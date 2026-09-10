@@ -1,0 +1,66 @@
+{
+  "$type": "rex.instance",
+  "formatVersion": 1,
+  "model": "nz.example.library",
+  "objects": [
+    {
+      "$id": "library/0",
+      "$type": "Library",
+      "books": [
+        {
+          "$id": "book/0",
+          "$type": "Book",
+          "authors": [
+            {
+              "$ref": "writer/0"
+            }
+          ],
+          "category": "ScienceFiction",
+          "copyright": "1965-08-01",
+          "pages": 412,
+          "title": "Dune"
+        },
+        {
+          "$id": "book/1",
+          "$type": "Book",
+          "authors": [
+            {
+              "$ref": "writer/0"
+            },
+            {
+              "$ref": "writer/1"
+            }
+          ],
+          "category": "Mystery",
+          "copyright": "1937-09-21",
+          "pages": 310,
+          "title": "The Hobbit"
+        }
+      ],
+      "name": "Default Name"
+    },
+    {
+      "$id": "writer/0",
+      "$type": "Writer",
+      "books": [
+        {
+          "$ref": "book/0"
+        },
+        {
+          "$ref": "book/1"
+        }
+      ],
+      "name": "Frank Herbert"
+    },
+    {
+      "$id": "writer/1",
+      "$type": "Writer",
+      "books": [
+        {
+          "$ref": "book/1"
+        }
+      ],
+      "name": "J.R.R. Tolkien"
+    }
+  ]
+}

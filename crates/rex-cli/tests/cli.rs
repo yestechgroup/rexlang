@@ -108,3 +108,46 @@ fn missing_file_is_a_clean_error() {
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).starts_with("error: cannot read"));
 }
+
+#[test]
+fn gen_rust_writes_generated_code() {
+    let path = write_source("gen.mox", GOOD);
+    let out = scratch_dir().join(format!("gen-out-{}", std::process::id()));
+    let output = rexlang()
+        .args([
+            "gen",
+            "rust",
+            path.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run rexlang gen rust");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let models = std::fs::read_to_string(out.join("models.rs")).expect("models.rs written");
+    assert!(models.contains("pub struct Resource"));
+    assert!(models.contains("pub struct Book"));
+    assert!(models.contains("pub fn to_instance_json"));
+}
+
+#[test]
+fn gen_rust_fails_on_invalid_source() {
+    let path = write_source("gen_bad.mox", BAD);
+    let out = scratch_dir().join(format!("gen-bad-out-{}", std::process::id()));
+    let output = rexlang()
+        .args([
+            "gen",
+            "rust",
+            path.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run rexlang gen rust");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("has class type"));
+}

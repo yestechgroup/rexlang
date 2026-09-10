@@ -12,7 +12,6 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use rex_driver::{compile_str, render, Compilation};
-
 /// rexlang compiler command-line interface.
 #[derive(Debug, Parser)]
 #[command(name = "rexlang", version, about)]
@@ -35,6 +34,23 @@ enum Command {
         /// Write the JSON to this path instead of stdout.
         #[arg(short, long, value_name = "FILE")]
         out: Option<PathBuf>,
+    },
+    /// Code generation from a compiled `.mox` file.
+    Gen {
+        #[command(subcommand)]
+        target: GenTarget,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum GenTarget {
+    /// Generate arena-based Rust model code (`models.rs`).
+    Rust {
+        /// Path to the `.mox` source file.
+        file: PathBuf,
+        /// Directory to write generated files into.
+        #[arg(short, long, value_name = "DIR")]
+        out: PathBuf,
     },
 }
 
@@ -73,6 +89,19 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 Some(out_path) => std::fs::write(out_path, json)?,
                 None => println!("{json}"),
             }
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Gen {
+            target: GenTarget::Rust { file, out },
+        } => {
+            let (path, source) = read_source(&file)?;
+            let compilation = compile_str(&path, &source);
+            report_diagnostics(&path, &source, &compilation);
+            let Some(model) = compilation.model else {
+                return Ok(ExitCode::FAILURE);
+            };
+            rex_backend_rust::generate_to_dir(&model, &out)?;
+            println!("generated Rust model code into {}", out.display());
             Ok(ExitCode::SUCCESS)
         }
     }

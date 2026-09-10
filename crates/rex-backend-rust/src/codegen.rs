@@ -53,23 +53,23 @@ pub fn generate_to_dir(model: &Model, out_dir: &Path) -> anyhow::Result<()> {
 }
 
 /// A generated class with everything the emitter needs precomputed.
-struct ClassCtx<'a> {
-    class: &'a ClassDef,
-    id_type: String,
-    slot_field: String,
-    single: String,
+pub(crate) struct ClassCtx<'a> {
+    pub(crate) class: &'a ClassDef,
+    pub(crate) id_type: String,
+    pub(crate) slot_field: String,
+    pub(crate) single: String,
 }
 
 /// All resolved inputs for one generation unit.
-struct Unit<'a> {
-    type_name: String,
-    classes: Vec<ClassCtx<'a>>,
-    enums: Vec<&'a EnumDef>,
-    datatypes: Vec<&'a DatatypeDef>,
+pub(crate) struct Unit<'a> {
+    pub(crate) type_name: String,
+    pub(crate) classes: Vec<ClassCtx<'a>>,
+    pub(crate) enums: Vec<&'a EnumDef>,
+    pub(crate) datatypes: Vec<&'a DatatypeDef>,
 }
 
 impl<'a> Unit<'a> {
-    fn class(&self, name: &str) -> anyhow::Result<&ClassCtx<'a>> {
+    pub(crate) fn class(&self, name: &str) -> anyhow::Result<&ClassCtx<'a>> {
         self.classes
             .iter()
             .find(|c| c.class.name == name)
@@ -255,6 +255,8 @@ fn generate_unit(model: &Model) -> anyhow::Result<String> {
     }
     e.push('\n');
     emit_resource(&mut e, &unit)?;
+    e.push('\n');
+    crate::serialize::emit(&mut e, &unit)?;
     Ok(e)
 }
 
@@ -532,6 +534,19 @@ fn emit_resource(e: &mut String, unit: &Unit<'_>) -> anyhow::Result<()> {
         ));
     }
     e.push_str("}\n\n");
+
+    e.push_str("impl PartialEq for Resource {\n");
+    e.push_str("    fn eq(&self, other: &Self) -> bool {\n");
+    for class in &unit.classes {
+        e.push_str(&format!(
+            "        self.{slot}.len() == other.{slot}.len()\n\
+             \x20           && self.{slot}.iter().all(|(key, value)| other.{slot}.get(key) == Some(value))\n\
+             \x20           &&\n",
+            slot = class.slot_field,
+        ));
+    }
+    e.push_str("        true\n");
+    e.push_str("    }\n}\n\n");
 
     e.push_str("impl rex_runtime::Resource for Resource {\n");
     e.push_str("    fn type_name(&self) -> &'static str {\n");

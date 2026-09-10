@@ -18,6 +18,19 @@
 /// Re-export of [`slotmap`] so generated code depends only on this crate.
 pub use slotmap;
 
+/// The `$type` key of the canonical instance JSON format (document type or
+/// class name).
+pub const KEY_TYPE: &str = "$type";
+/// The `$id` key of the canonical instance JSON format (object identity).
+pub const KEY_ID: &str = "$id";
+/// The `$ref` key of the canonical instance JSON format (cross reference
+/// link to an `$id`).
+pub const KEY_REF: &str = "$ref";
+/// The `$type` value of a canonical instance document root.
+pub const INSTANCE_TYPE: &str = "rex.instance";
+/// The canonical instance document format version.
+pub const INSTANCE_FORMAT_VERSION: u32 = 1;
+
 /// Errors produced by rexlang runtime operations.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RexError {

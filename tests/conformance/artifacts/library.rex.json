@@ -1,0 +1,288 @@
+{
+  "formatVersion": 1,
+  "rexVersion": "0.1.0",
+  "packages": [
+    {
+      "name": "nz.example.library",
+      "annotations": [],
+      "enums": [
+        {
+          "name": "BookCategory",
+          "literals": [
+            {
+              "name": "Mystery",
+              "label": "M",
+              "value": 0
+            },
+            {
+              "name": "ScienceFiction",
+              "label": "S",
+              "value": 1
+            }
+          ]
+        }
+      ],
+      "datatypes": [
+        {
+          "name": "Date",
+          "targetBindings": {
+            "csharp": "System.DateOnly",
+            "java": "java.time.LocalDate",
+            "rust": "chrono::NaiveDate"
+          }
+        }
+      ],
+      "interfaces": [],
+      "classes": [
+        {
+          "name": "Library",
+          "extends": [],
+          "features": [
+            {
+              "id": 0,
+              "name": "name",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "default": {
+                "type": "string",
+                "value": "Default Name"
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            },
+            {
+              "id": 1,
+              "name": "books",
+              "kind": "containment",
+              "type": {
+                "type": "class",
+                "value": {
+                  "package": "nz.example.library",
+                  "name": "Book"
+                }
+              },
+              "multiplicity": {
+                "lower": 0,
+                "upper": "unbounded"
+              },
+              "opposite": {
+                "class": "Book",
+                "feature": "library"
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            }
+          ]
+        },
+        {
+          "name": "Book",
+          "extends": [],
+          "features": [
+            {
+              "id": 0,
+              "name": "library",
+              "kind": "container",
+              "type": {
+                "type": "class",
+                "value": {
+                  "package": "nz.example.library",
+                  "name": "Library"
+                }
+              },
+              "multiplicity": {
+                "lower": 0,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "opposite": {
+                "class": "Library",
+                "feature": "books"
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            },
+            {
+              "id": 1,
+              "name": "title",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            },
+            {
+              "id": 2,
+              "name": "pages",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "int"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            },
+            {
+              "id": 3,
+              "name": "copyright",
+              "kind": "attribute",
+              "type": {
+                "type": "datatype",
+                "value": {
+                  "package": "nz.example.library",
+                  "name": "Date"
+                }
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            },
+            {
+              "id": 4,
+              "name": "category",
+              "kind": "attribute",
+              "type": {
+                "type": "enum",
+                "value": {
+                  "package": "nz.example.library",
+                  "name": "BookCategory"
+                }
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            },
+            {
+              "id": 5,
+              "name": "authors",
+              "kind": "crossReference",
+              "type": {
+                "type": "class",
+                "value": {
+                  "package": "nz.example.library",
+                  "name": "Writer"
+                }
+              },
+              "multiplicity": {
+                "lower": 0,
+                "upper": "unbounded"
+              },
+              "opposite": {
+                "class": "Writer",
+                "feature": "books"
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            },
+            {
+              "id": 6,
+              "name": "citation",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 0,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": true,
+              "isId": false,
+              "isReadOnly": false
+            }
+          ]
+        },
+        {
+          "name": "Writer",
+          "extends": [],
+          "features": [
+            {
+              "id": 0,
+              "name": "name",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            },
+            {
+              "id": 1,
+              "name": "books",
+              "kind": "crossReference",
+              "type": {
+                "type": "class",
+                "value": {
+                  "package": "nz.example.library",
+                  "name": "Book"
+                }
+              },
+              "multiplicity": {
+                "lower": 0,
+                "upper": "unbounded"
+              },
+              "opposite": {
+                "class": "Book",
+                "feature": "authors"
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

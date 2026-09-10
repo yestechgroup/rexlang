@@ -170,7 +170,8 @@ fn scratch_crate_files() -> Vec<(std::path::PathBuf, String)> {
                  path = \"src/lib.rs\"\n\n\
                  [dependencies]\n\
                  rex-runtime = {{ path = {:?} }}\n\
-                 slotmap = \"1\"\n",
+                 slotmap = \"1\"\n\
+                 serde_json = \"1\"\n",
                 runtime_path
             ),
         ),
@@ -178,7 +179,9 @@ fn scratch_crate_files() -> Vec<(std::path::PathBuf, String)> {
     ]
 }
 
-/// Runs `cargo test` inside the scratch crate. Skips gracefully when cargo is
+/// Runs `cargo test` inside the scratch crate, then checks the conformance
+/// instance JSON it produced against the committed golden fixture (or updates
+/// the fixture with `REX_UPDATE_FIXTURES=1`). Skips gracefully when cargo is
 /// unavailable (e.g. exotic CI environments).
 fn run_scratch_crate() {
     let cargo_available = std::process::Command::new("cargo")
@@ -193,6 +196,8 @@ fn run_scratch_crate() {
 
     let manifest = env!("CARGO_MANIFEST_DIR");
     let scratch = Path::new(manifest).join("../../target/scratch/rex-codegen-test");
+    let instance_out = scratch.join("library.instance.json");
+    std::fs::create_dir_all(&scratch).expect("create scratch root");
     for (relative, contents) in scratch_crate_files() {
         let path = scratch.join(&relative);
         if let Some(parent) = path.parent() {
@@ -207,6 +212,7 @@ fn run_scratch_crate() {
         if offline {
             command.arg("--offline");
         }
+        command.env("REX_INSTANCE_OUT", &instance_out);
         command.output().expect("spawn cargo")
     };
 
@@ -222,6 +228,30 @@ fn run_scratch_crate() {
         "scratch crate cargo test failed:\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
     );
     eprintln!("{stdout}");
+
+    check_instance_fixture(&instance_out);
+}
+
+/// Conformance: the canonical instance JSON produced by the generated code
+/// must byte-match the committed golden fixture.
+fn check_instance_fixture(instance_out: &Path) {
+    let produced = std::fs::read_to_string(instance_out).expect("scratch instance output");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../")
+        .canonicalize()
+        .expect("workspace root");
+    let fixture = root.join("tests/conformance/instances/library.instance.json");
+    if std::env::var("REX_UPDATE_FIXTURES").is_ok() {
+        std::fs::create_dir_all(fixture.parent().unwrap()).unwrap();
+        std::fs::write(&fixture, &produced).unwrap();
+        eprintln!("updated {}", fixture.display());
+        return;
+    }
+    let expected = std::fs::read_to_string(&fixture).expect("golden instance fixture");
+    assert_eq!(
+        produced, expected,
+        "canonical instance JSON drifted from the golden fixture"
+    );
 }
 
 #[test]
