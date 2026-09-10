@@ -1,0 +1,34 @@
+package nz.example.library
+
+enum BookCategory {
+    Mystery as "M" = 0
+    ScienceFiction as "S" = 1
+}
+
+type Date wraps opaque {
+    rust   "chrono::NaiveDate"
+    csharp "System.DateOnly"
+    java   "java.time.LocalDate"
+}
+
+class Library {
+    String name = "Default Name"
+    contains Book[] books opposite library
+
+    op Book getBook(String title)
+}
+
+class Book {
+    container Library library opposite books
+    String title
+    int pages
+    Date copyright
+    BookCategory category
+    refers Writer[] authors opposite books
+    derived String citation
+}
+
+class Writer {
+    String name
+    refers Book[] books opposite authors
+}

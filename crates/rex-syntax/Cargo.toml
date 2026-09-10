@@ -1,0 +1,10 @@
+[package]
+name = "rex-syntax"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+logos = { workspace = true }
+chumsky = { workspace = true }
+thiserror = { workspace = true }

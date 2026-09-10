@@ -1,0 +1,10 @@
+[package]
+name = "rex-backend-rust"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rex-ir = { workspace = true }
+askama = { workspace = true }
+anyhow = { workspace = true }

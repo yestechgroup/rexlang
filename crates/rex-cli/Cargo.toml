@@ -1,0 +1,18 @@
+[package]
+name = "rex-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "rexlang"
+path = "src/main.rs"
+
+[dependencies]
+rex-syntax = { workspace = true }
+rex-ir = { workspace = true }
+rex-driver = { workspace = true }
+rex-backend-rust = { workspace = true }
+rex-runtime = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
