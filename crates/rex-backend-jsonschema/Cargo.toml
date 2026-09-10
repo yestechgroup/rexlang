@@ -11,4 +11,5 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 jsonschema = { workspace = true }
+proptest = { workspace = true }
 rex-driver = { workspace = true }

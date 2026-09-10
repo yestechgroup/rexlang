@@ -6,7 +6,11 @@
 //! - Document root: `{ "$type": "rex.instance", "formatVersion": 1, "model":
 //!   "<package>", "objects": [...] }`.
 //! - Object ids: `"<singular>/<n>"`, n = per-class insertion order —
-//!   deterministic for a given resource.
+//!   deterministic for a given resource. The document groups objects by owner
+//!   (containment is inlined), so the loader registers and fills in
+//!   id-ordinal order, reconstructing the source per-class insertion order
+//!   even when objects were created in an order the document could not
+//!   express positionally.
 //! - Containment features serialize contained objects INLINE; container
 //!   features are NEVER serialized (they are derived from the opposite and
 //!   reconstructed by the loader — serializing them would recurse forever).
@@ -115,7 +119,7 @@ pub fn emit(e: &mut String, unit: &Unit<'_>) -> anyhow::Result<()> {
         emit_class_save(e, unit, class)?;
     }
     for class in &unit.classes {
-        emit_class_register(e, unit, class)?;
+        emit_class_register(e, class)?;
         emit_class_fill(e, unit, class)?;
     }
     emit_entry_points(e, unit)?;
@@ -179,6 +183,14 @@ fn emit_value_helpers(e: &mut String) {
          \x20       (Some(c), None) => Ok(c),\n\
          \x20       _ => Err(instance_error(format!(\"{where_} must be a single character\"))),\n\
          \x20   }\n\
+         }\n\n",
+    );
+    e.push_str(
+        "#[allow(dead_code)]\n\
+         fn instance_id_sort_key(object: &serde_json::Value) -> Option<(String, u64)> {\n\
+         \x20   let id = object.get(rex_runtime::KEY_ID)?.as_str()?;\n\
+         \x20   let (prefix, ordinal) = id.rsplit_once('/')?;\n\
+         \x20   Some((prefix.to_string(), ordinal.parse().ok()?))\n\
          }\n\n",
     );
     e.push_str(
@@ -408,11 +420,11 @@ fn emit_enum_loaders(e: &mut String, unit: &Unit<'_>) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// First load pass: register every object (recursing into embedded
-/// containment), mapping canonical ids to fresh keys.
+/// First load pass, per object: validate and map the canonical id to a fresh
+/// key. Registration is flat (no containment recursion): the loader collects
+/// every document object first and registers per class in id-ordinal order.
 fn emit_class_register(
     e: &mut String,
-    unit: &Unit<'_>,
     class: &ClassCtx<'_>,
 ) -> anyhow::Result<()> {
     let struct_name = rust_ident(&class.class.name);
@@ -442,43 +454,11 @@ fn emit_class_register(
          \x20           return Err(instance_error(format!(\"duplicate $id {{id:?}}\")));\n\
          \x20       }}\n\
          \x20       let key = resource.{}.insert({struct_name}::default());\n\
-         \x20       registry.{}.insert(id.to_string(), key);\n",
+         \x20       registry.{}.insert(id.to_string(), key);\n\
+         \x20       Ok(())\n\
+         \x20   }}\n\n",
         class.slot_field, class.slot_field, class.slot_field
     ));
-    // Recurse into embedded containment children (arrays and single-valued).
-    for feature in &class.class.features {
-        if feature.kind != FeatureKind::Containment {
-            continue;
-        }
-        let target = match &feature.type_ {
-            TypeRef::Class { name, .. } => name,
-            _ => continue,
-        };
-        let target_ctx = unit.class(target)?;
-        let key = json_key(feature);
-        if feature.multiplicity.is_many() {
-            e.push_str(&format!(
-                "        if let Some(children) = map.get({key:?}).and_then(|v| v.as_array()) {{\n\
-                 \x20           for child in children {{\n\
-                 \x20               if child.get(rex_runtime::KEY_TYPE).is_some() {{\n\
-                 \x20                   Self::register_{}(child, registry, resource)?;\n\
-                 \x20               }}\n\
-                 \x20           }}\n\
-                 \x20       }}\n",
-                target_ctx.single
-            ));
-        } else {
-            e.push_str(&format!(
-                "        if let Some(child) = map.get({key:?}) {{\n\
-                 \x20           if child.get(rex_runtime::KEY_TYPE).is_some() {{\n\
-                 \x20               Self::register_{}(child, registry, resource)?;\n\
-                 \x20           }}\n\
-                 \x20       }}\n",
-                target_ctx.single
-            ));
-        }
-    }
-    e.push_str("        Ok(())\n    }\n\n");
     Ok(())
 }
 
@@ -587,13 +567,7 @@ fn emit_class_fill(e: &mut String, unit: &Unit<'_>, class: &ClassCtx<'_>) -> any
                              \x20                       }}\n"
                         ));
                     }
-                    block.push_str(&format!(
-                        "                        if element.get(rex_runtime::KEY_TYPE).is_some() {{\n\
-                         \x20                           Self::fill_{target_single}(element, registry, resource)?;\n\
-                         \x20                       }}\n\
-                         \x20                   }}\n\
-                         \x20               }}\n",
-                    ));
+                    block.push_str("                    }\n                }\n");
                     e.push_str(&block);
                 } else {
                     let mut block = format!(
@@ -611,12 +585,7 @@ fn emit_class_fill(e: &mut String, unit: &Unit<'_>, class: &ClassCtx<'_>) -> any
                              \x20                   }}\n"
                         ));
                     }
-                    block.push_str(&format!(
-                        "                    if value.get(rex_runtime::KEY_TYPE).is_some() {{\n\
-                         \x20                       Self::fill_{target_single}(value, registry, resource)?;\n\
-                         \x20                   }}\n\
-                         \x20               }}\n"
-                    ));
+                    block.push_str("                }\n");
                     e.push_str(&block);
                 }
             }
@@ -726,6 +695,54 @@ fn emit_entry_points(e: &mut String, unit: &Unit<'_>) -> anyhow::Result<()> {
         ));
     }
 
+    // Per-class collectors: append the object and every embedded containment
+    // object, depth-first in document order. Containment entries that are
+    // `{"$ref": ...}` links (no `$type`) are skipped here; their embedding is
+    // resolved during fill.
+    for class in &unit.classes {
+        e.push_str(&format!(
+            "    fn collect_{single}<'a>(\n\
+             \x20       object: &'a serde_json::Value,\n\
+             \x20       collected: &mut Vec<&'a serde_json::Value>,\n\
+             \x20   ) {{\n\
+             \x20       collected.push(object);\n",
+            single = class.single,
+        ));
+        for feature in &class.class.features {
+            if feature.kind != FeatureKind::Containment {
+                continue;
+            }
+            let target = match &feature.type_ {
+                TypeRef::Class { name, .. } => name,
+                _ => continue,
+            };
+            let target_ctx = unit.class(target)?;
+            let key = json_key(feature);
+            if feature.multiplicity.is_many() {
+                e.push_str(&format!(
+                    "        if let Some(children) = object.get({key:?}).and_then(|v| v.as_array()) {{\n\
+                     \x20           for child in children {{\n\
+                     \x20               if child.get(rex_runtime::KEY_TYPE).is_some() {{\n\
+                     \x20                   Self::collect_{}(child, collected);\n\
+                     \x20               }}\n\
+                     \x20           }}\n\
+                     \x20       }}\n",
+                    target_ctx.single
+                ));
+            } else {
+                e.push_str(&format!(
+                    "        if let Some(child) = object.get({key:?}) {{\n\
+                     \x20           if child.get(rex_runtime::KEY_TYPE).is_some() {{\n\
+                     \x20               Self::collect_{}(child, collected);\n\
+                     \x20           }}\n\
+                     \x20       }}\n",
+                    target_ctx.single
+                ));
+            }
+        }
+        e.push_str("    }\n\n");
+    }
+
     e.push_str(
         "    /// Serializes the resource to the canonical instance JSON format.\n\
          \x20   pub fn to_instance_json(&self) -> String {\n\
@@ -801,12 +818,42 @@ fn emit_entry_points(e: &mut String, unit: &Unit<'_>) -> anyhow::Result<()> {
          \x20           .get(\"objects\")\n\
          \x20           .and_then(|v| v.as_array())\n\
          \x20           .ok_or_else(|| instance_error(\"document is missing objects\".to_string()))?;\n\
-         \x20       let mut resource = Resource::default();\n\
-         \x20       let mut registry = InstanceRegistry::default();\n",
+         \x20       // Flatten every document object (containment is inlined, so most\n\
+         \x20       // objects nest inside their owner), validating $type en route.\n\
+         \x20       let mut collected: Vec<&serde_json::Value> = Vec::new();\n\
+         \x20       for object in objects {{\n\
+         \x20           let type_name = object\n\
+         \x20               .get(rex_runtime::KEY_TYPE)\n\
+         \x20               .and_then(|v| v.as_str())\n\
+         \x20               .ok_or_else(|| instance_error(\"object is missing $type\".to_string()))?;\n\
+         \x20           match type_name {{\n",
         type_name = unit.type_name,
     ));
+    for class in &unit.classes {
+        e.push_str(&format!(
+            "                {:?} => Self::collect_{}(object, &mut collected),\n",
+            rust_ident(&class.class.name),
+            class.single
+        ));
+    }
     e.push_str(
-        "        for object in objects {\n\
+        "                other => {\n\
+         \x20                   return Err(instance_error(format!(\"unknown $type {other:?}\")));\n\
+         \x20               }\n\
+         \x20           }\n\
+         \x20       }\n\
+         \x20       // Canonical ids encode per-class insertion order (\"<singular>/<n>\")\n\
+         \x20       // while the document groups objects by owner, so register and fill\n\
+         \x20       // in id-ordinal order: the loaded arena preserves the source\n\
+         \x20       // per-class insertion order — the precondition for round-trip\n\
+         \x20       // identity. Objects with non-canonical ids keep their document\n\
+         \x20       // order, after the canonical ones (the sort is stable).\n\
+         \x20       collected.sort_by(|left, right| {\n\
+         \x20           instance_id_sort_key(left).cmp(&instance_id_sort_key(right))\n\
+         \x20       });\n\
+         \x20       let mut resource = Resource::default();\n\
+         \x20       let mut registry = InstanceRegistry::default();\n\
+         \x20       for object in &collected {\n\
          \x20           let type_name = object\n\
          \x20               .get(rex_runtime::KEY_TYPE)\n\
          \x20               .and_then(|v| v.as_str())\n\
@@ -826,7 +873,7 @@ fn emit_entry_points(e: &mut String, unit: &Unit<'_>) -> anyhow::Result<()> {
          \x20               }\n\
          \x20           }\n\
          \x20       }\n\
-         \x20       for object in objects {\n\
+         \x20       for object in &collected {\n\
          \x20           let type_name = object\n\
          \x20               .get(rex_runtime::KEY_TYPE)\n\
          \x20               .and_then(|v| v.as_str())\n\

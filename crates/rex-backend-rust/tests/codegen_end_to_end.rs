@@ -170,9 +170,11 @@ fn scratch_crate_files() -> Vec<(std::path::PathBuf, String)> {
                  [lib]\n\
                  path = \"src/lib.rs\"\n\n\
                  [dependencies]\n\
-                 rex-runtime = {{ path = {:?} }}\n\
-                 slotmap = \"1\"\n\
-                 serde_json = \"1\"\n",
+                  rex-runtime = {{ path = {:?} }}\n\
+                  slotmap = \"1\"\n\
+                  serde_json = \"1\"\n\n\
+                  [dev-dependencies]\n\
+                  proptest = \"1\"\n",
                 runtime_path
             ),
         ),
