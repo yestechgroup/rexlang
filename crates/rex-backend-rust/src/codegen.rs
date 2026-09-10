@@ -23,7 +23,7 @@ use std::path::Path;
 use anyhow::bail;
 use rex_ir::{
     ClassDef, DatatypeDef, DefaultValue, EnumDef, Feature, FeatureKind, Model, PrimitiveType,
-    TypeRef, VocabularyDef, VocabularyFacet, VocabularyEntry,
+    TypeRef, VocabularyDef, VocabularyEntry, VocabularyFacet,
 };
 
 use crate::naming::{rust_ident, slotmap_field, snake_case};
@@ -90,18 +90,16 @@ impl<'a> Unit<'a> {
     }
 
     /// The first vendored entry of a vocabulary, used as its default value.
-    fn first_vocabulary_entry(
-        &self,
-        vocabulary_name: &str,
-    ) -> anyhow::Result<&'a VocabularyEntry> {
+    fn first_vocabulary_entry(&self, vocabulary_name: &str) -> anyhow::Result<&'a VocabularyEntry> {
         let vocabulary = self
             .vocabularies
             .iter()
             .find(|v| v.name == vocabulary_name)
             .ok_or_else(|| anyhow::anyhow!("vocabulary '{vocabulary_name}' not found in model"))?;
-        vocabulary.entries.first().ok_or_else(|| {
-            anyhow::anyhow!("vocabulary '{vocabulary_name}' has no entries")
-        })
+        vocabulary
+            .entries
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("vocabulary '{vocabulary_name}' has no entries"))
     }
 }
 
@@ -201,7 +199,10 @@ fn feature_doc(feature: &Feature) -> &'static str {
 /// required (`lower >= 1`) and `Option<T>` when optional.
 fn field_type(_unit: &Unit<'_>, feature: &Feature) -> anyhow::Result<String> {
     if feature.is_derived {
-        bail!("derived feature '{}' should not be materialized", feature.name);
+        bail!(
+            "derived feature '{}' should not be materialized",
+            feature.name
+        );
     }
     let inner = match feature.kind {
         FeatureKind::Attribute => value_type(&feature.type_)?,
@@ -237,9 +238,7 @@ fn default_expr(unit: &Unit<'_>, feature: &Feature) -> anyhow::Result<String> {
             .find(|v| v.name == *name)
             .ok_or_else(|| anyhow::anyhow!("vocabulary '{name}' not found in model"))?;
         if !vocabulary.entries.iter().any(|entry| entry.key == *key) {
-            bail!(
-                "default '{key}' is not an entry of vocabulary '{name}'"
-            );
+            bail!("default '{key}' is not an entry of vocabulary '{name}'");
         }
         return Ok(format!("{}::{}", rust_ident(name), variant_ident(key)?));
     }
@@ -264,7 +263,9 @@ fn default_expr(unit: &Unit<'_>, feature: &Feature) -> anyhow::Result<String> {
     Ok(match &feature.type_ {
         TypeRef::Primitive(primitive) => match primitive {
             PrimitiveType::String => "String::new()".to_string(),
-            PrimitiveType::Int | PrimitiveType::Long | PrimitiveType::Short
+            PrimitiveType::Int
+            | PrimitiveType::Long
+            | PrimitiveType::Short
             | PrimitiveType::Byte => "0".to_string(),
             PrimitiveType::Float | PrimitiveType::Double => "0.0".to_string(),
             PrimitiveType::Boolean => "false".to_string(),
@@ -324,7 +325,11 @@ fn emit_header(e: &mut String, model: &Model, unit: &Unit<'_>) {
         "//! - operations are abstract hooks: implement them as hand-written methods\n\
          //!   in your own modules (generated code never contains operation bodies);\n",
     );
-    if unit.classes.iter().any(|c| c.class.features.iter().any(|f| f.is_derived)) {
+    if unit
+        .classes
+        .iter()
+        .any(|c| c.class.features.iter().any(|f| f.is_derived))
+    {
         e.push_str(
             "//! - derived features are declared in the IR but not materialized as fields;\n",
         );
@@ -417,7 +422,10 @@ fn emit_enums(e: &mut String, unit: &Unit<'_>) -> anyhow::Result<()> {
         e.push_str("    /// The human-readable label if declared, else the literal name.\n");
         e.push_str("    pub fn label(self) -> &'static str {\n        match self {\n");
         for literal in &enum_def.literals {
-            let label = literal.label.clone().unwrap_or_else(|| literal.name.clone());
+            let label = literal
+                .label
+                .clone()
+                .unwrap_or_else(|| literal.name.clone());
             e.push_str(&format!(
                 "            Self::{} => {:?},\n",
                 rust_ident(&literal.name),
@@ -478,8 +486,10 @@ struct Variant {
 fn variant_ident(key: &str) -> anyhow::Result<String> {
     let mut chars = key.chars();
     let valid = match chars.next() {
-        Some(first) => (first.is_alphabetic() || first == '_')
-            && chars.all(|rest| rest.is_alphanumeric() || rest == '_'),
+        Some(first) => {
+            (first.is_alphabetic() || first == '_')
+                && chars.all(|rest| rest.is_alphanumeric() || rest == '_')
+        }
         None => false,
     };
     if !valid {
@@ -533,30 +543,25 @@ fn facet_rust_type(type_: PrimitiveType) -> &'static str {
 /// are emitted verbatim as the float literal.
 fn facet_literal(facet: &VocabularyFacet, value: &DefaultValue) -> anyhow::Result<String> {
     let unexpected = |expected: &str| {
-        anyhow::anyhow!(
-            "facet '{}' expects {expected}, found {value:?}",
-            facet.name
-        )
+        anyhow::anyhow!("facet '{}' expects {expected}, found {value:?}", facet.name)
     };
     match (facet.type_, value) {
         (PrimitiveType::String, DefaultValue::String(text)) => Ok(format!("{text:?}")),
-        (PrimitiveType::Char, DefaultValue::String(text)) => match text.chars().collect::<Vec<_>>()[..] {
-            [c] => Ok(format!("{c:?}")),
-            _ => Err(unexpected("a single character")),
-        },
+        (PrimitiveType::Char, DefaultValue::String(text)) => {
+            match text.chars().collect::<Vec<_>>()[..] {
+                [c] => Ok(format!("{c:?}")),
+                _ => Err(unexpected("a single character")),
+            }
+        }
         (PrimitiveType::Int | PrimitiveType::Long, DefaultValue::Int(value)) => {
             Ok(value.to_string())
         }
-        (PrimitiveType::Short, DefaultValue::Int(value)) => {
-            i16::try_from(*value)
-                .map(|value| value.to_string())
-                .map_err(|_| anyhow::anyhow!("facet '{}' value {value} does not fit i16", facet.name))
-        }
-        (PrimitiveType::Byte, DefaultValue::Int(value)) => {
-            i8::try_from(*value)
-                .map(|value| value.to_string())
-                .map_err(|_| anyhow::anyhow!("facet '{}' value {value} does not fit i8", facet.name))
-        }
+        (PrimitiveType::Short, DefaultValue::Int(value)) => i16::try_from(*value)
+            .map(|value| value.to_string())
+            .map_err(|_| anyhow::anyhow!("facet '{}' value {value} does not fit i16", facet.name)),
+        (PrimitiveType::Byte, DefaultValue::Int(value)) => i8::try_from(*value)
+            .map(|value| value.to_string())
+            .map_err(|_| anyhow::anyhow!("facet '{}' value {value} does not fit i8", facet.name)),
         (PrimitiveType::Boolean, DefaultValue::Bool(value)) => Ok(value.to_string()),
         (PrimitiveType::Float | PrimitiveType::Double, DefaultValue::Int(value)) => {
             Ok(format!("{value}.0"))
@@ -623,17 +628,14 @@ fn emit_vocabularies(e: &mut String, unit: &Unit<'_>) -> anyhow::Result<()> {
                 type_ = facet_rust_type(facet.type_),
             ));
             for entry in &vocabulary.entries {
-                let value = entry
-                    .facets
-                    .get(&facet.name)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "entry '{}' of vocabulary '{}' is missing facet '{}'",
-                            entry.key,
-                            vocabulary.name,
-                            facet.name
-                        )
-                    })?;
+                let value = entry.facets.get(&facet.name).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "entry '{}' of vocabulary '{}' is missing facet '{}'",
+                        entry.key,
+                        vocabulary.name,
+                        facet.name
+                    )
+                })?;
                 e.push_str(&format!(
                     "            Self::{} => {},\n",
                     variant_ident(&entry.key)?,
@@ -1244,7 +1246,10 @@ mod tests {
         VocabularyEntry {
             key: key.to_string(),
             facets: BTreeMap::from([
-                ("symbol".to_string(), DefaultValue::String(symbol.to_string())),
+                (
+                    "symbol".to_string(),
+                    DefaultValue::String(symbol.to_string()),
+                ),
                 ("minorUnits".to_string(), DefaultValue::Int(minor_units)),
             ]),
         }
@@ -1395,7 +1400,10 @@ mod tests {
             Multiplicity::REQUIRED,
         )
         .with_default(DefaultValue::String("EUR".to_string()));
-        let code = generate(&model).expect("generate").remove("models.rs").unwrap();
+        let code = generate(&model)
+            .expect("generate")
+            .remove("models.rs")
+            .unwrap();
         assert!(
             code.contains("currency: Currency::EUR,"),
             "declared default must lower to the matching variant:\n{code}"
@@ -1437,7 +1445,10 @@ mod tests {
         model.packages[0].vocabularies[0]
             .entries
             .push(entry("type", "T", 1));
-        let code = generate(&model).expect("generate").remove("models.rs").unwrap();
+        let code = generate(&model)
+            .expect("generate")
+            .remove("models.rs")
+            .unwrap();
         assert!(
             code.contains("r#type,\n"),
             "keyword keys escape as r#type:\n{code}"
@@ -1464,7 +1475,10 @@ mod tests {
                 },
             );
         }
-        let code = generate(&model).expect("generate").remove("models.rs").unwrap();
+        let code = generate(&model)
+            .expect("generate")
+            .remove("models.rs")
+            .unwrap();
         assert!(
             code.contains("pub fn rate(self) -> f64"),
             "accessor:\n{code}"
@@ -1511,7 +1525,9 @@ mod tests {
         model.packages.push(second);
         let error = generate(&model).expect_err("duplicate vocabulary names must fail");
         assert!(
-            error.to_string().contains("duplicate vocabulary name 'Currency'"),
+            error
+                .to_string()
+                .contains("duplicate vocabulary name 'Currency'"),
             "error was: {error:#}"
         );
     }
@@ -1522,7 +1538,9 @@ mod tests {
         model.packages[0].vocabularies[0].entries.clear();
         let error = generate(&model).expect_err("empty vocabulary must fail");
         assert!(
-            error.to_string().contains("vocabulary 'Currency' has no entries"),
+            error
+                .to_string()
+                .contains("vocabulary 'Currency' has no entries"),
             "error was: {error:#}"
         );
     }
@@ -1569,8 +1587,14 @@ mod tests {
 
         // All three features are stored as fields.
         assert!(code.contains("pub plain: String,"), "plain field:\n{code}");
-        assert!(code.contains("pub code: String,"), "readonly field stays stored:\n{code}");
-        assert!(code.contains("pub sku: String,"), "id field stays stored:\n{code}");
+        assert!(
+            code.contains("pub code: String,"),
+            "readonly field stays stored:\n{code}"
+        );
+        assert!(
+            code.contains("pub sku: String,"),
+            "id field stays stored:\n{code}"
+        );
 
         // Plain and `id` features get setters; `readonly` does not.
         assert!(code.contains("pub fn set_plain"), "control setter:\n{code}");

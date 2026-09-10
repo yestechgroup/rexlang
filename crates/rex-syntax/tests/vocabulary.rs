@@ -25,7 +25,11 @@ fn full_vocabulary_declaration_parses() {
         }
     "#;
     let result = parse(source);
-    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
     let model = result.ast.expect("expected an AST");
     assert_eq!(model.declarations.len(), 1);
 
@@ -56,7 +60,11 @@ fn full_vocabulary_declaration_parses() {
 #[test]
 fn minimal_vocabulary_without_body_parses() {
     let result = parse(r#"vocabulary Currency from "iso:4217" { }"#);
-    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
     let model = result.ast.unwrap();
     let vocab = expect_vocabulary(&model.declarations[0], "Currency");
     assert_eq!(vocab.source, "iso:4217");
@@ -70,7 +78,11 @@ fn minimal_vocabulary_without_body_parses() {
 #[test]
 fn missing_key_parses_without_errors() {
     let result = parse(r#"vocabulary Currency from "iso:4217" { facet String symbol }"#);
-    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
     let model = result.ast.unwrap();
     let vocab = expect_vocabulary(&model.declarations[0], "Currency");
     assert!(vocab.key.is_none());
@@ -80,7 +92,11 @@ fn missing_key_parses_without_errors() {
 #[test]
 fn escaped_keyword_is_valid_as_facet_name() {
     let result = parse(r#"vocabulary V from "s:1" { facet String ^facet }"#);
-    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
     let model = result.ast.unwrap();
     let vocab = expect_vocabulary(&model.declarations[0], "V");
     assert_eq!(vocab.facets.len(), 1);
@@ -101,7 +117,11 @@ fn comments_and_spacing_are_tolerated() {
         }
     "#;
     let result = parse(source);
-    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
     let model = result.ast.unwrap();
     let vocab = expect_vocabulary(&model.declarations[0], "Currency");
     assert_eq!(vocab.version.as_deref(), Some("2024-01-01"));
@@ -116,7 +136,11 @@ fn vocabulary_and_class_declarations_interleave_in_order() {
         class B { String y }
     "#;
     let result = parse(source);
-    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
     let model = result.ast.unwrap();
     assert_eq!(model.declarations.len(), 3);
     assert!(matches!(&model.declarations[0], Decl::Class(_)));

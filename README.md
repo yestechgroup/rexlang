@@ -4,7 +4,8 @@ A multi-target modeling language inspired by [Eclipse Xcore](https://eclipse.dev
 
 `.mox` sources compile to a **Core IR** (an Ecore-like structural metamodel) that is
 serialized as a stable artifact. Code generators for multiple target languages
-(Rust, C#, JSON Schema, ...) consume only that IR.
+(Rust, JSON Schema, ...) consume only that IR. The language reference lives in
+[docs/LANGUAGE.md](docs/LANGUAGE.md).
 
 ```
 .mox source -> lexer/parser -> AST -> resolve & validate -> Core IR (.rex.json)

@@ -90,7 +90,10 @@ fn vocabulary_def_uses_camel_case_wire_names() {
 fn vocabulary_entries_reuse_default_value_tags() {
     let def = currency_def();
     let json = serde_json::to_value(&def.entries).expect("serialize");
-    assert_eq!(json[0]["facets"]["minorUnits"], serde_json::json!({ "type": "int", "value": 2 }));
+    assert_eq!(
+        json[0]["facets"]["minorUnits"],
+        serde_json::json!({ "type": "int", "value": 2 })
+    );
     assert_eq!(
         json[0]["facets"]["symbol"],
         serde_json::json!({ "type": "string", "value": "$" })
@@ -191,9 +194,15 @@ fn from_json_accepts_vocabulary_tagged_artifact() {
     let Feature { type_, default, .. } = &package.classes[0].features[0];
     assert_eq!(
         type_,
-        &TypeRef::Vocabulary { package: PKG.to_string(), name: "Currency".to_string() }
+        &TypeRef::Vocabulary {
+            package: PKG.to_string(),
+            name: "Currency".to_string()
+        }
     );
-    assert_eq!(default.as_ref(), Some(&DefaultValue::String("USD".to_string())));
+    assert_eq!(
+        default.as_ref(),
+        Some(&DefaultValue::String("USD".to_string()))
+    );
 }
 
 /// A `ClassDef::new` construction touching `Feature`/`Multiplicity` keeps the
@@ -203,10 +212,16 @@ fn feature_with_vocabulary_type_stays_eq() {
     let feature = Feature::new(
         "ccy",
         FeatureKind::Attribute,
-        TypeRef::Vocabulary { package: PKG.to_string(), name: "Currency".to_string() },
+        TypeRef::Vocabulary {
+            package: PKG.to_string(),
+            name: "Currency".to_string(),
+        },
         Multiplicity::REQUIRED,
     )
     .with_default(DefaultValue::String("USD".to_string()));
     let class = ClassDef::new("Price", vec![], vec![feature]);
-    assert_eq!(class.features[0].default, Some(DefaultValue::String("USD".to_string())));
+    assert_eq!(
+        class.features[0].default,
+        Some(DefaultValue::String("USD".to_string()))
+    );
 }

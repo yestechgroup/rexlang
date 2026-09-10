@@ -3,6 +3,18 @@ name = "rex-syntax"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description.workspace = true
+repository.workspace = true
+
+# Cannot mix lints.workspace with overrides; mirror the workspace lints
+# (clippy::all = warn) and allow unsafe: chumsky 0.10's `Input` trait
+# declares required `unsafe fn`s that the custom token-slice input must
+# implement. No unsafe blocks of our own beyond those trait methods.
+[lints]
+clippy.all = "warn"
+
+[lints.rust]
+unsafe_code = "allow"
 
 [dependencies]
 logos = { workspace = true }

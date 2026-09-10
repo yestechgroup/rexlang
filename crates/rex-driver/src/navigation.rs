@@ -238,8 +238,16 @@ impl NavigationIndex {
                         );
                         index.definitions[feature_id].modifiers = *feature.modifiers();
                         match feature {
-                            mox::FeatureDecl::Attribute { type_ref, multiplicity, .. }
-                            | mox::FeatureDecl::Derived { type_ref, multiplicity, .. } => {
+                            mox::FeatureDecl::Attribute {
+                                type_ref,
+                                multiplicity,
+                                ..
+                            }
+                            | mox::FeatureDecl::Derived {
+                                type_ref,
+                                multiplicity,
+                                ..
+                            } => {
                                 index.definitions[feature_id].type_text =
                                     Some(type_ref.name.full_name());
                                 index.definitions[feature_id].multiplicity_text =
@@ -300,17 +308,15 @@ impl NavigationIndex {
                                 }
                             }
                             mox::FeatureDecl::Op {
-                                return_type, params, ..
+                                return_type,
+                                params,
+                                ..
                             } => {
                                 index.definitions[feature_id].type_text =
                                     Some(return_type.name.full_name());
                                 index.add_type_reference(return_type, &package, &top_level);
                                 for param in params {
-                                    index.add_type_reference(
-                                        &param.type_ref,
-                                        &package,
-                                        &top_level,
-                                    );
+                                    index.add_type_reference(&param.type_ref, &package, &top_level);
                                 }
                             }
                         }
@@ -353,17 +359,17 @@ impl NavigationIndex {
         // Pass 3: resolve opposite mentions against the complete definition
         // set, best-effort (no class or no such feature → no target).
         for (class_name, feature_name, span) in opposites {
-            let target = top_level
-                .get(class_name.as_str())
-                .and_then(|&class_id| {
-                    index.definitions.iter().position(|definition| {
-                        definition.owner == Some(class_id) && definition.name == feature_name
-                    })
-                });
+            let target = top_level.get(class_name.as_str()).and_then(|&class_id| {
+                index.definitions.iter().position(|definition| {
+                    definition.owner == Some(class_id) && definition.name == feature_name
+                })
+            });
             index.references.push(Reference { span, target });
         }
         // Opposites were resolved out of order; restore source order.
-        index.references.sort_by_key(|reference| reference.span.start);
+        index
+            .references
+            .sort_by_key(|reference| reference.span.start);
         index
     }
 
@@ -410,9 +416,7 @@ impl NavigationIndex {
     /// form of [`NavigationIndex::resolve`], for callers that need to name
     /// the target rather than inspect it.
     pub fn resolve_id(&self, reference: &Reference) -> Option<DefId> {
-        reference
-            .target
-            .filter(|&id| id < self.definitions.len())
+        reference.target.filter(|&id| id < self.definitions.len())
     }
 
     /// Iterates all references in source order as `(span, reference)` pairs.
@@ -482,7 +486,8 @@ impl NavigationIndex {
 /// Resolves a type reference's last segment to a definition id, mirroring
 /// the resolver: single-segment names are package-local (primitives resolve
 /// to nothing), and the only supported qualified form is `<package>.<Name>`.
-fn type_target(    type_ref: &mox::TypeRef,
+fn type_target(
+    type_ref: &mox::TypeRef,
     package: &str,
     top_level: &HashMap<&str, DefId>,
 ) -> Option<DefId> {

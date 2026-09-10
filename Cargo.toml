@@ -16,6 +16,15 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
+description = "rexlang: a multi-target modeling language inspired by Eclipse Xcore"
+repository = "https://github.com/yestechgroup/rexlang"
+readme = "README.md"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
 
 [workspace.dependencies]
 rex-syntax = { path = "crates/rex-syntax" }

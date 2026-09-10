@@ -108,7 +108,11 @@ struct Formatter<'src> {
 }
 
 impl<'src> Formatter<'src> {
-    fn new(source: &'src str, tokens: Vec<(Token<'src>, Span)>, comments: Vec<crate::lexer::Comment<'src>>) -> Self {
+    fn new(
+        source: &'src str,
+        tokens: Vec<(Token<'src>, Span)>,
+        comments: Vec<crate::lexer::Comment<'src>>,
+    ) -> Self {
         // Merge tokens and comments into one position-ordered stream. Both
         // inputs are sorted, so a stable sort keeps within-token order.
         let mut nodes: Vec<Node<'src>> = tokens
@@ -135,7 +139,9 @@ impl<'src> Formatter<'src> {
             starts
         };
         let line_of = |byte: usize| -> usize {
-            line_starts.partition_point(|&start| start <= byte).saturating_sub(1)
+            line_starts
+                .partition_point(|&start| start <= byte)
+                .saturating_sub(1)
         };
         let mut prev_end_line: Option<usize> = None;
         for node in &mut nodes {
@@ -203,10 +209,20 @@ impl<'src> Formatter<'src> {
                 // `(`, `.` and `[` also glue to whatever *follows* them.
                 self.glue_next = matches!(token, Token::LParen | Token::Dot | Token::LBracket);
             }
-            Node::Comment { kind, text, own_line: true, .. } => {
+            Node::Comment {
+                kind,
+                text,
+                own_line: true,
+                ..
+            } => {
                 self.pending.push((kind, text));
             }
-            Node::Comment { kind, text, own_line: false, .. } => {
+            Node::Comment {
+                kind,
+                text,
+                own_line: false,
+                ..
+            } => {
                 if self.line.is_empty() && self.out.ends_with('\n') {
                     // The code this comment trails was already flushed
                     // (e.g. a `}` closed by the body scanner): reopen that
@@ -403,7 +419,10 @@ impl<'src> Formatter<'src> {
         match self.peek_tok() {
             Some(Token::Str(_) | Token::Int(_) | Token::True | Token::False) => {
                 self.take_if(|token| {
-                    matches!(token, Token::Str(_) | Token::Int(_) | Token::True | Token::False)
+                    matches!(
+                        token,
+                        Token::Str(_) | Token::Int(_) | Token::True | Token::False
+                    )
                 });
             }
             Some(Token::Ident(_) | Token::IdentEscaped(_)) => self.scan_qname(),
@@ -441,7 +460,10 @@ impl<'src> Formatter<'src> {
         self.drain_comments();
         // `pos` is at the `{` here; the body is empty when a bare `}` (not a
         // comment, which is multiline-forcing) immediately follows.
-        let empty = matches!(self.nodes.get(self.pos + 1), Some(Node::Token(Token::RBrace, _)));
+        let empty = matches!(
+            self.nodes.get(self.pos + 1),
+            Some(Node::Token(Token::RBrace, _))
+        );
         if !self.take_if(|token| matches!(token, Token::LBrace)) {
             self.flush_line();
             return;
@@ -579,7 +601,10 @@ impl<'src> Formatter<'src> {
     // --- other bodies --------------------------------------------------------
 
     fn scan_enum_literal(&mut self) {
-        if self.peek_tok().is_some_and(|token| matches!(token, Token::Ident(_) | Token::IdentEscaped(_))) {
+        if self
+            .peek_tok()
+            .is_some_and(|token| matches!(token, Token::Ident(_) | Token::IdentEscaped(_)))
+        {
             self.take_name();
             if self.take_if(|token| matches!(token, Token::As)) {
                 self.take_if(|token| matches!(token, Token::Str(_)));
@@ -589,18 +614,27 @@ impl<'src> Formatter<'src> {
             }
         } else {
             self.scan_junk_until(|token| {
-                matches!(token, Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_))
+                matches!(
+                    token,
+                    Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_)
+                )
             });
         }
     }
 
     fn scan_binding(&mut self) {
-        if self.peek_tok().is_some_and(|token| matches!(token, Token::Ident(_) | Token::IdentEscaped(_))) {
+        if self
+            .peek_tok()
+            .is_some_and(|token| matches!(token, Token::Ident(_) | Token::IdentEscaped(_)))
+        {
             self.take_name();
             self.take_if(|token| matches!(token, Token::Str(_)));
         } else {
             self.scan_junk_until(|token| {
-                matches!(token, Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_))
+                matches!(
+                    token,
+                    Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_)
+                )
             });
         }
     }
@@ -621,7 +655,10 @@ impl<'src> Formatter<'src> {
                 self.take_name();
             }
             _ => self.scan_junk_until(|token| {
-                matches!(token, Token::RBrace | Token::Version | Token::Key | Token::Facet)
+                matches!(
+                    token,
+                    Token::RBrace | Token::Version | Token::Key | Token::Facet
+                )
             }),
         }
     }
@@ -772,9 +809,7 @@ fn normalize_multiplicity(parts: &[Token<'_>]) -> String {
         [] => "[]".to_string(),
         [Token::Star] => "[]".to_string(),
         [Token::Int(value)] => format!("[{value}]"),
-        [Token::Int(lower), Token::Dot, Token::Dot, Token::Star] if *lower == 0 => {
-            "[]".to_string()
-        }
+        [Token::Int(lower), Token::Dot, Token::Dot, Token::Star] if *lower == 0 => "[]".to_string(),
         [Token::Int(lower), Token::Dot, Token::Dot, bound] => format!(
             "[{lower}..{}]",
             match bound {

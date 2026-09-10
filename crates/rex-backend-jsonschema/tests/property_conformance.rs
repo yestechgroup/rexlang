@@ -16,7 +16,9 @@ const WIRE_SCHEMA_RELATIVE: &str = "tests/conformance/schemas/library.wire.schem
 fn wire_validator() -> &'static jsonschema::Validator {
     static VALIDATOR: OnceLock<jsonschema::Validator> = OnceLock::new();
     VALIDATOR.get_or_init(|| {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(WIRE_SCHEMA_RELATIVE);
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(WIRE_SCHEMA_RELATIVE);
         let text = std::fs::read_to_string(path).expect("committed wire schema golden");
         let schema: serde_json::Value = serde_json::from_str(&text).expect("valid JSON schema");
         jsonschema::validator_for(&schema).expect("wire schema golden compiles")
@@ -61,7 +63,10 @@ struct LibraryShape {
 
 fn dedup(items: Vec<usize>) -> Vec<usize> {
     let mut seen = BTreeSet::new();
-    items.into_iter().filter(|item| seen.insert(*item)).collect()
+    items
+        .into_iter()
+        .filter(|item| seen.insert(*item))
+        .collect()
 }
 
 fn book_shape(writer_count: usize) -> impl Strategy<Value = BookShape> {
@@ -77,7 +82,11 @@ fn book_shape(writer_count: usize) -> impl Strategy<Value = BookShape> {
             pages,
             copyright,
             category_is_scifi: scifi,
-            authors: if writer_count == 0 { Vec::new() } else { dedup(authors) },
+            authors: if writer_count == 0 {
+                Vec::new()
+            } else {
+                dedup(authors)
+            },
         })
 }
 
@@ -199,7 +208,10 @@ fn check_document_rules(value: &serde_json::Value, ids: &BTreeSet<String>) {
                     !map.contains_key("library"),
                     "book object carries a serialized container key: {map:?}"
                 );
-                let category = map.get("category").and_then(serde_json::Value::as_str).expect("category");
+                let category = map
+                    .get("category")
+                    .and_then(serde_json::Value::as_str)
+                    .expect("category");
                 assert!(
                     category == "Mystery" || category == "ScienceFiction",
                     "enum attribute uses a non-literal name: {category:?}"

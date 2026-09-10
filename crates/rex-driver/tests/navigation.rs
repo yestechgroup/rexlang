@@ -83,7 +83,11 @@ fn top_level_definitions_are_indexed_with_exact_name_spans() {
         let (id, definition) = find_def(&index, name);
         assert_eq!(definition.kind, kind, "kind of '{name}'");
         assert_eq!(definition.owner, None, "owner of '{name}'");
-        assert_eq!(definition.name_span, span_of(SOURCE, name, nth), "span of '{name}'");
+        assert_eq!(
+            definition.name_span,
+            span_of(SOURCE, name, nth),
+            "span of '{name}'"
+        );
         assert_eq!(index.definition(id).name, name);
     }
 }
@@ -152,7 +156,11 @@ fn features_are_indexed_with_owner_and_kind() {
         let (_, definition) = find_def(&index, name);
         assert_eq!(definition.kind, kind, "kind of '{name}'");
         assert_eq!(definition.owner, Some(owner), "owner of '{name}'");
-        assert_eq!(definition.name_span, span_of(SOURCE, name, nth), "span of '{name}'");
+        assert_eq!(
+            definition.name_span,
+            span_of(SOURCE, name, nth),
+            "span of '{name}'"
+        );
     }
 }
 
@@ -338,8 +346,8 @@ fn definitions_iterate_in_source_order() {
     assert_eq!(
         names,
         vec![
-            "Library", "books", "Book", "library", "title", "price", "Special", "compute",
-            "label", "sequel", "Color", "Red", "Date", "Currency", "code",
+            "Library", "books", "Book", "library", "title", "price", "Special", "compute", "label",
+            "sequel", "Color", "Red", "Date", "Currency", "code",
         ]
     );
 }

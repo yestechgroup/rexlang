@@ -45,8 +45,8 @@ fn wire_validator() -> jsonschema::Validator {
 }
 
 fn library_instance() -> serde_json::Value {
-    let json =
-        std::fs::read_to_string(fixture_path(INSTANCE_RELATIVE_PATH)).expect("read golden instance");
+    let json = std::fs::read_to_string(fixture_path(INSTANCE_RELATIVE_PATH))
+        .expect("read golden instance");
     serde_json::from_str(&json).expect("golden instance is valid JSON")
 }
 
@@ -64,11 +64,12 @@ fn mutate_object(
                 mutate(map);
                 return true;
             }
-            map.values_mut().any(|value| mutate_object(value, id, mutate))
+            map.values_mut()
+                .any(|value| mutate_object(value, id, mutate))
         }
-        serde_json::Value::Array(items) => {
-            items.iter_mut().any(|value| mutate_object(value, id, mutate))
-        }
+        serde_json::Value::Array(items) => items
+            .iter_mut()
+            .any(|value| mutate_object(value, id, mutate)),
         _ => false,
     }
 }

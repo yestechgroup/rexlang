@@ -3,7 +3,9 @@
 //! (leaf) subclass, and instances must validate accordingly.
 
 use rex_backend_jsonschema::{generate, Profile};
-use rex_ir::{ClassDef, Feature, FeatureKind, Multiplicity, Model, Package, PrimitiveType, TypeRef};
+use rex_ir::{
+    ClassDef, Feature, FeatureKind, Model, Multiplicity, Package, PrimitiveType, TypeRef,
+};
 
 const PACKAGE: &str = "nz.example.zoo";
 
@@ -95,7 +97,10 @@ fn schema_encodes_inheritance_with_outermost_only_closure() {
         dog["allOf"],
         serde_json::json!([{"$ref": "#/$defs/Animal"}])
     );
-    assert_eq!(dog["properties"]["$type"], serde_json::json!({"const": "Dog"}));
+    assert_eq!(
+        dog["properties"]["$type"],
+        serde_json::json!({"const": "Dog"})
+    );
     assert_eq!(dog["properties"]["barkVolume"]["type"], "integer");
     assert_eq!(dog["unevaluatedProperties"], false);
     let dog_required = dog["required"].as_array().expect("Dog required");
@@ -164,4 +169,3 @@ fn mutate_object(
     }
     panic!("object with $id {id:?} not found");
 }
-

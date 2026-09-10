@@ -36,9 +36,7 @@ fn person_model() -> rex_ir::Model {
 fn class_of(profile: Profile) -> serde_json::Value {
     let files = generate(&person_model(), profile).expect("generate");
     let json = files.get("schema.json").expect("schema.json");
-    serde_json::from_str::<serde_json::Value>(json)
-        .expect("valid JSON")["$defs"]["Person"]
-        .clone()
+    serde_json::from_str::<serde_json::Value>(json).expect("valid JSON")["$defs"]["Person"].clone()
 }
 
 #[test]
@@ -80,7 +78,8 @@ fn wire_profile_documents_modifiers_in_the_class_comment() {
         "readonly attribute noted: {comment}"
     );
     assert!(
-        comment.contains("identity feature 'handle'") && comment.contains("readonly feature 'handle'"),
+        comment.contains("identity feature 'handle'")
+            && comment.contains("readonly feature 'handle'"),
         "both modifiers of 'handle' noted: {comment}"
     );
     // The omissions convention is preserved alongside the modifier notes.
@@ -107,10 +106,9 @@ fn unmodified_classes_have_no_modifier_notes() {
     assert!(compilation.diagnostics.is_empty());
     let model = compilation.model.unwrap();
     let files = generate(&model, Profile::Wire).expect("generate");
-    let plain = &serde_json::from_str::<serde_json::Value>(
-        files.get("schema.json").expect("schema.json"),
-    )
-    .unwrap()["$defs"]["Plain"];
+    let plain =
+        &serde_json::from_str::<serde_json::Value>(files.get("schema.json").expect("schema.json"))
+            .unwrap()["$defs"]["Plain"];
     assert!(
         plain.get("$comment").is_none(),
         "no $comment without omissions or modifiers"

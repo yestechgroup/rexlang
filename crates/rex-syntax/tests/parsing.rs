@@ -19,21 +19,35 @@ fn expect_class<'a>(decl: &'a Decl, name: &str) -> &'a ClassDecl {
     }
 }
 
-fn expect_feature<'a, F>(features: &'a [FeatureDecl], index: usize, kind: &str, name: &str, check: F)
-where
+fn expect_feature<'a, F>(
+    features: &'a [FeatureDecl],
+    index: usize,
+    kind: &str,
+    name: &str,
+    check: F,
+) where
     F: FnOnce(&'a FeatureDecl),
 {
     let feature = &features[index];
     assert_eq!(feature.kind(), kind, "unexpected feature kind at {index}");
-    assert_eq!(feature.name().text, name, "unexpected feature name at {index}");
+    assert_eq!(
+        feature.name().text,
+        name,
+        "unexpected feature name at {index}"
+    );
     check(feature);
 }
 
-fn expect_attribute(feature: &FeatureDecl) -> (&TypeRef, Option<&Multiplicity>, Option<&DefaultValue>) {
+fn expect_attribute(
+    feature: &FeatureDecl,
+) -> (&TypeRef, Option<&Multiplicity>, Option<&DefaultValue>) {
     match feature {
-        FeatureDecl::Attribute { type_ref, multiplicity, default, .. } => {
-            (type_ref, multiplicity.as_ref(), default.as_ref())
-        }
+        FeatureDecl::Attribute {
+            type_ref,
+            multiplicity,
+            default,
+            ..
+        } => (type_ref, multiplicity.as_ref(), default.as_ref()),
         other => panic!("expected attribute, found {other:?}"),
     }
 }
@@ -41,7 +55,11 @@ fn expect_attribute(feature: &FeatureDecl) -> (&TypeRef, Option<&Multiplicity>, 
 #[test]
 fn library_example_parses_without_errors() {
     let result = parse(LIBRARY);
-    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
     let model = result.ast.expect("expected an AST");
 
     let package = model.package.expect("expected a package declaration");
@@ -100,15 +118,30 @@ fn library_example_parses_without_errors() {
         }
     });
     expect_feature(&library.features, 1, "containment", "books", |feature| {
-        let FeatureDecl::Containment { type_ref, multiplicity, opposite, .. } = feature else {
+        let FeatureDecl::Containment {
+            type_ref,
+            multiplicity,
+            opposite,
+            ..
+        } = feature
+        else {
             panic!("expected containment");
         };
         assert_eq!(type_ref.name.full_name(), "Book");
-        assert_eq!(multiplicity.as_ref().map(|m| &m.kind), Some(&MultiplicityKind::Unbounded));
+        assert_eq!(
+            multiplicity.as_ref().map(|m| &m.kind),
+            Some(&MultiplicityKind::Unbounded)
+        );
         assert_eq!(opposite.as_ref().map(|n| n.text.as_str()), Some("library"));
     });
     expect_feature(&library.features, 2, "op", "getBook", |feature| {
-        let FeatureDecl::Op { return_type, params, body, .. } = feature else {
+        let FeatureDecl::Op {
+            return_type,
+            params,
+            body,
+            ..
+        } = feature
+        else {
             panic!("expected op");
         };
         assert_eq!(return_type.name.full_name(), "Book");
@@ -125,7 +158,10 @@ fn library_example_parses_without_errors() {
     assert!(span_text(LIBRARY, book.span).starts_with("class Book"));
 
     expect_feature(&book.features, 0, "container", "library", |feature| {
-        let FeatureDecl::Container { type_ref, opposite, .. } = feature else {
+        let FeatureDecl::Container {
+            type_ref, opposite, ..
+        } = feature
+        else {
             panic!("expected container");
         };
         assert_eq!(type_ref.name.full_name(), "Library");
@@ -150,15 +186,30 @@ fn library_example_parses_without_errors() {
         assert_eq!(type_ref.name.full_name(), "BookCategory");
     });
     expect_feature(&book.features, 5, "reference", "authors", |feature| {
-        let FeatureDecl::Reference { type_ref, multiplicity, opposite, .. } = feature else {
+        let FeatureDecl::Reference {
+            type_ref,
+            multiplicity,
+            opposite,
+            ..
+        } = feature
+        else {
             panic!("expected reference");
         };
         assert_eq!(type_ref.name.full_name(), "Writer");
-        assert_eq!(multiplicity.as_ref().map(|m| &m.kind), Some(&MultiplicityKind::Unbounded));
+        assert_eq!(
+            multiplicity.as_ref().map(|m| &m.kind),
+            Some(&MultiplicityKind::Unbounded)
+        );
         assert_eq!(opposite.as_ref().map(|n| n.text.as_str()), Some("books"));
     });
     expect_feature(&book.features, 6, "derived", "citation", |feature| {
-        let FeatureDecl::Derived { type_ref, multiplicity, body, .. } = feature else {
+        let FeatureDecl::Derived {
+            type_ref,
+            multiplicity,
+            body,
+            ..
+        } = feature
+        else {
             panic!("expected derived");
         };
         assert_eq!(type_ref.name.full_name(), "String");
@@ -171,11 +222,20 @@ fn library_example_parses_without_errors() {
     assert_eq!(writer.features.len(), 2);
     expect_feature(&writer.features, 0, "attribute", "name", |_| {});
     expect_feature(&writer.features, 1, "reference", "books", |feature| {
-        let FeatureDecl::Reference { type_ref, multiplicity, opposite, .. } = feature else {
+        let FeatureDecl::Reference {
+            type_ref,
+            multiplicity,
+            opposite,
+            ..
+        } = feature
+        else {
             panic!("expected reference");
         };
         assert_eq!(type_ref.name.full_name(), "Book");
-        assert_eq!(multiplicity.as_ref().map(|m| &m.kind), Some(&MultiplicityKind::Unbounded));
+        assert_eq!(
+            multiplicity.as_ref().map(|m| &m.kind),
+            Some(&MultiplicityKind::Unbounded)
+        );
         assert_eq!(opposite.as_ref().map(|n| n.text.as_str()), Some("authors"));
     });
 }
@@ -192,7 +252,11 @@ fn multiplicity_variants() {
         }
     "#;
     let result = parse(source);
-    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
     let model = result.ast.unwrap();
     let class = expect_class(&model.declarations[0], "M");
     assert_eq!(class.features.len(), 5);
@@ -201,7 +265,9 @@ fn multiplicity_variants() {
         .features
         .iter()
         .map(|feature| match feature {
-            FeatureDecl::Attribute { multiplicity, .. } => multiplicity.as_ref().unwrap().kind.clone(),
+            FeatureDecl::Attribute { multiplicity, .. } => {
+                multiplicity.as_ref().unwrap().kind.clone()
+            }
             other => panic!("expected attribute, found {other:?}"),
         })
         .collect();
@@ -217,7 +283,11 @@ fn multiplicity_variants() {
 fn escaped_keyword_identifiers() {
     let source = "class ^class { String ^op }";
     let result = parse(source);
-    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
     let model = result.ast.unwrap();
 
     let class = expect_class(&model.declarations[0], "class");
@@ -237,9 +307,14 @@ fn escaped_keyword_identifiers() {
 
 #[test]
 fn op_raw_body_span_is_captured() {
-    let source = "class C { op Book getBook(String title) { self.books.first(b => b.title == title) } }";
+    let source =
+        "class C { op Book getBook(String title) { self.books.first(b => b.title == title) } }";
     let result = parse(source);
-    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
     let model = result.ast.unwrap();
 
     let class = expect_class(&model.declarations[0], "C");
@@ -249,14 +324,21 @@ fn op_raw_body_span_is_captured() {
     };
     assert_eq!(params.len(), 1);
     let body = body.expect("expected a raw body span");
-    assert_eq!(span_text(source, body), "{ self.books.first(b => b.title == title) }");
+    assert_eq!(
+        span_text(source, body),
+        "{ self.books.first(b => b.title == title) }"
+    );
 }
 
 #[test]
 fn raw_bodies_may_contain_nested_braces() {
     let source = "class C { op int f() { { a } { {} } } op int g() derived String x { [1, 2] } }";
     let result = parse(source);
-    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
     let model = result.ast.unwrap();
 
     let class = expect_class(&model.declarations[0], "C");
@@ -282,7 +364,11 @@ fn raw_bodies_may_contain_nested_braces() {
 fn comments_are_skipped() {
     let source = "// leading line comment\n/* block\ncomment */ class /* mid */ A {\n// inner\n} // trailing";
     let result = parse(source);
-    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
     let model = result.ast.unwrap();
     assert!(model.declarations.len() == 1);
     assert_eq!(expect_class(&model.declarations[0], "A").features.len(), 0);
@@ -361,11 +447,17 @@ fn random_inputs_never_panic() {
     // Simple LCG so the test is reproducible without external crates.
     let mut state: u64 = 0x5EED_5EED_5EED_5EED;
     let mut next = move || {
-        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (state >> 33) as usize
     };
-    let alphabet: Vec<char> = "abcAZ019 \t\n{}[]().,*=^\"-+;:@#/?\\<>!~%&|$`'é§".chars().collect();
-    let keywords = ["class", "enum", "type", "package", "op", "opposite", "extends"];
+    let alphabet: Vec<char> = "abcAZ019 \t\n{}[]().,*=^\"-+;:@#/?\\<>!~%&|$`'é§"
+        .chars()
+        .collect();
+    let keywords = [
+        "class", "enum", "type", "package", "op", "opposite", "extends",
+    ];
     for _ in 0..2000 {
         let len = next() % 120;
         let mut input = String::new();
@@ -406,7 +498,11 @@ fn interface_annotation_extends_and_qualified_names() {
         }
     "#;
     let result = parse(source);
-    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
     let model = result.ast.unwrap();
     assert!(model.package.is_none());
     assert_eq!(model.declarations.len(), 3);
@@ -457,13 +553,22 @@ fn feature_level_recovery_resyncs_inside_class_body() {
     let model = result.ast.expect("expected a recovered AST");
     let class = expect_class(&model.declarations[0], "A");
 
-    let names: Vec<&str> = class.features.iter().map(|f| f.name().text.as_str()).collect();
+    let names: Vec<&str> = class
+        .features
+        .iter()
+        .map(|f| f.name().text.as_str())
+        .collect();
     assert_eq!(names, vec!["x", "bs", "tail"]);
 }
 
 fn expect_modifiers(feature: &FeatureDecl, id: bool, read_only: bool) {
     let modifiers = feature.modifiers();
-    assert_eq!(modifiers.is_id(), id, "unexpected `id` on {}", feature.name().text);
+    assert_eq!(
+        modifiers.is_id(),
+        id,
+        "unexpected `id` on {}",
+        feature.name().text
+    );
     assert_eq!(
         modifiers.is_read_only(),
         read_only,
@@ -490,7 +595,11 @@ fn modifiers_parse_on_every_feature_kind() {
         class Shelf {}
     "#;
     let result = parse(source);
-    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
     let model = result.ast.unwrap();
     let person = expect_class(&model.declarations[0], "Person");
     assert_eq!(person.features.len(), 8);
@@ -510,7 +619,13 @@ fn modifiers_parse_on_every_feature_kind() {
         assert_eq!(type_ref.name.full_name(), "String");
     });
     expect_feature(&person.features, 5, "op", "find", |feature| {
-        let FeatureDecl::Op { return_type, params, body, .. } = feature else {
+        let FeatureDecl::Op {
+            return_type,
+            params,
+            body,
+            ..
+        } = feature
+        else {
             panic!("expected op");
         };
         assert_eq!(return_type.name.full_name(), "Book");
@@ -519,7 +634,10 @@ fn modifiers_parse_on_every_feature_kind() {
     });
     expect_feature(&person.features, 6, "derived", "label", |_| {});
     expect_feature(&person.features, 7, "container", "shelf", |feature| {
-        let FeatureDecl::Container { type_ref, opposite, .. } = feature else {
+        let FeatureDecl::Container {
+            type_ref, opposite, ..
+        } = feature
+        else {
             panic!("expected container");
         };
         assert_eq!(type_ref.name.full_name(), "Shelf");
@@ -538,7 +656,11 @@ fn modifiers_are_order_free_and_repeats_are_idempotent() {
         }
     "#;
     let result = parse(source);
-    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
     let model = result.ast.unwrap();
     let class = expect_class(&model.declarations[0], "A");
     assert_eq!(class.features.len(), 4);
@@ -552,7 +674,11 @@ fn modifiers_are_order_free_and_repeats_are_idempotent() {
 fn modifier_spans_point_at_their_keywords_and_the_feature_spans_the_whole_line() {
     let source = "class C { readonly id String handle }";
     let result = parse(source);
-    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
     let model = result.ast.unwrap();
     let class = expect_class(&model.declarations[0], "C");
     let feature = &class.features[0];
@@ -560,7 +686,10 @@ fn modifier_spans_point_at_their_keywords_and_the_feature_spans_the_whole_line()
     assert_eq!(span_text(source, modifiers.read_only.unwrap()), "readonly");
     assert_eq!(span_text(source, modifiers.id.unwrap()), "id");
     // The feature span covers the whole declaration, modifiers included.
-    assert_eq!(span_text(source, feature.span()), "readonly id String handle");
+    assert_eq!(
+        span_text(source, feature.span()),
+        "readonly id String handle"
+    );
 }
 
 #[test]
@@ -569,7 +698,11 @@ fn escaped_readonly_is_a_type_or_name_never_a_modifier() {
     // modifier. The trailing unescaped `readonly` is the feature name.
     let source = "class C { ^readonly ^readonly }";
     let result = parse(source);
-    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
     let model = result.ast.unwrap();
     let class = expect_class(&model.declarations[0], "C");
     assert_eq!(class.features.len(), 1);
@@ -585,7 +718,11 @@ fn escaped_readonly_is_a_type_or_name_never_a_modifier() {
     // still a legal feature name.
     let source = "class C { readonly String ^readonly }";
     let result = parse(source);
-    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
     let model = result.ast.unwrap();
     let class = expect_class(&model.declarations[0], "C");
     assert_eq!(class.features.len(), 1);
@@ -601,7 +738,11 @@ fn escaped_readonly_is_a_type_or_name_never_a_modifier() {
 fn modifier_before_escaped_type_still_parses() {
     let source = "class C { id ^id handle }";
     let result = parse(source);
-    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
     let model = result.ast.unwrap();
     let class = expect_class(&model.declarations[0], "C");
     expect_feature(&class.features, 0, "attribute", "handle", |feature| {
@@ -616,7 +757,11 @@ fn modifier_before_escaped_type_still_parses() {
 fn readonly_and_id_remain_usable_as_unescaped_feature_names() {
     let source = "class C { String readonly\n String id }";
     let result = parse(source);
-    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
     let model = result.ast.unwrap();
     let class = expect_class(&model.declarations[0], "C");
     assert_eq!(class.features.len(), 2);
@@ -640,7 +785,11 @@ fn modifier_before_a_broken_feature_recovers_to_the_next_feature() {
     assert!(!result.errors.is_empty(), "expected errors");
     let model = result.ast.expect("expected a recovered AST");
     let class = expect_class(&model.declarations[0], "A");
-    let names: Vec<&str> = class.features.iter().map(|f| f.name().text.as_str()).collect();
+    let names: Vec<&str> = class
+        .features
+        .iter()
+        .map(|f| f.name().text.as_str())
+        .collect();
     assert_eq!(names, vec!["tail"]);
 }
 
@@ -656,15 +805,23 @@ fn datatype_wraps_named_target_and_bare_bindings() {
         }
     "#;
     let result = parse(source);
-    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
     let model = result.ast.unwrap();
     assert_eq!(model.declarations.len(), 3);
 
-    let Decl::Datatype(uuid) = &model.declarations[0] else { panic!("expected datatype") };
+    let Decl::Datatype(uuid) = &model.declarations[0] else {
+        panic!("expected datatype")
+    };
     assert!(matches!(uuid.wraps, Some(Wraps::Opaque(_))));
     assert!(uuid.bindings.is_empty());
 
-    let Decl::Datatype(money) = &model.declarations[1] else { panic!("expected datatype") };
+    let Decl::Datatype(money) = &model.declarations[1] else {
+        panic!("expected datatype")
+    };
     match &money.wraps {
         Some(Wraps::Named(name)) => assert_eq!(name.full_name(), "java.math.BigDecimal"),
         other => panic!("expected named wraps target, found {other:?}"),
@@ -672,7 +829,9 @@ fn datatype_wraps_named_target_and_bare_bindings() {
     assert_eq!(money.bindings.len(), 1);
     assert_eq!(money.bindings[0].value, "rust_decimal::Decimal");
 
-    let Decl::Datatype(timestamp) = &model.declarations[2] else { panic!("expected datatype") };
+    let Decl::Datatype(timestamp) = &model.declarations[2] else {
+        panic!("expected datatype")
+    };
     assert!(timestamp.wraps.is_none());
     assert_eq!(timestamp.bindings[0].key.text, "rust");
 }

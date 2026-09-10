@@ -31,7 +31,9 @@ pub(crate) mod lower;
 pub mod navigation;
 
 pub use diagnostic::{render, Diagnostic, DiagnosticCode, Severity};
-pub use navigation::{DefId, Definition, FeatureSymbolKind, Lookup, NavigationIndex, Reference, SymbolKind};
+pub use navigation::{
+    DefId, Definition, FeatureSymbolKind, Lookup, NavigationIndex, Reference, SymbolKind,
+};
 
 /// Byte-offset span into the source text.
 pub use rex_syntax::Span;
@@ -88,7 +90,10 @@ pub struct Compiled {
 pub fn compile(db: &dyn Db, file: SourceFile) -> Compiled {
     let parsed = parse_query(db, file);
     let mut diagnostics = parsed.diagnostics;
-    let lowered = parsed.ast.as_ref().map(|ast| lower::compile(&file.path(db), ast));
+    let lowered = parsed
+        .ast
+        .as_ref()
+        .map(|ast| lower::compile(&file.path(db), ast));
     if let Some((_, semantic)) = &lowered {
         diagnostics.extend(semantic.iter().cloned());
     }

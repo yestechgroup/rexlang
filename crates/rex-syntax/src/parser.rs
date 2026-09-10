@@ -87,10 +87,7 @@ impl<'src> Input<'src> for Tokens<'src> {
 }
 
 impl<'src> ValueInput<'src> for Tokens<'src> {
-    unsafe fn next(
-        this: &mut Self::Cache,
-        cursor: &mut Self::Cursor,
-    ) -> Option<Self::Token> {
+    unsafe fn next(this: &mut Self::Cache, cursor: &mut Self::Cursor) -> Option<Self::Token> {
         Self::next_maybe(this, cursor)
     }
 }
@@ -199,7 +196,12 @@ fn int_lit<'src>() -> impl Parser<'src, Tokens<'src>, i64, MoxExtra<'src>> + Clo
 
 fn qname<'src>() -> impl Parser<'src, Tokens<'src>, QualifiedName, MoxExtra<'src>> + Clone {
     name()
-        .then(kw(Token::Dot).ignore_then(name()).repeated().collect::<Vec<_>>())
+        .then(
+            kw(Token::Dot)
+                .ignore_then(name())
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
         .map_with(|(first, rest), e| QualifiedName {
             segments: once(first).chain(rest).collect(),
             span: e.span(),
@@ -207,7 +209,10 @@ fn qname<'src>() -> impl Parser<'src, Tokens<'src>, QualifiedName, MoxExtra<'src
 }
 
 fn tref<'src>() -> impl Parser<'src, Tokens<'src>, TypeRef, MoxExtra<'src>> + Clone {
-    qname().map_with(|name, e| TypeRef { name, span: e.span() })
+    qname().map_with(|name, e| TypeRef {
+        name,
+        span: e.span(),
+    })
 }
 
 fn multiplicity<'src>() -> impl Parser<'src, Tokens<'src>, Multiplicity, MoxExtra<'src>> + Clone {
@@ -230,15 +235,30 @@ fn multiplicity<'src>() -> impl Parser<'src, Tokens<'src>, Multiplicity, MoxExtr
     kw(Token::LBracket)
         .ignore_then(inner)
         .then_ignore(kw(Token::RBracket))
-        .map_with(|kind, e| Multiplicity { kind, span: e.span() })
+        .map_with(|kind, e| Multiplicity {
+            kind,
+            span: e.span(),
+        })
 }
 
 fn default_value<'src>() -> impl Parser<'src, Tokens<'src>, DefaultValue, MoxExtra<'src>> + Clone {
     choice((
-        string_lit().map_with(|value, e| DefaultValue::Str { value, span: e.span() }),
-        int_lit().map_with(|value, e| DefaultValue::Int { value, span: e.span() }),
-        kw(Token::True).map_with(|_, e| DefaultValue::Bool { value: true, span: e.span() }),
-        kw(Token::False).map_with(|_, e| DefaultValue::Bool { value: false, span: e.span() }),
+        string_lit().map_with(|value, e| DefaultValue::Str {
+            value,
+            span: e.span(),
+        }),
+        int_lit().map_with(|value, e| DefaultValue::Int {
+            value,
+            span: e.span(),
+        }),
+        kw(Token::True).map_with(|_, e| DefaultValue::Bool {
+            value: true,
+            span: e.span(),
+        }),
+        kw(Token::False).map_with(|_, e| DefaultValue::Bool {
+            value: false,
+            span: e.span(),
+        }),
         name().map(DefaultValue::Name),
     ))
 }
@@ -274,7 +294,9 @@ fn modifiers<'src>() -> impl Parser<'src, Tokens<'src>, Modifiers, MoxExtra<'src
 fn raw_body<'src>() -> impl Parser<'src, Tokens<'src>, Span, MoxExtra<'src>> + Clone {
     let balanced = recursive(|body| {
         let atom = select! { t if !matches!(t, Token::LBrace | Token::RBrace) => () };
-        atom.or(kw(Token::LBrace).ignore_then(body).then_ignore(kw(Token::RBrace)))
+        atom.or(kw(Token::LBrace)
+            .ignore_then(body)
+            .then_ignore(kw(Token::RBrace)))
             .repeated()
             .ignored()
     });
@@ -285,12 +307,19 @@ fn raw_body<'src>() -> impl Parser<'src, Tokens<'src>, Span, MoxExtra<'src>> + C
 }
 
 fn params<'src>() -> impl Parser<'src, Tokens<'src>, Vec<Param>, MoxExtra<'src>> + Clone {
-    let param = tref()
-        .then(name())
-        .map_with(|(type_ref, name), e| Param { type_ref, name, span: e.span() });
+    let param = tref().then(name()).map_with(|(type_ref, name), e| Param {
+        type_ref,
+        name,
+        span: e.span(),
+    });
     let list = param
         .clone()
-        .then(kw(Token::Comma).ignore_then(param).repeated().collect::<Vec<_>>())
+        .then(
+            kw(Token::Comma)
+                .ignore_then(param)
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
         .map(|(first, rest)| once(first).chain(rest).collect::<Vec<_>>());
     kw(Token::LParen)
         .ignore_then(list.or_not())
@@ -303,9 +332,16 @@ fn attribute<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<'s
         .then(multiplicity().or_not())
         .then(name())
         .then(kw(Token::Eq).ignore_then(default_value()).or_not())
-        .map_with(|(((type_ref, multiplicity), name), default), e| {
-            FeatureDecl::Attribute { modifiers: Modifiers::default(), type_ref, multiplicity, name, default, span: e.span() }
-        })
+        .map_with(
+            |(((type_ref, multiplicity), name), default), e| FeatureDecl::Attribute {
+                modifiers: Modifiers::default(),
+                type_ref,
+                multiplicity,
+                name,
+                default,
+                span: e.span(),
+            },
+        )
 }
 
 fn containment<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<'src>> + Clone {
@@ -314,9 +350,16 @@ fn containment<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<
         .then(multiplicity().or_not())
         .then(name())
         .then(opposite().or_not())
-        .map_with(|(((type_ref, multiplicity), name), opposite), e| {
-            FeatureDecl::Containment { modifiers: Modifiers::default(), type_ref, multiplicity, name, opposite, span: e.span() }
-        })
+        .map_with(
+            |(((type_ref, multiplicity), name), opposite), e| FeatureDecl::Containment {
+                modifiers: Modifiers::default(),
+                type_ref,
+                multiplicity,
+                name,
+                opposite,
+                span: e.span(),
+            },
+        )
 }
 
 fn reference<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<'src>> + Clone {
@@ -325,9 +368,16 @@ fn reference<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<'s
         .then(multiplicity().or_not())
         .then(name())
         .then(opposite().or_not())
-        .map_with(|(((type_ref, multiplicity), name), opposite), e| {
-            FeatureDecl::Reference { modifiers: Modifiers::default(), type_ref, multiplicity, name, opposite, span: e.span() }
-        })
+        .map_with(
+            |(((type_ref, multiplicity), name), opposite), e| FeatureDecl::Reference {
+                modifiers: Modifiers::default(),
+                type_ref,
+                multiplicity,
+                name,
+                opposite,
+                span: e.span(),
+            },
+        )
 }
 
 fn container<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<'src>> + Clone {
@@ -335,8 +385,12 @@ fn container<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<'s
         .ignore_then(tref())
         .then(name())
         .then(opposite().or_not())
-        .map_with(|((type_ref, name), opposite), e| {
-            FeatureDecl::Container { modifiers: Modifiers::default(), type_ref, name, opposite, span: e.span() }
+        .map_with(|((type_ref, name), opposite), e| FeatureDecl::Container {
+            modifiers: Modifiers::default(),
+            type_ref,
+            name,
+            opposite,
+            span: e.span(),
         })
 }
 
@@ -346,8 +400,13 @@ fn op_decl<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<'src
         .then(name())
         .then(params())
         .then(raw_body().or_not())
-        .map_with(|(((return_type, name), params), body), e| {
-            FeatureDecl::Op { modifiers: Modifiers::default(), return_type, name, params, body, span: e.span() }
+        .map_with(|(((return_type, name), params), body), e| FeatureDecl::Op {
+            modifiers: Modifiers::default(),
+            return_type,
+            name,
+            params,
+            body,
+            span: e.span(),
         })
 }
 
@@ -357,9 +416,16 @@ fn derived_decl<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra
         .then(multiplicity().or_not())
         .then(name())
         .then(raw_body().or_not())
-        .map_with(|(((type_ref, multiplicity), name), body), e| {
-            FeatureDecl::Derived { modifiers: Modifiers::default(), type_ref, multiplicity, name, body, span: e.span() }
-        })
+        .map_with(
+            |(((type_ref, multiplicity), name), body), e| FeatureDecl::Derived {
+                modifiers: Modifiers::default(),
+                type_ref,
+                multiplicity,
+                name,
+                body,
+                span: e.span(),
+            },
+        )
 }
 
 fn feature<'src>() -> impl Parser<'src, Tokens<'src>, Option<FeatureDecl>, MoxExtra<'src>> + Clone {
@@ -391,13 +457,20 @@ fn annotation_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'sr
         .ignore_then(string_lit())
         .then(kw(Token::As).ignore_then(name()).or_not())
         .map_with(|(value, name), e| {
-            Decl::Annotation(AnnotationDecl { value, name, span: e.span() })
+            Decl::Annotation(AnnotationDecl {
+                value,
+                name,
+                span: e.span(),
+            })
         })
 }
 
 fn class_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>> + Clone {
     let extends = {
-        let rest = kw(Token::Comma).ignore_then(tref()).repeated().collect::<Vec<_>>();
+        let rest = kw(Token::Comma)
+            .ignore_then(tref())
+            .repeated()
+            .collect::<Vec<_>>();
         kw(Token::Extends)
             .ignore_then(tref())
             .then(rest)
@@ -419,10 +492,15 @@ fn class_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>> +
         })
 }
 
-fn binding_block<'src>() -> impl Parser<'src, Tokens<'src>, Vec<BindingEntry>, MoxExtra<'src>> + Clone {
+fn binding_block<'src>(
+) -> impl Parser<'src, Tokens<'src>, Vec<BindingEntry>, MoxExtra<'src>> + Clone {
     let entry = name()
         .then(string_lit())
-        .map_with(|(key, value), e| BindingEntry { key, value, span: e.span() });
+        .map_with(|(key, value), e| BindingEntry {
+            key,
+            value,
+            span: e.span(),
+        });
     kw(Token::LBrace)
         .ignore_then(entry.repeated().collect::<Vec<_>>())
         .then_ignore(kw(Token::RBrace))
@@ -433,7 +511,11 @@ fn interface_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src
         .ignore_then(name())
         .then(binding_block())
         .map_with(|(name, bindings), e| {
-            Decl::Interface(InterfaceDecl { name, bindings, span: e.span() })
+            Decl::Interface(InterfaceDecl {
+                name,
+                bindings,
+                span: e.span(),
+            })
         })
 }
 
@@ -441,15 +523,24 @@ fn enum_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>> + 
     let literal = name()
         .then(kw(Token::As).ignore_then(string_lit()).or_not())
         .then(kw(Token::Eq).ignore_then(int_lit()).or_not())
-        .map_with(|((name, label), value), e| {
-            EnumLiteral { name, label, value, span: e.span() }
+        .map_with(|((name, label), value), e| EnumLiteral {
+            name,
+            label,
+            value,
+            span: e.span(),
         });
     kw(Token::Enum)
         .ignore_then(name())
         .then_ignore(kw(Token::LBrace))
         .then(literal.repeated().at_least(1).collect::<Vec<_>>())
         .then_ignore(kw(Token::RBrace))
-        .map_with(|(name, literals), e| Decl::Enum(EnumDecl { name, literals, span: e.span() }))
+        .map_with(|(name, literals), e| {
+            Decl::Enum(EnumDecl {
+                name,
+                literals,
+                span: e.span(),
+            })
+        })
 }
 
 fn datatype_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>> + Clone {
@@ -479,12 +570,19 @@ enum VocabItem {
 }
 
 fn vocabulary_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>> + Clone {
-    let facet_decl = kw(Token::Facet)
-        .ignore_then(tref())
-        .then(name())
-        .map_with(|(type_ref, name), e| VocabularyFacetDecl { type_ref, name, span: e.span() });
+    let facet_decl =
+        kw(Token::Facet)
+            .ignore_then(tref())
+            .then(name())
+            .map_with(|(type_ref, name), e| VocabularyFacetDecl {
+                type_ref,
+                name,
+                span: e.span(),
+            });
     let item = choice((
-        kw(Token::Version).ignore_then(string_lit()).map(VocabItem::Version),
+        kw(Token::Version)
+            .ignore_then(string_lit())
+            .map(VocabItem::Version),
         kw(Token::Key).ignore_then(name()).map(VocabItem::Key),
         facet_decl.map(VocabItem::Facet),
     ));
@@ -506,7 +604,14 @@ fn vocabulary_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'sr
                     VocabItem::Facet(facet) => facets.push(facet),
                 }
             }
-            Decl::Vocabulary(VocabularyDecl { name, source, version, key, facets, span: e.span() })
+            Decl::Vocabulary(VocabularyDecl {
+                name,
+                source,
+                version,
+                key,
+                facets,
+                span: e.span(),
+            })
         })
 }
 
@@ -546,7 +651,10 @@ fn fold_model(items: Vec<Item>) -> Model {
             Item::Decl(decl) => declarations.push(decl),
         }
     }
-    Model { package, declarations }
+    Model {
+        package,
+        declarations,
+    }
 }
 
 fn model<'src>() -> impl Parser<'src, Tokens<'src>, Model, MoxExtra<'src>> + Clone {

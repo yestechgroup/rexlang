@@ -185,7 +185,10 @@ pub(crate) fn compile(path: &str, model: &mox::Model) -> (Option<ir::Model>, Vec
                     format!("duplicate declaration of '{}'", name.text),
                     Some(name.span),
                 )
-                .with_help(format!("'{0}' is already declared in this package", name.text)),
+                .with_help(format!(
+                    "'{0}' is already declared in this package",
+                    name.text
+                )),
             );
         } else {
             kinds.insert(&name.text, kind);
@@ -337,7 +340,11 @@ fn primitive_type(name: &str) -> Option<ir::PrimitiveType> {
 
 /// Builds an IR type reference from a resolution, or a placeholder (the model
 /// is discarded whenever errors exist) when resolution failed.
-fn ir_type_of(resolution: Option<&Resolution>, package: &str, type_ref: &mox::TypeRef) -> ir::TypeRef {
+fn ir_type_of(
+    resolution: Option<&Resolution>,
+    package: &str,
+    type_ref: &mox::TypeRef,
+) -> ir::TypeRef {
     match resolution {
         Some(resolution) => resolution.kind.to_ir(package, &resolution.name),
         None => ir::TypeRef::Class {
@@ -763,8 +770,14 @@ fn lower_class(
                     ir_type,
                     multiplicity,
                 );
-                let ir_feature =
-                    apply_default(ir_feature, default.as_ref(), resolution.as_ref(), enum_decls, vocab_keys, diags);
+                let ir_feature = apply_default(
+                    ir_feature,
+                    default.as_ref(),
+                    resolution.as_ref(),
+                    enum_decls,
+                    vocab_keys,
+                    diags,
+                );
                 let ir_feature = apply_modifiers(ir_feature, feature.modifiers());
                 features.push(ir_feature);
                 records.push(FeatureRecord {
@@ -899,9 +912,13 @@ fn lower_class(
                     .map(|m| lower_multiplicity(m, diags))
                     .unwrap_or(ir::Multiplicity::OPTIONAL);
                 let ir_type = ir_type_of(resolution.as_ref(), package, type_ref);
-                let ir_feature =
-                    ir::Feature::new(&name.text, ir::FeatureKind::Attribute, ir_type, multiplicity)
-                        .derived();
+                let ir_feature = ir::Feature::new(
+                    &name.text,
+                    ir::FeatureKind::Attribute,
+                    ir_type,
+                    multiplicity,
+                )
+                .derived();
                 let ir_feature = apply_modifiers(ir_feature, feature.modifiers());
                 features.push(ir_feature);
                 records.push(FeatureRecord {
@@ -993,7 +1010,8 @@ fn lower_relation(
     let ir_type = ir_type_of(resolution.as_ref(), package, type_ref);
     let mut ir_feature = ir::Feature::new(
         &name.text,
-        kind.ir_kind().expect("relations always lower to an IR kind"),
+        kind.ir_kind()
+            .expect("relations always lower to an IR kind"),
         ir_type,
         multiplicity,
     );
@@ -1037,15 +1055,13 @@ fn lower_multiplicity(
 
 /// Converts a multiplicity bound, reporting out-of-range values.
 fn bound_value(value: i64, span: Span, diags: &mut Vec<Diagnostic>) -> Option<u32> {
-    u32::try_from(value)
-        .ok()
-        .or_else(|| {
-            diags.push(Diagnostic::error(
-                format!("invalid multiplicity bound {value}: bounds must be between 0 and 4294967295"),
-                Some(span),
-            ));
-            None
-        })
+    u32::try_from(value).ok().or_else(|| {
+        diags.push(Diagnostic::error(
+            format!("invalid multiplicity bound {value}: bounds must be between 0 and 4294967295"),
+            Some(span),
+        ));
+        None
+    })
 }
 
 /// Applies an attribute default value. The `Name` form is an enum literal
@@ -1073,7 +1089,10 @@ fn apply_default(
             feature.with_default(ir::DefaultValue::Bool(*value))
         }
         mox::DefaultValue::Name(name) => match resolution {
-            Some(Resolution { kind: Resolved::Enum, name: enum_name }) => {
+            Some(Resolution {
+                kind: Resolved::Enum,
+                name: enum_name,
+            }) => {
                 if let Some(enum_decl) = enum_decls.get(enum_name.as_str()) {
                     if !enum_decl
                         .literals
@@ -1088,7 +1107,10 @@ fn apply_default(
                 }
                 feature.with_default(ir::DefaultValue::EnumLiteral(name.text.clone()))
             }
-            Some(Resolution { kind: Resolved::Vocabulary, name: vocab_name }) => {
+            Some(Resolution {
+                kind: Resolved::Vocabulary,
+                name: vocab_name,
+            }) => {
                 // An absent key set means the vocabulary failed to load; that
                 // error is already reported, so the default adds nothing.
                 if let Some(keys) = vocab_keys.get(vocab_name.as_str()) {
@@ -1104,7 +1126,10 @@ fn apply_default(
             }
             Some(_) => {
                 diags.push(Diagnostic::error(
-                    format!("default value '{}' requires an enum-typed attribute", name.text),
+                    format!(
+                        "default value '{}' requires an enum-typed attribute",
+                        name.text
+                    ),
                     Some(name.span),
                 ));
                 feature
@@ -1119,8 +1144,10 @@ fn apply_default(
 /// Detects cycles in the class inheritance graph (class → class `extends`
 /// edges), reporting the first cycle found.
 fn detect_inheritance_cycles(classes: &[ClassRecord], diags: &mut Vec<Diagnostic>) {
-    let index: HashMap<&str, &ClassRecord> =
-        classes.iter().map(|class| (class.name.as_str(), class)).collect();
+    let index: HashMap<&str, &ClassRecord> = classes
+        .iter()
+        .map(|class| (class.name.as_str(), class))
+        .collect();
     let mut state: HashMap<&str, u8> = HashMap::new();
     for class in classes {
         let mut path: Vec<&str> = Vec::new();
@@ -1159,10 +1186,15 @@ fn visit_class<'a>(
     state.insert(class, 1);
     path.push(class);
     if let Some(record) = index.get(class) {
-        for superclass in record.def.extends.iter().filter_map(|type_ref| match type_ref {
-            ir::TypeRef::Class { name, .. } => Some(name.as_str()),
-            _ => None,
-        }) {
+        for superclass in record
+            .def
+            .extends
+            .iter()
+            .filter_map(|type_ref| match type_ref {
+                ir::TypeRef::Class { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+        {
             if let Some(cycle) = visit_class(superclass, index, state, path) {
                 return Some(cycle);
             }
@@ -1181,8 +1213,10 @@ fn visit_class<'a>(
 /// and requires each side's `opposite` to name the other feature back. Each
 /// violated declaration produces one error naming both sides.
 fn validate_opposites(classes: &[ClassRecord], diags: &mut Vec<Diagnostic>) {
-    let index: HashMap<&str, &ClassRecord> =
-        classes.iter().map(|class| (class.name.as_str(), class)).collect();
+    let index: HashMap<&str, &ClassRecord> = classes
+        .iter()
+        .map(|class| (class.name.as_str(), class))
+        .collect();
     for class in classes {
         for feature in &class.features {
             if !matches!(

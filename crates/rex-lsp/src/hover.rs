@@ -149,10 +149,7 @@ mod tests {
             \x20   derived String summary\n\
             }\n\n\
             class Book {}\nclass Writer {}\nclass Room {}\n";
-        assert_eq!(
-            hover_of(source, "name"),
-            "**name**: String\nattribute"
-        );
+        assert_eq!(hover_of(source, "name"), "**name**: String\nattribute");
         assert_eq!(hover_of(source, "stars"), "**stars**: int[3]\nattribute");
         assert_eq!(
             hover_of(source, "books"),
@@ -167,10 +164,7 @@ mod tests {
             "**room**: Room\ncontainer — opposite: `occupants`"
         );
         assert_eq!(hover_of(source, "find"), "**find**: Book\nop (abstract)");
-        assert_eq!(
-            hover_of(source, "summary"),
-            "**summary**: String\nderived"
-        );
+        assert_eq!(hover_of(source, "summary"), "**summary**: String\nderived");
     }
 
     #[test]

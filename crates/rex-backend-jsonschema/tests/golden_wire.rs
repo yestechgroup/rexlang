@@ -53,7 +53,8 @@ const MODELS: &[(&str, &str)] = &[
 #[test]
 fn conformance_wire_schemas_match_golden() {
     for (model_path, artifact_path) in MODELS {
-        let files = generate(&conformance_model(model_path), Profile::Wire).expect("generate wire schema");
+        let files =
+            generate(&conformance_model(model_path), Profile::Wire).expect("generate wire schema");
         let json = files
             .get("schema.json")
             .expect("single schema.json file")
@@ -95,7 +96,8 @@ fn conformance_model(relative_path: &str) -> rex_ir::Model {
 #[test]
 fn generate_returns_exactly_one_schema_file() {
     for (model_path, _) in MODELS {
-        let files = generate(&conformance_model(model_path), Profile::Wire).expect("generate wire schema");
+        let files =
+            generate(&conformance_model(model_path), Profile::Wire).expect("generate wire schema");
         assert_eq!(files.len(), 1, "the wire profile emits a single file");
     }
 }
@@ -104,10 +106,14 @@ fn generate_returns_exactly_one_schema_file() {
 #[test]
 fn vocabulary_attribute_enumerates_entry_keys() {
     for profile in [Profile::Wire, Profile::Api] {
-        let files = generate(&conformance_model("tests/conformance/models/currency.mox"), profile)
-            .expect("generate currency schema");
+        let files = generate(
+            &conformance_model("tests/conformance/models/currency.mox"),
+            profile,
+        )
+        .expect("generate currency schema");
         let schema: serde_json::Value =
-            serde_json::from_str(files.get("schema.json").expect("schema.json")).expect("valid JSON");
+            serde_json::from_str(files.get("schema.json").expect("schema.json"))
+                .expect("valid JSON");
         let currency = &schema["$defs"]["Account"]["properties"]["currency"];
         assert_eq!(
             currency["enum"],
@@ -162,7 +168,10 @@ fn wire_schema_structure_contract() {
         let name = reference
             .strip_prefix("#/$defs/")
             .expect("anyOf arm targets #/$defs/");
-        assert!(defs.get(name).is_some(), "ref target '{name}' exists in $defs");
+        assert!(
+            defs.get(name).is_some(),
+            "ref target '{name}' exists in $defs"
+        );
     }
 
     // Book def: closed, typed, ids patterned, container/derived omitted.
@@ -170,9 +179,18 @@ fn wire_schema_structure_contract() {
     assert_eq!(book["type"], "object");
     assert_eq!(book["properties"]["$type"]["const"], "Book");
     assert_eq!(book["properties"]["$id"]["pattern"], "^book/[0-9]+$");
-    assert!(book["properties"].get("library").is_none(), "container omitted");
-    assert!(book["properties"].get("citation").is_none(), "derived omitted");
-    assert_eq!(book["properties"]["pages"], serde_json::json!({"type": "integer"}));
+    assert!(
+        book["properties"].get("library").is_none(),
+        "container omitted"
+    );
+    assert!(
+        book["properties"].get("citation").is_none(),
+        "derived omitted"
+    );
+    assert_eq!(
+        book["properties"]["pages"],
+        serde_json::json!({"type": "integer"})
+    );
     assert_eq!(
         book["properties"]["category"],
         serde_json::json!({"enum": ["Mystery", "ScienceFiction"]})
@@ -195,7 +213,10 @@ fn wire_schema_structure_contract() {
     );
     let book_required = book["required"].as_array().expect("book required");
     for key in ["$id", "$type", "pages", "title", "category", "copyright"] {
-        assert!(book_required.iter().any(|k| k == key), "Book required has {key}");
+        assert!(
+            book_required.iter().any(|k| k == key),
+            "Book required has {key}"
+        );
     }
     assert!(
         !book_required.iter().any(|k| k == "authors"),
@@ -203,8 +224,14 @@ fn wire_schema_structure_contract() {
     );
     assert_eq!(book["unevaluatedProperties"], false);
     let book_comment = book["$comment"].as_str().expect("book $comment");
-    assert!(book_comment.contains("container 'library'"), "comment: {book_comment}");
-    assert!(book_comment.contains("derived 'citation'"), "comment: {book_comment}");
+    assert!(
+        book_comment.contains("container 'library'"),
+        "comment: {book_comment}"
+    );
+    assert!(
+        book_comment.contains("derived 'citation'"),
+        "comment: {book_comment}"
+    );
 
     // Library def: closed, containment inlined, many containment required.
     let library = &defs["Library"];
@@ -214,7 +241,10 @@ fn wire_schema_structure_contract() {
     );
     let library_required = library["required"].as_array().expect("library required");
     assert!(library_required.iter().any(|k| k == "books"));
-    assert!(library_required.iter().any(|k| k == "name"), "name is 1..1 in the IR");
+    assert!(
+        library_required.iter().any(|k| k == "name"),
+        "name is 1..1 in the IR"
+    );
     assert!(!library_required.iter().any(|k| k == "$comment"));
     assert_eq!(library["properties"]["$id"]["pattern"], "^library/[0-9]+$");
     assert_eq!(library["unevaluatedProperties"], false);
@@ -233,12 +263,13 @@ fn wire_schema_structure_contract() {
         writer_ref["properties"]["$ref"],
         serde_json::json!({"pattern": "^writer/[0-9]+$", "type": "string"})
     );
-    let ref_required = writer_ref["required"].as_array().expect("WriterRef required");
+    let ref_required = writer_ref["required"]
+        .as_array()
+        .expect("WriterRef required");
     assert!(ref_required.iter().any(|k| k == "$ref"));
     assert_eq!(writer_ref["unevaluatedProperties"], false);
     assert_eq!(
-        defs["BookRef"]["properties"]["$ref"]["pattern"],
-        "^book/[0-9]+$",
+        defs["BookRef"]["properties"]["$ref"]["pattern"], "^book/[0-9]+$",
         "BookRef def exists for Writer.books"
     );
 }

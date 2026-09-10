@@ -19,7 +19,10 @@ fn empty_input_formats_to_empty_output() {
 
 #[test]
 fn normalizes_spacing_one_decl_per_line() {
-    assert_eq!(fmt("class   Book  { int   pages }"), "class Book {\n    int pages\n}\n");
+    assert_eq!(
+        fmt("class   Book  { int   pages }"),
+        "class Book {\n    int pages\n}\n"
+    );
 }
 
 #[test]
@@ -202,7 +205,10 @@ fn interface_bindings_one_per_line() {
 
 #[test]
 fn annotation_decl() {
-    assert_eq!(fmt("annotation \"deprecated\" as Old"), "annotation \"deprecated\" as Old\n");
+    assert_eq!(
+        fmt("annotation \"deprecated\" as Old"),
+        "annotation \"deprecated\" as Old\n"
+    );
     assert_eq!(fmt("annotation \"x\""), "annotation \"x\"\n");
 }
 
@@ -238,10 +244,7 @@ fn blank_lines_collapse_between_top_level_decls() {
 
 #[test]
 fn no_blank_line_at_document_start_and_single_newline_at_eof() {
-    assert_eq!(
-        fmt("\n\npackage a\n"),
-        "package a\n"
-    );
+    assert_eq!(fmt("\n\npackage a\n"), "package a\n");
 }
 
 #[test]
@@ -321,10 +324,7 @@ fn comment_block_before_a_top_level_decl_sits_after_the_blank_line() {
 
 #[test]
 fn comment_at_document_start_gets_no_leading_blank() {
-    assert_eq!(
-        fmt("// header\npackage a\n"),
-        "// header\npackage a\n"
-    );
+    assert_eq!(fmt("// header\npackage a\n"), "// header\npackage a\n");
 }
 
 #[test]
@@ -377,12 +377,16 @@ fn assert_idempotent(source: &str) {
 
 #[test]
 fn idempotent_on_conformance_library() {
-    assert_idempotent(include_str!("../../../tests/conformance/models/library.mox"));
+    assert_idempotent(include_str!(
+        "../../../tests/conformance/models/library.mox"
+    ));
 }
 
 #[test]
 fn idempotent_on_conformance_currency() {
-    assert_idempotent(include_str!("../../../tests/conformance/models/currency.mox"));
+    assert_idempotent(include_str!(
+        "../../../tests/conformance/models/currency.mox"
+    ));
 }
 
 #[test]
@@ -508,8 +512,12 @@ fn assert_still_parses(source: &str) {
 
 #[test]
 fn stable_on_conformance_models() {
-    assert_still_parses(include_str!("../../../tests/conformance/models/library.mox"));
-    assert_still_parses(include_str!("../../../tests/conformance/models/currency.mox"));
+    assert_still_parses(include_str!(
+        "../../../tests/conformance/models/library.mox"
+    ));
+    assert_still_parses(include_str!(
+        "../../../tests/conformance/models/currency.mox"
+    ));
 }
 
 #[test]
@@ -571,6 +579,5 @@ fn conformance_models_match_golden_formatting() {
 
 /// Reads a workspace-relative fixture path at runtime.
 fn model_source(relative: &str) -> String {
-    std::fs::read_to_string(workspace_root().join(relative))
-        .expect("read conformance model")
+    std::fs::read_to_string(workspace_root().join(relative)).expect("read conformance model")
 }

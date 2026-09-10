@@ -164,12 +164,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Gen {
-            target:
-                GenTarget::JsonSchema {
-                    file,
-                    profile,
-                    out,
-                },
+            target: GenTarget::JsonSchema { file, profile, out },
         } => {
             let (path, source) = read_source(&file)?;
             let compilation = compile_str(&path, &source);
@@ -207,8 +202,9 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                     if check {
                         println!("would reformat: {}", file.display());
                     } else {
-                        std::fs::write(file, formatted)
-                            .map_err(|error| anyhow::anyhow!("cannot write {}: {error}", file.display()))?;
+                        std::fs::write(file, formatted).map_err(|error| {
+                            anyhow::anyhow!("cannot write {}: {error}", file.display())
+                        })?;
                     }
                 }
             }
@@ -219,11 +215,12 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             }
         }
         Command::Vocab {
-            action: VocabAction::Fetch {
-                file,
-                provider,
-                url_template,
-            },
+            action:
+                VocabAction::Fetch {
+                    file,
+                    provider,
+                    url_template,
+                },
         } => {
             vocab_fetch(&file, provider.as_deref(), url_template.as_deref())?;
             Ok(ExitCode::SUCCESS)
@@ -330,7 +327,9 @@ fn vocab_fetch(
             file.display()
         );
     }
-    let model = parsed.ast.ok_or_else(|| anyhow::anyhow!("cannot parse {}", file.display()))?;
+    let model = parsed
+        .ast
+        .ok_or_else(|| anyhow::anyhow!("cannot parse {}", file.display()))?;
     let vocabularies = declared_vocabularies(&model)?;
     if vocabularies.is_empty() {
         println!("no vocabulary declarations in {}", file.display());
@@ -355,9 +354,7 @@ fn vocab_fetch(
         Some(spec) if spec.starts_with("file:") => Box::new(FileProvider {
             root: PathBuf::from(&spec["file:".len()..]),
         }),
-        Some(other) => anyhow::bail!(
-            "unknown provider '{other}'; expected 'file:<DIR>' or 'http'"
-        ),
+        Some(other) => anyhow::bail!("unknown provider '{other}'; expected 'file:<DIR>' or 'http'"),
     };
 
     let lock_path = model_dir.join("model.lock");
@@ -392,8 +389,8 @@ fn vocab_fetch(
                 vocabulary.name
             )
         })?;
-        let entries = rex_vocab::validate_entries(&parsed_snapshot, declaration)
-            .map_err(|error| {
+        let entries =
+            rex_vocab::validate_entries(&parsed_snapshot, declaration).map_err(|error| {
                 anyhow::anyhow!(
                     "snapshot for vocabulary '{}' is invalid: {error}",
                     vocabulary.name

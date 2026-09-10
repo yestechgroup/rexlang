@@ -30,7 +30,11 @@ fn check_succeeds_on_valid_source() {
         .args(["check", path.to_str().unwrap()])
         .output()
         .expect("run rexlang check");
-    assert!(output.status.success(), "stderr: {:?}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         format!("OK {}\n", path.display())
@@ -64,7 +68,11 @@ fn ir_prints_parseable_json_to_stdout() {
         .args(["ir", path.to_str().unwrap()])
         .output()
         .expect("run rexlang ir");
-    assert!(output.status.success(), "stderr: {:?}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let json = String::from_utf8_lossy(&output.stdout);
     let model = rex_ir::Model::from_json(&json).expect("stdout is rex-ir JSON");
     assert_eq!(model.format_version, rex_ir::FORMAT_VERSION);
@@ -80,7 +88,11 @@ fn ir_writes_json_to_output_file() {
         .args(["ir", path.to_str().unwrap(), "-o", out.to_str().unwrap()])
         .output()
         .expect("run rexlang ir");
-    assert!(output.status.success(), "stderr: {:?}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(String::from_utf8_lossy(&output.stdout).is_empty());
     let json = std::fs::read_to_string(&out).expect("read IR output");
     let model = rex_ir::Model::from_json(&json).expect("file is rex-ir JSON");
@@ -177,7 +189,10 @@ fn gen_json_schema_wire_writes_schema_json() {
     let schema: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
     assert_eq!(schema["$id"], "urn:rex:model:demo:wire");
     assert_eq!(schema["properties"]["$type"]["const"], "rex.instance");
-    assert_eq!(schema["$defs"]["Book"]["properties"]["$type"]["const"], "Book");
+    assert_eq!(
+        schema["$defs"]["Book"]["properties"]["$type"]["const"],
+        "Book"
+    );
 }
 
 #[test]
@@ -204,7 +219,10 @@ fn gen_json_schema_api_writes_api_flavor() {
     let json = std::fs::read_to_string(out.join("schema.json")).expect("schema.json written");
     let schema: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
     assert_eq!(schema["$id"], "urn:rex:model:demo:api");
-    assert!(schema.get("properties").is_none(), "api root validates nothing");
+    assert!(
+        schema.get("properties").is_none(),
+        "api root validates nothing"
+    );
     assert_eq!(schema["$defs"]["Book"]["additionalProperties"], false);
 }
 
@@ -298,7 +316,8 @@ fn vocab_fixture(tag: &str, source: &str) -> (PathBuf, PathBuf) {
     std::fs::create_dir_all(&model_dir).expect("create model dir");
     std::fs::create_dir_all(&upstream_dir).expect("create upstream dir");
     std::fs::write(model_dir.join("model.mox"), source).expect("write model");
-    std::fs::write(upstream_dir.join("iso-4217@2024-01-01.json"), SNAPSHOT).expect("write snapshot");
+    std::fs::write(upstream_dir.join("iso-4217@2024-01-01.json"), SNAPSHOT)
+        .expect("write snapshot");
     (model_dir, upstream_dir)
 }
 
@@ -326,28 +345,40 @@ fn vocab_fetch_vendors_snapshot_and_pins_lockfile() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let digest = rex_vocab::digest(SNAPSHOT.as_bytes());
     assert!(
-        stdout.contains(&format!("vendored iso:4217@2024-01-01 (5 entries, {}…)", &digest[..7 + 16])),
+        stdout.contains(&format!(
+            "vendored iso:4217@2024-01-01 (5 entries, {}…)",
+            &digest[..7 + 16]
+        )),
         "stdout was: {stdout}"
     );
 
     // Snapshot vendored next to the model, byte-identical to the source.
-    let vendored =
-        std::fs::read(model_dir.join("vocab").join("iso-4217@2024-01-01.json")).expect("vendored snapshot");
+    let vendored = std::fs::read(model_dir.join("vocab").join("iso-4217@2024-01-01.json"))
+        .expect("vendored snapshot");
     assert_eq!(vendored, SNAPSHOT.as_bytes());
 
     // Lockfile pin: correct digest, version, RFC 3339 stamp.
-    let lockfile = rex_vocab::Lockfile::read(&model_dir.join("model.lock")).expect("read model.lock");
+    let lockfile =
+        rex_vocab::Lockfile::read(&model_dir.join("model.lock")).expect("read model.lock");
     let entry = lockfile.entry_for("iso:4217").expect("iso:4217 pin");
     assert_eq!(entry.version, "2024-01-01");
     assert_eq!(entry.digest, digest);
-    assert!(entry.fetched_at.ends_with('Z'), "fetchedAt: {}", entry.fetched_at);
+    assert!(
+        entry.fetched_at.ends_with('Z'),
+        "fetchedAt: {}",
+        entry.fetched_at
+    );
 
     // Hermetic follow-up: the compiled model now embeds the entries.
     let ir = rexlang()
         .args(["ir", model_path.to_str().unwrap()])
         .output()
         .expect("run rexlang ir");
-    assert!(ir.status.success(), "stderr: {:?}", String::from_utf8_lossy(&ir.stderr));
+    assert!(
+        ir.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&ir.stderr)
+    );
     let model = rex_ir::Model::from_json(&String::from_utf8_lossy(&ir.stdout)).expect("IR JSON");
     assert_eq!(model.packages[0].vocabularies[0].entries.len(), 5);
 }
@@ -370,7 +401,8 @@ fn vocab_fetch_defaults_to_the_vendored_dir_provider() {
         "stderr: {:?}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let lockfile = rex_vocab::Lockfile::read(&model_dir.join("model.lock")).expect("read model.lock");
+    let lockfile =
+        rex_vocab::Lockfile::read(&model_dir.join("model.lock")).expect("read model.lock");
     assert_eq!(
         lockfile.entry_for("iso:4217").expect("pin").digest,
         rex_vocab::digest(SNAPSHOT.as_bytes())
@@ -386,10 +418,13 @@ fn vocab_fetch_falls_back_to_the_lockfile_version() {
     lockfile.insert(rex_vocab::LockEntry {
         source: "iso:4217".to_string(),
         version: "2024-01-01".to_string(),
-        digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+        digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            .to_string(),
         fetched_at: "2026-09-10T00:00:00Z".to_string(),
     });
-    lockfile.write(&model_dir.join("model.lock")).expect("write lockfile");
+    lockfile
+        .write(&model_dir.join("model.lock"))
+        .expect("write lockfile");
 
     let output = rexlang()
         .args([
@@ -406,7 +441,8 @@ fn vocab_fetch_falls_back_to_the_lockfile_version() {
         "stderr: {:?}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let lockfile = rex_vocab::Lockfile::read(&model_dir.join("model.lock")).expect("read model.lock");
+    let lockfile =
+        rex_vocab::Lockfile::read(&model_dir.join("model.lock")).expect("read model.lock");
     assert_eq!(
         lockfile.entry_for("iso:4217").expect("pin").digest,
         rex_vocab::digest(SNAPSHOT.as_bytes()),
@@ -530,7 +566,10 @@ fn vocab_fetch_reports_missing_snapshots_cleanly() {
         .expect("run rexlang vocab fetch");
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("iso-4217@2024-01-01.json"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("iso-4217@2024-01-01.json"),
+        "stderr was: {stderr}"
+    );
 }
 
 // --- `rexlang fmt` -----------------------------------------------------------
@@ -657,7 +696,10 @@ fn fmt_missing_file_is_a_clean_error() {
 #[test]
 fn fmt_unformattable_source_is_a_clean_error() {
     // The only true lex error: an integer literal that overflows i64.
-    let path = write_source("fmt_lex_error.mox", "class B { int x = 99999999999999999999999 }");
+    let path = write_source(
+        "fmt_lex_error.mox",
+        "class B { int x = 99999999999999999999999 }",
+    );
     let output = rexlang()
         .args(["fmt", path.to_str().unwrap()])
         .output()

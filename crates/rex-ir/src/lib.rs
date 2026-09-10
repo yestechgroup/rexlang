@@ -801,8 +801,13 @@ mod tests {
                     Multiplicity::OPTIONAL,
                 )
                 .with_default(DefaultValue::String("The Library".to_string())),
-                Feature::new("books", FeatureKind::Containment, class_ref("Book"), Multiplicity::MANY)
-                    .with_opposite("Book", "library"),
+                Feature::new(
+                    "books",
+                    FeatureKind::Containment,
+                    class_ref("Book"),
+                    Multiplicity::MANY,
+                )
+                .with_opposite("Book", "library"),
             ],
         ));
         package.classes.push(ClassDef::new(
@@ -899,16 +904,24 @@ mod tests {
         let package = &parsed.packages[0];
         assert_eq!(package.name, PKG);
         assert_eq!(package.enums[0].literals[0].label.as_deref(), Some("M"));
-        assert_eq!(package.datatypes[0].target_bindings["rust"], "chrono::NaiveDate");
+        assert_eq!(
+            package.datatypes[0].target_bindings["rust"],
+            "chrono::NaiveDate"
+        );
 
         for class in &package.classes {
             for (index, feature) in class.features.iter().enumerate() {
                 assert_eq!(feature.id, index as u32, "class {}", class.name);
             }
         }
-        assert_eq!(package.classes[0].feature(1).map(|f| f.name.as_str()), Some("books"));
         assert_eq!(
-            package.classes[1].feature(0).and_then(|f| f.opposite.clone()),
+            package.classes[0].feature(1).map(|f| f.name.as_str()),
+            Some("books")
+        );
+        assert_eq!(
+            package.classes[1]
+                .feature(0)
+                .and_then(|f| f.opposite.clone()),
             Some(OppositeRef {
                 class: "Library".to_string(),
                 feature: "books".to_string(),
@@ -1009,7 +1022,10 @@ mod tests {
         json.insert_str(at, "\"someFutureField\": {\"nested\": true},");
         let parsed = Model::from_json(&json).expect("unknown fields ignored");
         assert_eq!(model, parsed);
-        assert!(matches!(&parsed.packages[0].annotations[0], Annotation { .. }));
+        assert!(matches!(
+            &parsed.packages[0].annotations[0],
+            Annotation { .. }
+        ));
     }
 
     #[test]

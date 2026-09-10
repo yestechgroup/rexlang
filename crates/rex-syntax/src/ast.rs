@@ -470,12 +470,24 @@ impl FeatureDecl {
     /// attach the modifiers parsed before the feature's type.
     pub fn set_modifiers(&mut self, modifiers: Modifiers) {
         match self {
-            FeatureDecl::Attribute { modifiers: slot, .. }
-            | FeatureDecl::Containment { modifiers: slot, .. }
-            | FeatureDecl::Reference { modifiers: slot, .. }
-            | FeatureDecl::Container { modifiers: slot, .. }
-            | FeatureDecl::Op { modifiers: slot, .. }
-            | FeatureDecl::Derived { modifiers: slot, .. } => *slot = modifiers,
+            FeatureDecl::Attribute {
+                modifiers: slot, ..
+            }
+            | FeatureDecl::Containment {
+                modifiers: slot, ..
+            }
+            | FeatureDecl::Reference {
+                modifiers: slot, ..
+            }
+            | FeatureDecl::Container {
+                modifiers: slot, ..
+            }
+            | FeatureDecl::Op {
+                modifiers: slot, ..
+            }
+            | FeatureDecl::Derived {
+                modifiers: slot, ..
+            } => *slot = modifiers,
         }
     }
 

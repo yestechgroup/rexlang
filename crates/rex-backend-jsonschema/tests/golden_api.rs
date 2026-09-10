@@ -53,7 +53,8 @@ const MODELS: &[(&str, &str)] = &[
 #[test]
 fn conformance_api_schemas_match_golden() {
     for (model_path, artifact_path) in MODELS {
-        let files = generate(&conformance_model(model_path), Profile::Api).expect("generate api schema");
+        let files =
+            generate(&conformance_model(model_path), Profile::Api).expect("generate api schema");
         let json = files
             .get("schema.json")
             .expect("single schema.json file")
@@ -99,7 +100,12 @@ fn api_schema_structure_contract() {
         serde_json::from_str(files.get("schema.json").expect("schema.json")).expect("valid JSON");
 
     // Root is a components-style document: exactly $schema, $id, $defs.
-    let root_keys: Vec<&str> = schema.as_object().expect("root object").keys().map(String::as_str).collect();
+    let root_keys: Vec<&str> = schema
+        .as_object()
+        .expect("root object")
+        .keys()
+        .map(String::as_str)
+        .collect();
     assert_eq!(root_keys, vec!["$defs", "$id", "$schema"]);
     assert!(schema.get("required").is_none(), "root has no required");
     assert!(schema.get("properties").is_none(), "root has no properties");
@@ -119,8 +125,14 @@ fn api_schema_structure_contract() {
     // as readOnly, numeric formats present, closed for extra keys.
     let book = &defs["Book"];
     assert!(book["properties"].get("$id").is_none(), "no $id on Book");
-    assert!(book["properties"].get("$type").is_none(), "no $type on Book (no subclasses)");
-    assert!(book["properties"].get("library").is_none(), "container omitted");
+    assert!(
+        book["properties"].get("$type").is_none(),
+        "no $type on Book (no subclasses)"
+    );
+    assert!(
+        book["properties"].get("library").is_none(),
+        "container omitted"
+    );
     assert_eq!(
         book["properties"]["authors"],
         serde_json::json!({
@@ -140,12 +152,21 @@ fn api_schema_structure_contract() {
     );
     let book_required = book["required"].as_array().expect("book required");
     assert!(book_required.iter().any(|k| k == "pages"));
-    assert!(!book_required.iter().any(|k| k == "citation"), "derived is not required");
+    assert!(
+        !book_required.iter().any(|k| k == "citation"),
+        "derived is not required"
+    );
     assert_eq!(book["additionalProperties"], false);
 
     // No *Ref helper defs in the API profile.
-    assert!(defs.get("WriterRef").is_none(), "no WriterRef def in api profile");
-    assert!(defs.get("BookRef").is_none(), "no BookRef def in api profile");
+    assert!(
+        defs.get("WriterRef").is_none(),
+        "no WriterRef def in api profile"
+    );
+    assert!(
+        defs.get("BookRef").is_none(),
+        "no BookRef def in api profile"
+    );
 
     // Library: containment is still inlined via $ref to the child def.
     let library = &defs["Library"];

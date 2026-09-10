@@ -332,7 +332,10 @@ mod tests {
     #[test]
     fn strings_and_ints() {
         assert_eq!(kinds(r#""a\"b\\c""#), vec![Token::Str("a\\\"b\\\\c")]);
-        assert_eq!(kinds("-42 0 007"), vec![Token::Int(-42), Token::Int(0), Token::Int(7)]);
+        assert_eq!(
+            kinds("-42 0 007"),
+            vec![Token::Int(-42), Token::Int(0), Token::Int(7)]
+        );
     }
 
     #[test]

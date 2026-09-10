@@ -28,7 +28,9 @@ pub struct PositionMap {
 
 /// The UTF-16 length of a string slice.
 fn utf16_len(text: &str) -> u32 {
-    text.chars().map(|character| character.len_utf16() as u32).sum::<u32>()
+    text.chars()
+        .map(|character| character.len_utf16() as u32)
+        .sum::<u32>()
 }
 
 /// The greatest `offset <= max` that is a `char` boundary of `text`.
@@ -49,10 +51,7 @@ impl PositionMap {
             let trimmed = line.strip_suffix('\n').unwrap_or(line);
             let trimmed = trimmed.strip_suffix('\r').unwrap_or(trimmed);
             let content_end = start + trimmed.len();
-            lines.push(LineInfo {
-                start,
-                content_end,
-            });
+            lines.push(LineInfo { start, content_end });
             start += line.len();
         }
         // A trailing fragment without a terminator is still a line; empty
@@ -239,7 +238,7 @@ mod tests {
         assert_eq!(map.position_for(5), pos(0, 5)); // last char of "alpha"
         assert_eq!(map.position_for(6), pos(0, 5)); // the '\r' clamps to line end
         assert_eq!(map.position_for(7), pos(1, 0)); // the '\n' starts line 1
-        // A character index at/past the line end maps to the '\r' offset…
+                                                    // A character index at/past the line end maps to the '\r' offset…
         assert_eq!(map.offset_for(pos(0, 5)), 5);
         assert_eq!(map.offset_for(pos(0, 6)), 5);
         assert_eq!(map.offset_for(pos(0, 100)), 5);

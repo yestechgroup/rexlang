@@ -251,10 +251,7 @@ fn wire_schema(context: &Context<'_>) -> anyhow::Result<serde_json::Value> {
         serde_json::json!(format!("urn:rex:model:{}:wire", context.package_name)),
     );
     root.insert("type".to_string(), serde_json::json!("object"));
-    root.insert(
-        "properties".to_string(),
-        wire_root_properties(context)?,
-    );
+    root.insert("properties".to_string(), wire_root_properties(context)?);
     let mut required = vec![
         "$type".to_string(),
         "formatVersion".to_string(),
@@ -449,7 +446,10 @@ fn api_class_def(context: &Context<'_>, class: &ClassDef) -> anyhow::Result<serd
         }
         properties.insert(feature.name.clone(), schema);
     }
-    def.insert("properties".to_string(), serde_json::Value::Object(properties));
+    def.insert(
+        "properties".to_string(),
+        serde_json::Value::Object(properties),
+    );
 
     let mut required = class_required(class, false);
     if extended {
@@ -570,7 +570,10 @@ fn array_schema(items: serde_json::Value, multiplicity: &Multiplicity) -> serde_
     wrapper.insert("type".to_string(), serde_json::json!("array"));
     wrapper.insert("items".to_string(), items);
     if multiplicity.lower > 0 {
-        wrapper.insert("minItems".to_string(), serde_json::json!(multiplicity.lower));
+        wrapper.insert(
+            "minItems".to_string(),
+            serde_json::json!(multiplicity.lower),
+        );
     }
     if let Upper::Finite(upper) = multiplicity.upper {
         wrapper.insert("maxItems".to_string(), serde_json::json!(upper));
@@ -605,7 +608,7 @@ fn value_schema(
                 "$comment": vocabulary_comment(vocabulary),
                 "enum": keys,
             }))
-        },
+        }
         TypeRef::Class { name, .. } | TypeRef::Interface { name, .. } => anyhow::bail!(
             "attribute values must be primitive, enum, or datatype; found class '{name}'"
         ),
@@ -648,7 +651,8 @@ fn primitive_schema(primitive: PrimitiveType, profile: Profile) -> serde_json::V
 }
 
 /// The `$comment` documenting a datatype attribute's target mapping.
-fn datatype_comment(datatype: &DatatypeDef) -> String {    let mut comment = format!(
+fn datatype_comment(datatype: &DatatypeDef) -> String {
+    let mut comment = format!(
         "datatype {} ({});",
         datatype.name,
         match &datatype.platform {
@@ -803,8 +807,7 @@ mod tests {
             serde_json::json!({"pattern": format!("^{}/[0-9]+$", snake_case("Library"))}),
         );
         assert_eq!(
-            properties["$id"]["pattern"],
-            "^library/[0-9]+$",
+            properties["$id"]["pattern"], "^library/[0-9]+$",
             "matches canonical ids like \"library/0\""
         );
     }
@@ -868,9 +871,7 @@ mod tests {
 
     #[test]
     fn inheritance_helpers_resolve_transitive_closure() {
-        let class = |name: &str, extends: Vec<TypeRef>| {
-            ClassDef::new(name, extends, vec![])
-        };
+        let class = |name: &str, extends: Vec<TypeRef>| ClassDef::new(name, extends, vec![]);
         let base = class("Animal", vec![]);
         let middle = class(
             "Dog",

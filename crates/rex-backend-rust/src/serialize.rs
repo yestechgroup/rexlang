@@ -54,7 +54,9 @@ fn save_expr(type_: &TypeRef, v: &str, deref: bool) -> String {
     match type_ {
         TypeRef::Primitive(primitive) => match primitive {
             PrimitiveType::String => format!("serde_json::Value::String({v}.clone())"),
-            PrimitiveType::Int | PrimitiveType::Long | PrimitiveType::Short
+            PrimitiveType::Int
+            | PrimitiveType::Long
+            | PrimitiveType::Short
             | PrimitiveType::Byte => format!("serde_json::Value::from({})", place(v)),
             PrimitiveType::Float | PrimitiveType::Double => {
                 format!("serde_json::Value::from({})", place(v))
@@ -240,9 +242,7 @@ fn emit_ids_and_registry(e: &mut String, unit: &Unit<'_>) {
 }
 
 fn emit_assign_ids(e: &mut String, unit: &Unit<'_>) {
-    e.push_str(
-        "    fn assign_instance_ids(&self, ids: &mut InstanceIds) {\n",
-    );
+    e.push_str("    fn assign_instance_ids(&self, ids: &mut InstanceIds) {\n");
     for class in &unit.classes {
         e.push_str(&format!(
             "        for (index, (key, _)) in self.{}.iter().enumerate() {{\n\
@@ -423,10 +423,7 @@ fn emit_enum_loaders(e: &mut String, unit: &Unit<'_>) -> anyhow::Result<()> {
 /// First load pass, per object: validate and map the canonical id to a fresh
 /// key. Registration is flat (no containment recursion): the loader collects
 /// every document object first and registers per class in id-ordinal order.
-fn emit_class_register(
-    e: &mut String,
-    class: &ClassCtx<'_>,
-) -> anyhow::Result<()> {
+fn emit_class_register(e: &mut String, class: &ClassCtx<'_>) -> anyhow::Result<()> {
     let struct_name = rust_ident(&class.class.name);
     e.push_str(&format!(
         "    fn register_{single}(\n\

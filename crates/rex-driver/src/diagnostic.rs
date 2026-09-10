@@ -158,8 +158,12 @@ pub fn render(path: &str, source: &str, diagnostics: &[Diagnostic]) -> String {
         let location = (path, start..end.max(start));
         let mut builder = Report::build(kind, location.clone())
             .with_message(&diagnostic.message)
-            .with_config(Config::default().with_color(false).with_index_type(IndexType::Byte));
-        builder.add_label(Label::new(location).with_message(""));
+            .with_config(
+                Config::default()
+                    .with_color(false)
+                    .with_index_type(IndexType::Byte),
+            );
+        builder.add_label(Label::new(location).with_message(&diagnostic.message));
         if let Some(help) = &diagnostic.help {
             builder = builder.with_help(help);
         }

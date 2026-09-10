@@ -2,9 +2,7 @@
 //! incrementality, exercised through the public API.
 
 use rex_driver::{compile_str, render, Severity};
-use rex_ir::{
-    ClassDef, DefaultValue, FeatureKind, Multiplicity, OppositeRef, TypeRef, Upper,
-};
+use rex_ir::{ClassDef, DefaultValue, FeatureKind, Multiplicity, OppositeRef, TypeRef, Upper};
 
 const LIBRARY: &str = include_str!("../../../examples/library.mox");
 
@@ -117,10 +115,7 @@ fn library_example_compiles_with_zero_diagnostics() {
         })
     );
     let pages = feature(book, "pages");
-    assert_eq!(
-        pages.type_,
-        TypeRef::Primitive(rex_ir::PrimitiveType::Int)
-    );
+    assert_eq!(pages.type_, TypeRef::Primitive(rex_ir::PrimitiveType::Int));
     assert_eq!(pages.multiplicity, Multiplicity::REQUIRED);
     let copyright = feature(book, "copyright");
     assert_eq!(
@@ -301,7 +296,9 @@ class Calc {
         .iter()
         .map(|d| d.message.as_str())
         .collect();
-    assert!(messages.contains(&"operation bodies are not supported yet (Tier 0: declare abstract operations only)"));
+    assert!(messages.contains(
+        &"operation bodies are not supported yet (Tier 0: declare abstract operations only)"
+    ));
     assert!(messages.contains(&"derived get bodies are not supported yet (Tier 2)"));
 }
 
@@ -317,9 +314,10 @@ enum Color {
 "#;
     let compilation = compile_str("color.mox", source);
     assert!(compilation.model.is_none());
-    assert!(compilation.diagnostics.iter().any(|d| {
-        d.message == "enum literal 'Green' requires an explicit value (e.g. `= 0`)"
-    }));
+    assert!(compilation
+        .diagnostics
+        .iter()
+        .any(|d| { d.message == "enum literal 'Green' requires an explicit value (e.g. `= 0`)" }));
 }
 
 #[test]
@@ -416,7 +414,10 @@ fn resolution_errors() {
         "x.mox",
         "package p\n\nclass C { other.Thing f }\n\nclass Thing { int a }",
     );
-    assert!(compilation.diagnostics.iter().any(|d| d.message == "cross-package type references are not supported yet"));
+    assert!(compilation
+        .diagnostics
+        .iter()
+        .any(|d| d.message == "cross-package type references are not supported yet"));
 }
 
 #[test]
@@ -440,9 +441,13 @@ class Thing {
         .iter()
         .map(|d| d.message.as_str())
         .collect();
-    assert!(messages.contains(&"feature 'wrong' is declared `contains` but type 'Color' is not a class"));
-    assert!(messages.contains(&"feature 'also_wrong' is declared `refers` but type 'int' is not a class"));
-    assert!(messages.contains(&"feature 'still_wrong' is declared `container` but type 'String' is not a class"));
+    assert!(messages
+        .contains(&"feature 'wrong' is declared `contains` but type 'Color' is not a class"));
+    assert!(messages
+        .contains(&"feature 'also_wrong' is declared `refers` but type 'int' is not a class"));
+    assert!(messages.contains(
+        &"feature 'still_wrong' is declared `container` but type 'String' is not a class"
+    ));
 }
 
 #[test]
@@ -588,7 +593,10 @@ class Book {
         .collect();
     assert_eq!(id_warnings.len(), 1, "expected one id warning");
     assert_eq!(id_warnings[0].severity, Severity::Warning);
-    assert_eq!(id_warnings[0].message, "modifier 'id' has no effect on operations");
+    assert_eq!(
+        id_warnings[0].message,
+        "modifier 'id' has no effect on operations"
+    );
     assert_eq!(
         &source[id_warnings[0].span.expect("warning span").start
             ..id_warnings[0].span.expect("warning span").end],

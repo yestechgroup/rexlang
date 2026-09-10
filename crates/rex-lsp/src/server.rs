@@ -183,7 +183,10 @@ impl LanguageServer for RexBackend {
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        self.documents.lock().unwrap().remove(&params.text_document.uri);
+        self.documents
+            .lock()
+            .unwrap()
+            .remove(&params.text_document.uri);
         self.client
             .publish_diagnostics(params.text_document.uri, vec![], None)
             .await;
@@ -289,11 +292,9 @@ impl LanguageServer for RexBackend {
             }
             // (b) A top-level line start: only whitespace so far on the
             // line, outside every declaration.
-            let inside_declaration = index
-                .definitions()
-                .any(|(_, definition)| {
-                    definition.full_span.start <= offset && offset <= definition.full_span.end
-                });
+            let inside_declaration = index.definitions().any(|(_, definition)| {
+                definition.full_span.start <= offset && offset <= definition.full_span.end
+            });
             if at_line_start(text, offset) && !inside_declaration {
                 return Some(CompletionResponse::Array(keyword_completions()));
             }
@@ -491,7 +492,13 @@ const PRIMITIVES: [&str; 9] = [
 
 /// The top-level declaration keywords, in completion order.
 const KEYWORDS: [&str; 7] = [
-    "package", "class", "interface", "enum", "type", "vocabulary", "annotation",
+    "package",
+    "class",
+    "interface",
+    "enum",
+    "type",
+    "vocabulary",
+    "annotation",
 ];
 
 /// `true` when the only text before `offset` on its line is whitespace.
@@ -555,16 +562,18 @@ fn keyword_completions() -> Vec<CompletionItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::StreamExt;
     use serde_json::json;
     use std::time::Duration;
-    use futures::StreamExt;
-    use tower_lsp::lsp_types::SymbolKind as LspSymbolKind;
     use tower::{Service, ServiceExt};
     use tower_lsp::jsonrpc;
+    use tower_lsp::lsp_types::SymbolKind as LspSymbolKind;
     use tower_lsp::LspService;
 
-    const BROKEN: &str = "package demo\n\nclass Book { String title }\n\nclass Shelf { Book oops }\n";
-    const FIXED: &str = "package demo\n\nclass Book { String title }\n\nclass Shelf { String oops }\n";
+    const BROKEN: &str =
+        "package demo\n\nclass Book { String title }\n\nclass Shelf { Book oops }\n";
+    const FIXED: &str =
+        "package demo\n\nclass Book { String title }\n\nclass Shelf { String oops }\n";
 
     fn uri() -> Url {
         Url::parse("file:///workspace/shelf.mox").unwrap()
@@ -588,7 +597,11 @@ mod tests {
         let (_, body) = response.unwrap().into_parts();
         assert!(body.is_ok(), "initialize failed: {body:?}");
         service
-            .call(jsonrpc::Request::build("initialized").params(json!({})).finish())
+            .call(
+                jsonrpc::Request::build("initialized")
+                    .params(json!({}))
+                    .finish(),
+            )
             .await
             .unwrap();
         // Drain any notification produced during initialization.
@@ -599,7 +612,8 @@ mod tests {
     /// Reads and discards everything currently queued on the socket.
     async fn drain_socket(socket: &mut tower_lsp::ClientSocket) {
         while let Ok(Some(_)) = tokio::time::timeout(Duration::from_millis(50), socket.next()).await
-        {}
+        {
+        }
     }
 
     /// The next `publishDiagnostics` for `uri`, or `None` on timeout.
@@ -685,8 +699,14 @@ mod tests {
         assert_eq!(
             diagnostic.range,
             Range {
-                start: Position { line: 4, character: 14 }, // `Book` in `class Shelf { Book oops }`
-                end: Position { line: 4, character: 18 },
+                start: Position {
+                    line: 4,
+                    character: 14
+                }, // `Book` in `class Shelf { Book oops }`
+                end: Position {
+                    line: 4,
+                    character: 18
+                },
             }
         );
         assert_eq!(diagnostic.severity, Some(DiagnosticSeverity::ERROR));
@@ -709,7 +729,9 @@ mod tests {
     async fn fixing_the_document_publishes_clean_diagnostics() {
         let (mut service, mut socket) = initialized_service().await;
         open(&mut service, BROKEN).await;
-        let publish = next_publish(&mut socket, &uri()).await.expect("first publish");
+        let publish = next_publish(&mut socket, &uri())
+            .await
+            .expect("first publish");
         assert_eq!(publish.diagnostics.len(), 1);
 
         service
@@ -742,7 +764,9 @@ mod tests {
     async fn closing_the_document_publishes_empty_diagnostics() {
         let (mut service, mut socket) = initialized_service().await;
         open(&mut service, BROKEN).await;
-        next_publish(&mut socket, &uri()).await.expect("open publish");
+        next_publish(&mut socket, &uri())
+            .await
+            .expect("open publish");
 
         service
             .call(
@@ -795,13 +819,21 @@ mod tests {
         open(&mut service, NAV).await;
 
         // `Book` as the containment type on line 3 → `class Book` on line 7.
-        let location = goto_definition_at(&mut service, 3, 15).await.expect("a location");
+        let location = goto_definition_at(&mut service, 3, 15)
+            .await
+            .expect("a location");
         assert_eq!(location.uri, uri());
         assert_eq!(
             location.range,
             Range {
-                start: Position { line: 7, character: 6 },
-                end: Position { line: 7, character: 10 },
+                start: Position {
+                    line: 7,
+                    character: 6
+                },
+                end: Position {
+                    line: 7,
+                    character: 10
+                },
             }
         );
     }
@@ -813,13 +845,21 @@ mod tests {
 
         // `opposite books` inside Book (line 8) → feature `books` of Library
         // (line 3, `books` at columns 20..25).
-        let location = goto_definition_at(&mut service, 8, 41).await.expect("a location");
+        let location = goto_definition_at(&mut service, 8, 41)
+            .await
+            .expect("a location");
         assert_eq!(location.uri, uri());
         assert_eq!(
             location.range,
             Range {
-                start: Position { line: 3, character: 20 },
-                end: Position { line: 3, character: 25 },
+                start: Position {
+                    line: 3,
+                    character: 20
+                },
+                end: Position {
+                    line: 3,
+                    character: 25
+                },
             }
         );
     }
@@ -830,12 +870,20 @@ mod tests {
         open(&mut service, NAV).await;
 
         // The class name `Book` itself (line 7) → its own span.
-        let location = goto_definition_at(&mut service, 7, 7).await.expect("a location");
+        let location = goto_definition_at(&mut service, 7, 7)
+            .await
+            .expect("a location");
         assert_eq!(
             location.range,
             Range {
-                start: Position { line: 7, character: 6 },
-                end: Position { line: 7, character: 10 },
+                start: Position {
+                    line: 7,
+                    character: 6
+                },
+                end: Position {
+                    line: 7,
+                    character: 10
+                },
             }
         );
     }
@@ -1110,7 +1158,10 @@ class Writer {
         // A feature symbol's range covers its declaration line.
         let library_children = library.children.as_ref().unwrap();
         let books = symbol(library_children, "books");
-        let (books_decl, _) = LIBRARY.match_indices("contains Book[] books").next().unwrap();
+        let (books_decl, _) = LIBRARY
+            .match_indices("contains Book[] books")
+            .next()
+            .unwrap();
         assert_eq!(books.range.start, map.position_for(books_decl));
         assert_eq!(
             books.selection_range,
@@ -1151,7 +1202,11 @@ class Writer {
         (position.line, position.character)
     }
 
-    async fn complete_at(service: &mut LspService<RexBackend>, line: u32, character: u32) -> Option<Vec<CompletionItem>> {
+    async fn complete_at(
+        service: &mut LspService<RexBackend>,
+        line: u32,
+        character: u32,
+    ) -> Option<Vec<CompletionItem>> {
         let response = service
             .call(
                 jsonrpc::Request::build("textDocument/completion")
@@ -1189,9 +1244,16 @@ class Writer {
             .await
             .expect("type completion in a type position");
 
-        let find = |label: &str| items.iter().find(|item| item.label == label).unwrap_or_else(|| panic!("no '{label}' item in {items:?}"));
+        let find = |label: &str| {
+            items
+                .iter()
+                .find(|item| item.label == label)
+                .unwrap_or_else(|| panic!("no '{label}' item in {items:?}"))
+        };
         // Primitives.
-        for primitive in ["String", "int", "long", "short", "float", "double", "boolean", "byte", "char"] {
+        for primitive in [
+            "String", "int", "long", "short", "float", "double", "boolean", "byte", "char",
+        ] {
             let item = find(primitive);
             assert_eq!(item.kind, Some(CompletionItemKind::KEYWORD), "{primitive}");
             assert_eq!(item.detail.as_deref(), Some("primitive"), "{primitive}");
@@ -1227,20 +1289,32 @@ class Writer {
         assert_eq!(
             items
                 .iter()
-                .map(|item| (
-                    item.label.as_str(),
-                    item.kind,
-                    item.detail.as_deref()
-                ))
+                .map(|item| (item.label.as_str(), item.kind, item.detail.as_deref()))
                 .collect::<Vec<_>>(),
             vec![
-                ("package", Some(CompletionItemKind::KEYWORD), Some("keyword")),
+                (
+                    "package",
+                    Some(CompletionItemKind::KEYWORD),
+                    Some("keyword")
+                ),
                 ("class", Some(CompletionItemKind::KEYWORD), Some("keyword")),
-                ("interface", Some(CompletionItemKind::KEYWORD), Some("keyword")),
+                (
+                    "interface",
+                    Some(CompletionItemKind::KEYWORD),
+                    Some("keyword")
+                ),
                 ("enum", Some(CompletionItemKind::KEYWORD), Some("keyword")),
                 ("type", Some(CompletionItemKind::KEYWORD), Some("keyword")),
-                ("vocabulary", Some(CompletionItemKind::KEYWORD), Some("keyword")),
-                ("annotation", Some(CompletionItemKind::KEYWORD), Some("keyword")),
+                (
+                    "vocabulary",
+                    Some(CompletionItemKind::KEYWORD),
+                    Some("keyword")
+                ),
+                (
+                    "annotation",
+                    Some(CompletionItemKind::KEYWORD),
+                    Some("keyword")
+                ),
             ]
         );
     }
@@ -1308,7 +1382,10 @@ class Writer {
 
     /// The flagship diagnostic as the client would echo it back, plus its
     /// published range.
-    async fn flagship_diagnostic(service: &mut LspService<RexBackend>, socket: &mut tower_lsp::ClientSocket) -> (Diagnostic, Range) {
+    async fn flagship_diagnostic(
+        service: &mut LspService<RexBackend>,
+        socket: &mut tower_lsp::ClientSocket,
+    ) -> (Diagnostic, Range) {
         open(service, BROKEN).await;
         let publish = next_publish(socket, &uri()).await.expect("publish");
         let diagnostic = publish.diagnostics[0].clone();
@@ -1348,8 +1425,14 @@ class Writer {
             .collect::<Vec<_>>();
         edits.sort_by(|a, b| a.0.cmp(&b.0));
         let keyword_range = Range {
-            start: Position { line: 4, character: 14 },
-            end: Position { line: 4, character: 14 },
+            start: Position {
+                line: 4,
+                character: 14,
+            },
+            end: Position {
+                line: 4,
+                character: 14,
+            },
         };
         assert_eq!(
             edits,
@@ -1368,8 +1451,7 @@ class Writer {
             code: None,
             ..diagnostic
         };
-        let actions =
-            code_actions_at(&mut service, vec![unrelated], range).await;
+        let actions = code_actions_at(&mut service, vec![unrelated], range).await;
         assert!(actions.is_empty(), "no fixes for unrelated diagnostics");
     }
 
@@ -1407,8 +1489,7 @@ class Writer {
                 if value.is_null() {
                     return Err("null".to_string());
                 }
-                let edit: WorkspaceEdit =
-                    serde_json::from_value(value).expect("a WorkspaceEdit");
+                let edit: WorkspaceEdit = serde_json::from_value(value).expect("a WorkspaceEdit");
                 Ok(edit)
             }
             Err(error) => Err(error.message.to_string()),
@@ -1480,13 +1561,22 @@ class Writer {
             edits_of(&edit),
             vec![
                 // Writer's `refers Book[]` type — latest source position.
-                (lib_sub_range("refers Book[] books", 0, 7, 4), "Tome".to_string()),
+                (
+                    lib_sub_range("refers Book[] books", 0, 7, 4),
+                    "Tome".to_string()
+                ),
                 // The class definition itself.
                 (lib_sub_range("class Book {", 0, 6, 4), "Tome".to_string()),
                 // `op Book getBook` return type.
-                (lib_sub_range("op Book getBook", 0, 3, 4), "Tome".to_string()),
+                (
+                    lib_sub_range("op Book getBook", 0, 3, 4),
+                    "Tome".to_string()
+                ),
                 // Library's `contains Book[]` type — earliest position.
-                (lib_sub_range("contains Book[] books", 0, 9, 4), "Tome".to_string()),
+                (
+                    lib_sub_range("contains Book[] books", 0, 9, 4),
+                    "Tome".to_string()
+                ),
             ],
             "type references are rewritten, edits sorted descending by start"
         );
@@ -1533,7 +1623,10 @@ class Writer {
             edits_of(&edit),
             vec![
                 (lib_range("books", 3), "titles".to_string()),
-                (lib_sub_range("opposite books", 1, 9, 5), "titles".to_string()),
+                (
+                    lib_sub_range("opposite books", 1, 9, 5),
+                    "titles".to_string()
+                ),
             ]
         );
     }

@@ -151,10 +151,7 @@ fn scratch_crate_files() -> Vec<(std::path::PathBuf, String)> {
         .canonicalize()
         .expect("rex-runtime path");
 
-    let lib_rs = format!(
-        "{models_rs}\n{}",
-        include_str!("scratch/scratch_tests.rs")
-    );
+    let lib_rs = format!("{models_rs}\n{}", include_str!("scratch/scratch_tests.rs"));
 
     vec![
         (
@@ -268,7 +265,10 @@ fn currency_entry(key: &str, symbol: &str, minor_units: i64) -> VocabularyEntry 
     VocabularyEntry {
         key: key.to_string(),
         facets: std::collections::BTreeMap::from([
-            ("symbol".to_string(), DefaultValue::String(symbol.to_string())),
+            (
+                "symbol".to_string(),
+                DefaultValue::String(symbol.to_string()),
+            ),
             ("minorUnits".to_string(), DefaultValue::Int(minor_units)),
         ]),
     }
@@ -338,10 +338,7 @@ fn currency_scratch_crate_files() -> Vec<(std::path::PathBuf, String)> {
         .canonicalize()
         .expect("rex-runtime path");
 
-    let lib_rs = format!(
-        "{models_rs}\n{}",
-        include_str!("scratch/currency_tests.rs")
-    );
+    let lib_rs = format!("{models_rs}\n{}", include_str!("scratch/currency_tests.rs"));
 
     vec![
         (

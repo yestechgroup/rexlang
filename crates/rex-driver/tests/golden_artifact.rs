@@ -24,8 +24,14 @@ fn fixture_path(relative: &str) -> PathBuf {
 
 /// Every conformance model and its committed golden artifact.
 const MODELS: &[(&str, &str)] = &[
-    ("tests/conformance/models/library.mox", "tests/conformance/artifacts/library.rex.json"),
-    ("tests/conformance/models/currency.mox", "tests/conformance/artifacts/currency.rex.json"),
+    (
+        "tests/conformance/models/library.mox",
+        "tests/conformance/artifacts/library.rex.json",
+    ),
+    (
+        "tests/conformance/models/currency.mox",
+        "tests/conformance/artifacts/currency.rex.json",
+    ),
 ];
 
 fn compile_conformance_model(relative_path: &str) -> rex_ir::Model {
@@ -73,11 +79,12 @@ fn conformance_models_match_golden_artifacts() {
 /// exact bytes of the vendored snapshot (hermetic builds key on this).
 #[test]
 fn currency_lockfile_digest_matches_vendored_snapshot() {
-    let snapshot = std::fs::read(fixture_path("tests/conformance/models/vocab/iso-4217@2024-01-01.json"))
-        .expect("read vendored snapshot");
-    let lockfile =
-        rex_vocab::Lockfile::read(&fixture_path("tests/conformance/models/model.lock"))
-            .expect("read model.lock");
+    let snapshot = std::fs::read(fixture_path(
+        "tests/conformance/models/vocab/iso-4217@2024-01-01.json",
+    ))
+    .expect("read vendored snapshot");
+    let lockfile = rex_vocab::Lockfile::read(&fixture_path("tests/conformance/models/model.lock"))
+        .expect("read model.lock");
     let entry = lockfile
         .entry_for("iso:4217")
         .expect("model.lock pins iso:4217");
@@ -104,8 +111,14 @@ fn currency_model_lowers_embedded_vocabulary_entries() {
     assert_eq!(vocabulary.key, "alpha3");
     assert_eq!(vocabulary.entries.len(), 5);
     assert_eq!(vocabulary.entries[0].key, "USD");
-    assert_eq!(vocabulary.entries[0].facets["symbol"], rex_ir::DefaultValue::String("$".to_string()));
-    assert_eq!(vocabulary.entries[2].facets["minorUnits"], rex_ir::DefaultValue::Int(0));
+    assert_eq!(
+        vocabulary.entries[0].facets["symbol"],
+        rex_ir::DefaultValue::String("$".to_string())
+    );
+    assert_eq!(
+        vocabulary.entries[2].facets["minorUnits"],
+        rex_ir::DefaultValue::Int(0)
+    );
     let account = &package.classes[0];
     assert_eq!(account.name, "Account");
     assert_eq!(

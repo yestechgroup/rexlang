@@ -64,9 +64,7 @@ pub enum VocabularyError {
     #[error("vocabulary snapshot has no entries")]
     NoEntries,
     /// The snapshot's `vocabulary` field does not match the declared source.
-    #[error(
-        "vocabulary snapshot declares source '{found}', but the model declares '{expected}'"
-    )]
+    #[error("vocabulary snapshot declares source '{found}', but the model declares '{expected}'")]
     SourceMismatch {
         /// Source the model declares.
         expected: String,
@@ -178,7 +176,9 @@ impl VocabularyProvider for FileProvider {
                 "vocabulary '{source}' must be pinned to a version to fetch from disk"
             ));
         };
-        let path = self.root.join(format!("{}@{version}.json", sanitize_source(source)));
+        let path = self
+            .root
+            .join(format!("{}@{version}.json", sanitize_source(source)));
         let bytes = fs::read(&path).with_context(|| {
             format!(
                 "missing vocabulary snapshot {} (expected at {})",
@@ -407,7 +407,9 @@ fn facet_value(
         (type_, _) => {
             let expected = match type_ {
                 PrimitiveType::String | PrimitiveType::Char => "a string",
-                PrimitiveType::Int | PrimitiveType::Long | PrimitiveType::Short
+                PrimitiveType::Int
+                | PrimitiveType::Long
+                | PrimitiveType::Short
                 | PrimitiveType::Byte => "an integer",
                 PrimitiveType::Float | PrimitiveType::Double => "a number",
                 PrimitiveType::Boolean => "a boolean",
@@ -465,8 +467,8 @@ impl Lockfile {
 
     /// Writes this lockfile to disk (pretty-printed, trailing newline).
     pub fn write(&self, path: &Path) -> anyhow::Result<()> {
-        let mut json = serde_json::to_string_pretty(self)
-            .context("lockfile serialization cannot fail")?;
+        let mut json =
+            serde_json::to_string_pretty(self).context("lockfile serialization cannot fail")?;
         json.push('\n');
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
@@ -477,12 +479,18 @@ impl Lockfile {
 
     /// The pin for `source`, if any.
     pub fn entry_for(&self, source: &str) -> Option<&LockEntry> {
-        self.vocabularies.iter().find(|entry| entry.source == source)
+        self.vocabularies
+            .iter()
+            .find(|entry| entry.source == source)
     }
 
     /// Inserts or replaces the pin for `entry.source`.
     pub fn insert(&mut self, entry: LockEntry) {
-        match self.vocabularies.iter_mut().find(|existing| existing.source == entry.source) {
+        match self
+            .vocabularies
+            .iter_mut()
+            .find(|existing| existing.source == entry.source)
+        {
             Some(existing) => *existing = entry,
             None => self.vocabularies.push(entry),
         }
@@ -523,8 +531,7 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let year_of_era =
         (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365; // [0, 399]
     let year = year_of_era as i64 + era * 400;
-    let day_of_year =
-        day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100); // [0, 365]
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100); // [0, 365]
     let mp = (5 * day_of_year + 2) / 153; // [0, 11]
     let day = (day_of_year - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
     let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]

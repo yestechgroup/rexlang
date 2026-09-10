@@ -6,15 +6,14 @@ enum BookCategory {
 }
 
 type Date wraps opaque {
-    rust   "chrono::NaiveDate"
+    rust "chrono::NaiveDate"
     csharp "System.DateOnly"
-    java   "java.time.LocalDate"
+    java "java.time.LocalDate"
 }
 
 class Library {
     String name = "Default Name"
     contains Book[] books opposite library
-
     op Book getBook(String title)
 }
 

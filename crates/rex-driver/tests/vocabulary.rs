@@ -65,7 +65,8 @@ fn setup(tag: &str, source: &str, snapshot: bool, lock: Option<&str>) -> (String
     let vocab_dir = dir.join("vocab");
     std::fs::create_dir_all(&vocab_dir).expect("create vocab dir");
     if snapshot {
-        std::fs::write(vocab_dir.join("iso-4217@2024-01-01.json"), SNAPSHOT).expect("write snapshot");
+        std::fs::write(vocab_dir.join("iso-4217@2024-01-01.json"), SNAPSHOT)
+            .expect("write snapshot");
     }
     if let Some(lock) = lock {
         std::fs::write(dir.join("model.lock"), lock).expect("write lockfile");
@@ -106,13 +107,19 @@ fn vocabulary_model_compiles_with_entries_and_resolved_types() {
     assert_eq!(vocab.entries.len(), 2);
     assert_eq!(vocab.entries[0].key, "USD");
     assert_eq!(vocab.entries[0].facets["minorUnits"], DefaultValue::Int(2));
-    assert_eq!(vocab.entries[1].facets["symbol"], DefaultValue::String("€".to_string()));
+    assert_eq!(
+        vocab.entries[1].facets["symbol"],
+        DefaultValue::String("€".to_string())
+    );
 
     let ccy = &package.classes[0].features[0];
     assert_eq!(ccy.name, "ccy");
     assert_eq!(
         ccy.type_,
-        TypeRef::Vocabulary { package: "demo".to_string(), name: "Currency".to_string() }
+        TypeRef::Vocabulary {
+            package: "demo".to_string(),
+            name: "Currency".to_string()
+        }
     );
     assert_eq!(ccy.default, Some(DefaultValue::String("USD".to_string())));
 }
@@ -128,7 +135,12 @@ fn missing_snapshot_is_an_error_with_fetch_help() {
         .iter()
         .filter(|d| d.message.contains("iso-4217@2024-01-01.json"))
         .collect();
-    assert_eq!(missing.len(), 1, "diagnostics: {:?}", compilation.diagnostics);
+    assert_eq!(
+        missing.len(),
+        1,
+        "diagnostics: {:?}",
+        compilation.diagnostics
+    );
     assert!(missing[0].is_error());
     let help = missing[0].help.as_deref().expect("help present");
     assert!(help.contains("rexlang vocab fetch"), "help was: {help}");
@@ -154,7 +166,12 @@ fn digest_mismatch_is_an_error() {
         .iter()
         .filter(|d| d.message.contains("digest mismatch") || d.message.contains("digest"))
         .collect();
-    assert_eq!(mismatch.len(), 1, "diagnostics: {:?}", compilation.diagnostics);
+    assert_eq!(
+        mismatch.len(),
+        1,
+        "diagnostics: {:?}",
+        compilation.diagnostics
+    );
     assert!(mismatch[0].is_error());
 }
 
@@ -172,7 +189,12 @@ fn missing_lockfile_warns_but_compiles() {
         .iter()
         .filter(|d| !d.is_error())
         .collect();
-    assert_eq!(warnings.len(), 1, "diagnostics: {:?}", compilation.diagnostics);
+    assert_eq!(
+        warnings.len(),
+        1,
+        "diagnostics: {:?}",
+        compilation.diagnostics
+    );
     assert!(
         warnings[0].message.contains("not pinned"),
         "warning was: {}",
@@ -206,7 +228,12 @@ fn facet_type_must_be_primitive() {
         .iter()
         .filter(|d| d.message.contains("minorUnits"))
         .collect();
-    assert_eq!(facet_errors.len(), 1, "diagnostics: {:?}", compilation.diagnostics);
+    assert_eq!(
+        facet_errors.len(),
+        1,
+        "diagnostics: {:?}",
+        compilation.diagnostics
+    );
     assert!(facet_errors[0].is_error());
     assert!(
         facet_errors[0].message.contains("primitive"),
@@ -233,7 +260,12 @@ fn missing_key_is_an_error() {
         .iter()
         .filter(|d| d.message.contains("key"))
         .collect();
-    assert_eq!(key_errors.len(), 1, "diagnostics: {:?}", compilation.diagnostics);
+    assert_eq!(
+        key_errors.len(),
+        1,
+        "diagnostics: {:?}",
+        compilation.diagnostics
+    );
     assert!(key_errors[0].is_error());
 }
 
@@ -247,12 +279,13 @@ fn unresolvable_version_suggests_pin_or_fetch() {
         .iter()
         .filter(|d| d.message.contains("version"))
         .collect();
-    assert_eq!(version_errors.len(), 1, "diagnostics: {:?}", compilation.diagnostics);
-    let combined = format!(
-        "{} {:?}",
-        version_errors[0].message,
-        version_errors[0].help
+    assert_eq!(
+        version_errors.len(),
+        1,
+        "diagnostics: {:?}",
+        compilation.diagnostics
     );
+    let combined = format!("{} {:?}", version_errors[0].message, version_errors[0].help);
     assert!(combined.contains("version"), "was: {combined}");
     assert!(combined.contains("rexlang vocab fetch"), "was: {combined}");
 }
@@ -267,7 +300,10 @@ fn unique_snapshot_resolves_version_from_filename() {
         compilation.diagnostics
     );
     let package = compilation.model.unwrap().packages.pop().unwrap();
-    assert_eq!(package.vocabularies[0].version.as_deref(), Some("2024-01-01"));
+    assert_eq!(
+        package.vocabularies[0].version.as_deref(),
+        Some("2024-01-01")
+    );
 }
 
 #[test]
@@ -282,7 +318,12 @@ fn ambiguous_snapshots_are_an_error() {
         .iter()
         .filter(|d| d.message.contains("multiple snapshots") || d.message.contains("2025-06-01"))
         .collect();
-    assert_eq!(ambiguous.len(), 1, "diagnostics: {:?}", compilation.diagnostics);
+    assert_eq!(
+        ambiguous.len(),
+        1,
+        "diagnostics: {:?}",
+        compilation.diagnostics
+    );
     assert!(ambiguous[0].is_error());
 }
 
@@ -309,7 +350,12 @@ fn vocabulary_default_must_be_an_entry_key() {
         .iter()
         .filter(|d| d.message.contains("GBP"))
         .collect();
-    assert_eq!(default_errors.len(), 1, "diagnostics: {:?}", compilation.diagnostics);
+    assert_eq!(
+        default_errors.len(),
+        1,
+        "diagnostics: {:?}",
+        compilation.diagnostics
+    );
     assert!(default_errors[0].is_error());
 }
 

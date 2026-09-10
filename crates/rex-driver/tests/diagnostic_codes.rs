@@ -27,7 +27,10 @@ fn class_typed_attribute_carries_a_structured_code() {
         })
     );
     // The diagnostic's own span is the offending type reference too.
-    assert_eq!(error.span, Some((type_start..type_start + "Book".len()).into()));
+    assert_eq!(
+        error.span,
+        Some((type_start..type_start + "Book".len()).into())
+    );
 }
 
 #[test]

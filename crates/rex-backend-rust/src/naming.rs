@@ -31,7 +31,10 @@ pub fn snake_case(name: &str) -> String {
                 .checked_sub(1)
                 .map(|p| chars[p].is_ascii_lowercase() || chars[p].is_ascii_digit())
                 .unwrap_or(false);
-            let next_lower = chars.get(index + 1).map(|n| n.is_ascii_lowercase()).unwrap_or(false);
+            let next_lower = chars
+                .get(index + 1)
+                .map(|n| n.is_ascii_lowercase())
+                .unwrap_or(false);
             let starts_run_after_word = prev_lower_or_digit;
             let starts_short_run = index > 0 && next_lower;
             if starts_run_after_word || starts_short_run {

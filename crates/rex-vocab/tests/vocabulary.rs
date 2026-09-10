@@ -25,9 +25,18 @@ fn currency_declaration() -> VocabularyDeclaration {
         version: Some("2024-01-01".to_string()),
         key: "alpha3".to_string(),
         facets: vec![
-            VocabularyFacet { name: "minorUnits".to_string(), type_: PrimitiveType::Int },
-            VocabularyFacet { name: "symbol".to_string(), type_: PrimitiveType::String },
-            VocabularyFacet { name: "displayName".to_string(), type_: PrimitiveType::String },
+            VocabularyFacet {
+                name: "minorUnits".to_string(),
+                type_: PrimitiveType::Int,
+            },
+            VocabularyFacet {
+                name: "symbol".to_string(),
+                type_: PrimitiveType::String,
+            },
+            VocabularyFacet {
+                name: "displayName".to_string(),
+                type_: PrimitiveType::String,
+            },
         ],
     }
 }
@@ -85,10 +94,19 @@ fn validate_entries_builds_ir_entries_in_snapshot_order() {
 
     assert_eq!(entries[0].key, "USD");
     assert_eq!(entries[0].facets["minorUnits"], DefaultValue::Int(2));
-    assert_eq!(entries[0].facets["symbol"], DefaultValue::String("$".to_string()));
-    assert_eq!(entries[0].facets["displayName"], DefaultValue::String("US Dollar".to_string()));
+    assert_eq!(
+        entries[0].facets["symbol"],
+        DefaultValue::String("$".to_string())
+    );
+    assert_eq!(
+        entries[0].facets["displayName"],
+        DefaultValue::String("US Dollar".to_string())
+    );
     assert_eq!(entries[1].key, "EUR");
-    assert_eq!(entries[1].facets["symbol"], DefaultValue::String("€".to_string()));
+    assert_eq!(
+        entries[1].facets["symbol"],
+        DefaultValue::String("€".to_string())
+    );
 }
 
 #[test]
@@ -103,13 +121,13 @@ fn validate_entries_rejects_a_foreign_snapshot() {
 
 #[test]
 fn validate_entries_rejects_empty_snapshots() {
-    let parsed = parse_snapshot(
-        br#"{ "vocabulary": "iso:4217", "version": "2024-01-01", "entries": [] }"#,
-    )
-    .expect("parse");
+    let parsed =
+        parse_snapshot(br#"{ "vocabulary": "iso:4217", "version": "2024-01-01", "entries": [] }"#)
+            .expect("parse");
     let err = validate_entries(&parsed, &currency_declaration()).unwrap_err();
     assert!(
-        err.to_string().contains("vocabulary snapshot has no entries"),
+        err.to_string()
+            .contains("vocabulary snapshot has no entries"),
         "error was: {err}"
     );
 }
@@ -166,7 +184,10 @@ fn validate_entries_checks_facet_value_types() {
         name: "obsolete".to_string(),
         type_: PrimitiveType::Boolean,
     });
-    decl.facets.push(VocabularyFacet { name: "rate".to_string(), type_: PrimitiveType::Double });
+    decl.facets.push(VocabularyFacet {
+        name: "rate".to_string(),
+        type_: PrimitiveType::Double,
+    });
 
     let snapshot_for = |mutate: &dyn Fn(&mut serde_json::Value)| {
         let mut entry = serde_json::json!({
@@ -203,7 +224,10 @@ fn validate_entries_checks_facet_value_types() {
     // double facets accept fractions and integers.
     let parsed = snapshot_for(&|e| e["rate"] = serde_json::json!(2.5));
     let entries = validate_entries(&parsed, &decl).expect("valid double");
-    assert_eq!(entries[0].facets["rate"], DefaultValue::String("2.5".to_string()));
+    assert_eq!(
+        entries[0].facets["rate"],
+        DefaultValue::String("2.5".to_string())
+    );
     let parsed = snapshot_for(&|e| e["rate"] = serde_json::json!(2));
     let entries = validate_entries(&parsed, &decl).expect("integral double");
     assert_eq!(entries[0].facets["rate"], DefaultValue::Int(2));
@@ -214,7 +238,10 @@ fn lockfile_round_trips_through_disk() {
     let dir = scratch("lockfile");
     let path = dir.join("model.lock");
 
-    assert!(Lockfile::read(&path).is_err(), "missing lockfile is an error");
+    assert!(
+        Lockfile::read(&path).is_err(),
+        "missing lockfile is an error"
+    );
 
     let mut lockfile = Lockfile::default();
     lockfile.insert(LockEntry {
@@ -281,18 +308,25 @@ fn file_provider_reads_sanitized_snapshot_files() {
 
 #[test]
 fn file_provider_requires_a_pinned_version() {
-    let provider = FileProvider { root: scratch("file-provider-unpinned") };
+    let provider = FileProvider {
+        root: scratch("file-provider-unpinned"),
+    };
     let err = provider.fetch("iso:4217", None).expect_err("must error");
     assert!(err.to_string().contains("iso:4217"), "error was: {err}");
 }
 
 #[test]
 fn file_provider_errors_on_missing_snapshot() {
-    let provider = FileProvider { root: scratch("file-provider-missing").join("vocab") };
+    let provider = FileProvider {
+        root: scratch("file-provider-missing").join("vocab"),
+    };
     let err = provider
         .fetch("iso:4217", Some("9999-12-31"))
         .expect_err("must error");
-    assert!(err.to_string().contains("iso-4217@9999-12-31.json"), "error was: {err}");
+    assert!(
+        err.to_string().contains("iso-4217@9999-12-31.json"),
+        "error was: {err}"
+    );
 }
 
 #[test]
@@ -304,7 +338,10 @@ fn http_provider_builds_urls_from_the_template() {
         .url_for("iso:4217", Some("2024-01-01"))
         .expect("url");
     assert_eq!(url, "https://example.com/vocab/iso-4217@2024-01-01.json");
-    assert!(provider.url_for("iso:4217", None).is_err(), "unpinned fetch is an error");
+    assert!(
+        provider.url_for("iso:4217", None).is_err(),
+        "unpinned fetch is an error"
+    );
 }
 
 #[test]
@@ -314,7 +351,8 @@ fn http_provider_requires_a_pinned_version_with_clear_message() {
     };
     let err = provider.fetch("iso:4217", None).expect_err("must error");
     assert!(
-        err.to_string().contains("vocabulary must be pinned to a version to fetch over http"),
+        err.to_string()
+            .contains("vocabulary must be pinned to a version to fetch over http"),
         "error was: {err}"
     );
 }
