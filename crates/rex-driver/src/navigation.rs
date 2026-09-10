@@ -125,6 +125,19 @@ pub struct Definition {
     /// The feature's `id`/`readonly` modifiers as written; empty for
     /// non-features and unmodified features.
     pub modifiers: mox::Modifiers,
+    /// An operation's parameter list rendered as `name: type` entries
+    /// (e.g. `title: String, pages: int`); `None` for everything but
+    /// operations.
+    pub params_text: Option<String>,
+    /// An operation's body target names in source order (e.g. `["rust"]`);
+    /// empty for body-less operations and non-operations.
+    pub body_targets: Vec<String>,
+    /// A datatype's `create` body target names in source order; empty when
+    /// absent or not a datatype.
+    pub create_targets: Vec<String>,
+    /// A datatype's `convert` body target names in source order; empty when
+    /// absent or not a datatype.
+    pub convert_targets: Vec<String>,
     /// Span of the whole declaration this definition comes from (e.g. the
     /// full `class Book { … }` source, the full feature line).
     pub full_span: Span,
@@ -310,10 +323,26 @@ impl NavigationIndex {
                             mox::FeatureDecl::Op {
                                 return_type,
                                 params,
+                                bodies,
                                 ..
                             } => {
                                 index.definitions[feature_id].type_text =
                                     Some(return_type.name.full_name());
+                                index.definitions[feature_id].params_text = Some(
+                                    params
+                                        .iter()
+                                        .map(|param| {
+                                            format!(
+                                                "{}: {}",
+                                                param.name.text,
+                                                param.type_ref.name.full_name()
+                                            )
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join(", "),
+                                );
+                                index.definitions[feature_id].body_targets =
+                                    bodies.iter().map(|body| body.target.text.clone()).collect();
                                 index.add_type_reference(return_type, &package, &top_level);
                                 for param in params {
                                     index.add_type_reference(&param.type_ref, &package, &top_level);
@@ -350,9 +379,21 @@ impl NavigationIndex {
                         index.add_type_reference(&facet.type_ref, &package, &top_level);
                     }
                 }
+                mox::Decl::Datatype(decl) => {
+                    index.definitions[decl_id].create_targets = decl
+                        .create
+                        .iter()
+                        .map(|body| body.target.text.clone())
+                        .collect();
+                    index.definitions[decl_id].convert_targets = decl
+                        .convert
+                        .iter()
+                        .map(|body| body.target.text.clone())
+                        .collect();
+                }
                 // Interfaces hold only target bindings (no names to index);
-                // datatypes wrap foreign names; annotations are unnamed.
-                mox::Decl::Interface(_) | mox::Decl::Datatype(_) | mox::Decl::Annotation(_) => {}
+                // annotations are unnamed.
+                mox::Decl::Interface(_) | mox::Decl::Annotation(_) => {}
             }
         }
 
@@ -463,6 +504,10 @@ impl NavigationIndex {
             value_text: None,
             extends_text: None,
             modifiers: mox::Modifiers::default(),
+            params_text: None,
+            body_targets: Vec::new(),
+            create_targets: Vec::new(),
+            convert_targets: Vec::new(),
             full_span,
         });
         id

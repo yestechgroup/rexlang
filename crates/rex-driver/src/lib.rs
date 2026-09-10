@@ -88,12 +88,13 @@ pub struct Compiled {
 /// parse → resolve/validate → lower.
 #[salsa::tracked]
 pub fn compile(db: &dyn Db, file: SourceFile) -> Compiled {
+    let source = file.text(db);
     let parsed = parse_query(db, file);
     let mut diagnostics = parsed.diagnostics;
     let lowered = parsed
         .ast
         .as_ref()
-        .map(|ast| lower::compile(&file.path(db), ast));
+        .map(|ast| lower::compile(&file.path(db), &source, ast));
     if let Some((_, semantic)) = &lowered {
         diagnostics.extend(semantic.iter().cloned());
     }

@@ -48,6 +48,13 @@
 //!    The converse is not true — an artifact containing the `"vocabulary"`
 //!    [`TypeRef`] tag additionally requires a rex-ir new enough to know that
 //!    tag; older readers reject it as schema-invalid JSON.
+//! 7. **Operation and datatype bodies (additive, Tier 1).**
+//!    [`ClassDef::operations`], [`Operation::bodies`], and
+//!    [`DatatypeDef::create`]/[`DatatypeDef::convert`] follow the same
+//!    additive rules: `#[serde(default)]` and omitted when empty, so
+//!    artifacts for body-less models are byte-identical to pre-Tier-1
+//!    output. Bodies are **verbatim code strings** keyed by target name —
+//!    the IR never parses or reformats them.
 //!
 //! [rexlang]: https://github.com/anton-makes/rexlang
 
@@ -264,6 +271,14 @@ pub struct DatatypeDef {
     /// Per-target concrete bindings, e.g. `"rust" -> "chrono::NaiveDate"`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub target_bindings: BTreeMap<String, String>,
+    /// Per-target `create` bodies (Tier 1): verbatim code constructing the
+    /// datatype from its wrapped value. Additive; omitted when empty.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub create: BTreeMap<String, String>,
+    /// Per-target `convert` bodies (Tier 1): verbatim code converting the
+    /// datatype to its wrapped value. Additive; omitted when empty.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub convert: BTreeMap<String, String>,
 }
 
 impl DatatypeDef {
@@ -274,6 +289,8 @@ impl DatatypeDef {
             name: name.into(),
             platform,
             target_bindings: BTreeMap::new(),
+            create: BTreeMap::new(),
+            convert: BTreeMap::new(),
         }
     }
 
@@ -281,6 +298,71 @@ impl DatatypeDef {
     /// `"chrono::NaiveDate"`).
     pub fn bind(mut self, target: impl Into<String>, type_name: impl Into<String>) -> Self {
         self.target_bindings.insert(target.into(), type_name.into());
+        self
+    }
+
+    /// Chainable setter adding a verbatim Tier 1 body. `kind` is `"create"`
+    /// or `"convert"`; anything else is recorded as-is under that key.
+    pub fn with_body(
+        mut self,
+        kind: impl Into<String>,
+        target: impl Into<String>,
+        code: impl Into<String>,
+    ) -> Self {
+        match kind.into().as_str() {
+            "create" => self.create.insert(target.into(), code.into()),
+            "convert" => self.convert.insert(target.into(), code.into()),
+            _ => self.target_bindings.insert(target.into(), code.into()),
+        };
+        self
+    }
+}
+
+/// A parameter of an [`Operation`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationParam {
+    /// Parameter name.
+    pub name: String,
+    /// The resolved parameter type.
+    #[serde(rename = "type")]
+    pub type_: TypeRef,
+}
+
+/// A declared operation with optional per-target bodies (Tier 1).
+///
+/// Operation bodies are verbatim code strings keyed by target name; a
+/// body-less operation is an abstract hook backends may skip. Additive to
+/// v1: [`ClassDef::operations`] is omitted when empty.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Operation {
+    /// Operation name, unique within its class.
+    pub name: String,
+    /// The resolved return type.
+    pub return_type: TypeRef,
+    /// Parameters in declaration order.
+    #[serde(default)]
+    pub params: Vec<OperationParam>,
+    /// Verbatim per-target bodies, e.g. `"rust" -> "res.books.len()"`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub bodies: BTreeMap<String, String>,
+}
+
+impl Operation {
+    /// Creates a body-less operation.
+    pub fn new(name: impl Into<String>, return_type: TypeRef, params: Vec<OperationParam>) -> Self {
+        Self {
+            name: name.into(),
+            return_type,
+            params,
+            bodies: BTreeMap::new(),
+        }
+    }
+
+    /// Chainable setter adding a verbatim per-target body.
+    pub fn with_body(mut self, target: impl Into<String>, code: impl Into<String>) -> Self {
+        self.bodies.insert(target.into(), code.into());
         self
     }
 }
@@ -326,6 +408,11 @@ pub struct ClassDef {
     /// contract](crate#wire-format-contract) for [`Feature::id`].
     #[serde(default)]
     pub features: Vec<Feature>,
+    /// Declared operations (Tier 1), in declaration order. Operations are not
+    /// [`Feature`]s: they hold no value, get no feature id, and are never
+    /// serialized in instance JSON. Additive; omitted when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub operations: Vec<Operation>,
 }
 
 impl ClassDef {
@@ -335,6 +422,7 @@ impl ClassDef {
             name: name.into(),
             extends,
             features,
+            operations: Vec::new(),
         };
         class.assign_feature_ids();
         class
@@ -979,6 +1067,101 @@ mod tests {
               "isDerived": false,
               "isId": false,
               "isReadOnly": false
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}"#;
+
+        assert_eq!(model.to_json_pretty().expect("serialize"), expected);
+        let parsed = Model::from_json(expected).expect("deserialize golden");
+        assert_eq!(model, parsed);
+    }
+
+    #[test]
+    fn golden_json_with_bodies_pins_the_tier_1_wire_format() {
+        // Additive (wire-contract rule 5): body-less models stay byte-identical
+        // (see `golden_json_matches_expected_wire_format`); this golden pins the
+        // NEW fields — `operations[].bodies`, datatype `create`/`convert` —
+        // which are omitted when empty.
+        let mut package = Package::new("nz.example.demo");
+        package.datatypes.push(
+            DatatypeDef::new("Date", None)
+                .with_body("create", "rust", "Date(it)".to_string())
+                .with_body("convert", "rust", "self.0.clone()".to_string()),
+        );
+        package
+            .classes
+            .push(ClassDef::new("Person", vec![], vec![]));
+        package.classes[0].operations.push(
+            Operation::new(
+                "getBook",
+                TypeRef::Class {
+                    package: "nz.example.demo".to_string(),
+                    name: "Book".to_string(),
+                },
+                vec![OperationParam {
+                    name: "title".to_string(),
+                    type_: TypeRef::Primitive(PrimitiveType::String),
+                }],
+            )
+            .with_body(
+                "rust",
+                "res.books.iter().find_map(|b| { (b.title == title).then_some(*b) })",
+            ),
+        );
+        let mut model = Model::new();
+        model.packages.push(package);
+
+        let expected = r#"{
+  "formatVersion": 1,
+  "rexVersion": "0.1.0",
+  "packages": [
+    {
+      "name": "nz.example.demo",
+      "annotations": [],
+      "enums": [],
+      "datatypes": [
+        {
+          "name": "Date",
+          "create": {
+            "rust": "Date(it)"
+          },
+          "convert": {
+            "rust": "self.0.clone()"
+          }
+        }
+      ],
+      "interfaces": [],
+      "classes": [
+        {
+          "name": "Person",
+          "extends": [],
+          "features": [],
+          "operations": [
+            {
+              "name": "getBook",
+              "returnType": {
+                "type": "class",
+                "value": {
+                  "package": "nz.example.demo",
+                  "name": "Book"
+                }
+              },
+              "params": [
+                {
+                  "name": "title",
+                  "type": {
+                    "type": "primitive",
+                    "value": "string"
+                  }
+                }
+              ],
+              "bodies": {
+                "rust": "res.books.iter().find_map(|b| { (b.title == title).then_some(*b) })"
+              }
             }
           ]
         }

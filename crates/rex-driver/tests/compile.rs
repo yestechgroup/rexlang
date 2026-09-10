@@ -97,7 +97,14 @@ fn library_example_compiles_with_zero_diagnostics() {
         })
     );
 
-    // Ops are validated but NOT lowered into the IR.
+    // Tier 1: ops lower into `ClassDef.operations` (not into `features`).
+    let get_book_op = library
+        .operations
+        .iter()
+        .find(|op| op.name == "getBook")
+        .expect("getBook lowers into operations");
+    assert_eq!(get_book_op.return_type, class_ref("Book"));
+    assert!(get_book_op.bodies.is_empty(), "body-less op in the fixture");
     assert!(library.features.iter().all(|f| f.name != "getBook"));
 
     let book = &package.classes[1];
@@ -279,27 +286,251 @@ class Leaf {
     }));
 }
 
+// --- Tier 1: operation lowering and per-target bodies ------------------------
+
 #[test]
-fn op_and_derived_bodies_are_rejected() {
+fn ops_lower_to_classdef_operations() {
+    let source = r#"
+package demo
+
+class Library {
+    contains Book[] books
+    op Book getBook(String title)
+    op int countBooks()
+}
+
+class Book { String title }
+"#;
+    let compilation = compile_str("ops.mox", source);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "unexpected diagnostics:\n{}",
+        render("ops.mox", source, &compilation.diagnostics)
+    );
+    let model = compilation.model.expect("a model on success");
+    let library = &model.packages[0].classes[0];
+    assert_eq!(library.operations.len(), 2);
+
+    let get_book = &library.operations[0];
+    assert_eq!(get_book.name, "getBook");
+    assert_eq!(
+        get_book.return_type,
+        TypeRef::Class {
+            package: "demo".to_string(),
+            name: "Book".to_string(),
+        }
+    );
+    assert_eq!(get_book.params.len(), 1);
+    assert_eq!(get_book.params[0].name, "title");
+    assert_eq!(
+        get_book.params[0].type_,
+        TypeRef::Primitive(rex_ir::PrimitiveType::String)
+    );
+    // Abstract (body-less) operations carry no bodies.
+    assert!(get_book.bodies.is_empty());
+    assert_eq!(library.operations[1].name, "countBooks");
+
+    // Operations are not features: no feature id, no stored slot.
+    assert!(library.features.iter().all(|f| f.name != "getBook"));
+}
+
+#[test]
+fn op_target_bodies_lower_verbatim() {
+    // The body text must reach the IR exactly as written, including the odd
+    // spacing, the non-grammar `=>`/`?` characters, and the nested braces.
+    let source = "package demo\n\
+                  \n\
+                  class Library {\n\
+                  \x20   contains Book[] books\n\
+                  \x20   op Book getBook(String title) {\n\
+                  \x20       rust { res.books.iter().find_map(|b| { (b.title == *title).then_some(*b) }) }\n\
+                  \x20       java { /* verbatim */ return books.stream()\n\
+                  \x20           .filter(b => b.title.equals(title)); }\n\
+                  \x20   }\n\
+                  }\n\
+                  \n\
+                  class Book { String title }";
+    let compilation = compile_str("opbodies.mox", source);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "unexpected diagnostics:\n{}",
+        render("opbodies.mox", source, &compilation.diagnostics)
+    );
+    let model = compilation.model.expect("a model on success");
+    let get_book = &model.packages[0].classes[0].operations[0];
+    assert_eq!(
+        get_book.bodies.get("rust").map(String::as_str),
+        Some(" res.books.iter().find_map(|b| { (b.title == *title).then_some(*b) }) ")
+    );
+    assert_eq!(
+        get_book.bodies.get("java").map(String::as_str),
+        Some(" /* verbatim */ return books.stream()\n            .filter(b => b.title.equals(title)); ")
+    );
+}
+
+#[test]
+fn bare_op_body_is_rejected_with_the_per_target_message() {
     let source = r#"
 package demo
 
 class Calc {
     op int compute(int x) { x + 1 }
+}
+"#;
+    let compilation = compile_str("calc.mox", source);
+    assert!(compilation.model.is_none());
+    assert!(compilation.diagnostics.iter().any(|d| {
+        d.message == "operation bodies must be per-target in Tier 1 (e.g. `rust { ... }`)"
+    }));
+}
+
+#[test]
+fn unknown_op_target_warns_and_lowering_continues() {
+    let source = r#"
+package demo
+
+class Calc {
+    op int compute(int x) {
+        kotlin { x + 1 }
+        rust { x + 1 }
+    }
+}
+"#;
+    let compilation = compile_str("kt.mox", source);
+    let model = compilation.model.expect("warnings must not block lowering");
+    let compute = &model.packages[0].classes[0].operations[0];
+    // Unknown targets are carried in the IR (nothing is dropped silently);
+    // consumers pick the entries for their own target.
+    assert_eq!(
+        compute.bodies.get("rust").map(String::as_str),
+        Some(" x + 1 ")
+    );
+    assert_eq!(
+        compute.bodies.get("kotlin").map(String::as_str),
+        Some(" x + 1 ")
+    );
+
+    let warnings: Vec<_> = compilation
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Warning)
+        .collect();
+    assert_eq!(warnings.len(), 1, "expected one warning");
+    assert_eq!(
+        warnings[0].message,
+        "unknown target 'kotlin' (known: rust, csharp, java)"
+    );
+}
+
+#[test]
+fn duplicate_op_target_is_an_error() {
+    let source = r#"
+package demo
+
+class Calc {
+    op int compute(int x) {
+        rust { x + 1 }
+        rust { x + 2 }
+    }
+}
+"#;
+    let compilation = compile_str("dup.mox", source);
+    assert!(compilation.model.is_none());
+    assert!(
+        compilation
+            .diagnostics
+            .iter()
+            .any(|d| d.message == "duplicate target body 'rust' for operation 'compute'"),
+        "unexpected diagnostics: {:?}",
+        compilation.diagnostics
+    );
+}
+
+#[test]
+fn datatype_create_convert_lower_to_datatype_def() {
+    let source = "package demo\n\
+                  \n\
+                  type Date wraps opaque {\n\
+                  \x20   rust \"chrono::NaiveDate\"\n\
+                  \x20   create { rust { Date(it) } }\n\
+                  \x20   convert { rust { self.0.clone() } }\n\
+                  }";
+    let compilation = compile_str("date.mox", source);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "unexpected diagnostics:\n{}",
+        render("date.mox", source, &compilation.diagnostics)
+    );
+    let model = compilation.model.expect("a model on success");
+    let date = &model.packages[0].datatypes[0];
+    // Target-binding entries and create/convert bodies coexist.
+    assert_eq!(
+        date.target_bindings.get("rust").map(String::as_str),
+        Some("chrono::NaiveDate")
+    );
+    assert_eq!(
+        date.create.get("rust").map(String::as_str),
+        Some(" Date(it) ")
+    );
+    assert_eq!(
+        date.convert.get("rust").map(String::as_str),
+        Some(" self.0.clone() ")
+    );
+}
+
+#[test]
+fn datatype_body_unknown_target_warns_and_duplicate_block_is_an_error() {
+    // Unknown target inside `create`: warning only.
+    let source = "package demo\n\
+                  \n\
+                  type Date wraps opaque {\n\
+                  \x20   create { kotlin { Date(it) } rust { Date(it) } }\n\
+                  }";
+    let compilation = compile_str("date.mox", source);
+    let model = compilation.model.expect("warnings must not block lowering");
+    let date = &model.packages[0].datatypes[0];
+    assert_eq!(
+        date.create.get("rust").map(String::as_str),
+        Some(" Date(it) ")
+    );
+    assert_eq!(
+        date.create.get("kotlin").map(String::as_str),
+        Some(" Date(it) ")
+    );
+
+    // A duplicate target within one block is an error.
+    let source = "package demo\n\
+                  \n\
+                  type Date wraps opaque {\n\
+                  \x20   convert { rust { a } rust { b } }\n\
+                  }";
+    let compilation = compile_str("date2.mox", source);
+    assert!(compilation.model.is_none());
+    assert!(
+        compilation
+            .diagnostics
+            .iter()
+            .any(|d| d.message == "duplicate target body 'rust' for datatype 'Date' convert"),
+        "unexpected diagnostics: {:?}",
+        compilation.diagnostics
+    );
+}
+
+#[test]
+fn derived_bodies_stay_rejected_tier_2() {
+    let source = r#"
+package demo
+
+class Calc {
     derived int total { 42 }
 }
 "#;
     let compilation = compile_str("calc.mox", source);
     assert!(compilation.model.is_none());
-    let messages: Vec<&str> = compilation
+    assert!(compilation
         .diagnostics
         .iter()
-        .map(|d| d.message.as_str())
-        .collect();
-    assert!(messages.contains(
-        &"operation bodies are not supported yet (Tier 0: declare abstract operations only)"
-    ));
-    assert!(messages.contains(&"derived get bodies are not supported yet (Tier 2)"));
+        .any(|d| d.message == "derived get bodies are not supported yet (Tier 2)"));
 }
 
 #[test]

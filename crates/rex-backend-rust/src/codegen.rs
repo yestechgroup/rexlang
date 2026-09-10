@@ -16,6 +16,40 @@
 //!   holder.
 //! - single ↔ single: `set` on both ends with full detach/reattach logic.
 //! - one-way containment (no opposite): plain owner-side `add`/`remove`.
+//!
+//! # Tier 1: operation bodies and datatype create/convert (the contract)
+//!
+//! Operations with a `rust` body are emitted into the class's impl block with
+//! a FIXED signature convention; the body text is embedded verbatim
+//! (byte-identical to the IR string — spacing, comments, and everything else
+//! the author wrote is the generated method's body):
+//!
+//! ```text
+//! pub fn <snake_name>(&self, res: &Resource, <param>: <type>, ...) -> <Ret> { <verbatim body> }
+//! ```
+//!
+//! Type mapping in signatures: primitive `String` stays `String` (body
+//! authors clone/deref as needed), `int` → `i32` and friends as for fields,
+//! class-typed params and returns map to the typed id (`BookId`), enums,
+//! datatypes, and vocabularies to their Rust type. Note the consequences of
+//! the convention: a class-typed return means the BODY must produce a
+//! `BookId` (e.g. by `.expect`-ing a lookup), and `String` params are owned.
+//! A class-typed parameter or return never carries `Option`.
+//!
+//! Datatypes with `create`/`convert` rust bodies get a small impl block:
+//!
+//! ```text
+//! impl Date {
+//!     pub fn create(it: String) -> Self { <verbatim body> }   // body returns Self
+//!     pub fn convert(self) -> String { <verbatim body> }      // body may use self.0
+//! }
+//! ```
+//!
+//! When a class has NO `rust` body for an operation, nothing is emitted for
+//! it: it remains an abstract hook to implement as a hand-written method in
+//! your own modules (as in Tier 0). Instance JSON (see `serialize.rs`) is
+//! untouched by all of the above: operations and datatype behavior are never
+//! serialized.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -183,6 +217,19 @@ fn is_reference(kind: FeatureKind) -> bool {
     )
 }
 
+/// The Rust type of an operation signature slot (param or return), per the
+/// Tier 1 convention: classes map to their typed id (`BookId`), enums,
+/// datatypes, and vocabularies to their Rust type, primitives as for fields.
+fn op_type(type_: &TypeRef) -> anyhow::Result<String> {
+    match type_ {
+        TypeRef::Class { name, .. } => Ok(format!("{}Id", rust_ident(name))),
+        TypeRef::Interface { name, .. } => {
+            bail!("interfaces are not materialized by the Rust backend yet ('{name}')")
+        }
+        other => value_type(other),
+    }
+}
+
 fn feature_doc(feature: &Feature) -> &'static str {
     match feature.kind {
         FeatureKind::Attribute => "attribute",
@@ -320,10 +367,11 @@ fn emit_header(e: &mut String, model: &Model, unit: &Unit<'_>) {
         model.format_version,
         model.rex_version.as_deref().unwrap_or("unknown")
     ));
-    e.push_str("//! Tier 0 notes:\n");
+    e.push_str("//! Notes:\n");
     e.push_str(
-        "//! - operations are abstract hooks: implement them as hand-written methods\n\
-         //!   in your own modules (generated code never contains operation bodies);\n",
+        "//! - operations with a `rust` body are emitted as methods on the class\n\
+         //!   (the body text is embedded verbatim); body-less operations stay\n\
+         //!   abstract — implement them as hand-written methods in your own modules;\n",
     );
     if unit
         .classes
@@ -380,6 +428,25 @@ fn emit_datatypes(e: &mut String, unit: &Unit<'_>) {
             "pub struct {}(pub String);\n",
             rust_ident(&datatype.name)
         ));
+        // Tier 1: create/convert bodies become a small impl block. `create`
+        // takes the wrapped value and returns `Self`; `convert` consumes
+        // `self` and returns the wrapped `String`. Bodies are verbatim.
+        let create = datatype.create.get("rust");
+        let convert = datatype.convert.get("rust");
+        if create.is_some() || convert.is_some() {
+            e.push_str(&format!("impl {} {{\n", rust_ident(&datatype.name)));
+            if let Some(body) = create {
+                e.push_str(&format!(
+                    "    /// Tier 1 `create` body, embedded verbatim.\n    pub fn create(it: String) -> Self {{\n{body}\n    }}\n"
+                ));
+            }
+            if let Some(body) = convert {
+                e.push_str(&format!(
+                    "    /// Tier 1 `convert` body, embedded verbatim.\n    pub fn convert(self) -> String {{\n{body}\n    }}\n"
+                ));
+            }
+            e.push_str("}\n");
+        }
     }
 }
 
@@ -725,7 +792,9 @@ fn emit_struct(e: &mut String, unit: &Unit<'_>, class: &ClassCtx<'_>) -> anyhow:
     }
     e.push_str("        }\n    }\n}\n\n");
 
-    // Struct impl: attribute setters + reference navigation.
+    // Struct impl: attribute setters + reference navigation + operation
+    // bodies (Tier 1: a `rust` body becomes a method; body-less operations
+    // are hand-written hooks and emit nothing).
     let mut methods = String::new();
     for feature in &class.class.features {
         if feature.is_derived {
@@ -786,6 +855,34 @@ fn emit_struct(e: &mut String, unit: &Unit<'_>, class: &ClassCtx<'_>) -> anyhow:
                 ));
             }
         }
+    }
+    for operation in &class.class.operations {
+        let Some(body) = operation.bodies.get("rust") else {
+            continue;
+        };
+        let params = operation
+            .params
+            .iter()
+            .map(|param| {
+                Ok(format!(
+                    "{}: {}",
+                    rust_ident(&snake_case(&param.name)),
+                    op_type(&param.type_)?
+                ))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?
+            .join(", ");
+        let head = if params.is_empty() {
+            String::new()
+        } else {
+            format!(", {params}")
+        };
+        methods.push_str(&format!(
+            "    /// Declared operation `{name}` (rust body embedded verbatim).\n    pub fn {snake}(&self, res: &Resource{head}) -> {ret} {{\n{body}\n    }}\n\n",
+            name = operation.name,
+            snake = rust_ident(&snake_case(&operation.name)),
+            ret = op_type(&operation.return_type)?,
+        ));
     }
     if !methods.is_empty() {
         e.push_str(&format!("impl {name} {{\n"));
@@ -1231,7 +1328,9 @@ fn emit_one_sided_containment(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rex_ir::{Multiplicity, Package, VocabularyDef, VocabularyEntry};
+    use rex_ir::{
+        Multiplicity, Operation, OperationParam, Package, VocabularyDef, VocabularyEntry,
+    };
 
     const PKG: &str = "nz.example.payments";
 
@@ -1605,6 +1704,127 @@ mod tests {
         assert!(
             !code.contains("pub fn set_code"),
             "`readonly` features must not get a setter:\n{code}"
+        );
+    }
+
+    // --- Tier 1: operation bodies and datatype create/convert ----------------
+
+    fn op_model() -> Model {
+        let mut model = Model::new();
+        let mut package = Package::new("demo");
+        package.datatypes.push(
+            DatatypeDef::new("Date", None)
+                .bind("rust", "chrono::NaiveDate")
+                .with_body("create", "rust", " Date(it) ")
+                .with_body("convert", "rust", " self.0.clone() "),
+        );
+        package.classes.push(ClassDef::new(
+            "Library",
+            vec![],
+            vec![Feature::new(
+                "books",
+                FeatureKind::Containment,
+                TypeRef::Class {
+                    package: "demo".to_string(),
+                    name: "Book".to_string(),
+                },
+                Multiplicity::MANY,
+            )],
+        ));
+        package.classes[0].operations.push(
+            Operation::new(
+                "getBook",
+                TypeRef::Class {
+                    package: "demo".to_string(),
+                    name: "Book".to_string(),
+                },
+                vec![
+                    OperationParam {
+                        name: "title".to_string(),
+                        type_: TypeRef::Primitive(PrimitiveType::String),
+                    },
+                    OperationParam {
+                        name: "shelf".to_string(),
+                        type_: TypeRef::Class {
+                            package: "demo".to_string(),
+                            name: "Shelf".to_string(),
+                        },
+                    },
+                ],
+            )
+            .with_body(
+                "rust",
+                " res.books.iter().find_map(|b| { (b.title == *title).then_some(*b) }) ",
+            ),
+        );
+        package.classes[0].operations.push(Operation::new(
+            "countBooks",
+            TypeRef::Primitive(PrimitiveType::Int),
+            vec![],
+        ));
+        package.classes.push(ClassDef::new("Book", vec![], vec![]));
+        package.classes.push(ClassDef::new("Shelf", vec![], vec![]));
+        model.packages.push(package);
+        model
+    }
+
+    #[test]
+    fn operation_signature_convention_and_verbatim_body() {
+        let code = generate(&op_model())
+            .expect("generate")
+            .remove("models.rs")
+            .expect("models.rs");
+        // Fixed signature: `&self, res: &Resource, params…` with String
+        // params as `String`, class params as `ShelfId`, class return as
+        // `BookId` — and the body embedded verbatim (byte-identical, on its
+        // own line between the braces).
+        assert!(
+            code.contains("pub fn get_book(&self, res: &Resource, title: String, shelf: ShelfId) -> BookId {\n res.books.iter().find_map(|b| { (b.title == *title).then_some(*b) }) \n    }"),
+            "signature + verbatim body:\n{code}"
+        );
+        // The operation lives inside the class's impl block.
+        let impl_start = code.find("impl Library {").expect("Library impl");
+        let fn_at = code.find("pub fn get_book").expect("operation in output");
+        assert!(fn_at > impl_start, "operation must be in the impl block");
+    }
+
+    #[test]
+    fn body_less_operation_emits_nothing() {
+        let code = generate(&op_model())
+            .expect("generate")
+            .remove("models.rs")
+            .expect("models.rs");
+        assert!(
+            !code.contains("count_books"),
+            "body-less ops are hand-written hooks, not generated:\n{code}"
+        );
+    }
+
+    #[test]
+    fn datatype_create_convert_impl_convention() {
+        let code = generate(&op_model())
+            .expect("generate")
+            .remove("models.rs")
+            .expect("models.rs");
+        // `create(it: String) -> Self` and `convert(self) -> String`, bodies
+        // verbatim. The example bodies compile: `create` returns
+        // `Self` directly (the body's choice — no `Some(...)` wrapping),
+        // `convert` clones through the newtype's `self.0`.
+        assert!(
+            code.contains("impl Date {\n    /// Tier 1 `create` body, embedded verbatim.\n    pub fn create(it: String) -> Self {\n Date(it) \n    }\n    /// Tier 1 `convert` body, embedded verbatim.\n    pub fn convert(self) -> String {\n self.0.clone() \n    }\n}"),
+            "datatype impl:\n{code}"
+        );
+    }
+
+    #[test]
+    fn module_header_documents_the_body_contract() {
+        let code = generate(&op_model())
+            .expect("generate")
+            .remove("models.rs")
+            .expect("models.rs");
+        assert!(
+            code.contains("operations with a `rust` body are emitted"),
+            "header must describe Tier 1 bodies:\n{code}"
         );
     }
 }

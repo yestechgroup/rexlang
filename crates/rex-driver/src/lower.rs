@@ -5,7 +5,7 @@
 //! Vocabulary declarations additionally read the vendored `vocab/` snapshots
 //! and `model.lock` from disk, relative to the source file's directory.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use rex_ir as ir;
@@ -71,8 +71,56 @@ struct Resolution {
     name: String,
 }
 
+/// The per-target backends known in Tier 1, in warning-message order.
+const KNOWN_TARGETS: [&str; 3] = ["rust", "csharp", "java"];
+
+/// The verbatim text inside a target body's braces. Spans are byte offsets
+/// into the same source the AST was parsed from; braces are one byte each,
+/// so stripping first and last yields the exact inner text (spacing,
+/// newlines, comments, and non-grammar characters intact).
+fn body_text(source: &str, span: Span) -> &str {
+    &source[span.start + 1..span.end - 1]
+}
+
+/// Lowers target-tagged bodies into a verbatim `target -> code` map,
+/// warning on unknown target names and erroring on duplicates.
+fn lower_target_bodies(
+    bodies: &[mox::TargetBody],
+    source: &str,
+    subject: &str,
+    diags: &mut Vec<Diagnostic>,
+) -> BTreeMap<String, String> {
+    let mut lowered = BTreeMap::new();
+    for body in bodies {
+        if !KNOWN_TARGETS.contains(&body.target.text.as_str()) {
+            diags.push(Diagnostic::warning(
+                format!(
+                    "unknown target '{}' (known: {})",
+                    body.target.text,
+                    KNOWN_TARGETS.join(", ")
+                ),
+                Some(body.target.span),
+            ));
+        }
+        if lowered
+            .insert(
+                body.target.text.clone(),
+                body_text(source, body.span).to_string(),
+            )
+            .is_some()
+        {
+            diags.push(Diagnostic::error(
+                format!("duplicate target body '{}' for {subject}", body.target.text),
+                Some(body.target.span),
+            ));
+        }
+    }
+    lowered
+}
+
 /// Feature kind as written in the source (superset of the IR's kinds: ops and
-/// derived features exist syntactically even though ops are not lowered).
+/// derived features exist syntactically even though neither lowers into the
+/// stored feature list — ops lower into `ClassDef.operations` instead).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FKind {
     Attribute,
@@ -108,7 +156,8 @@ impl FKind {
         }
     }
 
-    /// The IR kind this lowers to; ops are not lowered.
+    /// The IR kind this lowers to; ops lower into `ClassDef.operations`
+    /// instead of the stored feature list.
     fn ir_kind(self) -> Option<ir::FeatureKind> {
         match self {
             FKind::Attribute | FKind::Derived => Some(ir::FeatureKind::Attribute),
@@ -141,6 +190,8 @@ struct ClassRecord {
     name_span: Span,
     def: ir::ClassDef,
     features: Vec<FeatureRecord>,
+    /// Lowered operations; appended to `def.operations` after validation.
+    operations: Vec<ir::Operation>,
 }
 
 /// Resolves and validates a parsed model and lowers it into the Core IR.
@@ -149,7 +200,11 @@ struct ClassRecord {
 /// `None` when any error-severity diagnostic was produced. `path` locates the
 /// model on disk: vocabulary snapshots are read from a `vocab/` directory
 /// next to the source, and pins from `model.lock` next to that.
-pub(crate) fn compile(path: &str, model: &mox::Model) -> (Option<ir::Model>, Vec<Diagnostic>) {
+pub(crate) fn compile(
+    path: &str,
+    source: &str,
+    model: &mox::Model,
+) -> (Option<ir::Model>, Vec<Diagnostic>) {
     let mut diags = Vec::new();
 
     let Some(package_decl) = &model.package else {
@@ -229,10 +284,13 @@ pub(crate) fn compile(path: &str, model: &mox::Model) -> (Option<ir::Model>, Vec
                 details: Default::default(),
             }),
             mox::Decl::Enum(decl) => out.enums.push(lower_enum(decl, &mut diags)),
-            mox::Decl::Datatype(decl) => out.datatypes.push(lower_datatype(decl)),
+            mox::Decl::Datatype(decl) => {
+                out.datatypes.push(lower_datatype(decl, source, &mut diags))
+            }
             mox::Decl::Interface(decl) => out.interfaces.push(lower_interface(decl)),
             mox::Decl::Class(decl) => classes.push(lower_class(
                 decl,
+                source,
                 &package,
                 &kinds,
                 &enum_decls,
@@ -246,7 +304,8 @@ pub(crate) fn compile(path: &str, model: &mox::Model) -> (Option<ir::Model>, Vec
     detect_inheritance_cycles(&classes, &mut diags);
     validate_opposites(&classes, &mut diags);
 
-    for class in classes {
+    for mut class in classes {
+        class.def.operations = std::mem::take(&mut class.operations);
         out.classes.push(class.def);
     }
 
@@ -417,7 +476,11 @@ fn lower_enum(decl: &mox::EnumDecl, diags: &mut Vec<Diagnostic>) -> ir::EnumDef 
     ir::EnumDef::new(&decl.name.text, literals)
 }
 
-fn lower_datatype(decl: &mox::DatatypeDecl) -> ir::DatatypeDef {
+fn lower_datatype(
+    decl: &mox::DatatypeDecl,
+    source: &str,
+    diags: &mut Vec<Diagnostic>,
+) -> ir::DatatypeDef {
     let platform = match &decl.wraps {
         Some(mox::Wraps::Named(name)) => Some(name.full_name()),
         Some(mox::Wraps::Opaque(_)) | None => None,
@@ -426,6 +489,19 @@ fn lower_datatype(decl: &mox::DatatypeDecl) -> ir::DatatypeDef {
     for binding in &decl.bindings {
         datatype = datatype.bind(&binding.key.text, &binding.value);
     }
+    // Tier 1: create/convert bodies lower next to the binding entries.
+    datatype.create = lower_target_bodies(
+        &decl.create,
+        source,
+        &format!("datatype '{}' create", decl.name.text),
+        diags,
+    );
+    datatype.convert = lower_target_bodies(
+        &decl.convert,
+        source,
+        &format!("datatype '{}' convert", decl.name.text),
+        diags,
+    );
     datatype
 }
 
@@ -707,6 +783,7 @@ fn primitive_facet_type(type_ref: &mox::TypeRef) -> Option<ir::PrimitiveType> {
 
 fn lower_class(
     decl: &mox::ClassDecl,
+    source: &str,
     package: &str,
     kinds: &HashMap<&str, TopKind>,
     enum_decls: &HashMap<&str, &mox::EnumDecl>,
@@ -736,6 +813,7 @@ fn lower_class(
     }
 
     let mut features = Vec::new();
+    let mut operations = Vec::new();
     let mut records = Vec::new();
     let mut seen = HashSet::new();
     for feature in &decl.features {
@@ -855,11 +933,11 @@ fn lower_class(
                 name,
                 params,
                 body,
+                bodies,
                 ..
             } => {
-                // Tier 0: signatures are validated but operations are not
-                // lowered into the IR. The `id`/`readonly` modifiers only
-                // apply to stored features, so they warn here.
+                // The `id`/`readonly` modifiers only apply to stored features,
+                // so they warn here.
                 let modifiers = feature.modifiers();
                 if let Some(span) = modifiers.id {
                     diags.push(Diagnostic::warning(
@@ -873,16 +951,37 @@ fn lower_class(
                         Some(span),
                     ));
                 }
-                resolve(return_type, package, kinds, diags);
-                for param in params {
-                    resolve(&param.type_ref, package, kinds, diags);
-                }
-                if let Some(body) = body {
+                // Tier 1: operations lower into `ClassDef.operations` with
+                // their resolved signature; bodies must be per-target and are
+                // carried verbatim. Body-less operations are abstract hooks.
+                if body.is_some() && bodies.is_empty() {
                     diags.push(Diagnostic::error(
-                        "operation bodies are not supported yet (Tier 0: declare abstract operations only)",
-                        Some(*body),
+                        "operation bodies must be per-target in Tier 1 (e.g. `rust { ... }`)",
+                        Some(body.expect("body span checked above")),
                     ));
                 }
+                let lowered_bodies = lower_target_bodies(
+                    bodies,
+                    source,
+                    &format!("operation '{}'", name.text),
+                    diags,
+                );
+                let return_resolution = resolve(return_type, package, kinds, diags);
+                let mut lowered_params = Vec::new();
+                for param in params {
+                    let resolution = resolve(&param.type_ref, package, kinds, diags);
+                    lowered_params.push(ir::OperationParam {
+                        name: param.name.text.clone(),
+                        type_: ir_type_of(resolution.as_ref(), package, &param.type_ref),
+                    });
+                }
+                let mut operation = ir::Operation::new(
+                    &name.text,
+                    ir_type_of(return_resolution.as_ref(), package, return_type),
+                    lowered_params,
+                );
+                operation.bodies = lowered_bodies;
+                operations.push(operation);
                 records.push(FeatureRecord {
                     name: name.text.clone(),
                     kind: FKind::Op,
@@ -938,6 +1037,7 @@ fn lower_class(
         name_span: decl.name.span,
         def: ir::ClassDef::new(&decl.name.text, extends, features),
         features: records,
+        operations,
     }
 }
 

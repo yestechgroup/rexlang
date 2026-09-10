@@ -306,6 +306,31 @@ fn raw_body<'src>() -> impl Parser<'src, Tokens<'src>, Span, MoxExtra<'src>> + C
         .map_with(|(), e| e.span())
 }
 
+/// One `<target> { ... }` body block inside an operation body or a datatype
+/// `create`/`convert` block.
+fn target_body<'src>() -> impl Parser<'src, Tokens<'src>, TargetBody, MoxExtra<'src>> + Clone {
+    name()
+        .then(raw_body())
+        .map_with(|(target, span), _| TargetBody { target, span })
+}
+
+/// The body of an `op` declaration: either a bare balanced `{ ... }` block
+/// (Tier 1 rejects it downstream) or one or more `<target> { ... }` blocks
+/// inside an outer brace pair. Returns the outer span (when present) and the
+/// target-tagged bodies (empty for a bare body).
+fn op_body<'src>(
+) -> impl Parser<'src, Tokens<'src>, (Option<Span>, Vec<TargetBody>), MoxExtra<'src>> + Clone {
+    let tagged = kw(Token::LBrace)
+        .ignore_then(target_body().repeated().at_least(1).collect::<Vec<_>>())
+        .then_ignore(kw(Token::RBrace))
+        .map_with(|bodies, e| (Some(e.span()), bodies));
+    let bare = raw_body().map(|span| (Some(span), Vec::new()));
+    tagged
+        .or(bare)
+        .or_not()
+        .map(|body| body.unwrap_or((None, Vec::new())))
+}
+
 fn params<'src>() -> impl Parser<'src, Tokens<'src>, Vec<Param>, MoxExtra<'src>> + Clone {
     let param = tref().then(name()).map_with(|(type_ref, name), e| Param {
         type_ref,
@@ -399,15 +424,18 @@ fn op_decl<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<'src
         .ignore_then(tref())
         .then(name())
         .then(params())
-        .then(raw_body().or_not())
-        .map_with(|(((return_type, name), params), body), e| FeatureDecl::Op {
-            modifiers: Modifiers::default(),
-            return_type,
-            name,
-            params,
-            body,
-            span: e.span(),
-        })
+        .then(op_body())
+        .map_with(
+            |(((return_type, name), params), (body, bodies)), e| FeatureDecl::Op {
+                modifiers: Modifiers::default(),
+                return_type,
+                name,
+                params,
+                body,
+                bodies,
+                span: e.span(),
+            },
+        )
 }
 
 fn derived_decl<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<'src>> + Clone {
@@ -494,15 +522,102 @@ fn class_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>> +
 
 fn binding_block<'src>(
 ) -> impl Parser<'src, Tokens<'src>, Vec<BindingEntry>, MoxExtra<'src>> + Clone {
-    let entry = name()
+    kw(Token::LBrace)
+        .ignore_then(binding_entry().repeated().collect::<Vec<_>>())
+        .then_ignore(kw(Token::RBrace))
+}
+
+fn binding_entry<'src>() -> impl Parser<'src, Tokens<'src>, BindingEntry, MoxExtra<'src>> + Clone {
+    name()
         .then(string_lit())
         .map_with(|(key, value), e| BindingEntry {
             key,
             value,
             span: e.span(),
-        });
+        })
+}
+
+/// A `create { <target-body>* }` or `convert { <target-body>* }` block named
+/// by a contextual keyword (both lex as ordinary identifiers).
+fn named_target_block<'src>(
+    keyword: &'static str,
+) -> impl Parser<'src, Tokens<'src>, Vec<TargetBody>, MoxExtra<'src>> + Clone {
+    select! { Token::Ident(text) if text == keyword => () }
+        .ignore_then(kw(Token::LBrace))
+        .ignore_then(target_body().repeated().collect::<Vec<_>>())
+        .then_ignore(kw(Token::RBrace))
+}
+
+/// One entry of a datatype's `{ ... }` block.
+enum DatatypeEntry {
+    Binding(BindingEntry),
+    Create(Vec<TargetBody>),
+    Convert(Vec<TargetBody>),
+}
+
+/// The `{ ... }` block of a datatype: target-binding entries and (at most one
+/// each) `create`/`convert` body blocks, in any order. A second `create` (or
+/// `convert`) block is a syntax error.
+fn datatype_block<'src>() -> impl Parser<
+    'src,
+    Tokens<'src>,
+    (Vec<BindingEntry>, Vec<TargetBody>, Vec<TargetBody>),
+    MoxExtra<'src>,
+> + Clone {
+    let entry = choice((
+        named_target_block("create").map(DatatypeEntry::Create),
+        named_target_block("convert").map(DatatypeEntry::Convert),
+        binding_entry().map(DatatypeEntry::Binding),
+    ));
     kw(Token::LBrace)
-        .ignore_then(entry.repeated().collect::<Vec<_>>())
+        .ignore_then(
+            entry
+                .repeated()
+                .collect::<Vec<_>>()
+                .map(|entries| {
+                    let mut bindings = Vec::new();
+                    let mut create: Option<Vec<TargetBody>> = None;
+                    let mut convert: Option<Vec<TargetBody>> = None;
+                    // `Some(keyword)` when a second block of that kind appears.
+                    let mut duplicate: Option<&'static str> = None;
+                    for entry in entries {
+                        match entry {
+                            DatatypeEntry::Binding(binding) => bindings.push(binding),
+                            DatatypeEntry::Create(bodies) if create.is_none() => {
+                                create = Some(bodies)
+                            }
+                            DatatypeEntry::Create(_) if duplicate.is_none() => {
+                                duplicate = Some("create")
+                            }
+                            DatatypeEntry::Create(_) => {}
+                            DatatypeEntry::Convert(bodies) if convert.is_none() => {
+                                convert = Some(bodies)
+                            }
+                            DatatypeEntry::Convert(_) if duplicate.is_none() => {
+                                duplicate = Some("convert")
+                            }
+                            DatatypeEntry::Convert(_) => {}
+                        }
+                    }
+                    (
+                        (
+                            bindings,
+                            create.unwrap_or_default(),
+                            convert.unwrap_or_default(),
+                        ),
+                        duplicate,
+                    )
+                })
+                .validate(|(block, duplicate), e, emitter| {
+                    if let Some(keyword) = duplicate {
+                        emitter.emit(Rich::custom(
+                            e.span(),
+                            format!("duplicate `{keyword}` block in datatype declaration"),
+                        ));
+                    }
+                    block
+                }),
+        )
         .then_ignore(kw(Token::RBrace))
 }
 
@@ -551,12 +666,15 @@ fn datatype_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>
         .ignore_then(name())
         .then_ignore(kw(Token::Wraps))
         .then(wraps_target.or_not())
-        .then(binding_block().or_not())
-        .map_with(|((name, wraps), bindings), e| {
+        .then(datatype_block().or_not())
+        .map_with(|((name, wraps), block), e| {
+            let (bindings, create, convert) = block.unwrap_or_default();
             Decl::Datatype(DatatypeDecl {
                 name,
                 wraps,
-                bindings: bindings.unwrap_or_default(),
+                bindings,
+                create,
+                convert,
                 span: e.span(),
             })
         })

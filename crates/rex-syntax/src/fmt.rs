@@ -28,9 +28,19 @@
 //!   followed code on the same source line stays trailing on that line. A
 //!   multi-line block comment keeps its internal newlines; only its first
 //!   line is indented.
-//! * The raw `{ ... }` body of an `op`/`derived` feature is emitted on one
-//!   line (braces balanced, single spaces), since its contents are not
-//!   grammar.
+//! * The raw `{ ... }` body of a `derived` feature is emitted on one line
+//!   (braces balanced, single spaces), since its contents are not grammar.
+//! * An `op` body is target-tagged (`{ <target> { ... } ... }`): the op's
+//!   `{` closes its own line and each `<target> {` block sits at the next
+//!   indent. A target body whose inner bytes contain no newline renders
+//!   inline (`<target> { …bytes… }`); a multi-line target body keeps its
+//!   inner bytes VERBATIM (leading brace newline dropped, trailing whitespace
+//!   trimmed) between the `<target> {` line and a `}` at the `<target>`
+//!   indent. Because body bytes are emitted untouched, re-formatting the
+//!   output is a fixpoint. A bare (untagged) body still renders inline on
+//!   the feature's line (the driver rejects it semantically). The same
+//!   rendering applies to a datatype's `create { ... }`/`convert { ... }`
+//!   blocks.
 
 use crate::ast::Span;
 use crate::lexer::{lex_with_comments, CommentKind, LexError, Token};
@@ -92,6 +102,8 @@ enum BodyKind {
 }
 
 struct Formatter<'src> {
+    /// The original source text; target body contents are sliced verbatim.
+    source: &'src str,
     nodes: Vec<Node<'src>>,
     pos: usize,
     out: String,
@@ -153,6 +165,7 @@ impl<'src> Formatter<'src> {
         }
 
         Formatter {
+            source,
             nodes,
             pos: 0,
             out: String::new(),
@@ -430,8 +443,8 @@ impl<'src> Formatter<'src> {
         }
     }
 
-    /// Consumes and emits the balanced `{ ... }` raw body of an
-    /// `op`/`derived` feature on a single line.
+    /// Consumes and emits the balanced `{ ... }` raw body of a `derived`
+    /// feature (or a bare op body) on a single line.
     fn scan_raw_body(&mut self) {
         if !self.take_if(|token| matches!(token, Token::LBrace)) {
             return;
@@ -450,6 +463,120 @@ impl<'src> Formatter<'src> {
                 }
                 Some(_) => self.advance(),
             }
+        }
+    }
+
+    /// Consumes and emits the body of an `op` feature: a target-tagged body
+    /// list (`{ rust { ... } java { ... } }`) when it has that shape, else a
+    /// bare body rendered inline as before.
+    fn scan_op_body(&mut self) {
+        let tagged = matches!(
+            (
+                self.nodes.get(self.pos),
+                self.nodes.get(self.pos + 1),
+                self.nodes.get(self.pos + 2),
+            ),
+            (
+                Some(Node::Token(Token::LBrace, _)),
+                Some(Node::Token(Token::Ident(_) | Token::IdentEscaped(_), _)),
+                Some(Node::Token(Token::LBrace, _)),
+            )
+        );
+        if tagged {
+            self.scan_target_body_list();
+        } else {
+            self.scan_raw_body();
+        }
+    }
+
+    /// Consumes and emits `{ <target> { ... } ... }` — the wrapping brace
+    /// joins the line under construction (e.g. the op signature or the
+    /// `create` keyword), each `<target> { ... }` block starts on its own
+    /// line at the next indent, and the wrapping `}` closes at the parent
+    /// indent.
+    fn scan_target_body_list(&mut self) {
+        if !self.take_if(|token| matches!(token, Token::LBrace)) {
+            return;
+        }
+        self.flush_line();
+        self.indent += 1;
+        loop {
+            self.flush_pending(self.indent);
+            match self.peek_tok() {
+                Some(Token::RBrace) | None => break,
+                Some(Token::Ident(_) | Token::IdentEscaped(_))
+                    if matches!(
+                        self.nodes.get(self.pos + 1),
+                        Some(Node::Token(Token::LBrace, _))
+                    ) =>
+                {
+                    self.scan_target_block();
+                }
+                _ => {
+                    // Ungrammatical tail: one junk line before the close.
+                    self.scan_junk_until(|token| matches!(token, Token::RBrace));
+                    self.flush_line();
+                }
+            }
+        }
+        self.indent -= 1;
+        self.take_if(|token| matches!(token, Token::RBrace));
+        self.flush_line();
+    }
+
+    /// Consumes and emits one `<target> { ... }` block at the current indent.
+    /// The body's inner bytes are emitted verbatim: single-line contents join
+    /// the `<target> {` line; multi-line contents are written as-is between
+    /// the `<target> {` line and a `}` at the `<target>` indent (leading
+    /// brace newline dropped, trailing whitespace trimmed), which keeps
+    /// re-formatting a fixpoint.
+    fn scan_target_block(&mut self) {
+        self.advance(); // the target name
+        self.advance(); // the `{` joins the line
+        let Some(Node::Token(_, open_span)) = self.nodes.get(self.pos - 1) else {
+            return;
+        };
+        let open_span = *open_span;
+        // Find the matching close brace by depth over the token stream
+        // (braces inside comments or string tokens never count).
+        let mut depth = 1usize;
+        let mut close_index = self.pos;
+        while depth > 0 {
+            match self.nodes.get(close_index) {
+                None => break,
+                Some(Node::Token(Token::LBrace, _)) => {
+                    depth += 1;
+                    close_index += 1;
+                }
+                Some(Node::Token(Token::RBrace, _)) => {
+                    depth -= 1;
+                    close_index += 1;
+                }
+                Some(_) => close_index += 1,
+            }
+        }
+        // `close_index - 1` is the matching `}` (or the last node when the
+        // body was never closed).
+        let content_end = self
+            .nodes
+            .get(close_index - 1)
+            .map(|node| node.span().start)
+            .unwrap_or(open_span.end);
+        let content = &self.source[open_span.end..content_end.max(open_span.end)];
+        // Every node inside the braces (tokens *and* comments) is already
+        // covered by the verbatim slice; skip them without emitting.
+        self.pos = close_index;
+        if content.contains('\n') {
+            self.flush_line();
+            let text = content.strip_prefix('\n').unwrap_or(content).trim_end();
+            self.out.push_str(text);
+            self.out.push('\n');
+            self.out.push_str(&indent_str(self.indent));
+            self.out.push_str("}\n");
+        } else {
+            self.line.push_str(content);
+            self.line.push('}');
+            self.flush_line();
         }
     }
 
@@ -562,7 +689,7 @@ impl<'src> Formatter<'src> {
                 self.scan_qname();
                 self.take_name();
                 self.scan_params();
-                self.scan_raw_body();
+                self.scan_op_body();
             }
             Some(Token::Derived) => {
                 self.advance();
@@ -623,6 +750,20 @@ impl<'src> Formatter<'src> {
     }
 
     fn scan_binding(&mut self) {
+        // `create { ... }` / `convert { ... }` body blocks: a contextual
+        // keyword directly followed by a brace.
+        if matches!(
+            self.peek_tok(),
+            Some(Token::Ident(text) | Token::IdentEscaped(text))
+                if text == "create" || text == "convert"
+        ) && matches!(
+            self.nodes.get(self.pos + 1),
+            Some(Node::Token(Token::LBrace, _))
+        ) {
+            self.advance();
+            self.scan_target_body_list();
+            return;
+        }
         if self
             .peek_tok()
             .is_some_and(|token| matches!(token, Token::Ident(_) | Token::IdentEscaped(_)))

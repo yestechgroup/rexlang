@@ -8,7 +8,8 @@ use std::path::Path;
 
 use rex_ir::{
     ClassDef, DatatypeDef, DefaultValue, EnumDef, EnumLiteral, Feature, FeatureKind, Model,
-    Multiplicity, Package, PrimitiveType, TypeRef, VocabularyDef, VocabularyEntry,
+    Multiplicity, Operation, OperationParam, Package, PrimitiveType, TypeRef, VocabularyDef,
+    VocabularyEntry,
 };
 
 const PKG: &str = "nz.example.library";
@@ -20,10 +21,19 @@ fn class_ref(name: &str) -> TypeRef {
     }
 }
 
-/// The IR equivalent of `examples/library.mox` after driver lowering:
-/// attributes without multiplicity are REQUIRED, `refers`/`contains` are MANY,
-/// `container` is forced OPTIONAL, ops are omitted (Tier 0), derived features
-/// stay in the IR but are not materialized.
+/// The verbatim rust body lowered from the source (span-sliced between the
+/// braces — note the leading/trailing spaces the source carries). The
+/// generated `Resource.books` is a `SlotMap`, so iteration yields
+/// `(BookId, &Book)` pairs; the body unwraps with `expect` because the
+/// fixed signature returns `BookId`, not `Option<BookId>`.
+const GET_BOOK_BODY: &str = " res.books.iter().find_map(|(id, b)| (b.title == title).then_some(id)).expect(\"no book with the given title\") ";
+
+/// The IR equivalent of `examples/library.mox` after driver lowering, plus the
+/// Tier 1 bodies that model gains in the body-bearing scenario: attributes
+/// without multiplicity are REQUIRED, `refers`/`contains` are MANY,
+/// `container` is forced OPTIONAL, `getBook` lowers into `Library.operations`
+/// with a verbatim rust body, and the Date datatype carries create/convert
+/// bodies. Derived features stay in the IR but are not materialized.
 fn library_model() -> Model {
     let mut model = Model::new();
     let mut package = Package::new(PKG);
@@ -38,7 +48,9 @@ fn library_model() -> Model {
         DatatypeDef::new("Date", None)
             .bind("rust", "chrono::NaiveDate")
             .bind("csharp", "System.DateOnly")
-            .bind("java", "java.time.LocalDate"),
+            .bind("java", "java.time.LocalDate")
+            .with_body("create", "rust", " Date(it) ")
+            .with_body("convert", "rust", " self.0.clone() "),
     );
     package.classes.push(ClassDef::new(
         "Library",
@@ -60,6 +72,19 @@ fn library_model() -> Model {
             .with_opposite("Book", "library"),
         ],
     ));
+    // Tier 1: `op Book getBook(String title) { rust { ... } }` lowers into
+    // `Library.operations` with the body carried verbatim.
+    package.classes[0].operations.push(
+        Operation::new(
+            "getBook",
+            class_ref("Book"),
+            vec![OperationParam {
+                name: "title".to_string(),
+                type_: TypeRef::Primitive(PrimitiveType::String),
+            }],
+        )
+        .with_body("rust", GET_BOOK_BODY),
+    );
     package.classes.push(ClassDef::new(
         "Book",
         vec![],

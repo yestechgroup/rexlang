@@ -7,12 +7,16 @@ use rex_driver::navigation::{DefId, FeatureSymbolKind, NavigationIndex, SymbolKi
 ///
 /// * `**class Book**` / `**class Shelf**` + `\nextends Base, Other`
 /// * `**interface Named**`, `**enum Mood**`, `**datatype Date**`,
-///   `**vocabulary Currency**`
+///   `**vocabulary Currency**`; a datatype carrying Tier 1 bodies appends
+///   e.g. `\ncreate [rust], convert [rust]` (only what is present)
 /// * features: `**books**: Book[]` plus a kind line, e.g.
 ///   `contains — opposite: `library`` / `refers — opposite: `books`` /
-///   `container` / `attribute` / `op (abstract)` / `derived`; features
-///   carrying the `id`/`readonly` modifiers prefix the kind line with
-///   `[id]`/`[readonly]` tags, e.g. `[id] [readonly] attribute`
+///   `container` / `attribute` / `derived`; features carrying the
+///   `id`/`readonly` modifiers prefix the kind line with `[id]`/`[readonly]`
+///   tags, e.g. `[id] [readonly] attribute`
+/// * operations: body-less ops render `**find**: Book\nop (abstract)`; ops
+///   with target-tagged bodies render the full signature plus the target
+///   list, e.g. `**getBook**(title: String) -> Book\n[rust] operation`
 /// * enum literals: `**Mystery** = 0 (BookCategory)`
 pub fn hover_markdown(index: &NavigationIndex, def_id: DefId) -> String {
     let definition = index.definition(def_id);
@@ -23,7 +27,25 @@ pub fn hover_markdown(index: &NavigationIndex, def_id: DefId) -> String {
         },
         SymbolKind::Interface => format!("**interface {}**", definition.name),
         SymbolKind::Enum => format!("**enum {}**", definition.name),
-        SymbolKind::Datatype => format!("**datatype {}**", definition.name),
+        SymbolKind::Datatype => {
+            let mut out = format!("**datatype {}**", definition.name);
+            if !definition.create_targets.is_empty() {
+                out.push_str(&format!(
+                    "\ncreate [{}]",
+                    definition.create_targets.join(", ")
+                ));
+            }
+            if !definition.convert_targets.is_empty() {
+                if !definition.create_targets.is_empty() {
+                    out.push_str(", ");
+                }
+                out.push_str(&format!(
+                    "convert [{}]",
+                    definition.convert_targets.join(", ")
+                ));
+            }
+            out
+        }
         SymbolKind::Vocabulary => format!("**vocabulary {}**", definition.name),
         SymbolKind::EnumLiteral => {
             let value = definition.value_text.as_deref();
@@ -39,6 +61,18 @@ pub fn hover_markdown(index: &NavigationIndex, def_id: DefId) -> String {
             }
         }
         SymbolKind::Feature(feature_kind) => {
+            // Tier 1: an operation with target-tagged bodies shows its full
+            // signature and the body targets; body-less operations stay the
+            // abstract-hook shape.
+            if feature_kind == FeatureSymbolKind::Operation && !definition.body_targets.is_empty() {
+                return format!(
+                    "**{name}**({params}) -> {type_}\n[{targets}] operation",
+                    name = definition.name,
+                    params = definition.params_text.as_deref().unwrap_or_default(),
+                    type_ = definition.type_text.as_deref().unwrap_or_default(),
+                    targets = definition.body_targets.join(", "),
+                );
+            }
             let mut out = format!("**{}**", definition.name);
             if let Some(type_text) = &definition.type_text {
                 out.push_str(": ");
@@ -223,6 +257,68 @@ mod tests {
         assert_eq!(
             hover_of("package demo\n\nenum Mood { Happy }", "Happy"),
             "**Happy** (Mood)"
+        );
+    }
+
+    // --- Tier 1: operations with bodies and datatype create/convert ----------
+
+    #[test]
+    fn operations_with_bodies_show_signature_and_targets() {
+        let source = "package demo\n\n\
+            class Library {\n\
+            \x20   op Book getBook(String title) {\n\
+            \x20       rust { books.iter().find_map(|b| { (b.title == title).then_some(*b) }) }\n\
+            \x20   }\n\
+            }\n\n\
+            class Book {}\n";
+        assert_eq!(
+            hover_of(source, "getBook"),
+            "**getBook**(title: String) -> Book\n[rust] operation"
+        );
+    }
+
+    #[test]
+    fn operations_with_multiple_bodies_list_all_targets() {
+        let source = "package demo\n\n\
+            class Library {\n\
+            \x20   op Book get(String t) { rust { a } java { b } }\n\
+            }\n\n\
+            class Book {}\n";
+        assert_eq!(
+            hover_of(source, "get"),
+            "**get**(t: String) -> Book\n[rust, java] operation"
+        );
+    }
+
+    #[test]
+    fn datatype_hover_appends_create_and_convert_targets() {
+        let source = "package demo\n\n\
+            type Date wraps opaque {\n\
+            \x20   rust \"chrono::NaiveDate\"\n\
+            \x20   create { rust { Date(it) } }\n\
+            \x20   convert { rust { self.0.clone() } }\n\
+            }";
+        assert_eq!(
+            hover_of(source, "Date"),
+            "**datatype Date**\ncreate [rust], convert [rust]"
+        );
+    }
+
+    #[test]
+    fn datatype_hover_appends_only_what_is_present() {
+        let source = "package demo\n\n\
+            type Money wraps opaque {\n\
+            \x20   create { csharp { new Money(it) } rust { Money(it) } }\n\
+            }";
+        assert_eq!(
+            hover_of(source, "Money"),
+            "**datatype Money**\ncreate [csharp, rust]"
+        );
+
+        // Without create/convert the hover is unchanged.
+        assert_eq!(
+            hover_of("package demo\n\ntype Bare wraps opaque", "Bare"),
+            "**datatype Bare**"
         );
     }
 }

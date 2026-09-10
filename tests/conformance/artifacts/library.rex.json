@@ -83,6 +83,27 @@
               "isId": false,
               "isReadOnly": false
             }
+          ],
+          "operations": [
+            {
+              "name": "getBook",
+              "returnType": {
+                "type": "class",
+                "value": {
+                  "package": "nz.example.library",
+                  "name": "Book"
+                }
+              },
+              "params": [
+                {
+                  "name": "title",
+                  "type": {
+                    "type": "primitive",
+                    "value": "string"
+                  }
+                }
+              ]
+            }
           ]
         },
         {

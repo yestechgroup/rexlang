@@ -1764,6 +1764,7 @@ name = "rex-backend-rust"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "proptest",
  "rex-ir",
 ]
 

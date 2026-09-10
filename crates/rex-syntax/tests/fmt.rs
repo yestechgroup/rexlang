@@ -494,6 +494,120 @@ fn idempotent_gnarly_extends_and_type_decls() {
     ));
 }
 
+// --- Tier 1: target-tagged op bodies and datatype create/convert blocks ------
+//
+// Body formatting rule (see the module docs in src/fmt.rs): the op's `{`
+// closes its line; each `<target> {` sits at the next indent. A single-line
+// body renders inline; a multi-line body's inner bytes are kept VERBATIM
+// (only ends trimmed) between the `<target> {` line and a `}` at the
+// `<target>` indent. Verbatim bytes make re-formatting a fixpoint.
+
+#[test]
+fn op_single_line_target_body_renders_inline() {
+    let formatted = fmt("class S { op Book get(String t) { rust { find(t) } } }");
+    assert_eq!(
+        formatted,
+        "class S {\n    op Book get(String t) {\n        rust { find(t) }\n    }\n}\n"
+    );
+    assert_eq!(fmt(&formatted), formatted, "not a fixpoint");
+}
+
+#[test]
+fn op_multiline_target_body_keeps_bytes_verbatim() {
+    let source = "class S {\n\
+                  \x20   op Book get(String t) {\n\
+                  \x20       rust {\n\
+                  \x20           res.books.iter().find_map(|b| {\n\
+                  \x20               (b.title == t).then_some(*b)\n\
+                  \x20           })\n\
+                  \x20       }\n\
+                  \x20   }\n\
+                  }";
+    let formatted = fmt(source);
+    assert_eq!(
+        formatted,
+        "class S {\n\
+         \x20   op Book get(String t) {\n\
+         \x20       rust {\n\
+         \x20           res.books.iter().find_map(|b| {\n\
+         \x20               (b.title == t).then_some(*b)\n\
+         \x20           })\n\
+         \x20       }\n\
+         \x20   }\n\
+         }\n"
+    );
+    assert_eq!(fmt(&formatted), formatted, "not a fixpoint");
+}
+
+#[test]
+fn op_multiple_target_bodies_each_get_their_own_block() {
+    let source = "class S { op Book get(String t) { rust { find(t) } java { jfind(t) } } }";
+    let formatted = fmt(source);
+    assert_eq!(
+        formatted,
+        "class S {\n\
+         \x20   op Book get(String t) {\n\
+         \x20       rust { find(t) }\n\
+         \x20       java { jfind(t) }\n\
+         \x20   }\n\
+         }\n"
+    );
+    assert_eq!(fmt(&formatted), formatted, "not a fixpoint");
+}
+
+#[test]
+fn bare_op_body_still_renders_on_one_line() {
+    // Bare (untagged) bodies are a driver error, but formatting must be
+    // stable regardless.
+    let formatted = fmt("class S { op int f() { if x { y } } }");
+    assert_eq!(formatted, "class S {\n    op int f() { if x { y } }\n}\n");
+    assert_eq!(fmt(&formatted), formatted);
+}
+
+#[test]
+fn datatype_create_convert_blocks_render_and_fixpoint() {
+    let source = "type D wraps opaque {\n\
+                  \x20   rust \"a::D\"\n\
+                  \x20   create { rust { D(it) } csharp { new D(it) } }\n\
+                  \x20   convert { rust { self.0.clone() } }\n\
+                  }";
+    let formatted = fmt(source);
+    assert_eq!(
+        formatted,
+        "type D wraps opaque {\n\
+         \x20   rust \"a::D\"\n\
+         \x20   create {\n\
+         \x20       rust { D(it) }\n\
+         \x20       csharp { new D(it) }\n\
+         \x20   }\n\
+         \x20   convert {\n\
+         \x20       rust { self.0.clone() }\n\
+         \x20   }\n\
+         }\n"
+    );
+    assert_eq!(fmt(&formatted), formatted, "not a fixpoint");
+}
+
+#[test]
+fn idempotent_gnarly_target_bodies_with_odd_indentation() {
+    // The body bytes (including their original indentation) survive
+    // verbatim; the surrounding scaffolding is normalized once and then
+    // never changes again.
+    let source = "class S {\n\
+                  \x20 op Book get(String t) { rust {\n\
+                  \x20     if x {\n\
+                  \x20   y\n\
+                  \x20     }\n\
+                  \x20 } }\n\
+                  }";
+    let formatted = fmt(source);
+    assert_eq!(fmt(&formatted), formatted, "not a fixpoint");
+    assert!(
+        formatted.contains("      if x {\n    y\n      }\n"),
+        "body bytes must survive verbatim (only ends trimmed):\n{formatted}"
+    );
+}
+
 // --- stability: output parses when the input did -----------------------------
 
 fn assert_still_parses(source: &str) {

@@ -128,6 +128,56 @@ mod scratch_tests {
         assert_eq!(copyright.0, "2026-09-10");
     }
 
+    // ------------------------------------------------------------------
+    // Tier 1: operation bodies and datatype create/convert, embedded
+    // verbatim by the backend and exercised here against built resources.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn operation_body_executes_found_case() {
+        let mut res = Resource::default();
+        let lib = res.new_library();
+        let dune = res.new_book();
+        res.library_add_books(lib, dune);
+        res.book_mut(dune).unwrap().set_title("Dune".to_string());
+        let hobbit = res.new_book();
+        res.library_add_books(lib, hobbit);
+        res.book_mut(hobbit).unwrap().set_title("The Hobbit".to_string());
+
+        let found = res
+            .library(lib)
+            .unwrap()
+            .get_book(&res, "Dune".to_string());
+        assert_eq!(found, dune, "get_book must resolve the contained book");
+
+        let also = res
+            .library(lib)
+            .unwrap()
+            .get_book(&res, "The Hobbit".to_string());
+        assert_eq!(also, hobbit);
+    }
+
+    #[test]
+    #[should_panic(expected = "no book with the given title")]
+    fn operation_body_not_found_case_panics() {
+        // The example body unwraps with `.expect("no book with the given
+        // title")`: the signature returns `BookId`, not `Option<BookId>`, so
+        // the not-found case surfaces as the body's own panic.
+        let mut res = Resource::default();
+        let lib = res.new_library();
+        let book = res.new_book();
+        res.library_add_books(lib, book);
+        res.book_mut(book).unwrap().set_title("Dune".to_string());
+        res.library(lib).unwrap().get_book(&res, "missing".to_string());
+    }
+
+    #[test]
+    fn datatype_create_convert_round_trip() {
+        let date = Date::create("1965-08-01".to_string());
+        assert_eq!(date, Date("1965-08-01".to_string()));
+        assert_eq!(date.convert(), "1965-08-01".to_string());
+    }
+
     #[test]
     fn unknown_ids_are_absent() {
         use slotmap::Key;

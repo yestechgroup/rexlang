@@ -89,6 +89,21 @@ pub struct BindingEntry {
     pub span: Span,
 }
 
+/// A target-tagged body block: `<target> { ... }`, used as an operation body
+/// and inside datatype `create`/`convert` blocks.
+///
+/// The block's contents are deliberately not parsed; the body text is the
+/// source text strictly inside [`TargetBody::span`] (the braces), captured
+/// verbatim (spacing, newlines, comments, and non-grammar characters intact)
+/// by whoever holds the source text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TargetBody {
+    /// The target name, e.g. `rust`.
+    pub target: Name,
+    /// Span of the balanced `{ ... }` block, braces inclusive.
+    pub span: Span,
+}
+
 /// The target of a `wraps` clause on a datatype.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Wraps {
@@ -232,6 +247,11 @@ pub struct DatatypeDecl {
     pub wraps: Option<Wraps>,
     /// Target binding entries.
     pub bindings: Vec<BindingEntry>,
+    /// `create { <target-body>+ }` blocks, in source order. More than one is
+    /// a driver error ("at most one of each").
+    pub create: Vec<TargetBody>,
+    /// `convert { <target-body>+ }` blocks, in source order.
+    pub convert: Vec<TargetBody>,
     /// Span of the whole declaration.
     pub span: Span,
 }
@@ -406,8 +426,13 @@ pub enum FeatureDecl {
         name: Name,
         /// Parameters in source order.
         params: Vec<Param>,
-        /// Span of the raw `{ ... }` body, if present. Contents are not parsed.
+        /// Span of the raw `{ ... }` body, if present (braces inclusive).
+        /// Contents are not parsed.
         body: Option<Span>,
+        /// Target-tagged bodies `<target> { ... }` in source order. Empty when
+        /// the body is absent *or* is a bare (untagged) `{ ... }` block, which
+        /// the driver rejects: bodies must be per-target in Tier 1.
+        bodies: Vec<TargetBody>,
         /// Span of the whole feature, modifiers included.
         span: Span,
     },

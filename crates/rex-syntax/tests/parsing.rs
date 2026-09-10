@@ -793,6 +793,143 @@ fn modifier_before_a_broken_feature_recovers_to_the_next_feature() {
     assert_eq!(names, vec!["tail"]);
 }
 
+// --- Tier 1: target-tagged op bodies and datatype create/convert blocks ------
+
+#[test]
+fn op_target_bodies_are_captured_verbatim() {
+    let source = "class Library {\n\
+                  \x20   op Book getBook(String title) {\n\
+                  \x20       rust { res.books.iter().find_map(|b| { (b.title == *title).then_some(*b) }) }\n\
+                  \x20       java { return books.stream().filter(b => b.title.equals(title)).findFirst(); }\n\
+                  \x20   }\n\
+                  }";
+    let result = parse(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.unwrap();
+    let class = expect_class(&model.declarations[0], "Library");
+    assert_eq!(class.features.len(), 1);
+    let FeatureDecl::Op { body, bodies, .. } = &class.features[0] else {
+        panic!("expected op");
+    };
+    // The whole-body span (braces inclusive) is still captured.
+    assert_eq!(span_text(source, body.expect("body span")), "{\n\
+                  \x20       rust { res.books.iter().find_map(|b| { (b.title == *title).then_some(*b) }) }\n\
+                  \x20       java { return books.stream().filter(b => b.title.equals(title)).findFirst(); }\n\
+                  \x20   }");
+    // Two target bodies, in source order, with verbatim inner text.
+    assert_eq!(bodies.len(), 2);
+    assert_eq!(bodies[0].target.text, "rust");
+    assert!(!bodies[0].target.escaped);
+    assert_eq!(
+        span_text(source, bodies[0].span),
+        "{ res.books.iter().find_map(|b| { (b.title == *title).then_some(*b) }) }"
+    );
+    assert_eq!(bodies[1].target.text, "java");
+    assert_eq!(
+        span_text(source, bodies[1].span),
+        "{ return books.stream().filter(b => b.title.equals(title)).findFirst(); }"
+    );
+}
+
+#[test]
+fn bare_op_body_captures_span_without_targets() {
+    let source = "class C { op int f() { { a } { {} } } }";
+    let result = parse(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.unwrap();
+    let class = expect_class(&model.declarations[0], "C");
+    let FeatureDecl::Op { body, bodies, .. } = &class.features[0] else {
+        panic!("expected op");
+    };
+    assert_eq!(
+        span_text(source, body.expect("body span")),
+        "{ { a } { {} } }"
+    );
+    // A bare body has no target-tagged entries; the driver rejects it.
+    assert!(bodies.is_empty());
+}
+
+#[test]
+fn datatype_create_convert_blocks_are_captured() {
+    let source = "type Date wraps opaque {\n\
+                  \x20   rust \"chrono::NaiveDate\"\n\
+                  \x20   create { rust { Date(it) } }\n\
+                  \x20   convert { rust { self.0.clone() } }\n\
+                  }";
+    let result = parse(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.unwrap();
+    let Decl::Datatype(date) = &model.declarations[0] else {
+        panic!("expected datatype")
+    };
+    assert_eq!(date.bindings.len(), 1);
+    assert_eq!(date.create.len(), 1);
+    assert_eq!(date.create[0].target.text, "rust");
+    assert_eq!(span_text(source, date.create[0].span), "{ Date(it) }");
+    assert_eq!(date.convert.len(), 1);
+    assert_eq!(date.convert[0].target.text, "rust");
+    assert_eq!(
+        span_text(source, date.convert[0].span),
+        "{ self.0.clone() }"
+    );
+}
+
+#[test]
+fn datatype_blocks_and_bindings_are_order_free() {
+    let source = "type D wraps opaque {\n\
+                  \x20   create { csharp { new D(it) } }\n\
+                  \x20   java \"java.time.D\"\n\
+                  \x20   convert { java { self.inner } }\n\
+                  }";
+    let result = parse(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.unwrap();
+    let Decl::Datatype(decl) = &model.declarations[0] else {
+        panic!("expected datatype")
+    };
+    assert_eq!(decl.bindings.len(), 1);
+    assert_eq!(decl.bindings[0].key.text, "java");
+    assert_eq!(decl.create.len(), 1);
+    assert_eq!(decl.create[0].target.text, "csharp");
+    assert_eq!(decl.convert.len(), 1);
+    assert_eq!(decl.convert[0].target.text, "java");
+}
+
+#[test]
+fn duplicate_create_or_convert_block_is_a_syntax_error() {
+    for keyword in ["create", "convert"] {
+        let source = format!(
+            "type D wraps opaque {{\n    {k} {{ rust {{ a }} }}\n    {k} {{ rust {{ b }} }}\n}}",
+            k = keyword
+        );
+        let result = parse(&source);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains(&format!("duplicate `{keyword}` block"))),
+            "expected a duplicate `{keyword}` block error, got {:?}",
+            result.errors
+        );
+    }
+}
+
 #[test]
 fn datatype_wraps_named_target_and_bare_bindings() {
     let source = r#"
