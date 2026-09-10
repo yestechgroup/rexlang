@@ -52,6 +52,26 @@ enum GenTarget {
         #[arg(short, long, value_name = "DIR")]
         out: PathBuf,
     },
+    /// Generate JSON Schema (draft 2020-12) for the model (`schema.json`).
+    JsonSchema {
+        /// Path to the `.mox` source file.
+        file: PathBuf,
+        /// Which schema flavor to emit.
+        #[arg(long, value_enum, default_value_t = SchemaProfile::Wire)]
+        profile: SchemaProfile,
+        /// Directory to write generated files into.
+        #[arg(short, long, value_name = "DIR")]
+        out: PathBuf,
+    },
+}
+
+/// The JSON Schema flavor to generate.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum SchemaProfile {
+    /// Validates the canonical instance document (envelope, ids, `$ref`s).
+    Wire,
+    /// Flattened DTO projection for OpenAPI-style consumers.
+    Api,
 }
 
 fn main() -> ExitCode {
@@ -102,6 +122,28 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             };
             rex_backend_rust::generate_to_dir(&model, &out)?;
             println!("generated Rust model code into {}", out.display());
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Gen {
+            target:
+                GenTarget::JsonSchema {
+                    file,
+                    profile,
+                    out,
+                },
+        } => {
+            let (path, source) = read_source(&file)?;
+            let compilation = compile_str(&path, &source);
+            report_diagnostics(&path, &source, &compilation);
+            let Some(model) = compilation.model else {
+                return Ok(ExitCode::FAILURE);
+            };
+            let profile = match profile {
+                SchemaProfile::Wire => rex_backend_jsonschema::Profile::Wire,
+                SchemaProfile::Api => rex_backend_jsonschema::Profile::Api,
+            };
+            rex_backend_jsonschema::generate_to_dir(&model, profile, &out)?;
+            println!("generated JSON Schema into {}", out.display());
             Ok(ExitCode::SUCCESS)
         }
     }

@@ -1,0 +1,166 @@
+{
+  "$defs": {
+    "Book": {
+      "$comment": "omitted: container 'library' (reconstructed from nesting on load); omitted: derived 'citation' (computed, not stored)",
+      "properties": {
+        "$id": {
+          "pattern": "^book/[0-9]+$",
+          "type": "string"
+        },
+        "$type": {
+          "const": "Book"
+        },
+        "authors": {
+          "items": {
+            "$ref": "#/$defs/WriterRef"
+          },
+          "type": "array"
+        },
+        "category": {
+          "enum": [
+            "Mystery",
+            "ScienceFiction"
+          ]
+        },
+        "copyright": {
+          "$comment": "datatype Date (opaque); target bindings: csharp → System.DateOnly; java → java.time.LocalDate; rust → chrono::NaiveDate",
+          "type": "string"
+        },
+        "pages": {
+          "type": "integer"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "$id",
+        "$type",
+        "category",
+        "copyright",
+        "pages",
+        "title"
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "BookRef": {
+      "properties": {
+        "$ref": {
+          "pattern": "^book/[0-9]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "$ref"
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "Library": {
+      "properties": {
+        "$id": {
+          "pattern": "^library/[0-9]+$",
+          "type": "string"
+        },
+        "$type": {
+          "const": "Library"
+        },
+        "books": {
+          "items": {
+            "$ref": "#/$defs/Book"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "$id",
+        "$type",
+        "books",
+        "name"
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "Writer": {
+      "properties": {
+        "$id": {
+          "pattern": "^writer/[0-9]+$",
+          "type": "string"
+        },
+        "$type": {
+          "const": "Writer"
+        },
+        "books": {
+          "items": {
+            "$ref": "#/$defs/BookRef"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "$id",
+        "$type",
+        "name"
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "WriterRef": {
+      "properties": {
+        "$ref": {
+          "pattern": "^writer/[0-9]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "$ref"
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    }
+  },
+  "$id": "urn:rex:model:nz.example.library:wire",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "$type": {
+      "const": "rex.instance"
+    },
+    "formatVersion": {
+      "const": 1
+    },
+    "model": {
+      "const": "nz.example.library"
+    },
+    "objects": {
+      "items": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Library"
+          },
+          {
+            "$ref": "#/$defs/Book"
+          },
+          {
+            "$ref": "#/$defs/Writer"
+          }
+        ]
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "$type",
+    "formatVersion",
+    "model",
+    "objects"
+  ],
+  "type": "object",
+  "unevaluatedProperties": false
+}

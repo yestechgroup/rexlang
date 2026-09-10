@@ -13,6 +13,10 @@ rex-syntax = { workspace = true }
 rex-ir = { workspace = true }
 rex-driver = { workspace = true }
 rex-backend-rust = { workspace = true }
+rex-backend-jsonschema = { workspace = true }
 rex-runtime = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

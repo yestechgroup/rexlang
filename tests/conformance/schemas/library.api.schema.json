@@ -1,0 +1,85 @@
+{
+  "$defs": {
+    "Book": {
+      "$comment": "omitted: container 'library' (reconstructed from nesting on load)",
+      "additionalProperties": false,
+      "properties": {
+        "authors": {
+          "items": {
+            "pattern": "^writer/[0-9]+$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "category": {
+          "enum": [
+            "Mystery",
+            "ScienceFiction"
+          ]
+        },
+        "citation": {
+          "readOnly": true,
+          "type": "string"
+        },
+        "copyright": {
+          "$comment": "datatype Date (opaque); target bindings: csharp → System.DateOnly; java → java.time.LocalDate; rust → chrono::NaiveDate",
+          "type": "string"
+        },
+        "pages": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "category",
+        "copyright",
+        "pages",
+        "title"
+      ],
+      "type": "object"
+    },
+    "Library": {
+      "additionalProperties": false,
+      "properties": {
+        "books": {
+          "items": {
+            "$ref": "#/$defs/Book"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "books",
+        "name"
+      ],
+      "type": "object"
+    },
+    "Writer": {
+      "additionalProperties": false,
+      "properties": {
+        "books": {
+          "items": {
+            "pattern": "^book/[0-9]+$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "urn:rex:model:nz.example.library:api",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
