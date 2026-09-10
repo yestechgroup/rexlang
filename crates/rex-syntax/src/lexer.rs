@@ -1,0 +1,263 @@
+//! Token definitions and the lexer entry point.
+
+use std::fmt;
+
+use logos::Logos;
+
+use crate::ast::Span;
+
+/// A lexical token. Payloads borrow from the source text.
+///
+/// Keywords can be used as identifiers by prefixing them with `^`; the lexer
+/// emits [`Token::IdentEscaped`] with the caret stripped from the payload,
+/// while the token span still covers the raw `^keyword` text.
+///
+/// Note that `get`, `set`, `id` and `readonly` are *not* keywords: they lex as
+/// ordinary identifiers so they may be used as feature names unescaped.
+#[derive(Debug, Clone, PartialEq, Eq, Logos)]
+pub enum Token<'src> {
+    #[token("package")]
+    Package,
+    #[token("annotation")]
+    Annotation,
+    #[token("as")]
+    As,
+    #[token("class")]
+    Class,
+    #[token("extends")]
+    Extends,
+    #[token("interface")]
+    Interface,
+    #[token("enum")]
+    Enum,
+    #[token("type")]
+    Type,
+    #[token("wraps")]
+    Wraps,
+    #[token("opaque")]
+    Opaque,
+    #[token("contains")]
+    Contains,
+    #[token("refers")]
+    Refers,
+    #[token("container")]
+    Container,
+    #[token("opposite")]
+    Opposite,
+    #[token("op")]
+    Op,
+    #[token("derived")]
+    Derived,
+    #[token("true")]
+    True,
+    #[token("false")]
+    False,
+
+    /// An identifier: `[A-Za-z_][A-Za-z0-9_]*`.
+    #[regex("[A-Za-z_][A-Za-z0-9_]*", |lexer| lexer.slice())]
+    Ident(&'src str),
+    /// An escaped keyword `^name`; the payload has the leading `^` stripped.
+    #[regex(r"\^[A-Za-z_][A-Za-z0-9_]*", |lexer| &lexer.slice()[1..])]
+    IdentEscaped(&'src str),
+    /// A string literal payload: the raw text between the quotes, with
+    /// escapes left intact (unescaping happens in the parser).
+    #[regex(r#""([^"\\\n\r]|\\.)*""#, |lexer| {
+        let slice = lexer.slice();
+        &slice[1..slice.len() - 1]
+    })]
+    Str(&'src str),
+    /// A decimal integer literal with optional leading `-`.
+    #[regex("-?[0-9]+", |lexer| lexer.slice().parse::<i64>().map_err(|_| ()))]
+    Int(i64),
+
+    #[token(".")]
+    Dot,
+    #[token(",")]
+    Comma,
+    #[token("(")]
+    LParen,
+    #[token(")")]
+    RParen,
+    #[token("{")]
+    LBrace,
+    #[token("}")]
+    RBrace,
+    #[token("[")]
+    LBracket,
+    #[token("]")]
+    RBracket,
+    #[token("=")]
+    Eq,
+    #[token("*")]
+    Star,
+
+    // Trivia: whitespace and comments. Priority 1 beats the `Other` catch-all.
+    // Block comments are non-nested; the shape of the regex is the classic
+    // DFA-friendly "C block comment" pattern (logos rejects lazy quantifiers).
+    #[regex(r"[ \t\r\n\f]+", logos::skip, priority = 1)]
+    #[regex(r"//[^\r\n]*", logos::skip, priority = 1)]
+    #[regex(r"/\*[^*]*\*+([^/*][^*]*\*+)*/", logos::skip, priority = 1)]
+    Whitespace,
+
+    /// Emitted by logos for characters that match no pattern. This keeps raw
+    /// `op`/`derived` bodies tokenizable regardless of their contents
+    /// (operators, arrows, ...). Priority 0 makes every more specific pattern
+    /// (keywords, identifiers, punctuation, skipped whitespace/comments) win.
+    #[regex(".", |lexer| lexer.slice().chars().next().unwrap_or('\u{0}'), priority = 0)]
+    Other(char),
+
+    /// Emitted by logos for characters that match no pattern. Given the
+    /// [`Token::Other`] catch-all this should never occur, but it is kept for
+    /// robustness.
+    Error,
+}
+
+impl Token<'_> {
+    /// The static text of a keyword token, if this is a keyword.
+    pub fn keyword(&self) -> Option<&'static str> {
+        Some(match self {
+            Token::Package => "package",
+            Token::Annotation => "annotation",
+            Token::As => "as",
+            Token::Class => "class",
+            Token::Extends => "extends",
+            Token::Interface => "interface",
+            Token::Enum => "enum",
+            Token::Type => "type",
+            Token::Wraps => "wraps",
+            Token::Opaque => "opaque",
+            Token::Contains => "contains",
+            Token::Refers => "refers",
+            Token::Container => "container",
+            Token::Opposite => "opposite",
+            Token::Op => "op",
+            Token::Derived => "derived",
+            Token::True => "true",
+            Token::False => "false",
+            _ => return None,
+        })
+    }
+}
+
+impl fmt::Display for Token<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(keyword) = self.keyword() {
+            return write!(f, "`{keyword}`");
+        }
+        match self {
+            Token::Ident(text) => write!(f, "`{text}`"),
+            Token::IdentEscaped(text) => write!(f, "`^{text}`"),
+            Token::Str(_) => f.write_str("string literal"),
+            Token::Int(value) => write!(f, "`{value}`"),
+            Token::Other(char) => write!(f, "`{char}`"),
+            Token::Dot => f.write_str("`.`"),
+            Token::Comma => f.write_str("`,`"),
+            Token::LParen => f.write_str("`(`"),
+            Token::RParen => f.write_str("`)`"),
+            Token::LBrace => f.write_str("`{`"),
+            Token::RBrace => f.write_str("`}`"),
+            Token::LBracket => f.write_str("`[`"),
+            Token::RBracket => f.write_str("`]`"),
+            Token::Eq => f.write_str("`=`"),
+            Token::Star => f.write_str("`*`"),
+            Token::Error => f.write_str("invalid token"),
+            // Keyword variants are handled by the `keyword()` early return;
+            // this arm is unreachable but keeps the match exhaustive.
+            _ => f.write_str("token"),
+        }
+    }
+}
+
+/// A lexical error: an input region that matched no token pattern.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("invalid token at byte offset {}", span.start)]
+pub struct LexError {
+    /// Span of the offending text.
+    pub span: Span,
+}
+
+/// Tokenize a source text.
+///
+/// Whitespace and comments (`//` line, `/* */` block) are skipped. Returns the
+/// tokens paired with their spans, or a [`LexError`] describing the first
+/// unmatched region.
+pub fn lex(source: &str) -> Result<Vec<(Token<'_>, Span)>, LexError> {
+    let mut tokens = Vec::new();
+    for (result, range) in Token::lexer(source).spanned() {
+        match result {
+            Err(_) | Ok(Token::Error) => return Err(LexError { span: range.into() }),
+            Ok(token) => tokens.push((token, range.into())),
+        }
+    }
+    Ok(tokens)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn kinds(source: &str) -> Vec<Token<'_>> {
+        lex(source).unwrap().into_iter().map(|(t, _)| t).collect()
+    }
+
+    #[test]
+    fn lexes_basic_class() {
+        let tokens = lex("class Book { int pages }").unwrap();
+        assert_eq!(tokens[0], (Token::Class, (0..5).into()));
+        assert_eq!(tokens[1], (Token::Ident("Book"), (6..10).into()));
+        assert_eq!(tokens[2], (Token::LBrace, (11..12).into()));
+        assert_eq!(tokens[3], (Token::Ident("int"), (13..16).into()));
+        assert_eq!(tokens[4], (Token::Ident("pages"), (17..22).into()));
+        assert_eq!(tokens[5], (Token::RBrace, (23..24).into()));
+        assert_eq!(tokens.len(), 6);
+    }
+
+    #[test]
+    fn contextual_modifiers_are_idents() {
+        assert_eq!(
+            kinds("get set id readonly"),
+            vec![
+                Token::Ident("get"),
+                Token::Ident("set"),
+                Token::Ident("id"),
+                Token::Ident("readonly"),
+            ]
+        );
+    }
+
+    #[test]
+    fn escaped_keyword_strips_caret() {
+        let tokens = lex("^class").unwrap();
+        assert_eq!(tokens[0].0, Token::IdentEscaped("class"));
+        // Span still covers the raw text including the caret.
+        assert_eq!(tokens[0].1, (0..6).into());
+    }
+
+    #[test]
+    fn strings_and_ints() {
+        assert_eq!(kinds(r#""a\"b\\c""#), vec![Token::Str("a\\\"b\\\\c")]);
+        assert_eq!(kinds("-42 0 007"), vec![Token::Int(-42), Token::Int(0), Token::Int(7)]);
+    }
+
+    #[test]
+    fn comments_and_whitespace_are_skipped() {
+        assert_eq!(
+            kinds("// line\nclass /* block */ A"),
+            vec![Token::Class, Token::Ident("A")]
+        );
+    }
+
+    #[test]
+    fn unknown_chars_become_other_tokens() {
+        assert_eq!(
+            kinds("@ # > ! :"),
+            vec![
+                Token::Other('@'),
+                Token::Other('#'),
+                Token::Other('>'),
+                Token::Other('!'),
+                Token::Other(':'),
+            ]
+        );
+    }
+}

@@ -1,0 +1,97 @@
+//! Diagnostics (errors and warnings) and their rendering with [ariadne].
+//!
+//! [ariadne]: https://crates.io/crates/ariadne
+
+use ariadne::{Config, IndexType, Label, Report, ReportKind, Source};
+
+/// Byte-offset span into the source text.
+pub use rex_syntax::Span;
+
+/// Severity of a [`Diagnostic`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Severity {
+    /// A problem that prevents compilation; no IR artifact is produced.
+    Error,
+    /// A suspicious construct that does not prevent compilation.
+    Warning,
+}
+
+/// A single compiler diagnostic: a severity, a message, an optional span,
+/// and an optional help hint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Diagnostic {
+    /// How severe the diagnostic is.
+    pub severity: Severity,
+    /// Human-readable description of the problem.
+    pub message: String,
+    /// Byte span the diagnostic refers to, if any.
+    pub span: Option<Span>,
+    /// Optional actionable hint shown below the report.
+    pub help: Option<String>,
+}
+
+impl Diagnostic {
+    /// Creates an error diagnostic.
+    pub fn error(message: impl Into<String>, span: Option<Span>) -> Self {
+        Self {
+            severity: Severity::Error,
+            message: message.into(),
+            span,
+            help: None,
+        }
+    }
+
+    /// Creates a warning diagnostic.
+    pub fn warning(message: impl Into<String>, span: Option<Span>) -> Self {
+        Self {
+            severity: Severity::Warning,
+            message: message.into(),
+            span,
+            help: None,
+        }
+    }
+
+    /// Attaches a help hint to this diagnostic.
+    pub fn with_help(mut self, help: impl Into<String>) -> Self {
+        self.help = Some(help.into());
+        self
+    }
+
+    /// `true` when the severity is [`Severity::Error`].
+    pub fn is_error(&self) -> bool {
+        self.severity == Severity::Error
+    }
+}
+
+/// Renders diagnostics into a plain-text (colorless) ariadne report string,
+/// sorted by source span. Parse errors and semantic diagnostics can be mixed;
+/// they are merged and ordered here.
+pub fn render(path: &str, source: &str, diagnostics: &[Diagnostic]) -> String {
+    let mut ordered: Vec<&Diagnostic> = diagnostics.iter().collect();
+    ordered.sort_by_key(|diagnostic| diagnostic.span.map(|span| (span.start, span.end)));
+
+    let mut out: Vec<u8> = Vec::new();
+    for diagnostic in ordered {
+        let kind = match diagnostic.severity {
+            Severity::Error => ReportKind::Error,
+            Severity::Warning => ReportKind::Warning,
+        };
+        let (start, end) = diagnostic
+            .span
+            .map(|span| (span.start, span.end))
+            .unwrap_or((0, 0));
+        let location = (path, start..end.max(start));
+        let mut builder = Report::build(kind, location.clone())
+            .with_message(&diagnostic.message)
+            .with_config(Config::default().with_color(false).with_index_type(IndexType::Byte));
+        builder.add_label(Label::new(location).with_message(""));
+        if let Some(help) = &diagnostic.help {
+            builder = builder.with_help(help);
+        }
+        builder
+            .finish()
+            .write((path, Source::from(source)), &mut out)
+            .expect("writing a diagnostic into a buffer cannot fail");
+    }
+    String::from_utf8(out).expect("diagnostics are valid UTF-8")
+}
