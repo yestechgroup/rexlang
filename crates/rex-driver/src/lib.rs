@@ -28,8 +28,10 @@
 
 pub mod diagnostic;
 pub(crate) mod lower;
+pub mod navigation;
 
-pub use diagnostic::{render, Diagnostic, Severity};
+pub use diagnostic::{render, Diagnostic, DiagnosticCode, Severity};
+pub use navigation::{DefId, Definition, FeatureSymbolKind, Lookup, NavigationIndex, Reference, SymbolKind};
 
 /// Byte-offset span into the source text.
 pub use rex_syntax::Span;

@@ -16,8 +16,23 @@ pub enum Severity {
     Warning,
 }
 
+/// Machine-readable diagnostic codes, serializable for structured LSP
+/// payloads (e.g. quick-fix `data`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DiagnosticCode {
+    /// `feature '<feature>' has class type '<class>'` — the author almost
+    /// certainly meant `contains` or `refers`; a quick fix can offer both.
+    AttributeWithClassType {
+        /// The name of the feature (attribute or derived feature) involved.
+        feature: String,
+        /// The class-typed name as written in the source.
+        class: String,
+    },
+}
+
 /// A single compiler diagnostic: a severity, a message, an optional span,
-/// and an optional help hint.
+/// an optional help hint, and an optional machine-readable code.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     /// How severe the diagnostic is.
@@ -28,6 +43,9 @@ pub struct Diagnostic {
     pub span: Option<Span>,
     /// Optional actionable hint shown below the report.
     pub help: Option<String>,
+    /// Optional machine-readable code for structured tooling (LSP quick
+    /// fixes and the like). Absent unless explicitly attached.
+    pub code: Option<DiagnosticCode>,
 }
 
 impl Diagnostic {
@@ -38,6 +56,7 @@ impl Diagnostic {
             message: message.into(),
             span,
             help: None,
+            code: None,
         }
     }
 
@@ -48,12 +67,19 @@ impl Diagnostic {
             message: message.into(),
             span,
             help: None,
+            code: None,
         }
     }
 
     /// Attaches a help hint to this diagnostic.
     pub fn with_help(mut self, help: impl Into<String>) -> Self {
         self.help = Some(help.into());
+        self
+    }
+
+    /// Attaches a machine-readable code to this diagnostic.
+    pub fn with_code(mut self, code: DiagnosticCode) -> Self {
+        self.code = Some(code);
         self
     }
 

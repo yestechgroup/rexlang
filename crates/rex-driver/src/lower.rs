@@ -12,7 +12,7 @@ use rex_ir as ir;
 use rex_syntax::ast as mox;
 use rex_syntax::Span;
 
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, DiagnosticCode};
 
 /// The kind of a top-level declaration that occupies the package namespace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -917,7 +917,11 @@ fn report_class_typed_feature(
         .with_help(format!(
             "did you mean `contains {class}[..] {}` or `refers {class}[..] {}`?",
             name.text, name.text
-        )),
+        ))
+        .with_code(DiagnosticCode::AttributeWithClassType {
+            feature: name.text.clone(),
+            class,
+        }),
     );
 }
 

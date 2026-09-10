@@ -1,0 +1,15 @@
+[package]
+name = "rex-lsp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rex-driver = { workspace = true }
+rex-ir = { workspace = true }
+rex-syntax = { workspace = true }
+tower-lsp = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
