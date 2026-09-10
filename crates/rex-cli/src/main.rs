@@ -43,6 +43,8 @@ enum Command {
         #[command(subcommand)]
         target: GenTarget,
     },
+    /// Serve the rexlang language server over stdin/stdout.
+    Lsp,
     /// Vocabulary snapshot tooling.
     Vocab {
         #[command(subcommand)]
@@ -180,6 +182,10 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             },
         } => {
             vocab_fetch(&file, provider.as_deref(), url_template.as_deref())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Lsp => {
+            rex_lsp::run_stdio()?;
             Ok(ExitCode::SUCCESS)
         }
     }

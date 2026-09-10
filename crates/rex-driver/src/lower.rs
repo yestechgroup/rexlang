@@ -921,6 +921,7 @@ fn report_class_typed_feature(
         .with_code(DiagnosticCode::AttributeWithClassType {
             feature: name.text.clone(),
             class,
+            type_span: type_ref.span,
         }),
     );
 }

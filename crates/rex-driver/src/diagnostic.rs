@@ -18,8 +18,7 @@ pub enum Severity {
 
 /// Machine-readable diagnostic codes, serializable for structured LSP
 /// payloads (e.g. quick-fix `data`).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiagnosticCode {
     /// `feature '<feature>' has class type '<class>'` — the author almost
     /// certainly meant `contains` or `refers`; a quick fix can offer both.
@@ -28,7 +27,57 @@ pub enum DiagnosticCode {
         feature: String,
         /// The class-typed name as written in the source.
         class: String,
+        /// Byte span of the offending type reference in the source — where
+        /// a quick fix must edit.
+        type_span: Span,
     },
+}
+
+impl DiagnosticCode {
+    /// A stable, camelCase name for the code, suitable as the LSP
+    /// diagnostic `code` string.
+    pub fn name(&self) -> &'static str {
+        match self {
+            DiagnosticCode::AttributeWithClassType { .. } => "attributeWithClassType",
+        }
+    }
+}
+
+/// The `attributeWithClassType` payload, serialized with camelCase keys and
+/// the span as a `[start, end]` pair.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AttributeWithClassTypePayload<'a> {
+    feature: &'a str,
+    class: &'a str,
+    type_span: [usize; 2],
+}
+
+impl serde::Serialize for DiagnosticCode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        match self {
+            DiagnosticCode::AttributeWithClassType {
+                feature,
+                class,
+                type_span,
+            } => {
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry(
+                    "attributeWithClassType",
+                    &AttributeWithClassTypePayload {
+                        feature,
+                        class,
+                        type_span: [type_span.start, type_span.end],
+                    },
+                )?;
+                map.end()
+            }
+        }
+    }
 }
 
 /// A single compiler diagnostic: a severity, a message, an optional span,

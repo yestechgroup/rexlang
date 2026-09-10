@@ -26,6 +26,36 @@ rexlang ir model.mox -o model.rex.json
 rexlang gen rust model.mox -o src-gen/
 rexlang gen json-schema model.mox --profile wire -o schemas/
 rexlang vocab fetch model.mox --provider file:vocab-sources/
+rexlang lsp                       # start the language server (stdio)
+```
+
+## Language server
+
+`rexlang lsp` speaks LSP 3.x over stdio (tower-lsp). Any LSP client works;
+capabilities:
+
+- **Diagnostics** — full-document compile on open/change, incremental
+  (salsa); the flagship diagnostic carries a machine-readable code with
+  structured data
+- **Quick fix** — on `feature 'x' has class type 'C'`: two actions inserting
+  `contains` or `refers` before the type
+- **Go to definition** — type references, `extends`, and **opposite
+  mentions** (jumping from `opposite library` to `Book.library`, as in
+  Xcore's F3)
+- **Hover** — feature/class/enum/datatype/vocabulary summaries rendered from
+  the AST
+- **Document symbols**, **completion** (keywords, types in scope), and
+  **rename** (bidirectionally consistent: renaming a feature rewrites the
+  opposite mentions on the other side)
+
+Example client config (VS Code `settings.json`):
+
+```json
+{
+  "mox.server.path": "/path/to/rexlang",
+  "mox.server.args": ["lsp"],
+  "mox.server.languages": ["mox"]
+}
 ```
 
 ## Vocabularies

@@ -355,3 +355,33 @@ fn build_or_empty_handles_garbage_without_panicking() {
     let index = index_of("\"unterminated");
     assert_eq!(index.definitions().count(), 0);
 }
+
+#[test]
+fn resolve_id_returns_the_target_id_of_a_reference() {
+    let source = "package demo\n\n\
+        class Library {\n\
+        \x20   contains Book[] books opposite library\n\
+        \x20   Date when\n\
+        }\n\n\
+        class Book { container Library library opposite books }\n";
+    let index = index_of(source);
+    let (library_id, _) = index
+        .definitions()
+        .find(|(_, d)| d.name == "library" && d.owner.is_some())
+        .expect("feature `library`");
+
+    // The `opposite library` mention resolves to that feature's id.
+    let (_, reference) = index
+        .references()
+        .find(|(_, reference)| reference.target == Some(library_id))
+        .expect("a reference to `library`");
+    assert_eq!(index.resolve_id(reference), Some(library_id));
+
+    // `Date` is not declared: the reference is indexed but unresolved.
+    let (_, date_ref) = index
+        .references()
+        .find(|(span, _)| source[span.start..span.end] == *"Date")
+        .expect("the Date type reference");
+    assert_eq!(date_ref.target, None);
+    assert_eq!(index.resolve_id(date_ref), None);
+}
