@@ -6,5 +6,4 @@ license.workspace = true
 
 [dependencies]
 rex-ir = { workspace = true }
-askama = { workspace = true }
 anyhow = { workspace = true }
