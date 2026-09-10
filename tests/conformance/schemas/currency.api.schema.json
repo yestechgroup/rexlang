@@ -1,0 +1,29 @@
+{
+  "$defs": {
+    "Account": {
+      "additionalProperties": false,
+      "properties": {
+        "currency": {
+          "$comment": "vocabulary iso:4217@2024-01-01 with 5 entries",
+          "enum": [
+            "USD",
+            "EUR",
+            "JPY",
+            "GBP",
+            "CHF"
+          ]
+        },
+        "owner": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "currency",
+        "owner"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "urn:rex:model:nz.example.payments:api",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

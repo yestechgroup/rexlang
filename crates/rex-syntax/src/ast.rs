@@ -144,6 +144,8 @@ pub enum Decl {
     Datatype(DatatypeDecl),
     /// An `annotation` declaration.
     Annotation(AnnotationDecl),
+    /// A `vocabulary ... from ...` declaration.
+    Vocabulary(VocabularyDecl),
 }
 
 impl Decl {
@@ -155,6 +157,7 @@ impl Decl {
             Decl::Enum(decl) => decl.span,
             Decl::Datatype(decl) => decl.span,
             Decl::Annotation(decl) => decl.span,
+            Decl::Vocabulary(decl) => decl.span,
         }
     }
 
@@ -167,6 +170,7 @@ impl Decl {
             Decl::Enum(decl) => Some(&decl.name),
             Decl::Datatype(decl) => Some(&decl.name),
             Decl::Annotation(decl) => decl.name.as_ref(),
+            Decl::Vocabulary(decl) => Some(&decl.name),
         }
     }
 }
@@ -240,6 +244,37 @@ pub struct AnnotationDecl {
     /// Optional target name from the `as` clause.
     pub name: Option<Name>,
     /// Span of the whole declaration.
+    pub span: Span,
+}
+
+/// A `vocabulary ... from ...` declaration: an external, versioned set of
+/// enumerated keys usable as a type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VocabularyDecl {
+    /// The vocabulary name (usable as a type name in the package).
+    pub name: Name,
+    /// The external source identifier, e.g. `"iso:4217"` (unescaped).
+    pub source: String,
+    /// Pinned snapshot version from the `version` clause, if present.
+    pub version: Option<String>,
+    /// The `key` facet naming the unique entry key, if present. Absence is a
+    /// *semantic* error reported by the driver, not a syntax error.
+    pub key: Option<Name>,
+    /// Declared facets in source order.
+    pub facets: Vec<VocabularyFacetDecl>,
+    /// Span of the whole declaration.
+    pub span: Span,
+}
+
+/// A single `facet <type_ref> <name>` member of a [`VocabularyDecl`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct VocabularyFacetDecl {
+    /// The facet's declared type (must resolve to a primitive; checked by the
+    /// driver).
+    pub type_ref: TypeRef,
+    /// The facet name.
+    pub name: Name,
+    /// Span of the whole facet declaration.
     pub span: Span,
 }
 

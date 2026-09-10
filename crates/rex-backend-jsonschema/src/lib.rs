@@ -27,7 +27,7 @@ use std::path::Path;
 
 use rex_ir::{
     ClassDef, DatatypeDef, EnumDef, Feature, FeatureKind, Model, Multiplicity, PrimitiveType,
-    TypeRef, Upper,
+    TypeRef, Upper, VocabularyDef,
 };
 
 /// Which flavor of schema to generate.
@@ -83,6 +83,8 @@ struct Context<'a> {
     enums: Vec<&'a EnumDef>,
     /// All datatypes, for `$comment` lookups.
     datatypes: Vec<&'a DatatypeDef>,
+    /// All vocabularies, for entry-key lookups.
+    vocabularies: Vec<&'a VocabularyDef>,
 }
 
 impl<'a> Context<'a> {
@@ -91,9 +93,11 @@ impl<'a> Context<'a> {
         let mut seen = BTreeSet::new();
         let mut enums = Vec::new();
         let mut datatypes = Vec::new();
+        let mut vocabularies = Vec::new();
         for package in &model.packages {
             enums.extend(package.enums.iter());
             datatypes.extend(package.datatypes.iter());
+            vocabularies.extend(package.vocabularies.iter());
             for class in &package.classes {
                 if !seen.insert(class.name.clone()) {
                     anyhow::bail!(
@@ -115,7 +119,16 @@ impl<'a> Context<'a> {
             classes,
             enums,
             datatypes,
+            vocabularies,
         })
+    }
+
+    fn vocabulary_def(&self, name: &str) -> anyhow::Result<&'a VocabularyDef> {
+        self.vocabularies
+            .iter()
+            .copied()
+            .find(|v| v.name == name)
+            .ok_or_else(|| anyhow::anyhow!("vocabulary '{name}' not found in model"))
     }
 
     fn enum_def(&self, name: &str) -> anyhow::Result<&'a EnumDef> {
@@ -585,6 +598,14 @@ fn value_schema(
                 "$comment": datatype_comment(datatype),
             }))
         }
+        TypeRef::Vocabulary { name, .. } => {
+            let vocabulary = context.vocabulary_def(name)?;
+            let keys: Vec<&String> = vocabulary.entries.iter().map(|entry| &entry.key).collect();
+            Ok(serde_json::json!({
+                "$comment": vocabulary_comment(vocabulary),
+                "enum": keys,
+            }))
+        },
         TypeRef::Class { name, .. } | TypeRef::Interface { name, .. } => anyhow::bail!(
             "attribute values must be primitive, enum, or datatype; found class '{name}'"
         ),
@@ -627,8 +648,7 @@ fn primitive_schema(primitive: PrimitiveType, profile: Profile) -> serde_json::V
 }
 
 /// The `$comment` documenting a datatype attribute's target mapping.
-fn datatype_comment(datatype: &DatatypeDef) -> String {
-    let mut comment = format!(
+fn datatype_comment(datatype: &DatatypeDef) -> String {    let mut comment = format!(
         "datatype {} ({});",
         datatype.name,
         match &datatype.platform {
@@ -646,6 +666,17 @@ fn datatype_comment(datatype: &DatatypeDef) -> String {
         comment.push_str(&bindings.join("; "));
     }
     comment
+}
+
+/// The `$comment` documenting a vocabulary attribute's vendored source:
+/// source id, pinned version, and entry count.
+fn vocabulary_comment(vocabulary: &VocabularyDef) -> String {
+    format!(
+        "vocabulary {source}@{version} with {count} entries",
+        source = vocabulary.source,
+        version = vocabulary.version.as_deref().unwrap_or("unversioned"),
+        count = vocabulary.entries.len(),
+    )
 }
 
 /// The `$comment` listing features the schema intentionally omits.

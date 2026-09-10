@@ -1,0 +1,67 @@
+{
+  "$defs": {
+    "Account": {
+      "properties": {
+        "$id": {
+          "pattern": "^account/[0-9]+$",
+          "type": "string"
+        },
+        "$type": {
+          "const": "Account"
+        },
+        "currency": {
+          "$comment": "vocabulary iso:4217@2024-01-01 with 5 entries",
+          "enum": [
+            "USD",
+            "EUR",
+            "JPY",
+            "GBP",
+            "CHF"
+          ]
+        },
+        "owner": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "$id",
+        "$type",
+        "currency",
+        "owner"
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    }
+  },
+  "$id": "urn:rex:model:nz.example.payments:wire",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "$type": {
+      "const": "rex.instance"
+    },
+    "formatVersion": {
+      "const": 1
+    },
+    "model": {
+      "const": "nz.example.payments"
+    },
+    "objects": {
+      "items": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Account"
+          }
+        ]
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "$type",
+    "formatVersion",
+    "model",
+    "objects"
+  ],
+  "type": "object",
+  "unevaluatedProperties": false
+}

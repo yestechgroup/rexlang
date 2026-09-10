@@ -86,7 +86,7 @@ pub struct Compiled {
 pub fn compile(db: &dyn Db, file: SourceFile) -> Compiled {
     let parsed = parse_query(db, file);
     let mut diagnostics = parsed.diagnostics;
-    let lowered = parsed.ast.as_ref().map(lower::compile);
+    let lowered = parsed.ast.as_ref().map(|ast| lower::compile(&file.path(db), ast));
     if let Some((_, semantic)) = &lowered {
         diagnostics.extend(semantic.iter().cloned());
     }

@@ -24,7 +24,32 @@ Milestones 1-3 (front-end, Core IR, Rust backend, canonical JSON instances) — 
 rexlang check model.mox           # validate, render diagnostics
 rexlang ir model.mox -o model.rex.json
 rexlang gen rust model.mox -o src-gen/
+rexlang gen json-schema model.mox --profile wire -o schemas/
+rexlang vocab fetch model.mox --provider file:vocab-sources/
 ```
+
+## Vocabularies
+
+Well-known external vocabularies are declared in the model, vendored once,
+pinned by digest, and materialized identically by every backend:
+
+```
+vocabulary Currency from "iso:4217" {
+    version "2024-01-01"
+    key alpha3
+    facet String symbol
+    facet int minorUnits
+}
+```
+
+- `rexlang vocab fetch` is the ONLY command that fetches: it writes
+  `vocab/<source>@<version>.json` and pins `sha256` digests in `model.lock`.
+- Compilation is **hermetic**: it reads only the vendored snapshot and verifies
+  the lockfile digest; a missing or tampered snapshot is a diagnostic, never a
+  network call.
+- Backends materialize the vocabulary as a closed enum over its keys with
+  facet accessors (Rust), an `enum` of keys (JSON Schema), and key strings in
+  canonical instance JSON (`"currency": "USD"`).
 
 ## The canonical instance format
 

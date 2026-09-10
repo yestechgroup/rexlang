@@ -6,6 +6,7 @@ members = [
     "crates/rex-driver",
     "crates/rex-backend-rust",
     "crates/rex-backend-jsonschema",
+    "crates/rex-vocab",
     "crates/rex-runtime",
     "crates/rex-cli",
 ]
@@ -21,6 +22,7 @@ rex-ir = { path = "crates/rex-ir" }
 rex-driver = { path = "crates/rex-driver" }
 rex-backend-rust = { path = "crates/rex-backend-rust" }
 rex-backend-jsonschema = { path = "crates/rex-backend-jsonschema" }
+rex-vocab = { path = "crates/rex-vocab" }
 rex-runtime = { path = "crates/rex-runtime" }
 
 anyhow = "1.0"

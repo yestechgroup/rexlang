@@ -227,3 +227,308 @@ fn gen_json_schema_fails_on_invalid_source() {
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("has class type"));
 }
+
+const VOCAB_MODEL: &str = r#"package demo
+
+vocabulary Currency from "iso:4217" {
+    version "2024-01-01"
+    key alpha3
+    facet String symbol
+    facet int minorUnits
+}
+
+class Account {
+    String owner
+    Currency currency
+}
+"#;
+
+const VOCAB_MODEL_NO_VERSION: &str = r#"package demo
+
+vocabulary Currency from "iso:4217" {
+    key alpha3
+    facet String symbol
+    facet int minorUnits
+}
+
+class Account {
+    String owner
+    Currency currency
+}
+"#;
+
+const VOCAB_MODEL_BAD_FACET: &str = r#"package demo
+
+vocabulary Currency from "iso:4217" {
+    version "2024-01-01"
+    key alpha3
+    facet Book minorUnits
+}
+
+class Book { String title }
+"#;
+
+const VOCAB_MODEL_NO_KEY: &str = r#"package demo
+
+vocabulary Currency from "iso:4217" {
+    version "2024-01-01"
+    facet String symbol
+}
+"#;
+
+const SNAPSHOT: &str = r#"{
+  "vocabulary": "iso:4217",
+  "version": "2024-01-01",
+  "entries": [
+    { "alpha3": "USD", "symbol": "$", "minorUnits": 2 },
+    { "alpha3": "EUR", "symbol": "€", "minorUnits": 2 },
+    { "alpha3": "JPY", "symbol": "¥", "minorUnits": 0 },
+    { "alpha3": "GBP", "symbol": "£", "minorUnits": 2 },
+    { "alpha3": "CHF", "symbol": "CHF", "minorUnits": 2 }
+  ]
+}
+"#;
+
+/// A fresh model dir plus an upstream provider dir holding the snapshot.
+fn vocab_fixture(tag: &str, source: &str) -> (PathBuf, PathBuf) {
+    let dir = scratch_dir().join(format!("vocab-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let model_dir = dir.join("model");
+    let upstream_dir = dir.join("upstream");
+    std::fs::create_dir_all(&model_dir).expect("create model dir");
+    std::fs::create_dir_all(&upstream_dir).expect("create upstream dir");
+    std::fs::write(model_dir.join("model.mox"), source).expect("write model");
+    std::fs::write(upstream_dir.join("iso-4217@2024-01-01.json"), SNAPSHOT).expect("write snapshot");
+    (model_dir, upstream_dir)
+}
+
+#[test]
+fn vocab_fetch_vendors_snapshot_and_pins_lockfile() {
+    let (model_dir, upstream_dir) = vocab_fixture("happy", VOCAB_MODEL);
+    let model_path = model_dir.join("model.mox");
+    let output = rexlang()
+        .args([
+            "vocab",
+            "fetch",
+            model_path.to_str().unwrap(),
+            "--provider",
+            &format!("file:{}", upstream_dir.display()),
+        ])
+        .output()
+        .expect("run rexlang vocab fetch");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Per-vocabulary line: `vendored iso:4217@2024-01-01 (N entries, sha256:…)`.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let digest = rex_vocab::digest(SNAPSHOT.as_bytes());
+    assert!(
+        stdout.contains(&format!("vendored iso:4217@2024-01-01 (5 entries, {}…)", &digest[..7 + 16])),
+        "stdout was: {stdout}"
+    );
+
+    // Snapshot vendored next to the model, byte-identical to the source.
+    let vendored =
+        std::fs::read(model_dir.join("vocab").join("iso-4217@2024-01-01.json")).expect("vendored snapshot");
+    assert_eq!(vendored, SNAPSHOT.as_bytes());
+
+    // Lockfile pin: correct digest, version, RFC 3339 stamp.
+    let lockfile = rex_vocab::Lockfile::read(&model_dir.join("model.lock")).expect("read model.lock");
+    let entry = lockfile.entry_for("iso:4217").expect("iso:4217 pin");
+    assert_eq!(entry.version, "2024-01-01");
+    assert_eq!(entry.digest, digest);
+    assert!(entry.fetched_at.ends_with('Z'), "fetchedAt: {}", entry.fetched_at);
+
+    // Hermetic follow-up: the compiled model now embeds the entries.
+    let ir = rexlang()
+        .args(["ir", model_path.to_str().unwrap()])
+        .output()
+        .expect("run rexlang ir");
+    assert!(ir.status.success(), "stderr: {:?}", String::from_utf8_lossy(&ir.stderr));
+    let model = rex_ir::Model::from_json(&String::from_utf8_lossy(&ir.stdout)).expect("IR JSON");
+    assert_eq!(model.packages[0].vocabularies[0].entries.len(), 5);
+}
+
+#[test]
+fn vocab_fetch_defaults_to_the_vendored_dir_provider() {
+    let (model_dir, _upstream_dir) = vocab_fixture("default-provider", VOCAB_MODEL);
+    // Pre-vendor the snapshot into `<model-dir>/vocab`; the default provider
+    // reads from there.
+    let vocab_dir = model_dir.join("vocab");
+    std::fs::create_dir_all(&vocab_dir).expect("create vocab dir");
+    std::fs::write(vocab_dir.join("iso-4217@2024-01-01.json"), SNAPSHOT).expect("write snapshot");
+    let model_path = model_dir.join("model.mox");
+    let output = rexlang()
+        .args(["vocab", "fetch", model_path.to_str().unwrap()])
+        .output()
+        .expect("run rexlang vocab fetch");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let lockfile = rex_vocab::Lockfile::read(&model_dir.join("model.lock")).expect("read model.lock");
+    assert_eq!(
+        lockfile.entry_for("iso:4217").expect("pin").digest,
+        rex_vocab::digest(SNAPSHOT.as_bytes())
+    );
+}
+
+#[test]
+fn vocab_fetch_falls_back_to_the_lockfile_version() {
+    let (model_dir, upstream_dir) = vocab_fixture("lock-version", VOCAB_MODEL_NO_VERSION);
+    let model_path = model_dir.join("model.mox");
+    // Pre-seed a lockfile pinning the version; the declaration has none.
+    let mut lockfile = rex_vocab::Lockfile::default();
+    lockfile.insert(rex_vocab::LockEntry {
+        source: "iso:4217".to_string(),
+        version: "2024-01-01".to_string(),
+        digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+        fetched_at: "2026-09-10T00:00:00Z".to_string(),
+    });
+    lockfile.write(&model_dir.join("model.lock")).expect("write lockfile");
+
+    let output = rexlang()
+        .args([
+            "vocab",
+            "fetch",
+            model_path.to_str().unwrap(),
+            "--provider",
+            &format!("file:{}", upstream_dir.display()),
+        ])
+        .output()
+        .expect("run rexlang vocab fetch");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let lockfile = rex_vocab::Lockfile::read(&model_dir.join("model.lock")).expect("read model.lock");
+    assert_eq!(
+        lockfile.entry_for("iso:4217").expect("pin").digest,
+        rex_vocab::digest(SNAPSHOT.as_bytes()),
+        "the stale pin is replaced with the fetched digest"
+    );
+}
+
+#[test]
+fn vocab_fetch_without_any_version_is_an_error() {
+    let (model_dir, upstream_dir) = vocab_fixture("no-version", VOCAB_MODEL_NO_VERSION);
+    let model_path = model_dir.join("model.mox");
+    let output = rexlang()
+        .args([
+            "vocab",
+            "fetch",
+            model_path.to_str().unwrap(),
+            "--provider",
+            &format!("file:{}", upstream_dir.display()),
+        ])
+        .output()
+        .expect("run rexlang vocab fetch");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("pin a version"), "stderr was: {stderr}");
+}
+
+#[test]
+fn vocab_fetch_http_requires_a_url_template() {
+    let (model_dir, _upstream_dir) = vocab_fixture("http-no-template", VOCAB_MODEL);
+    let model_path = model_dir.join("model.mox");
+    let output = rexlang()
+        .args([
+            "vocab",
+            "fetch",
+            model_path.to_str().unwrap(),
+            "--provider",
+            "http",
+        ])
+        .output()
+        .expect("run rexlang vocab fetch");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("url-template"), "stderr was: {stderr}");
+}
+
+#[test]
+fn vocab_fetch_rejects_unknown_providers() {
+    let (model_dir, _upstream_dir) = vocab_fixture("unknown-provider", VOCAB_MODEL);
+    let model_path = model_dir.join("model.mox");
+    let output = rexlang()
+        .args([
+            "vocab",
+            "fetch",
+            model_path.to_str().unwrap(),
+            "--provider",
+            "carrier-pigeon",
+        ])
+        .output()
+        .expect("run rexlang vocab fetch");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("carrier-pigeon"),
+        "stderr was: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn vocab_fetch_rejects_non_primitive_facets() {
+    let (model_dir, upstream_dir) = vocab_fixture("bad-facet", VOCAB_MODEL_BAD_FACET);
+    let model_path = model_dir.join("model.mox");
+    let output = rexlang()
+        .args([
+            "vocab",
+            "fetch",
+            model_path.to_str().unwrap(),
+            "--provider",
+            &format!("file:{}", upstream_dir.display()),
+        ])
+        .output()
+        .expect("run rexlang vocab fetch");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("minorUnits"), "stderr was: {stderr}");
+    assert!(stderr.contains("primitive"), "stderr was: {stderr}");
+}
+
+#[test]
+fn vocab_fetch_requires_a_key_declaration() {
+    let (model_dir, upstream_dir) = vocab_fixture("no-key", VOCAB_MODEL_NO_KEY);
+    let model_path = model_dir.join("model.mox");
+    let output = rexlang()
+        .args([
+            "vocab",
+            "fetch",
+            model_path.to_str().unwrap(),
+            "--provider",
+            &format!("file:{}", upstream_dir.display()),
+        ])
+        .output()
+        .expect("run rexlang vocab fetch");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("key"), "stderr was: {stderr}");
+}
+
+#[test]
+fn vocab_fetch_reports_missing_snapshots_cleanly() {
+    let (model_dir, upstream_dir) = vocab_fixture("missing-snapshot", VOCAB_MODEL);
+    std::fs::remove_file(upstream_dir.join("iso-4217@2024-01-01.json")).expect("remove snapshot");
+    let model_path = model_dir.join("model.mox");
+    let output = rexlang()
+        .args([
+            "vocab",
+            "fetch",
+            model_path.to_str().unwrap(),
+            "--provider",
+            &format!("file:{}", upstream_dir.display()),
+        ])
+        .output()
+        .expect("run rexlang vocab fetch");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("iso-4217@2024-01-01.json"), "stderr was: {stderr}");
+}

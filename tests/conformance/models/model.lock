@@ -1,0 +1,10 @@
+{
+  "vocabularies": [
+    {
+      "source": "iso:4217",
+      "version": "2024-01-01",
+      "digest": "sha256:640cdb01e66fcca9be0125ac01fcfb100c86d14dd9ac41d93d13a52160c8433e",
+      "fetchedAt": "2026-09-10T00:00:00Z"
+    }
+  ]
+}

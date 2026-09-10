@@ -1,0 +1,14 @@
+[package]
+name = "rex-vocab"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rex-ir = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+ureq = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }

@@ -1,0 +1,145 @@
+{
+  "formatVersion": 1,
+  "rexVersion": "0.1.0",
+  "packages": [
+    {
+      "name": "nz.example.payments",
+      "annotations": [],
+      "enums": [],
+      "datatypes": [],
+      "interfaces": [],
+      "classes": [
+        {
+          "name": "Account",
+          "extends": [],
+          "features": [
+            {
+              "id": 0,
+              "name": "owner",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            },
+            {
+              "id": 1,
+              "name": "currency",
+              "kind": "attribute",
+              "type": {
+                "type": "vocabulary",
+                "value": {
+                  "package": "nz.example.payments",
+                  "name": "Currency"
+                }
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            }
+          ]
+        }
+      ],
+      "vocabularies": [
+        {
+          "name": "Currency",
+          "source": "iso:4217",
+          "version": "2024-01-01",
+          "key": "alpha3",
+          "facets": [
+            {
+              "name": "symbol",
+              "type": "string"
+            },
+            {
+              "name": "minorUnits",
+              "type": "int"
+            }
+          ],
+          "entries": [
+            {
+              "key": "USD",
+              "facets": {
+                "minorUnits": {
+                  "type": "int",
+                  "value": 2
+                },
+                "symbol": {
+                  "type": "string",
+                  "value": "$"
+                }
+              }
+            },
+            {
+              "key": "EUR",
+              "facets": {
+                "minorUnits": {
+                  "type": "int",
+                  "value": 2
+                },
+                "symbol": {
+                  "type": "string",
+                  "value": "€"
+                }
+              }
+            },
+            {
+              "key": "JPY",
+              "facets": {
+                "minorUnits": {
+                  "type": "int",
+                  "value": 0
+                },
+                "symbol": {
+                  "type": "string",
+                  "value": "¥"
+                }
+              }
+            },
+            {
+              "key": "GBP",
+              "facets": {
+                "minorUnits": {
+                  "type": "int",
+                  "value": 2
+                },
+                "symbol": {
+                  "type": "string",
+                  "value": "£"
+                }
+              }
+            },
+            {
+              "key": "CHF",
+              "facets": {
+                "minorUnits": {
+                  "type": "int",
+                  "value": 2
+                },
+                "symbol": {
+                  "type": "string",
+                  "value": "CHF"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

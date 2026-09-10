@@ -12,7 +12,9 @@
 //!   reconstructed by the loader — serializing them would recurse forever).
 //! - Cross references serialize as `{"$ref": "<id>"}`.
 //! - Enums serialize the declared literal name; datatypes their inner String;
-//!   optional attributes are omitted when `None`; derived features are never
+//!   vocabulary-typed attributes the entry key string (loading resolves the
+//!   key back to the variant, unknown keys are `InvalidInstance`); optional
+//!   attributes are omitted when `None`; derived features are never
 //!   serialized.
 //! - Loading is strict: unknown feature keys, unknown `$type`, duplicate
 //!   `$id`, unresolved `$ref`, a serialized container key, and version/model
@@ -58,6 +60,7 @@ fn save_expr(type_: &TypeRef, v: &str, deref: bool) -> String {
         },
         TypeRef::Enum { .. } => format!("serde_json::Value::String({v}.name().to_string())"),
         TypeRef::Datatype { .. } => format!("serde_json::Value::String({v}.0.clone())"),
+        TypeRef::Vocabulary { .. } => format!("serde_json::Value::String({v}.key().to_string())"),
         TypeRef::Class { .. } | TypeRef::Interface { .. } => {
             unreachable!("class/interface values are references, not attributes")
         }
@@ -88,6 +91,10 @@ fn load_expr(type_: &TypeRef, value: &str, where_: &str) -> String {
         ),
         TypeRef::Datatype { name, .. } => format!(
             "{}(expect_string({value}, {w:?})?.to_string())",
+            rust_ident(name)
+        ),
+        TypeRef::Vocabulary { name, .. } => format!(
+            "{}::try_from(expect_string({value}, {w:?})?)?",
             rust_ident(name)
         ),
         TypeRef::Class { .. } | TypeRef::Interface { .. } => {

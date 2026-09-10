@@ -443,6 +443,45 @@ fn datatype_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>
         })
 }
 
+/// One body item of a `vocabulary` declaration.
+enum VocabItem {
+    Version(String),
+    Key(Name),
+    Facet(VocabularyFacetDecl),
+}
+
+fn vocabulary_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>> + Clone {
+    let facet_decl = kw(Token::Facet)
+        .ignore_then(tref())
+        .then(name())
+        .map_with(|(type_ref, name), e| VocabularyFacetDecl { type_ref, name, span: e.span() });
+    let item = choice((
+        kw(Token::Version).ignore_then(string_lit()).map(VocabItem::Version),
+        kw(Token::Key).ignore_then(name()).map(VocabItem::Key),
+        facet_decl.map(VocabItem::Facet),
+    ));
+    kw(Token::Vocabulary)
+        .ignore_then(name())
+        .then_ignore(kw(Token::From))
+        .then(string_lit())
+        .then_ignore(kw(Token::LBrace))
+        .then(item.repeated().collect::<Vec<_>>())
+        .then_ignore(kw(Token::RBrace))
+        .map_with(|((name, source), items), e| {
+            let mut version = None;
+            let mut key = None;
+            let mut facets = Vec::new();
+            for item in items {
+                match item {
+                    VocabItem::Version(value) => version = Some(value),
+                    VocabItem::Key(key_name) => key = Some(key_name),
+                    VocabItem::Facet(facet) => facets.push(facet),
+                }
+            }
+            Decl::Vocabulary(VocabularyDecl { name, source, version, key, facets, span: e.span() })
+        })
+}
+
 #[derive(Clone)]
 enum Item {
     Package(QualifiedName),
@@ -458,7 +497,7 @@ fn junk_decl<'src>() -> impl Parser<'src, Tokens<'src>, (), MoxExtra<'src>> + Cl
     let rest = select! {
         t if !matches!(
             t,
-            Token::Package | Token::Annotation | Token::Class | Token::Interface | Token::Enum | Token::Type
+            Token::Package | Token::Annotation | Token::Class | Token::Interface | Token::Enum | Token::Type | Token::Vocabulary
         ) =>
         ()
     };
@@ -490,6 +529,7 @@ fn model<'src>() -> impl Parser<'src, Tokens<'src>, Model, MoxExtra<'src>> + Clo
         interface_decl().map(Item::Decl),
         enum_decl().map(Item::Decl),
         datatype_decl().map(Item::Decl),
+        vocabulary_decl().map(Item::Decl),
     ))
     .or(junk_decl().to(Item::Junk));
 

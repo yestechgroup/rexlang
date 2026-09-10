@@ -1,0 +1,11 @@
+{
+  "vocabulary": "iso:4217",
+  "version": "2024-01-01",
+  "entries": [
+    { "alpha3": "USD", "symbol": "$", "minorUnits": 2 },
+    { "alpha3": "EUR", "symbol": "€", "minorUnits": 2 },
+    { "alpha3": "JPY", "symbol": "¥", "minorUnits": 0 },
+    { "alpha3": "GBP", "symbol": "£", "minorUnits": 2 },
+    { "alpha3": "CHF", "symbol": "CHF", "minorUnits": 2 }
+  ]
+}

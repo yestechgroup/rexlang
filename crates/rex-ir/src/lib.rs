@@ -37,7 +37,17 @@
 //!    with [`IrError::UnsupportedFormatVersion`] rather than guessing.
 //! 5. **Forward compatibility.** Unknown JSON fields are *ignored* on
 //!    deserialize (never denied), and every field added after v1 must be
-//!    `#[serde(default)]` so older artifacts keep loading.
+//!    `#[serde(default)]` so older artifacts keep loading. Fields that are
+//!    empty in the common case additionally `skip_serializing_if`, so
+//!    artifacts for models that do not use the new feature are byte-identical
+//!    to older output.
+//! 6. **Vocabularies (additive, v1).** [`Package::vocabularies`] and
+//!    [`TypeRef::Vocabulary`] were added to v1 as purely additive changes:
+//!    every artifact older rex-ir versions could produce remains readable
+//!    (empty `vocabularies` are omitted on serialize, absent on deserialize).
+//!    The converse is not true — an artifact containing the `"vocabulary"`
+//!    [`TypeRef`] tag additionally requires a rex-ir new enough to know that
+//!    tag; older readers reject it as schema-invalid JSON.
 //!
 //! [rexlang]: https://github.com/anton-makes/rexlang
 
@@ -159,6 +169,10 @@ pub struct Package {
     /// Class definitions, in declaration order.
     #[serde(default)]
     pub classes: Vec<ClassDef>,
+    /// Vocabulary definitions, in declaration order. Entries are embedded so
+    /// artifacts stay self-contained (no snapshot files needed downstream).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vocabularies: Vec<VocabularyDef>,
 }
 
 impl Package {
@@ -171,6 +185,7 @@ impl Package {
             datatypes: Vec::new(),
             interfaces: Vec::new(),
             classes: Vec::new(),
+            vocabularies: Vec::new(),
         }
     }
 }
@@ -572,7 +587,7 @@ pub enum DefaultValue {
 /// Adjacently tagged: `{"type": "class", "value": {"package": "p",
 /// "name": "Book"}}`; primitives are `{"type": "primitive", "value":
 /// "string"}`. Tags are camelCase: `"primitive"`, `"class"`, `"enum"`,
-/// `"datatype"`, `"interface"`.
+/// `"datatype"`, `"interface"`, `"vocabulary"`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "camelCase")]
 pub enum TypeRef {
@@ -606,6 +621,15 @@ pub enum TypeRef {
         /// Interface name within that package.
         name: String,
     },
+    /// A vocabulary of enumerated key values (e.g. the ISO 4217 currencies),
+    /// by qualified name. Attribute features may use vocabulary types; their
+    /// values are entry keys of the referenced [`VocabularyDef`].
+    Vocabulary {
+        /// Owning package name.
+        package: String,
+        /// Vocabulary name within that package.
+        name: String,
+    },
 }
 
 impl TypeRef {
@@ -617,9 +641,63 @@ impl TypeRef {
             TypeRef::Class { package, name }
             | TypeRef::Enum { package, name }
             | TypeRef::Datatype { package, name }
-            | TypeRef::Interface { package, name } => Some(format!("{package}::{name}")),
+            | TypeRef::Interface { package, name }
+            | TypeRef::Vocabulary { package, name } => Some(format!("{package}::{name}")),
         }
     }
+}
+
+/// A vocabulary declaration: a fixed, versioned set of enumerated keys
+/// vendored from an external authority (e.g. `iso:4217` currencies), with
+/// typed facets per key.
+///
+/// The [`VocabularyDef::entries`] are embedded in the artifact so it stays
+/// self-contained: backends never read snapshot files.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VocabularyDef {
+    /// Vocabulary name, unique within its package (usable as a type name).
+    pub name: String,
+    /// External source identifier, e.g. `"iso:4217"`.
+    pub source: String,
+    /// The snapshot version inlined into this artifact, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Name of the facet acting as the unique entry key (e.g. `"alpha3"`).
+    pub key: String,
+    /// Declared facets in source order. The key facet is also listed here.
+    #[serde(default)]
+    pub facets: Vec<VocabularyFacet>,
+    /// The vendored entries, in snapshot order.
+    #[serde(default)]
+    pub entries: Vec<VocabularyEntry>,
+}
+
+/// A typed facet of a [`VocabularyDef`]: a named primitive value every entry
+/// carries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VocabularyFacet {
+    /// Facet name, unique within its vocabulary.
+    pub name: String,
+    /// The facet's primitive type.
+    #[serde(rename = "type")]
+    pub type_: PrimitiveType,
+}
+
+/// One vendored vocabulary entry: a unique key plus its facet values.
+///
+/// Facet values reuse [`DefaultValue`] so the wire encoding needs no new
+/// tags (`String`, `Int`, `Bool`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VocabularyEntry {
+    /// The entry's key: the value of the [`VocabularyDef::key`] facet, unique
+    /// within the vocabulary.
+    pub key: String,
+    /// Facet values by facet name.
+    #[serde(default)]
+    pub facets: BTreeMap<String, DefaultValue>,
 }
 
 /// The built-in primitives (Xcore's Java-style primitives).

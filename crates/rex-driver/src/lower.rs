@@ -2,8 +2,11 @@
 //! translation for a single `.mox` source (one package per file).
 //!
 //! This module is salsa-free; the driver's tracked queries call into it.
+//! Vocabulary declarations additionally read the vendored `vocab/` snapshots
+//! and `model.lock` from disk, relative to the source file's directory.
 
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use rex_ir as ir;
 use rex_syntax::ast as mox;
@@ -18,6 +21,7 @@ enum TopKind {
     Interface,
     Enum,
     Datatype,
+    Vocabulary,
 }
 
 /// A fully classified type reference.
@@ -28,6 +32,7 @@ enum Resolved {
     Datatype,
     Class,
     Interface,
+    Vocabulary,
 }
 
 impl Resolved {
@@ -48,6 +53,10 @@ impl Resolved {
                 name: name.to_string(),
             },
             Resolved::Interface => ir::TypeRef::Interface {
+                package: package.to_string(),
+                name: name.to_string(),
+            },
+            Resolved::Vocabulary => ir::TypeRef::Vocabulary {
                 package: package.to_string(),
                 name: name.to_string(),
             },
@@ -137,8 +146,10 @@ struct ClassRecord {
 /// Resolves and validates a parsed model and lowers it into the Core IR.
 ///
 /// Returns the IR (with `Model::rex_version` and `formatVersion` set) or
-/// `None` when any error-severity diagnostic was produced.
-pub(crate) fn compile(model: &mox::Model) -> (Option<ir::Model>, Vec<Diagnostic>) {
+/// `None` when any error-severity diagnostic was produced. `path` locates the
+/// model on disk: vocabulary snapshots are read from a `vocab/` directory
+/// next to the source, and pins from `model.lock` next to that.
+pub(crate) fn compile(path: &str, model: &mox::Model) -> (Option<ir::Model>, Vec<Diagnostic>) {
     let mut diags = Vec::new();
 
     let Some(package_decl) = &model.package else {
@@ -150,6 +161,11 @@ pub(crate) fn compile(model: &mox::Model) -> (Option<ir::Model>, Vec<Diagnostic>
         return (None, diags);
     };
     let package = package_decl.full_name();
+    let base_dir = Path::new(path)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
 
     // Index the package namespace and report duplicate declarations.
     let mut kinds: HashMap<&str, TopKind> = HashMap::new();
@@ -160,6 +176,7 @@ pub(crate) fn compile(model: &mox::Model) -> (Option<ir::Model>, Vec<Diagnostic>
             mox::Decl::Interface(decl) => (TopKind::Interface, &decl.name),
             mox::Decl::Enum(decl) => (TopKind::Enum, &decl.name),
             mox::Decl::Datatype(decl) => (TopKind::Datatype, &decl.name),
+            mox::Decl::Vocabulary(decl) => (TopKind::Vocabulary, &decl.name),
             mox::Decl::Annotation(_) => continue,
         };
         if kinds.contains_key(name.text.as_str()) {
@@ -178,11 +195,32 @@ pub(crate) fn compile(model: &mox::Model) -> (Option<ir::Model>, Vec<Diagnostic>
         }
     }
 
+    // Lower vocabulary declarations first (in source order): their entry
+    // keys are needed while validating class attribute defaults below.
+    let mut vocabulary_defs = Vec::new();
+    for decl in &model.declarations {
+        if let mox::Decl::Vocabulary(decl) = decl {
+            if let Some(def) = lower_vocabulary(decl, &base_dir, &mut diags) {
+                vocabulary_defs.push(def);
+            }
+        }
+    }
+    let vocab_keys: HashMap<&str, HashSet<&str>> = vocabulary_defs
+        .iter()
+        .map(|def| {
+            (
+                def.name.as_str(),
+                def.entries.iter().map(|entry| entry.key.as_str()).collect(),
+            )
+        })
+        .collect();
+
     // Lower declarations in source order.
     let mut out = ir::Package::new(package.clone());
     let mut classes: Vec<ClassRecord> = Vec::new();
     for decl in &model.declarations {
         match decl {
+            mox::Decl::Vocabulary(_) => {}
             mox::Decl::Annotation(annotation) => out.annotations.push(ir::Annotation {
                 source: annotation.value.clone(),
                 details: Default::default(),
@@ -195,10 +233,12 @@ pub(crate) fn compile(model: &mox::Model) -> (Option<ir::Model>, Vec<Diagnostic>
                 &package,
                 &kinds,
                 &enum_decls,
+                &vocab_keys,
                 &mut diags,
             )),
         }
     }
+    out.vocabularies = vocabulary_defs;
 
     detect_inheritance_cycles(&classes, &mut diags);
     validate_opposites(&classes, &mut diags);
@@ -262,6 +302,7 @@ fn resolve(
                 TopKind::Interface => Resolved::Interface,
                 TopKind::Enum => Resolved::Enum,
                 TopKind::Datatype => Resolved::Datatype,
+                TopKind::Vocabulary => Resolved::Vocabulary,
             };
             Some(Resolution {
                 kind,
@@ -374,11 +415,280 @@ fn lower_interface(decl: &mox::InterfaceDecl) -> ir::InterfaceDef {
     interface
 }
 
+/// Lowers a `vocabulary` declaration: checks its shape, resolves the
+/// snapshot version, reads the vendored snapshot, verifies the `model.lock`
+/// digest, and validates the entries.
+///
+/// Returns `None` (with diagnostics) when the declaration cannot be lowered.
+fn lower_vocabulary(
+    decl: &mox::VocabularyDecl,
+    base_dir: &Path,
+    diags: &mut Vec<Diagnostic>,
+) -> Option<ir::VocabularyDef> {
+    let name = &decl.name.text;
+
+    // `key` is required.
+    let Some(key) = &decl.key else {
+        diags.push(
+            Diagnostic::error(
+                format!("vocabulary '{name}' is missing its `key` declaration"),
+                Some(decl.name.span),
+            )
+            .with_help(
+                "add `key <facetName>` naming the field that uniquely identifies each entry",
+            ),
+        );
+        return None;
+    };
+
+    // Facet types must be primitives.
+    let mut facets = Vec::new();
+    let mut facets_ok = true;
+    for facet in &decl.facets {
+        match primitive_facet_type(&facet.type_ref) {
+            Some(type_) => facets.push(ir::VocabularyFacet {
+                name: facet.name.text.clone(),
+                type_,
+            }),
+            None => {
+                facets_ok = false;
+                diags.push(
+                    Diagnostic::error(
+                        format!(
+                            "facet '{}' of vocabulary '{name}' must have a primitive type, found '{}'",
+                            facet.name.text,
+                            facet.type_ref.name.full_name()
+                        ),
+                        Some(facet.type_ref.span),
+                    )
+                    .with_help(
+                        "facet types must be primitives (String/int/long/short/float/double/boolean/byte/char)",
+                    ),
+                );
+            }
+        }
+    }
+    if !facets_ok {
+        return None;
+    }
+
+    // Resolve the snapshot version: declared version, else the lockfile pin,
+    // else a unique vendored snapshot.
+    let sanitized = rex_vocab::sanitize_source(&decl.source);
+    let vocab_dir = base_dir.join("vocab");
+    let lockfile = read_lockfile(base_dir, diags);
+    let version = match &decl.version {
+        Some(version) => version.clone(),
+        None => match lockfile
+            .as_ref()
+            .and_then(|lockfile| lockfile.entry_for(&decl.source))
+            .map(|entry| entry.version.clone())
+        {
+            Some(version) => version,
+            None => match glob_snapshot_version(&vocab_dir, &sanitized) {
+                GlobVersion::Unique(version) => version,
+                GlobVersion::Missing => {
+                    diags.push(
+                        Diagnostic::error(
+                            format!("cannot determine the version of vocabulary '{name}'"),
+                            Some(decl.name.span),
+                        )
+                        .with_help(
+                            "pin `version \"...\"` in the vocabulary declaration, or run `rexlang vocab fetch`",
+                        ),
+                    );
+                    return None;
+                }
+                GlobVersion::Ambiguous(candidates) => {
+                    diags.push(
+                        Diagnostic::error(
+                            format!(
+                                "multiple snapshots found for vocabulary '{name}': {}; pin `version` in the declaration or run `rexlang vocab fetch`",
+                                candidates.join(", ")
+                            ),
+                            Some(decl.name.span),
+                        )
+                        .with_help(
+                            "vendoring one snapshot per version keeps builds reproducible",
+                        ),
+                    );
+                    return None;
+                }
+            },
+        },
+    };
+
+    // Read the vendored snapshot. Builds stay hermetic: never fetched at
+    // compile time, only read from disk.
+    let file_name = format!("{sanitized}@{version}.json");
+    let snapshot_path = vocab_dir.join(&file_name);
+    let bytes = match std::fs::read(&snapshot_path) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            diags.push(
+                Diagnostic::error(
+                    format!(
+                        "missing snapshot file '{}' for vocabulary '{name}'",
+                        snapshot_path.display()
+                    ),
+                    Some(decl.name.span),
+                )
+                .with_help(
+                    "run `rexlang vocab fetch <model>` to vendor it (builds stay hermetic — never fetched at compile time)",
+                ),
+            );
+            return None;
+        }
+    };
+
+    // Verify the lockfile digest, or warn about the missing pin.
+    match &lockfile {
+        Some(lockfile) => match lockfile.entry_for(&decl.source) {
+            Some(entry) if entry.version == version => {
+                let found = rex_vocab::digest(&bytes);
+                if entry.digest != found {
+                    diags.push(Diagnostic::error(
+                        format!(
+                            "snapshot digest mismatch for vocabulary '{name}' ({file_name}): model.lock records {}, but the vendored snapshot hashes to {}",
+                            entry.digest, found
+                        ),
+                        Some(decl.name.span),
+                    ));
+                    return None;
+                }
+            }
+            Some(entry) => {
+                diags.push(Diagnostic::warning(
+                    format!(
+                        "vocabulary '{name}' uses version '{version}', but model.lock pins '{}'; run `rexlang vocab fetch` to reconcile",
+                        entry.version
+                    ),
+                    Some(decl.name.span),
+                ));
+            }
+            None => push_unpinned_warning(name, decl.name.span, diags),
+        },
+        None => push_unpinned_warning(name, decl.name.span, diags),
+    }
+
+    // Parse and validate the snapshot entries.
+    let parsed = match rex_vocab::parse_snapshot(&bytes) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            diags.push(Diagnostic::error(
+                format!("vocabulary '{name}' snapshot {file_name} is invalid: {error}"),
+                Some(decl.name.span),
+            ));
+            return None;
+        }
+    };
+    let declaration = rex_vocab::VocabularyDeclaration {
+        source: decl.source.clone(),
+        version: Some(version.clone()),
+        key: key.text.clone(),
+        facets: facets.clone(),
+    };
+    let entries = match rex_vocab::validate_entries(&parsed, &declaration) {
+        Ok(entries) => entries,
+        Err(error) => {
+            diags.push(Diagnostic::error(
+                format!("vocabulary '{name}' snapshot {file_name} is invalid: {error}"),
+                Some(decl.name.span),
+            ));
+            return None;
+        }
+    };
+
+    Some(ir::VocabularyDef {
+        name: name.clone(),
+        source: decl.source.clone(),
+        version: Some(version),
+        key: key.text.clone(),
+        facets,
+        entries,
+    })
+}
+
+/// The "not pinned" warning shown when no lockfile records the vocabulary.
+fn push_unpinned_warning(name: &str, span: Span, diags: &mut Vec<Diagnostic>) {
+    diags.push(Diagnostic::warning(
+        format!(
+            "vocabulary '{name}' is not pinned; run `rexlang vocab fetch` to generate model.lock"
+        ),
+        Some(span),
+    ));
+}
+
+/// Reads `model.lock` next to the model. A missing lockfile is not an error
+/// (an "unpinned" warning is emitted later); an unreadable one is.
+fn read_lockfile(base_dir: &Path, diags: &mut Vec<Diagnostic>) -> Option<rex_vocab::Lockfile> {
+    let path = base_dir.join("model.lock");
+    match rex_vocab::Lockfile::read(&path) {
+        Ok(lockfile) => Some(lockfile),
+        Err(error) => {
+            let not_found = error.chain().any(|cause| {
+                cause
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+            });
+            if !not_found {
+                diags.push(Diagnostic::error(
+                    format!("cannot read model.lock: {error}"),
+                    None,
+                ));
+            }
+            None
+        }
+    }
+}
+
+/// The outcome of scanning `vocab/` for `<sanitized>@<version>.json` files.
+enum GlobVersion {
+    /// No snapshot (or no `vocab/` directory).
+    Missing,
+    /// Exactly one snapshot; the version parsed from its file name.
+    Unique(String),
+    /// Several snapshots; the user must pin the version.
+    Ambiguous(Vec<String>),
+}
+
+fn glob_snapshot_version(vocab_dir: &Path, sanitized: &str) -> GlobVersion {
+    let Ok(read_dir) = std::fs::read_dir(vocab_dir) else {
+        return GlobVersion::Missing;
+    };
+    let prefix = format!("{sanitized}@");
+    let mut versions: Vec<String> = read_dir
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter_map(|file_name| {
+            file_name
+                .strip_prefix(&prefix)
+                .and_then(|rest| rest.strip_suffix(".json"))
+                .map(str::to_string)
+        })
+        .collect();
+    versions.sort();
+    match versions.len() {
+        0 => GlobVersion::Missing,
+        1 => GlobVersion::Unique(versions.pop().expect("len checked")),
+        _ => GlobVersion::Ambiguous(versions),
+    }
+}
+
+/// The primitive type of a facet type reference, when it names one.
+fn primitive_facet_type(type_ref: &mox::TypeRef) -> Option<ir::PrimitiveType> {
+    match type_ref.name.segments.as_slice() {
+        [segment] => primitive_type(&segment.text),
+        _ => None,
+    }
+}
+
 fn lower_class(
     decl: &mox::ClassDecl,
     package: &str,
     kinds: &HashMap<&str, TopKind>,
     enum_decls: &HashMap<&str, &mox::EnumDecl>,
+    vocab_keys: &HashMap<&str, HashSet<&str>>,
     diags: &mut Vec<Diagnostic>,
 ) -> ClassRecord {
     let mut extends = Vec::new();
@@ -439,7 +749,7 @@ fn lower_class(
                     multiplicity,
                 );
                 let ir_feature =
-                    apply_default(ir_feature, default.as_ref(), resolution.as_ref(), enum_decls, diags);
+                    apply_default(ir_feature, default.as_ref(), resolution.as_ref(), enum_decls, vocab_keys, diags);
                 features.push(ir_feature);
                 records.push(FeatureRecord {
                     name: name.text.clone(),
@@ -703,12 +1013,16 @@ fn bound_value(value: i64, span: Span, diags: &mut Vec<Diagnostic>) -> Option<u3
 }
 
 /// Applies an attribute default value. The `Name` form is an enum literal
-/// reference and is only allowed on enum-typed attributes.
+/// reference on enum-typed attributes, or an entry-key reference on
+/// vocabulary-typed attributes (lowered to `DefaultValue::String`, since
+/// vocabulary keys are strings).
+#[allow(clippy::too_many_arguments)]
 fn apply_default(
     feature: ir::Feature,
     default: Option<&mox::DefaultValue>,
     resolution: Option<&Resolution>,
     enum_decls: &HashMap<&str, &mox::EnumDecl>,
+    vocab_keys: &HashMap<&str, HashSet<&str>>,
     diags: &mut Vec<Diagnostic>,
 ) -> ir::Feature {
     let Some(default) = default else {
@@ -737,6 +1051,20 @@ fn apply_default(
                     }
                 }
                 feature.with_default(ir::DefaultValue::EnumLiteral(name.text.clone()))
+            }
+            Some(Resolution { kind: Resolved::Vocabulary, name: vocab_name }) => {
+                // An absent key set means the vocabulary failed to load; that
+                // error is already reported, so the default adds nothing.
+                if let Some(keys) = vocab_keys.get(vocab_name.as_str()) {
+                    if !keys.contains(name.text.as_str()) {
+                        diags.push(Diagnostic::error(
+                            format!("vocabulary '{vocab_name}' has no entry '{}'", name.text),
+                            Some(name.span),
+                        ));
+                    }
+                }
+                // Keys are strings; `String` is the wire representation.
+                feature.with_default(ir::DefaultValue::String(name.text.clone()))
             }
             Some(_) => {
                 diags.push(Diagnostic::error(

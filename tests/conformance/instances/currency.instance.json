@@ -1,0 +1,13 @@
+{
+  "$type": "rex.instance",
+  "formatVersion": 1,
+  "model": "nz.example.payments",
+  "objects": [
+    {
+      "$id": "account/0",
+      "$type": "Account",
+      "currency": "USD",
+      "owner": "Alice"
+    }
+  ]
+}

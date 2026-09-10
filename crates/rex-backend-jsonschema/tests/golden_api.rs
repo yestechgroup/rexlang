@@ -38,28 +38,58 @@ fn library_model() -> rex_ir::Model {
     compilation.model.expect("model lowered")
 }
 
-#[test]
-fn library_api_schema_matches_golden() {
-    let files = generate(&library_model(), Profile::Api).expect("generate api schema");
-    let json = files
-        .get("schema.json")
-        .expect("single schema.json file")
-        .as_str();
+/// Every conformance model and its committed golden API schema.
+const MODELS: &[(&str, &str)] = &[
+    (
+        "tests/conformance/models/library.mox",
+        "tests/conformance/schemas/library.api.schema.json",
+    ),
+    (
+        "tests/conformance/models/currency.mox",
+        "tests/conformance/schemas/currency.api.schema.json",
+    ),
+];
 
-    let artifact = fixture_path("tests/conformance/schemas/library.api.schema.json");
-    if std::env::var("REX_UPDATE_FIXTURES").is_ok() {
-        std::fs::create_dir_all(artifact.parent().unwrap()).unwrap();
-        std::fs::write(&artifact, json).unwrap();
-        eprintln!("updated {}", artifact.display());
-        return;
+#[test]
+fn conformance_api_schemas_match_golden() {
+    for (model_path, artifact_path) in MODELS {
+        let files = generate(&conformance_model(model_path), Profile::Api).expect("generate api schema");
+        let json = files
+            .get("schema.json")
+            .expect("single schema.json file")
+            .as_str();
+
+        let artifact = fixture_path(artifact_path);
+        if std::env::var("REX_UPDATE_FIXTURES").is_ok() {
+            std::fs::create_dir_all(artifact.parent().unwrap()).unwrap();
+            std::fs::write(&artifact, json).unwrap();
+            eprintln!("updated {}", artifact.display());
+            continue;
+        }
+        let expected = std::fs::read_to_string(&artifact).unwrap_or_else(|_| {
+            panic!(
+                "missing golden schema {}; regenerate with REX_UPDATE_FIXTURES=1",
+                artifact.display()
+            )
+        });
+        assert_eq!(
+            json, expected,
+            "api schema for {model_path} drifted from the golden file"
+        );
     }
-    let expected = std::fs::read_to_string(&artifact).unwrap_or_else(|_| {
-        panic!(
-            "missing golden schema {}; regenerate with REX_UPDATE_FIXTURES=1",
-            artifact.display()
-        )
-    });
-    assert_eq!(json, expected, "api schema drifted from the golden file");
+}
+
+/// Compiles one of the conformance models by its workspace-relative path.
+fn conformance_model(relative_path: &str) -> rex_ir::Model {
+    let path = fixture_path(relative_path);
+    let source = std::fs::read_to_string(&path).expect("read conformance model");
+    let compilation = compile_str(path.to_str().expect("utf-8 path"), &source);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "conformance model {relative_path} must compile cleanly: {:?}",
+        compilation.diagnostics
+    );
+    compilation.model.expect("model lowered")
 }
 
 #[test]

@@ -52,6 +52,16 @@ pub enum Token<'src> {
     True,
     #[token("false")]
     False,
+    #[token("vocabulary")]
+    Vocabulary,
+    #[token("from")]
+    From,
+    #[token("version")]
+    Version,
+    #[token("key")]
+    Key,
+    #[token("facet")]
+    Facet,
 
     /// An identifier: `[A-Za-z_][A-Za-z0-9_]*`.
     #[regex("[A-Za-z_][A-Za-z0-9_]*", |lexer| lexer.slice())]
@@ -134,6 +144,11 @@ impl Token<'_> {
             Token::Derived => "derived",
             Token::True => "true",
             Token::False => "false",
+            Token::Vocabulary => "vocabulary",
+            Token::From => "from",
+            Token::Version => "version",
+            Token::Key => "key",
+            Token::Facet => "facet",
             _ => return None,
         })
     }
@@ -223,6 +238,30 @@ mod tests {
                 Token::Ident("readonly"),
             ]
         );
+    }
+
+    #[test]
+    fn vocabulary_keywords_lex_as_keywords() {
+        assert_eq!(
+            kinds("vocabulary from version key facet"),
+            vec![
+                Token::Vocabulary,
+                Token::From,
+                Token::Version,
+                Token::Key,
+                Token::Facet,
+            ]
+        );
+    }
+
+    #[test]
+    fn new_keywords_escape_like_any_keyword() {
+        let tokens = lex("^facet ^key ^vocabulary").unwrap();
+        assert_eq!(tokens[0].0, Token::IdentEscaped("facet"));
+        assert_eq!(tokens[1].0, Token::IdentEscaped("key"));
+        assert_eq!(tokens[2].0, Token::IdentEscaped("vocabulary"));
+        // Spans still cover the raw text including the caret.
+        assert_eq!(tokens[0].1, (0..6).into());
     }
 
     #[test]

@@ -1,0 +1,13 @@
+package nz.example.payments
+
+vocabulary Currency from "iso:4217" {
+    version "2024-01-01"
+    key alpha3
+    facet String symbol
+    facet int minorUnits
+}
+
+class Account {
+    String owner
+    Currency currency
+}

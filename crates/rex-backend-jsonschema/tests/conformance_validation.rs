@@ -163,3 +163,45 @@ fn missing_objects_member_is_rejected() {
         "a document without objects must fail validation"
     );
 }
+
+/// The currency conformance scenario: the golden instance validates, and an
+/// unknown vocabulary key is rejected (vocabulary attributes are closed
+/// enums of the vendored keys).
+#[test]
+fn currency_instance_validates_and_unknown_keys_are_rejected() {
+    let model = conformance_model("tests/conformance/models/currency.mox");
+    let files = generate(&model, Profile::Wire).expect("generate wire schema");
+    let schema: serde_json::Value =
+        serde_json::from_str(files.get("schema.json").expect("schema.json")).expect("valid JSON");
+    let validator = jsonschema::validator_for(&schema).expect("wire schema compiles");
+
+    let json = std::fs::read_to_string(fixture_path(
+        "tests/conformance/instances/currency.instance.json",
+    ))
+    .expect("golden currency instance");
+    let mut instance: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    assert!(
+        validator.is_valid(&instance),
+        "the canonical currency instance must validate against the wire schema"
+    );
+
+    assert!(mutate_object(&mut instance, "account/0", &mut |account| {
+        account.insert("currency".to_string(), serde_json::json!("XYZ"));
+    }));
+    assert!(
+        !validator.is_valid(&instance),
+        "an unknown vocabulary key must fail validation"
+    );
+}
+
+fn conformance_model(relative_path: &str) -> rex_ir::Model {
+    let path = fixture_path(relative_path);
+    let source = std::fs::read_to_string(&path).expect("read conformance model");
+    let compilation = compile_str(path.to_str().expect("utf-8 path"), &source);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "conformance model {relative_path} must compile cleanly: {:?}",
+        compilation.diagnostics
+    );
+    compilation.model.expect("model lowered")
+}

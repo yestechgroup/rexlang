@@ -17,7 +17,7 @@ pub mod parser;
 pub use ast::{
     AnnotationDecl, BindingEntry, ClassDecl, DatatypeDecl, Decl, DefaultValue, EnumDecl,
     EnumLiteral, FeatureDecl, InterfaceDecl, Model, MultBound, Multiplicity, MultiplicityKind,
-    Name, Param, QualifiedName, Span, TypeRef, Wraps,
+    Name, Param, QualifiedName, Span, TypeRef, VocabularyDecl, VocabularyFacetDecl, Wraps,
 };
 pub use lexer::{lex, LexError, Token};
 pub use parser::{parse, ParseError, ParseResult};
