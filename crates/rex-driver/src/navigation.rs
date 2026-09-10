@@ -122,6 +122,9 @@ pub struct Definition {
     /// The class's `extends` clause as written, entries comma-separated;
     /// `None` when the class has none (or is not a class).
     pub extends_text: Option<String>,
+    /// The feature's `id`/`readonly` modifiers as written; empty for
+    /// non-features and unmodified features.
+    pub modifiers: mox::Modifiers,
     /// Span of the whole declaration this definition comes from (e.g. the
     /// full `class Book { … }` source, the full feature line).
     pub full_span: Span,
@@ -233,6 +236,7 @@ impl NavigationIndex {
                             Some(decl_id),
                             feature.span(),
                         );
+                        index.definitions[feature_id].modifiers = *feature.modifiers();
                         match feature {
                             mox::FeatureDecl::Attribute { type_ref, multiplicity, .. }
                             | mox::FeatureDecl::Derived { type_ref, multiplicity, .. } => {
@@ -454,6 +458,7 @@ impl NavigationIndex {
             opposite_text: None,
             value_text: None,
             extends_text: None,
+            modifiers: mox::Modifiers::default(),
             full_span,
         });
         id

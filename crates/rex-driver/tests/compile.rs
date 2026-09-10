@@ -497,6 +497,106 @@ class B extends A {
 }
 
 #[test]
+fn modifiers_lower_to_ir_flags() {
+    let source = r#"
+package demo
+
+class Person {
+    id String email
+    readonly String name
+    readonly id String handle
+    id contains Child[] children opposite parent
+    readonly refers Person[] friends
+    derived String label
+}
+
+class Child {
+    id container Person parent opposite children
+}
+"#;
+    let compilation = compile_str("modifiers.mox", source);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "unexpected diagnostics:\n{}",
+        render("modifiers.mox", source, &compilation.diagnostics)
+    );
+    let model = compilation.model.expect("a model on success");
+    let classes = &model.packages[0].classes;
+    let person = classes.iter().find(|c| c.name == "Person").unwrap();
+    let child = classes.iter().find(|c| c.name == "Child").unwrap();
+
+    assert!(feature(person, "email").is_id);
+    assert!(!feature(person, "email").is_read_only);
+    assert!(!feature(person, "name").is_id);
+    assert!(feature(person, "name").is_read_only);
+    assert!(feature(person, "handle").is_id);
+    assert!(feature(person, "handle").is_read_only);
+    assert!(feature(person, "children").is_id, "id containment");
+    let label = feature(person, "label");
+    assert!(label.is_derived, "derived flag survives");
+    assert!(!label.is_id);
+    assert!(!label.is_read_only);
+    let friends = feature(person, "friends");
+    assert!(friends.is_read_only, "readonly reference");
+    assert!(feature(child, "parent").is_id, "id container");
+
+    // Ops do not lower, so their modifiers only surface as warnings (see the
+    // operation-modifier test below).
+    assert!(person.features.iter().all(|f| f.name != "find"));
+}
+
+#[test]
+fn modifiers_on_operations_warn_and_lowering_continues() {
+    let source = r#"
+package demo
+
+class C {
+    readonly op Book find(String title)
+    id op Book lookup(String title)
+}
+
+class Book {
+    String title
+}
+"#;
+    let compilation = compile_str("opmods.mox", source);
+    let model = compilation.model.expect("warnings must not block lowering");
+    assert_eq!(model.packages[0].classes[0].name, "C");
+
+    let readonly_warnings: Vec<_> = compilation
+        .diagnostics
+        .iter()
+        .filter(|d| d.message.contains("readonly"))
+        .collect();
+    assert_eq!(readonly_warnings.len(), 1, "expected one readonly warning");
+    let warning = readonly_warnings[0];
+    assert_eq!(warning.severity, Severity::Warning);
+    assert_eq!(
+        warning.message,
+        "modifier 'readonly' has no effect on operations"
+    );
+    assert_eq!(
+        &source[warning.span.expect("warning span").start..warning.span.expect("warning span").end],
+        "readonly",
+        "the warning points at the modifier token"
+    );
+
+    let id_warnings: Vec<_> = compilation
+        .diagnostics
+        .iter()
+        .filter(|d| d.message.contains("'id'"))
+        .collect();
+    assert_eq!(id_warnings.len(), 1, "expected one id warning");
+    assert_eq!(id_warnings[0].severity, Severity::Warning);
+    assert_eq!(id_warnings[0].message, "modifier 'id' has no effect on operations");
+    assert_eq!(
+        &source[id_warnings[0].span.expect("warning span").start
+            ..id_warnings[0].span.expect("warning span").end],
+        "id"
+    );
+}
+
+#[test]
 fn salsa_incrementality_smoke() {
     use rex_driver::{compile, Database, SourceFile};
     use salsa::Setter;

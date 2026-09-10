@@ -441,7 +441,7 @@ fn api_class_def(context: &Context<'_>, class: &ClassDef) -> anyhow::Result<serd
             continue;
         }
         let mut schema = feature_schema(context, feature, Profile::Api)?;
-        if feature.is_derived {
+        if feature.is_derived || feature.is_read_only {
             schema
                 .as_object_mut()
                 .expect("feature schema is an object")
@@ -679,11 +679,15 @@ fn vocabulary_comment(vocabulary: &VocabularyDef) -> String {
     )
 }
 
-/// The `$comment` listing features the schema intentionally omits.
+/// The `$comment` documenting a class's intentionally omitted features and
+/// its `id`/`readonly` modifiers.
 ///
 /// The wire profile omits both container back-pointers and derived features;
 /// the API profile keeps derived features (`readOnly`), so only containers
-/// are listed there.
+/// are listed there. Every feature carrying the `id` or `readonly` modifier
+/// contributes an `identity feature '<f>'` / `readonly feature '<f>'` note;
+/// these only appear when modifiers do, so unmodified models (e.g. the
+/// conformance goldens) are unaffected.
 fn class_comment(class: &ClassDef, include_derived: bool) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
     for feature in &class.features {
@@ -702,6 +706,14 @@ fn class_comment(class: &ClassDef, include_derived: bool) -> Option<String> {
                     feature.name
                 ));
             }
+        }
+    }
+    for feature in &class.features {
+        if feature.is_id {
+            parts.push(format!("identity feature '{}'", feature.name));
+        }
+        if feature.is_read_only {
+            parts.push(format!("readonly feature '{}'", feature.name));
         }
     }
     (!parts.is_empty()).then(|| parts.join("; "))

@@ -461,6 +461,189 @@ fn feature_level_recovery_resyncs_inside_class_body() {
     assert_eq!(names, vec!["x", "bs", "tail"]);
 }
 
+fn expect_modifiers(feature: &FeatureDecl, id: bool, read_only: bool) {
+    let modifiers = feature.modifiers();
+    assert_eq!(modifiers.is_id(), id, "unexpected `id` on {}", feature.name().text);
+    assert_eq!(
+        modifiers.is_read_only(),
+        read_only,
+        "unexpected `readonly` on {}",
+        feature.name().text
+    );
+}
+
+#[test]
+fn modifiers_parse_on_every_feature_kind() {
+    let source = r#"
+        class Person {
+            id String email
+            readonly String name
+            readonly id String handle
+            contains Book[] books opposite shelf
+            refers Writer[] friends opposite books
+            readonly op Book find(String title)
+            id derived String label
+            id container Shelf shelf opposite people
+        }
+        class Book {}
+        class Writer {}
+        class Shelf {}
+    "#;
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    let model = result.ast.unwrap();
+    let person = expect_class(&model.declarations[0], "Person");
+    assert_eq!(person.features.len(), 8);
+
+    expect_modifiers(&person.features[0], true, false); // id String email
+    expect_modifiers(&person.features[1], false, true); // readonly String name
+    expect_modifiers(&person.features[2], true, true); // readonly id String handle
+    expect_modifiers(&person.features[3], false, false); // contains Book[] books
+    expect_modifiers(&person.features[4], false, false); // refers Writer[] friends
+    expect_modifiers(&person.features[5], false, true); // readonly op Book find
+    expect_modifiers(&person.features[6], true, false); // id derived String label
+    expect_modifiers(&person.features[7], true, false); // id container Shelf shelf
+
+    // Modifiers must not disturb the parsed shape of the features themselves.
+    expect_feature(&person.features, 2, "attribute", "handle", |feature| {
+        let (type_ref, ..) = expect_attribute(feature);
+        assert_eq!(type_ref.name.full_name(), "String");
+    });
+    expect_feature(&person.features, 5, "op", "find", |feature| {
+        let FeatureDecl::Op { return_type, params, body, .. } = feature else {
+            panic!("expected op");
+        };
+        assert_eq!(return_type.name.full_name(), "Book");
+        assert_eq!(params.len(), 1);
+        assert!(body.is_none());
+    });
+    expect_feature(&person.features, 6, "derived", "label", |_| {});
+    expect_feature(&person.features, 7, "container", "shelf", |feature| {
+        let FeatureDecl::Container { type_ref, opposite, .. } = feature else {
+            panic!("expected container");
+        };
+        assert_eq!(type_ref.name.full_name(), "Shelf");
+        assert_eq!(opposite.as_ref().map(|n| n.text.as_str()), Some("people"));
+    });
+}
+
+#[test]
+fn modifiers_are_order_free_and_repeats_are_idempotent() {
+    let source = r#"
+        class A {
+            readonly id String a
+            id readonly String b
+            id id String c
+            readonly readonly String d
+        }
+    "#;
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    let model = result.ast.unwrap();
+    let class = expect_class(&model.declarations[0], "A");
+    assert_eq!(class.features.len(), 4);
+    expect_modifiers(&class.features[0], true, true); // readonly id String a
+    expect_modifiers(&class.features[1], true, true); // id readonly String b
+    expect_modifiers(&class.features[2], true, false); // id id String c
+    expect_modifiers(&class.features[3], false, true); // readonly readonly String d
+}
+
+#[test]
+fn modifier_spans_point_at_their_keywords_and_the_feature_spans_the_whole_line() {
+    let source = "class C { readonly id String handle }";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    let model = result.ast.unwrap();
+    let class = expect_class(&model.declarations[0], "C");
+    let feature = &class.features[0];
+    let modifiers = feature.modifiers();
+    assert_eq!(span_text(source, modifiers.read_only.unwrap()), "readonly");
+    assert_eq!(span_text(source, modifiers.id.unwrap()), "id");
+    // The feature span covers the whole declaration, modifiers included.
+    assert_eq!(span_text(source, feature.span()), "readonly id String handle");
+}
+
+#[test]
+fn escaped_readonly_is_a_type_or_name_never_a_modifier() {
+    // `^readonly` in modifier position starts the *type*; it is never a
+    // modifier. The trailing unescaped `readonly` is the feature name.
+    let source = "class C { ^readonly ^readonly }";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    let model = result.ast.unwrap();
+    let class = expect_class(&model.declarations[0], "C");
+    assert_eq!(class.features.len(), 1);
+    expect_feature(&class.features, 0, "attribute", "readonly", |feature| {
+        assert!(feature.modifiers().is_empty());
+        let (type_ref, ..) = expect_attribute(feature);
+        assert_eq!(type_ref.name.full_name(), "readonly");
+        assert!(type_ref.name.segments[0].escaped);
+        assert!(feature.name().escaped);
+    });
+
+    // A real modifier may precede an escaped type; an escaped keyword is
+    // still a legal feature name.
+    let source = "class C { readonly String ^readonly }";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    let model = result.ast.unwrap();
+    let class = expect_class(&model.declarations[0], "C");
+    assert_eq!(class.features.len(), 1);
+    expect_feature(&class.features, 0, "attribute", "readonly", |feature| {
+        assert!(feature.modifiers().is_read_only());
+        let (type_ref, ..) = expect_attribute(feature);
+        assert_eq!(type_ref.name.full_name(), "String");
+        assert!(feature.name().escaped);
+    });
+}
+
+#[test]
+fn modifier_before_escaped_type_still_parses() {
+    let source = "class C { id ^id handle }";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    let model = result.ast.unwrap();
+    let class = expect_class(&model.declarations[0], "C");
+    expect_feature(&class.features, 0, "attribute", "handle", |feature| {
+        assert!(feature.modifiers().is_id());
+        let (type_ref, ..) = expect_attribute(feature);
+        assert_eq!(type_ref.name.full_name(), "id");
+        assert!(type_ref.name.segments[0].escaped);
+    });
+}
+
+#[test]
+fn readonly_and_id_remain_usable_as_unescaped_feature_names() {
+    let source = "class C { String readonly\n String id }";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+    let model = result.ast.unwrap();
+    let class = expect_class(&model.declarations[0], "C");
+    assert_eq!(class.features.len(), 2);
+    expect_feature(&class.features, 0, "attribute", "readonly", |feature| {
+        assert!(feature.modifiers().is_empty());
+    });
+    expect_feature(&class.features, 1, "attribute", "id", |feature| {
+        assert!(feature.modifiers().is_empty());
+    });
+}
+
+#[test]
+fn modifier_before_a_broken_feature_recovers_to_the_next_feature() {
+    let source = r#"
+        class A {
+            readonly = "oops"
+            String tail
+        }
+    "#;
+    let result = parse(source);
+    assert!(!result.errors.is_empty(), "expected errors");
+    let model = result.ast.expect("expected a recovered AST");
+    let class = expect_class(&model.declarations[0], "A");
+    let names: Vec<&str> = class.features.iter().map(|f| f.name().text.as_str()).collect();
+    assert_eq!(names, vec!["tail"]);
+}
+
 #[test]
 fn datatype_wraps_named_target_and_bare_bindings() {
     let source = r#"

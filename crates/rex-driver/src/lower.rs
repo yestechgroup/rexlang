@@ -360,6 +360,21 @@ fn class_of(resolution: Option<&Resolution>) -> Option<String> {
     }
 }
 
+/// Applies the AST `id`/`readonly` modifiers to a lowered IR feature.
+/// Repeats in the source are idempotent, so the builder calls run at most once.
+fn apply_modifiers(feature: ir::Feature, modifiers: &mox::Modifiers) -> ir::Feature {
+    let feature = if modifiers.is_id() {
+        feature.identifier()
+    } else {
+        feature
+    };
+    if modifiers.is_read_only() {
+        feature.read_only()
+    } else {
+        feature
+    }
+}
+
 fn lower_enum(decl: &mox::EnumDecl, diags: &mut Vec<Diagnostic>) -> ir::EnumDef {
     let mut seen = HashSet::new();
     let mut literals = Vec::new();
@@ -750,6 +765,7 @@ fn lower_class(
                 );
                 let ir_feature =
                     apply_default(ir_feature, default.as_ref(), resolution.as_ref(), enum_decls, vocab_keys, diags);
+                let ir_feature = apply_modifiers(ir_feature, feature.modifiers());
                 features.push(ir_feature);
                 records.push(FeatureRecord {
                     name: name.text.clone(),
@@ -777,7 +793,7 @@ fn lower_class(
                     kinds,
                     diags,
                 );
-                features.push(ir_feature);
+                features.push(apply_modifiers(ir_feature, feature.modifiers()));
                 records.push(record);
             }
             mox::FeatureDecl::Reference {
@@ -797,7 +813,7 @@ fn lower_class(
                     kinds,
                     diags,
                 );
-                features.push(ir_feature);
+                features.push(apply_modifiers(ir_feature, feature.modifiers()));
                 records.push(record);
             }
             mox::FeatureDecl::Container {
@@ -818,7 +834,7 @@ fn lower_class(
                     kinds,
                     diags,
                 );
-                features.push(ir_feature);
+                features.push(apply_modifiers(ir_feature, feature.modifiers()));
                 records.push(record);
             }
             mox::FeatureDecl::Op {
@@ -829,7 +845,21 @@ fn lower_class(
                 ..
             } => {
                 // Tier 0: signatures are validated but operations are not
-                // lowered into the IR.
+                // lowered into the IR. The `id`/`readonly` modifiers only
+                // apply to stored features, so they warn here.
+                let modifiers = feature.modifiers();
+                if let Some(span) = modifiers.id {
+                    diags.push(Diagnostic::warning(
+                        "modifier 'id' has no effect on operations",
+                        Some(span),
+                    ));
+                }
+                if let Some(span) = modifiers.read_only {
+                    diags.push(Diagnostic::warning(
+                        "modifier 'readonly' has no effect on operations",
+                        Some(span),
+                    ));
+                }
                 resolve(return_type, package, kinds, diags);
                 for param in params {
                     resolve(&param.type_ref, package, kinds, diags);
@@ -872,6 +902,7 @@ fn lower_class(
                 let ir_feature =
                     ir::Feature::new(&name.text, ir::FeatureKind::Attribute, ir_type, multiplicity)
                         .derived();
+                let ir_feature = apply_modifiers(ir_feature, feature.modifiers());
                 features.push(ir_feature);
                 records.push(FeatureRecord {
                     name: name.text.clone(),

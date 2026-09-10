@@ -385,3 +385,26 @@ fn resolve_id_returns_the_target_id_of_a_reference() {
     assert_eq!(date_ref.target, None);
     assert_eq!(index.resolve_id(date_ref), None);
 }
+
+#[test]
+fn feature_definitions_carry_their_modifiers() {
+    let source = "package demo\n\n\
+        class Person {\n\
+        \x20   id String email\n\
+        \x20   readonly id String handle\n\
+        \x20   String plain\n\
+        }\n";
+    let index = NavigationIndex::build_or_empty(source);
+    let find = |name: &str| {
+        index
+            .definitions()
+            .find(|(_, d)| d.name == name && d.owner.is_some())
+            .map(|(_, d)| d)
+            .unwrap_or_else(|| panic!("no feature '{name}'"))
+    };
+    assert!(find("email").modifiers.is_id(), "email carries `id`");
+    assert!(!find("email").modifiers.is_read_only());
+    assert!(find("handle").modifiers.is_id());
+    assert!(find("handle").modifiers.is_read_only());
+    assert!(find("plain").modifiers.is_empty(), "plain stays empty");
+}

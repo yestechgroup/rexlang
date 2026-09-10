@@ -1526,4 +1526,61 @@ mod tests {
             "error was: {error:#}"
         );
     }
+
+    /// A `readonly` feature keeps its stored field but gets **no** setter; an
+    /// `id` feature is codegen-neutral (stored and settable like any other).
+    /// The driver's lowering stage sets these flags (see the rex-driver
+    /// modifier tests); this locks in the backend's contract.
+    #[test]
+    fn readonly_feature_has_no_setter_and_id_feature_is_unchanged() {
+        let mut model = Model::new();
+        let mut package = Package::new("demo");
+        package.classes.push(ClassDef::new(
+            "Gadget",
+            vec![],
+            vec![
+                Feature::new(
+                    "plain",
+                    FeatureKind::Attribute,
+                    TypeRef::Primitive(PrimitiveType::String),
+                    Multiplicity::REQUIRED,
+                ),
+                Feature::new(
+                    "code",
+                    FeatureKind::Attribute,
+                    TypeRef::Primitive(PrimitiveType::String),
+                    Multiplicity::REQUIRED,
+                )
+                .read_only(),
+                Feature::new(
+                    "sku",
+                    FeatureKind::Attribute,
+                    TypeRef::Primitive(PrimitiveType::String),
+                    Multiplicity::REQUIRED,
+                )
+                .identifier(),
+            ],
+        ));
+        model.packages.push(package);
+        let code = generate(&model)
+            .expect("generate")
+            .remove("models.rs")
+            .expect("models.rs");
+
+        // All three features are stored as fields.
+        assert!(code.contains("pub plain: String,"), "plain field:\n{code}");
+        assert!(code.contains("pub code: String,"), "readonly field stays stored:\n{code}");
+        assert!(code.contains("pub sku: String,"), "id field stays stored:\n{code}");
+
+        // Plain and `id` features get setters; `readonly` does not.
+        assert!(code.contains("pub fn set_plain"), "control setter:\n{code}");
+        assert!(
+            code.contains("pub fn set_sku"),
+            "`id` is codegen-neutral: same setters as any other feature:\n{code}"
+        );
+        assert!(
+            !code.contains("pub fn set_code"),
+            "`readonly` features must not get a setter:\n{code}"
+        );
+    }
 }

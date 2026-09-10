@@ -10,7 +10,9 @@ use rex_driver::navigation::{DefId, FeatureSymbolKind, NavigationIndex, SymbolKi
 ///   `**vocabulary Currency**`
 /// * features: `**books**: Book[]` plus a kind line, e.g.
 ///   `contains — opposite: `library`` / `refers — opposite: `books`` /
-///   `container` / `attribute` / `op (abstract)` / `derived`
+///   `container` / `attribute` / `op (abstract)` / `derived`; features
+///   carrying the `id`/`readonly` modifiers prefix the kind line with
+///   `[id]`/`[readonly]` tags, e.g. `[id] [readonly] attribute`
 /// * enum literals: `**Mystery** = 0 (BookCategory)`
 pub fn hover_markdown(index: &NavigationIndex, def_id: DefId) -> String {
     let definition = index.definition(def_id);
@@ -46,6 +48,14 @@ pub fn hover_markdown(index: &NavigationIndex, def_id: DefId) -> String {
                 }
             }
             out.push('\n');
+            // Modifier tags prefix the kind line, in canonical (`id` then
+            // `readonly`) order regardless of source order.
+            if definition.modifiers.is_id() {
+                out.push_str("[id] ");
+            }
+            if definition.modifiers.is_read_only() {
+                out.push_str("[readonly] ");
+            }
             out.push_str(match feature_kind {
                 FeatureSymbolKind::Attribute => "attribute",
                 FeatureSymbolKind::Operation => "op (abstract)",
@@ -173,6 +183,37 @@ mod tests {
             class Book {}\nclass Writer {}\n";
         assert_eq!(hover_of(source, "books"), "**books**: Book[]\ncontains");
         assert_eq!(hover_of(source, "authors"), "**authors**: Writer[]\nrefers");
+    }
+
+    #[test]
+    fn features_render_modifier_tags_before_the_kind_line() {
+        let source = "package demo\n\n\
+            class Person {\n\
+            \x20   id String email\n\
+            \x20   readonly String name\n\
+            \x20   readonly id String handle\n\
+            \x20   readonly op Book find(String title)\n\
+            \x20   String plain\n\
+            }\n\n\
+            class Book {}\n";
+        assert_eq!(
+            hover_of(source, "email"),
+            "**email**: String\n[id] attribute"
+        );
+        assert_eq!(
+            hover_of(source, "name"),
+            "**name**: String\n[readonly] attribute"
+        );
+        assert_eq!(
+            hover_of(source, "handle"),
+            "**handle**: String\n[id] [readonly] attribute"
+        );
+        assert_eq!(
+            hover_of(source, "find"),
+            "**find**: Book\n[readonly] op (abstract)"
+        );
+        // Unmodified features keep their exact previous rendering.
+        assert_eq!(hover_of(source, "plain"), "**plain**: String\nattribute");
     }
 
     #[test]

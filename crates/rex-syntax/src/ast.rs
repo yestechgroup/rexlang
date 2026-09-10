@@ -278,11 +278,70 @@ pub struct VocabularyFacetDecl {
     pub span: Span,
 }
 
+/// A contextual feature modifier: the `id` or `readonly` keyword written
+/// before a feature's type. The lexer emits both as ordinary identifiers;
+/// they act as modifiers only in modifier position (before the feature).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModifierKind {
+    /// `id` — the feature is part of the class identity.
+    Id,
+    /// `readonly` — the feature cannot be reassigned after initialization.
+    ReadOnly,
+}
+
+impl ModifierKind {
+    /// The keyword text as written in the source.
+    pub fn keyword(self) -> &'static str {
+        match self {
+            ModifierKind::Id => "id",
+            ModifierKind::ReadOnly => "readonly",
+        }
+    }
+}
+
+/// The `id`/`readonly` modifiers of a feature, each carrying the span of the
+/// modifier keyword as written. Escaped forms (`^id`, `^readonly`) are never
+/// modifiers. Repeating a modifier is idempotent (the first occurrence wins).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Modifiers {
+    /// Span of the `id` modifier keyword, if present.
+    pub id: Option<Span>,
+    /// Span of the `readonly` modifier keyword, if present.
+    pub read_only: Option<Span>,
+}
+
+impl Modifiers {
+    /// Records one modifier; repeats are idempotent (the first span wins).
+    pub fn push(&mut self, kind: ModifierKind, span: Span) {
+        match kind {
+            ModifierKind::Id => self.id = self.id.or(Some(span)),
+            ModifierKind::ReadOnly => self.read_only = self.read_only.or(Some(span)),
+        }
+    }
+
+    /// `true` when neither modifier is present.
+    pub fn is_empty(&self) -> bool {
+        self.id.is_none() && self.read_only.is_none()
+    }
+
+    /// `true` when the feature carries the `id` modifier.
+    pub fn is_id(&self) -> bool {
+        self.id.is_some()
+    }
+
+    /// `true` when the feature carries the `readonly` modifier.
+    pub fn is_read_only(&self) -> bool {
+        self.read_only.is_some()
+    }
+}
+
 /// A feature declared inside a class body.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FeatureDecl {
-    /// `type_ref multiplicity? name ("=" default)?`
+    /// `(modifier)* type_ref multiplicity? name ("=" default)?`
     Attribute {
+        /// Declared `id`/`readonly` modifiers.
+        modifiers: Modifiers,
         /// Declared type.
         type_ref: TypeRef,
         /// Multiplicity annotation, if any.
@@ -291,11 +350,13 @@ pub enum FeatureDecl {
         name: Name,
         /// Default value, if any.
         default: Option<DefaultValue>,
-        /// Span of the whole feature.
+        /// Span of the whole feature, modifiers included.
         span: Span,
     },
-    /// `contains type_ref multiplicity? name ("opposite" name)?`
+    /// `(modifier)* contains type_ref multiplicity? name ("opposite" name)?`
     Containment {
+        /// Declared `id`/`readonly` modifiers.
+        modifiers: Modifiers,
         /// Element type.
         type_ref: TypeRef,
         /// Multiplicity annotation, if any.
@@ -304,11 +365,13 @@ pub enum FeatureDecl {
         name: Name,
         /// Opposite end name, if any.
         opposite: Option<Name>,
-        /// Span of the whole feature.
+        /// Span of the whole feature, modifiers included.
         span: Span,
     },
-    /// `refers type_ref multiplicity? name ("opposite" name)?`
+    /// `(modifier)* refers type_ref multiplicity? name ("opposite" name)?`
     Reference {
+        /// Declared `id`/`readonly` modifiers.
+        modifiers: Modifiers,
         /// Referenced type.
         type_ref: TypeRef,
         /// Multiplicity annotation, if any.
@@ -317,22 +380,26 @@ pub enum FeatureDecl {
         name: Name,
         /// Opposite end name, if any.
         opposite: Option<Name>,
-        /// Span of the whole feature.
+        /// Span of the whole feature, modifiers included.
         span: Span,
     },
-    /// `container type_ref name ("opposite" name)?`
+    /// `(modifier)* container type_ref name ("opposite" name)?`
     Container {
+        /// Declared `id`/`readonly` modifiers.
+        modifiers: Modifiers,
         /// Container type.
         type_ref: TypeRef,
         /// Feature name.
         name: Name,
         /// Opposite end name, if any.
         opposite: Option<Name>,
-        /// Span of the whole feature.
+        /// Span of the whole feature, modifiers included.
         span: Span,
     },
-    /// `op type_ref name "(" params? ")" raw_body?`
+    /// `(modifier)* op type_ref name "(" params? ")" raw_body?`
     Op {
+        /// Declared `id`/`readonly` modifiers.
+        modifiers: Modifiers,
         /// Declared return type.
         return_type: TypeRef,
         /// Operation name.
@@ -341,11 +408,13 @@ pub enum FeatureDecl {
         params: Vec<Param>,
         /// Span of the raw `{ ... }` body, if present. Contents are not parsed.
         body: Option<Span>,
-        /// Span of the whole feature.
+        /// Span of the whole feature, modifiers included.
         span: Span,
     },
-    /// `derived type_ref multiplicity? name raw_body?`
+    /// `(modifier)* derived type_ref multiplicity? name raw_body?`
     Derived {
+        /// Declared `id`/`readonly` modifiers.
+        modifiers: Modifiers,
         /// Declared type.
         type_ref: TypeRef,
         /// Multiplicity annotation, if any.
@@ -354,13 +423,13 @@ pub enum FeatureDecl {
         name: Name,
         /// Span of the raw `{ ... }` body, if present. Contents are not parsed.
         body: Option<Span>,
-        /// Span of the whole feature.
+        /// Span of the whole feature, modifiers included.
         span: Span,
     },
 }
 
 impl FeatureDecl {
-    /// Span of the whole feature.
+    /// Span of the whole feature, modifiers included.
     pub fn span(&self) -> Span {
         match self {
             FeatureDecl::Attribute { span, .. }
@@ -369,6 +438,44 @@ impl FeatureDecl {
             | FeatureDecl::Container { span, .. }
             | FeatureDecl::Op { span, .. }
             | FeatureDecl::Derived { span, .. } => *span,
+        }
+    }
+
+    /// The feature's declared `id`/`readonly` modifiers.
+    pub fn modifiers(&self) -> &Modifiers {
+        match self {
+            FeatureDecl::Attribute { modifiers, .. }
+            | FeatureDecl::Containment { modifiers, .. }
+            | FeatureDecl::Reference { modifiers, .. }
+            | FeatureDecl::Container { modifiers, .. }
+            | FeatureDecl::Op { modifiers, .. }
+            | FeatureDecl::Derived { modifiers, .. } => modifiers,
+        }
+    }
+
+    /// Overwrites the feature's whole-declaration span. The parser uses this
+    /// to widen the span across leading modifiers.
+    pub fn set_span(&mut self, span: Span) {
+        match self {
+            FeatureDecl::Attribute { span: slot, .. }
+            | FeatureDecl::Containment { span: slot, .. }
+            | FeatureDecl::Reference { span: slot, .. }
+            | FeatureDecl::Container { span: slot, .. }
+            | FeatureDecl::Op { span: slot, .. }
+            | FeatureDecl::Derived { span: slot, .. } => *slot = span,
+        }
+    }
+
+    /// Overwrites the feature's declared modifiers. The parser uses this to
+    /// attach the modifiers parsed before the feature's type.
+    pub fn set_modifiers(&mut self, modifiers: Modifiers) {
+        match self {
+            FeatureDecl::Attribute { modifiers: slot, .. }
+            | FeatureDecl::Containment { modifiers: slot, .. }
+            | FeatureDecl::Reference { modifiers: slot, .. }
+            | FeatureDecl::Container { modifiers: slot, .. }
+            | FeatureDecl::Op { modifiers: slot, .. }
+            | FeatureDecl::Derived { modifiers: slot, .. } => *slot = modifiers,
         }
     }
 

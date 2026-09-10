@@ -247,6 +247,27 @@ fn opposite<'src>() -> impl Parser<'src, Tokens<'src>, Name, MoxExtra<'src>> + C
     kw(Token::Opposite).ignore_then(name())
 }
 
+/// Parses the contextual `id`/`readonly` modifiers that may precede any
+/// feature. Both keywords lex as ordinary identifiers; they act as modifiers
+/// only in this leading position, and the first token that is neither starts
+/// the feature itself. Escaped forms (`^id`, `^readonly`) are different token
+/// variants and are never modifiers. Repeats are idempotent.
+fn modifiers<'src>() -> impl Parser<'src, Tokens<'src>, Modifiers, MoxExtra<'src>> + Clone {
+    select! {
+        Token::Ident("id") = e => (ModifierKind::Id, e.span()),
+        Token::Ident("readonly") = e => (ModifierKind::ReadOnly, e.span()),
+    }
+    .repeated()
+    .collect::<Vec<_>>()
+    .map(|pairs| {
+        let mut modifiers = Modifiers::default();
+        for (kind, span) in pairs {
+            modifiers.push(kind, span);
+        }
+        modifiers
+    })
+}
+
 /// Scans a raw `{ ... }` body with balanced braces and returns the span
 /// covering everything from the opening to the closing brace, inclusive. The
 /// contents are deliberately not parsed.
@@ -283,7 +304,7 @@ fn attribute<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<'s
         .then(name())
         .then(kw(Token::Eq).ignore_then(default_value()).or_not())
         .map_with(|(((type_ref, multiplicity), name), default), e| {
-            FeatureDecl::Attribute { type_ref, multiplicity, name, default, span: e.span() }
+            FeatureDecl::Attribute { modifiers: Modifiers::default(), type_ref, multiplicity, name, default, span: e.span() }
         })
 }
 
@@ -294,7 +315,7 @@ fn containment<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<
         .then(name())
         .then(opposite().or_not())
         .map_with(|(((type_ref, multiplicity), name), opposite), e| {
-            FeatureDecl::Containment { type_ref, multiplicity, name, opposite, span: e.span() }
+            FeatureDecl::Containment { modifiers: Modifiers::default(), type_ref, multiplicity, name, opposite, span: e.span() }
         })
 }
 
@@ -305,7 +326,7 @@ fn reference<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<'s
         .then(name())
         .then(opposite().or_not())
         .map_with(|(((type_ref, multiplicity), name), opposite), e| {
-            FeatureDecl::Reference { type_ref, multiplicity, name, opposite, span: e.span() }
+            FeatureDecl::Reference { modifiers: Modifiers::default(), type_ref, multiplicity, name, opposite, span: e.span() }
         })
 }
 
@@ -315,7 +336,7 @@ fn container<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<'s
         .then(name())
         .then(opposite().or_not())
         .map_with(|((type_ref, name), opposite), e| {
-            FeatureDecl::Container { type_ref, name, opposite, span: e.span() }
+            FeatureDecl::Container { modifiers: Modifiers::default(), type_ref, name, opposite, span: e.span() }
         })
 }
 
@@ -326,7 +347,7 @@ fn op_decl<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<'src
         .then(params())
         .then(raw_body().or_not())
         .map_with(|(((return_type, name), params), body), e| {
-            FeatureDecl::Op { return_type, name, params, body, span: e.span() }
+            FeatureDecl::Op { modifiers: Modifiers::default(), return_type, name, params, body, span: e.span() }
         })
 }
 
@@ -337,20 +358,27 @@ fn derived_decl<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra
         .then(name())
         .then(raw_body().or_not())
         .map_with(|(((type_ref, multiplicity), name), body), e| {
-            FeatureDecl::Derived { type_ref, multiplicity, name, body, span: e.span() }
+            FeatureDecl::Derived { modifiers: Modifiers::default(), type_ref, multiplicity, name, body, span: e.span() }
         })
 }
 
 fn feature<'src>() -> impl Parser<'src, Tokens<'src>, Option<FeatureDecl>, MoxExtra<'src>> + Clone {
-    let any_feature = choice((
-        containment(),
-        reference(),
-        container(),
-        op_decl(),
-        derived_decl(),
-        attribute(),
-    ))
-    .map(Some);
+    let any_feature = modifiers()
+        .then(choice((
+            containment(),
+            reference(),
+            container(),
+            op_decl(),
+            derived_decl(),
+            attribute(),
+        )))
+        .map_with(|(modifiers, mut feature), e| {
+            feature.set_modifiers(modifiers);
+            // The whole-declaration span includes the leading modifiers.
+            feature.set_span(e.span());
+            feature
+        })
+        .map(Some);
     any_feature.or(junk_feature().to(None))
 }
 
