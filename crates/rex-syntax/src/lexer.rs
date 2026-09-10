@@ -101,13 +101,23 @@ pub enum Token<'src> {
     #[token("*")]
     Star,
 
-    // Trivia: whitespace and comments. Priority 1 beats the `Other` catch-all.
-    // Block comments are non-nested; the shape of the regex is the classic
-    // DFA-friendly "C block comment" pattern (logos rejects lazy quantifiers).
+    // Trivia: whitespace is skipped outright. Comments are captured as
+    // dedicated tokens (priority 1 beats the `Other` catch-all) so that
+    // [`lex_with_comments`] can hand them to the formatter; [`lex`] filters
+    // them out, keeping the parser's input unchanged. Block comments are
+    // non-nested; the shape of the regex is the classic DFA-friendly "C block
+    // comment" pattern (logos rejects lazy quantifiers).
     #[regex(r"[ \t\r\n\f]+", logos::skip, priority = 1)]
-    #[regex(r"//[^\r\n]*", logos::skip, priority = 1)]
-    #[regex(r"/\*[^*]*\*+([^/*][^*]*\*+)*/", logos::skip, priority = 1)]
     Whitespace,
+
+    /// A `// ...` line comment; the payload is the verbatim text including
+    /// the leading `//` and stops before the line break.
+    #[regex(r"//[^\r\n]*", |lexer| lexer.slice(), priority = 1)]
+    LineComment(&'src str),
+    /// A `/* ... */` block comment; the payload is the verbatim text
+    /// including the delimiters and any internal newlines.
+    #[regex(r"/\*[^*]*\*+([^/*][^*]*\*+)*/", |lexer| lexer.slice(), priority = 1)]
+    BlockComment(&'src str),
 
     /// Emitted by logos for characters that match no pattern. This keeps raw
     /// `op`/`derived` bodies tokenizable regardless of their contents
@@ -197,14 +207,61 @@ pub struct LexError {
 /// tokens paired with their spans, or a [`LexError`] describing the first
 /// unmatched region.
 pub fn lex(source: &str) -> Result<Vec<(Token<'_>, Span)>, LexError> {
+    lex_with_comments(source).map(|(tokens, _)| tokens)
+}
+
+/// The kind of a captured comment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommentKind {
+    /// A `// ...` line comment.
+    Line,
+    /// A `/* ... */` block comment (possibly spanning multiple lines).
+    Block,
+}
+
+/// A comment captured by [`lex_with_comments`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Comment<'src> {
+    /// Whether the comment is a line or block comment.
+    pub kind: CommentKind,
+    /// Verbatim comment text, including the `//` or `/* */` delimiters and
+    /// any internal newlines.
+    pub text: &'src str,
+    /// Span of the comment in the source.
+    pub span: Span,
+}
+
+/// Tokens paired with their spans.
+pub type TokenStream<'src> = Vec<(Token<'src>, Span)>;
+
+/// Comments in source order.
+pub type Comments<'src> = Vec<Comment<'src>>;
+
+/// Tokenize a source text, keeping comments.
+///
+/// Like [`lex`], but comments are returned alongside the token stream (in
+/// source order, never overlapping token spans). The parser consumes [`lex`],
+/// so comment capture never affects parsing.
+pub fn lex_with_comments(source: &str) -> Result<(TokenStream<'_>, Comments<'_>), LexError> {
     let mut tokens = Vec::new();
+    let mut comments = Vec::new();
     for (result, range) in Token::lexer(source).spanned() {
         match result {
             Err(_) | Ok(Token::Error) => return Err(LexError { span: range.into() }),
+            Ok(Token::LineComment(text)) => comments.push(Comment {
+                kind: CommentKind::Line,
+                text,
+                span: range.into(),
+            }),
+            Ok(Token::BlockComment(text)) => comments.push(Comment {
+                kind: CommentKind::Block,
+                text,
+                span: range.into(),
+            }),
             Ok(token) => tokens.push((token, range.into())),
         }
     }
-    Ok(tokens)
+    Ok((tokens, comments))
 }
 
 #[cfg(test)]

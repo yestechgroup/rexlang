@@ -9,6 +9,7 @@
 //! * `rexlang vocab fetch <file> [--provider file:<DIR>|http]` — fetch and
 //!   vendor vocabulary snapshots, updating `model.lock`.
 
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -42,6 +43,16 @@ enum Command {
     Gen {
         #[command(subcommand)]
         target: GenTarget,
+    },
+    /// Format `.mox` files in place, preserving comments.
+    Fmt {
+        /// List files whose formatting would change instead of rewriting
+        /// them; exits `1` when any file is unformatted.
+        #[arg(long)]
+        check: bool,
+        /// Files to format, or `-` to read stdin and write stdout. With no
+        /// files, stdin is formatted.
+        files: Vec<PathBuf>,
     },
     /// Serve the rexlang language server over stdin/stdout.
     Lsp,
@@ -173,6 +184,39 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             rex_backend_jsonschema::generate_to_dir(&model, profile, &out)?;
             println!("generated JSON Schema into {}", out.display());
             Ok(ExitCode::SUCCESS)
+        }
+        Command::Fmt { check, files } => {
+            if files.is_empty() || files.iter().any(|file| file == Path::new("-")) {
+                let mut source = String::new();
+                std::io::stdin()
+                    .read_to_string(&mut source)
+                    .map_err(|error| anyhow::anyhow!("cannot read stdin: {error}"))?;
+                let formatted = rex_syntax::fmt::format(&source)?;
+                std::io::stdout()
+                    .write_all(formatted.as_bytes())
+                    .map_err(|error| anyhow::anyhow!("cannot write stdout: {error}"))?;
+                return Ok(ExitCode::SUCCESS);
+            }
+            let mut unformatted = false;
+            for file in &files {
+                let source = std::fs::read_to_string(file)
+                    .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
+                let formatted = rex_syntax::fmt::format(&source)?;
+                if formatted != source {
+                    unformatted = true;
+                    if check {
+                        println!("would reformat: {}", file.display());
+                    } else {
+                        std::fs::write(file, formatted)
+                            .map_err(|error| anyhow::anyhow!("cannot write {}: {error}", file.display()))?;
+                    }
+                }
+            }
+            if check && unformatted {
+                Ok(ExitCode::FAILURE)
+            } else {
+                Ok(ExitCode::SUCCESS)
+            }
         }
         Command::Vocab {
             action: VocabAction::Fetch {

@@ -11,6 +11,7 @@
 //! ```
 
 pub mod ast;
+pub mod fmt;
 pub mod lexer;
 pub mod parser;
 
@@ -19,5 +20,6 @@ pub use ast::{
     EnumLiteral, FeatureDecl, InterfaceDecl, Model, MultBound, Multiplicity, MultiplicityKind,
     Name, Param, QualifiedName, Span, TypeRef, VocabularyDecl, VocabularyFacetDecl, Wraps,
 };
-pub use lexer::{lex, LexError, Token};
+pub use fmt::{format, FormatError};
+pub use lexer::{lex, lex_with_comments, Comment, CommentKind, LexError, Token};
 pub use parser::{parse, ParseError, ParseResult};
