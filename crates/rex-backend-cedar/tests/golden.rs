@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use rex_backend_cedar::generate;
+use rex_backend_cedar::generate_for_model;
 use rex_driver::compile_str;
 
 /// The conformance model and its committed golden artifacts.
@@ -45,7 +45,7 @@ fn actors_model() -> rex_ir::Model {
 
 #[test]
 fn conformance_cedar_output_matches_golden() {
-    let files = generate(&actors_model()).expect("generate cedar output");
+    let files = generate_for_model(&actors_model()).expect("generate cedar output");
     for golden in GOLDENS {
         let file_name = Path::new(golden)
             .file_name()
@@ -83,6 +83,6 @@ fn actorless_model_generates_nothing() {
     let compilation = compile_str("bookless.mox", source);
     assert!(compilation.diagnostics.is_empty());
     let model = compilation.model.expect("model lowered");
-    let files = generate(&model).expect("generate");
+    let files = generate_for_model(&model).expect("generate");
     assert!(files.is_empty(), "got: {:?}", files.keys());
 }

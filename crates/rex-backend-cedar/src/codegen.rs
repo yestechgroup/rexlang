@@ -35,31 +35,51 @@ use std::path::Path;
 
 use rex_expr::{Expr, ExprKind, UnOp};
 use rex_ir::{
-    ActorsDef, ClassDef, Feature, FeatureKind, GrantEffect, Model, PrimitiveType, TypeRef,
+    ActorModel, ActorsDef, ClassDef, Feature, FeatureKind, GrantEffect, Model, PrimitiveType,
+    TypeRef,
 };
 
-/// Generates Cedar policies and schemas for every `actors` block of `model`.
+/// Generates Cedar policies and schemas for the actor-policy artifact
+/// `actors`, resolving capability classes against the domain `model`.
+///
+/// This is the pair API: the policy dimension ([`ActorModel`], produced by
+/// compiling an `.actor` file or collected from inline blocks) is consumed
+/// separately from the domain dimension ([`Model`]). Capability classes are
+/// looked up by their resolved, package-qualified [`TypeRef`] across all
+/// packages of `model`.
 ///
 /// Returns a map of file name to contents: `<Block>.cedar` and
-/// `<Block>.cedarschema.json` per block, in IR order. A model without
-/// `actors` blocks yields an empty map.
-pub fn generate(model: &Model) -> anyhow::Result<BTreeMap<String, String>> {
+/// `<Block>.cedarschema.json` per block, in artifact order. An actor
+/// artifact without blocks yields an empty map.
+pub fn generate(actors: &ActorModel, model: &Model) -> anyhow::Result<BTreeMap<String, String>> {
     let mut files = BTreeMap::new();
-    for package in &model.packages {
-        for actors in &package.actors {
-            files.insert(format!("{}.cedar", actors.name), policy_set(actors, model)?);
-            files.insert(
-                format!("{}.cedarschema.json", actors.name),
-                schema_json(actors, model)?,
-            );
-        }
+    for actors_block in &actors.blocks {
+        files.insert(
+            format!("{}.cedar", actors_block.name),
+            policy_set(actors_block, model)?,
+        );
+        files.insert(
+            format!("{}.cedarschema.json", actors_block.name),
+            schema_json(actors_block, model)?,
+        );
     }
     Ok(files)
 }
 
-/// Generates Cedar output for `model` and writes it into `out_dir`.
-pub fn generate_to_dir(model: &Model, out_dir: &Path) -> anyhow::Result<()> {
-    let files = generate(model)?;
+/// The inline convenience: wraps every `actors` block of `model` into an
+/// [`ActorModel`] and delegates to [`generate`] (the `gen cedar x.mox`
+/// path). A model without `actors` blocks yields an empty map.
+pub fn generate_for_model(model: &Model) -> anyhow::Result<BTreeMap<String, String>> {
+    let mut actors = ActorModel::new();
+    for package in &model.packages {
+        actors.blocks.extend(package.actors.iter().cloned());
+    }
+    generate(&actors, model)
+}
+
+/// Generates Cedar output for the pair and writes it into `out_dir`.
+pub fn generate_to_dir(actors: &ActorModel, model: &Model, out_dir: &Path) -> anyhow::Result<()> {
+    let files = generate(actors, model)?;
     for (relative, contents) in &files {
         let path = out_dir.join(relative);
         if let Some(parent) = path.parent() {
@@ -404,7 +424,8 @@ fn cedar_string_literal(text: &str) -> String {
 mod tests {
     use super::*;
     use rex_ir::{
-        ActorDef, CapabilityDef, GrantDef, GrantEntry, Multiplicity, NeverBothDef, Package,
+        ActorDef, ActorModel, CapabilityDef, GrantDef, GrantEntry, Multiplicity, NeverBothDef,
+        Package,
     };
 
     fn attribute(name: &str, primitive: PrimitiveType) -> Feature {
@@ -445,9 +466,11 @@ mod tests {
         actors
     }
 
-    /// A model over `Ticket { id: String, title: String, internal: boolean,
-    /// amount: int, refers User assignee, derived fee: double }`.
-    fn fixture_model(actors: ActorsDef) -> Model {
+    /// A pair over `Ticket { id: String, title: String, internal: boolean,
+    /// amount: int, refers User assignee, derived fee: double }`: the actors
+    /// block lives only in the [`ActorModel`] dimension; the domain model
+    /// carries the classes (no inline actors at all).
+    fn fixture_pair(actors: ActorsDef) -> (ActorModel, Model) {
         let mut ticket = class(
             "Ticket",
             vec![
@@ -475,9 +498,8 @@ mod tests {
         let mut model = Model::new();
         let mut package = Package::new("demo");
         package.classes = vec![ticket];
-        package.actors = vec![actors];
         model.packages.push(package);
-        model
+        (ActorModel::new().block(actors), model)
     }
 
     fn grant(actor: &str, entries: Vec<GrantEntry>) -> GrantDef {
@@ -489,16 +511,16 @@ mod tests {
     }
 
     /// Generates and returns the `<Block>.cedar` contents.
-    fn cedar_of(model: &Model) -> String {
-        generate(model)
+    fn cedar_of(pair: &(ActorModel, Model)) -> String {
+        generate(&pair.0, &pair.1)
             .expect("generate")
             .remove("Support.cedar")
             .expect("policies file")
     }
 
     /// Generates and returns the schema JSON as parsed JSON.
-    fn schema_of(model: &Model) -> serde_json::Value {
-        let files = generate(model).expect("generate");
+    fn schema_of(pair: &(ActorModel, Model)) -> serde_json::Value {
+        let files = generate(&pair.0, &pair.1).expect("generate");
         let schema = files.get("Support.cedarschema.json").expect("schema file");
         serde_json::from_str(schema).expect("valid JSON")
     }
@@ -526,10 +548,9 @@ mod tests {
                 attribute("bo", PrimitiveType::Boolean),
             ],
         )];
-        package.actors = vec![actors];
         model.packages.push(package);
-
-        let files = generate(&model).expect("generate");
+        let actors = ActorModel::new().block(actors);
+        let files = generate(&actors, &model).expect("generate");
         let schema: serde_json::Value =
             serde_json::from_str(files.get("N.cedarschema.json").expect("schema")).expect("json");
         let attributes = &schema["N"]["entityTypes"]["Wide"]["shape"]["attributes"];
@@ -546,8 +567,8 @@ mod tests {
 
     #[test]
     fn non_primitive_features_are_not_schema_attributes() {
-        let model = fixture_model(fixture_actors(vec![]));
-        let schema = schema_of(&model);
+        let pair = fixture_pair(fixture_actors(vec![]));
+        let schema = schema_of(&pair);
         let attributes = &schema["Support"]["entityTypes"]["Ticket"]["shape"]["attributes"];
         assert_eq!(
             attributes
@@ -566,7 +587,7 @@ mod tests {
             "Customer",
             vec![GrantEntry::permit("ReadTicket")],
         )]);
-        let schema = schema_of(&fixture_model(actors));
+        let schema = schema_of(&fixture_pair(actors));
         let entity_types = &schema["Support"]["entityTypes"];
         assert_eq!(
             entity_types["Agent"],
@@ -588,7 +609,7 @@ mod tests {
             grant("Manager", vec![GrantEntry::forbid("ReadTicket")]),
             grant("Customer", vec![GrantEntry::permit("ReadTicket")]),
         ]);
-        let schema = schema_of(&fixture_model(actors));
+        let schema = schema_of(&fixture_pair(actors));
         let applies_to = &schema["Support"]["actions"]["ReadTicket"]["appliesTo"];
         assert_eq!(
             applies_to["principalTypes"],
@@ -607,7 +628,7 @@ mod tests {
 
     #[test]
     fn capability_without_grants_gets_empty_principal_types() {
-        let schema = schema_of(&fixture_model(fixture_actors(vec![])));
+        let schema = schema_of(&fixture_pair(fixture_actors(vec![])));
         assert_eq!(
             schema["Support"]["actions"]["RaiseRefund"]["appliesTo"]["principalTypes"],
             serde_json::json!([]),
@@ -617,13 +638,11 @@ mod tests {
 
     #[test]
     fn multiple_blocks_emit_one_pair_each_in_ir_order() {
-        let mut model = fixture_model(fixture_actors(vec![]));
+        let (mut actors, model) = fixture_pair(fixture_actors(vec![]));
         let mut second = ActorsDef::new("Billing");
         second = second.actor(ActorDef::new("Clerk"));
-        let mut package = Package::new("other");
-        package.actors = vec![second];
-        model.packages.push(package);
-        let files = generate(&model).expect("generate");
+        actors.blocks.push(second);
+        let files = generate(&actors, &model).expect("generate");
         assert_eq!(
             files.keys().collect::<Vec<_>>(),
             [
@@ -635,6 +654,56 @@ mod tests {
         );
     }
 
+    // -- pair API -------------------------------------------------------------
+
+    #[test]
+    fn empty_actor_model_yields_an_empty_map() {
+        let (_, model) = fixture_pair(fixture_actors(vec![]));
+        let empty = ActorModel::new();
+        let files = generate(&empty, &model).expect("generate");
+        assert!(files.is_empty(), "got: {:?}", files.keys());
+    }
+
+    #[test]
+    fn blocks_and_classes_live_in_different_packages_of_the_pair() {
+        // The payoff surface: the actors block references its capability
+        // class through a package-qualified TypeRef, and the class is found
+        // in the domain model even though the block itself is in no package
+        // of that model at all.
+        let actors = fixture_actors(vec![grant(
+            "Customer",
+            vec![GrantEntry::permit("ReadTicket")],
+        )]);
+        let pair = fixture_pair(actors);
+        let files = generate(&pair.0, &pair.1).expect("generate");
+        assert_eq!(files.keys().len(), 2);
+        assert!(files["Support.cedar"].contains("resource is Support::Ticket)"));
+    }
+
+    #[test]
+    fn generate_for_model_wraps_inline_blocks_and_matches_the_pair_call() {
+        // The `gen cedar x.mox` path: a model with inline `actors` blocks
+        // produces exactly what the explicit pair call produces.
+        let mut actors = fixture_actors(vec![grant(
+            "Customer",
+            vec![GrantEntry::permit("ReadTicket")],
+        )]);
+        actors.capabilities[0].class = class_ref("demo", "Ticket");
+        let mut model = Model::new();
+        let mut package = Package::new("demo");
+        package.classes = vec![class(
+            "Ticket",
+            vec![attribute("id", PrimitiveType::String)],
+        )];
+        package.actors = vec![actors.clone()];
+        model.packages.push(package);
+
+        let via_model = generate_for_model(&model).expect("generate_for_model");
+        let via_pair = generate(&ActorModel::new().block(actors), &model).expect("generate");
+        assert_eq!(via_model, via_pair);
+        assert_eq!(via_model.keys().len(), 2);
+    }
+
     // -- policy mapping ------------------------------------------------------
 
     #[test]
@@ -644,7 +713,7 @@ mod tests {
             vec![GrantEntry::permit("ReadTicket")],
         )]);
         actors = actors.never_both(NeverBothDef::new("ReadTicket", "RaiseRefund"));
-        let cedar = cedar_of(&fixture_model(actors));
+        let cedar = cedar_of(&fixture_pair(actors));
         assert!(
             cedar.starts_with(
                 "// generated by rexlang from actors block `Support` — do not edit\n\
@@ -664,7 +733,7 @@ mod tests {
             "Agent",
             vec![GrantEntry::forbid("RaiseRefund")],
         )]);
-        let cedar = cedar_of(&fixture_model(actors));
+        let cedar = cedar_of(&fixture_pair(actors));
         assert!(
             cedar.contains(
                 "forbid(principal is Support::Agent, action == \
@@ -682,7 +751,7 @@ mod tests {
                 .obligation("audit")
                 .obligation("four-eyes")],
         )]);
-        let cedar = cedar_of(&fixture_model(actors));
+        let cedar = cedar_of(&fixture_pair(actors));
         assert!(
             cedar.contains(
                 "@obligation(\"audit,four-eyes\")\npermit(\
@@ -699,7 +768,7 @@ mod tests {
             "Agent",
             vec![GrantEntry::permit("RaiseRefund").obligation("audit")],
         )]);
-        let cedar = cedar_of(&fixture_model(actors));
+        let cedar = cedar_of(&fixture_pair(actors));
         assert!(
             cedar.contains("@obligation(\"audit\")\npermit(principal is Support::Agent"),
             "single obligation: {cedar}"
@@ -713,7 +782,7 @@ mod tests {
             vec![GrantEntry::permit("RaiseRefund")
                 .when("(!(internal) && amount <= 1000) || title == \"a \\ b\"")],
         )]);
-        let cedar = cedar_of(&fixture_model(actors));
+        let cedar = cedar_of(&fixture_pair(actors));
         assert!(
             cedar.contains(
                 "when { ((!(resource.internal) && (resource.amount <= 1000)) \
@@ -740,8 +809,8 @@ mod tests {
                 "Agent",
                 vec![GrantEntry::permit("RaiseRefund").when(source)],
             )]);
-            let model = fixture_model(actors);
-            let error = generate(&model).expect_err("must be rejected");
+            let pair = fixture_pair(actors);
+            let error = generate(&pair.0, &pair.1).expect_err("must be rejected");
             assert_eq!(
                 error.to_string(),
                 format!(
@@ -759,8 +828,8 @@ mod tests {
             "Agent",
             vec![GrantEntry::permit("RaiseRefund").when("assignee != null")],
         )]);
-        let model = fixture_model(actors);
-        let error = generate(&model).expect_err("must be rejected");
+        let pair = fixture_pair(actors);
+        let error = generate(&pair.0, &pair.1).expect_err("must be rejected");
         assert_eq!(
             error.to_string(),
             "capability `RaiseRefund`: `when` condition references `assignee`, \
@@ -778,7 +847,7 @@ mod tests {
                 GrantEntry::forbid("RaiseRefund"),
             ],
         )]);
-        let cedar = cedar_of(&fixture_model(actors));
+        let cedar = cedar_of(&fixture_pair(actors));
         assert!(
             cedar.contains(
                 ";\n\npermit(principal, action, resource);\n\nforbid(\
@@ -794,7 +863,7 @@ mod tests {
             "Customer",
             vec![GrantEntry::permit("ReadTicket")],
         )]);
-        let cedar = cedar_of(&fixture_model(actors));
+        let cedar = cedar_of(&fixture_pair(actors));
         assert!(cedar.ends_with('\n'));
         assert!(!cedar.ends_with("\n\n"), "exactly one trailing newline");
     }

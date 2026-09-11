@@ -98,6 +98,30 @@ vocabulary_decl := "vocabulary" name "from" string "{" ( version "string"
   is hermetic. Entries are embedded in the IR, and every backend materializes
   the vocabulary as a closed set of keys with facet accessors.
 
+## Actor policy files (.actor)
+
+Actor policy surfaces can also live in standalone `.actor` files, compiled
+separately from the domain and emitted as their own ActorModel artifact for
+the Cedar backend:
+
+```
+actor_file  := import_decl* actors_block+
+import_decl := "import" string
+actors_block:= "actors" name "{" actor* capability* grant* never_both* "}"
+```
+
+The `actors` block grammar is identical to the inline `actors` block of a
+`.mox` model. Import paths are resolved **relative to the `.actor` file's
+directory** and may name any `.mox` domain; multiple imports are allowed and
+duplicates are collapsed. The compiled policy set is the **union** of the
+actor file's blocks followed by every imported domain's inline blocks
+(in that order), so capabilities typecheck against the imported domain's
+classes (`permit EscalateTicket when (amount > 0)` resolves `amount` on
+`Ticket`), and the separation-of-duty checks span files.
+
+`rexlang fmt` formats `.actor` files with the same canonical layout rules
+(imports first, one per line; then blocks).
+
 ## Canonical instance JSON
 
 The cross-language exchange format (`$type`/`$id`/`$ref`):
@@ -132,11 +156,11 @@ property, not an aspiration.
 
 | Command | Purpose |
 |---|---|
-| `rexlang check <file>` | validate; ariadne-rendered diagnostics |
-| `rexlang ir <file> -o <out>` | emit the Core IR artifact |
+| `rexlang check <file>` | validate; ariadne-rendered diagnostics (`.mox` and `.actor`) |
+| `rexlang ir <file> -o <out>` | emit the Core IR artifact (`.actor`: the ActorModel artifact) |
 | `rexlang gen rust <file> -o <dir>` | arena-based Rust models |
 | `rexlang gen json-schema <file> --profile wire\|api -o <dir>` | JSON Schema |
-| `rexlang gen cedar <file> -o <dir>` | Cedar policies + schema |
+| `rexlang gen cedar <file> -o <dir>` | Cedar policies + schema (`.mox`: inline blocks; `.actor`: file + imported domains) |
 | `rexlang vocab fetch <file>` | vendor + pin vocabulary snapshots |
 | `rexlang fmt [--check] <files>\|-` | canonical formatting (comments kept) |
 | `rexlang lsp` | language server (stdio) |

@@ -9,7 +9,7 @@ use std::str::FromStr;
 use std::sync::OnceLock;
 
 use cedar_policy::{PolicySet, Schema, ValidationMode, Validator};
-use rex_backend_cedar::generate;
+use rex_backend_cedar::generate_for_model;
 use rex_driver::compile_str;
 
 const MODEL_RELATIVE_PATH: &str = "tests/conformance/models/actors.mox";
@@ -39,7 +39,7 @@ fn actors_model() -> rex_ir::Model {
 /// The generated files, computed once per test binary.
 fn generated() -> &'static BTreeMap<String, String> {
     static FILES: OnceLock<BTreeMap<String, String>> = OnceLock::new();
-    FILES.get_or_init(|| generate(&actors_model()).expect("generate cedar output"))
+    FILES.get_or_init(|| generate_for_model(&actors_model()).expect("generate cedar output"))
 }
 
 fn cedar_text() -> &'static str {

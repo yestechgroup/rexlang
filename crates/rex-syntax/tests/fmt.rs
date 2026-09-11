@@ -467,6 +467,14 @@ fn idempotent_on_conformance_actors() {
 }
 
 #[test]
+fn idempotent_on_conformance_actors_file() {
+    let source = include_str!("../../../tests/conformance/models/actors.actor");
+    let once = rex_syntax::fmt::format_actors(source).expect("format succeeds");
+    let twice = rex_syntax::fmt::format_actors(&once).expect("format succeeds");
+    assert_eq!(once, twice, "formatting must be a fixpoint for:\n{source}");
+}
+
+#[test]
 fn idempotent_on_examples_library() {
     assert_idempotent(include_str!("../../../examples/library.mox"));
 }
@@ -726,18 +734,30 @@ fn stable_on_inline_models() {
 
 // --- golden fixtures ---------------------------------------------------------
 
-const GOLDENS: &[(&str, &str)] = &[
+/// The formatter a golden entry uses: `.mox` sources go through `format`,
+/// `.actor` sources through `format_actors`.
+type Formatter = fn(&str) -> Result<String, FormatError>;
+
+const GOLDENS: &[(&str, &str, Formatter)] = &[
     (
         "tests/conformance/models/library.mox",
         "tests/conformance/fmt/library.fmt.mox",
+        format,
     ),
     (
         "tests/conformance/models/currency.mox",
         "tests/conformance/fmt/currency.fmt.mox",
+        format,
     ),
     (
         "tests/conformance/models/actors.mox",
         "tests/conformance/fmt/actors.fmt.mox",
+        format,
+    ),
+    (
+        "tests/conformance/models/actors.actor",
+        "tests/conformance/fmt/actors.fmt.actor",
+        rex_syntax::fmt::format_actors,
     ),
 ];
 
@@ -751,8 +771,8 @@ fn workspace_root() -> std::path::PathBuf {
 
 #[test]
 fn conformance_models_match_golden_formatting() {
-    for (model, golden) in GOLDENS {
-        let formatted = fmt(&model_source(model));
+    for (model, golden, format_source) in GOLDENS {
+        let formatted = format_source(&model_source(model)).expect("format conformance fixture");
         let golden_path = workspace_root().join(golden);
         if std::env::var("REX_UPDATE_FIXTURES").is_ok() {
             std::fs::create_dir_all(golden_path.parent().unwrap()).unwrap();

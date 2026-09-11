@@ -18,7 +18,8 @@ documents in `instances/`. A missing or broken example fails the suite.
 | `org.mox` | `nz.example.org` | two containment pairs, `refers`↔`refers` pair, three-level hierarchy (Department → Team → Employee), navigation accessor both ways, predicate and aggregate operations | `op boolean any_member_earns_over(int threshold) { expr { members.any(m => m.salary > threshold) } }` (A4); `op int payroll() { expr { members.map(m => m.salary).sum() } }` (A3 + A6) |
 | `iot.mox` | `nz.example.iot` | Tier-1 datatype bodies (`create`/`convert` embedded verbatim), labeled enum (`as "on" = 0`), readonly identity feature, derived display name | `derived String displayName { expr { if sensors.size() > 0 { name } else { "unprovisioned device" } } }` (A5 + U1) |
 | `shapes.mox` | `nz.example.shapes` | `extends` inheritance: schema `allOf` with base `$type` enum and leaf closure; Rust codegen materializes **own features only** (declared, not inherited, structure) | — |
-| `support.mox` | `nz.example.support` | actors model (`actors Support { ... }`): actor hierarchy via `extends`, capabilities on a class, `when` conditions over primitive attributes, obligations (incl. two on one entry), native `forbid`, the verbatim `cedar { ... }` escape hatch, `never_both` separation of duty; refers↔refers pair, readonly identity features, labeled enum state, derived boolean. Cedar output is validated against the real `cedar-policy` crate (strict mode) in `examples_cedar.rs` | `derived boolean needsRefund { expr { refundCents > 0 } }` |
+| `support.mox` | `nz.example.support` | domain of the actors example: refers↔refers pair, readonly identity features, labeled enum state, derived boolean. Its policy surface lives in the sibling `support.actor` file | `derived boolean needsRefund { expr { refundCents > 0 } }` |
+| `support.actor` | imports `support.mox` | standalone actor-policy file (`import "support.mox"` + `actors Support { ... }`): actor hierarchy via `extends`, capabilities on a class, `when` conditions over primitive attributes, obligations (incl. two on one entry), native `forbid`, the verbatim `cedar { ... }` escape hatch, `never_both` separation of duty. Cedar output is validated against the real `cedar-policy` crate (strict mode) in `examples_cedar.rs` | `permit RaiseRefund when (refundCents > 0 && refundCents <= 5000) obligation audit obligation notifyCustomer` |
 
 Expression typing follows `docs/EXPRESSIONS.md`; in particular `+` is numeric
 only (L2), so string assembly is expressed with `if` unification instead.
@@ -41,11 +42,11 @@ rexlang gen json-schema examples/library.mox --profile wire -o /tmp/library-wire
 rexlang gen json-schema examples/library.mox --profile api   -o /tmp/library-api
 
 # generate Cedar policies + schema from the actors example
-rexlang gen cedar examples/support.mox -o /tmp/support-cedar
+rexlang gen cedar examples/support.actor -o /tmp/support-cedar
 
 # canonical formatting (CI gates all of examples/ with --check)
 rexlang fmt examples/org.mox
-rexlang fmt --check examples/*.mox
+rexlang fmt --check examples/*.mox examples/*.actor
 ```
 
 Vocabulary example only — refresh the vendored snapshot and lockfile pin

@@ -36,6 +36,10 @@ const MODELS: &[(&str, &str)] = &[
         "tests/conformance/models/actors.mox",
         "tests/conformance/artifacts/actors.rex.json",
     ),
+    (
+        "tests/conformance/models/actors.actor",
+        "tests/conformance/artifacts/actors.actors.rex.json",
+    ),
 ];
 
 fn compile_conformance_model(relative_path: &str) -> rex_ir::Model {
@@ -53,11 +57,50 @@ fn compile_conformance_model(relative_path: &str) -> rex_ir::Model {
     compilation.model.expect("model lowered")
 }
 
+/// Compiles a conformance `.actor` file against the domain models it
+/// imports. Import paths resolve relative to the actor file's directory;
+/// each imported file's path string is passed exactly as imported.
+fn compile_conformance_actor_file(relative_path: &str) -> rex_ir::ActorModel {
+    let absolute = fixture_path(relative_path);
+    let source = std::fs::read_to_string(&absolute)
+        .unwrap_or_else(|error| panic!("read conformance actor file {relative_path}: {error}"));
+    let dir = absolute.parent().expect("actor file has a parent");
+    let parsed = rex_syntax::parse_actors(&source);
+    let domains: Vec<(String, String)> = parsed
+        .ast
+        .expect("conformance actor file parses")
+        .imports
+        .iter()
+        .map(|import| {
+            let resolved = dir.join(&import.path);
+            let text = std::fs::read_to_string(&resolved).unwrap_or_else(|error| {
+                panic!("read imported domain {}: {error}", resolved.display())
+            });
+            (import.path.clone(), text)
+        })
+        .collect();
+    let compilation =
+        rex_driver::compile_actors_str(absolute.to_str().expect("utf-8 path"), &source, &domains);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "conformance actor file {relative_path} must compile cleanly: {:?}",
+        compilation.diagnostics
+    );
+    compilation.model.expect("actor model lowered")
+}
+
 #[test]
 fn conformance_models_match_golden_artifacts() {
     for (model_path, artifact_path) in MODELS {
-        let model = compile_conformance_model(model_path);
-        let json = model.to_json_pretty().expect("serialize IR");
+        let json = if model_path.ends_with(".actor") {
+            compile_conformance_actor_file(model_path)
+                .to_json_pretty()
+                .expect("serialize actor IR")
+        } else {
+            compile_conformance_model(model_path)
+                .to_json_pretty()
+                .expect("serialize IR")
+        };
 
         let artifact = fixture_path(artifact_path);
         if std::env::var("REX_UPDATE_FIXTURES").is_ok() {

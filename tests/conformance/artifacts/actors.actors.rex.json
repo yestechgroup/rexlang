@@ -1,0 +1,157 @@
+{
+  "formatVersion": 1,
+  "blocks": [
+    {
+      "name": "Escalation",
+      "actors": [
+        {
+          "name": "Finance"
+        }
+      ],
+      "capabilities": [
+        {
+          "name": "EscalateTicket",
+          "class": {
+            "type": "class",
+            "value": {
+              "package": "rex.conformance.actors",
+              "name": "Ticket"
+            }
+          }
+        }
+      ],
+      "grants": [
+        {
+          "actor": "Finance",
+          "entries": [
+            {
+              "effect": "permit",
+              "capability": "EscalateTicket",
+              "when": "amount > 0"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Support",
+      "actors": [
+        {
+          "name": "Customer"
+        },
+        {
+          "name": "Agent",
+          "extends": "Customer"
+        },
+        {
+          "name": "Manager",
+          "extends": "Agent"
+        },
+        {
+          "name": "Finance"
+        }
+      ],
+      "capabilities": [
+        {
+          "name": "ReadTicket",
+          "class": {
+            "type": "class",
+            "value": {
+              "package": "rex.conformance.actors",
+              "name": "Ticket"
+            }
+          }
+        },
+        {
+          "name": "ResolveTicket",
+          "class": {
+            "type": "class",
+            "value": {
+              "package": "rex.conformance.actors",
+              "name": "Ticket"
+            }
+          }
+        },
+        {
+          "name": "RaiseRefund",
+          "class": {
+            "type": "class",
+            "value": {
+              "package": "rex.conformance.actors",
+              "name": "Ticket"
+            }
+          }
+        },
+        {
+          "name": "ApproveRefund",
+          "class": {
+            "type": "class",
+            "value": {
+              "package": "rex.conformance.actors",
+              "name": "Ticket"
+            }
+          }
+        }
+      ],
+      "grants": [
+        {
+          "actor": "Customer",
+          "entries": [
+            {
+              "effect": "permit",
+              "capability": "ReadTicket"
+            }
+          ]
+        },
+        {
+          "actor": "Agent",
+          "entries": [
+            {
+              "effect": "permit",
+              "capability": "ReadTicket",
+              "when": "!internal"
+            },
+            {
+              "effect": "permit",
+              "capability": "RaiseRefund",
+              "when": "amount <= 1000",
+              "obligations": [
+                "audit"
+              ]
+            }
+          ]
+        },
+        {
+          "actor": "Manager",
+          "entries": [
+            {
+              "effect": "permit",
+              "capability": "ReadTicket"
+            },
+            {
+              "effect": "permit",
+              "capability": "ResolveTicket"
+            }
+          ]
+        },
+        {
+          "actor": "Finance",
+          "entries": [
+            {
+              "effect": "permit",
+              "capability": "ApproveRefund"
+            }
+          ]
+        }
+      ],
+      "neverBoth": [
+        {
+          "capabilities": [
+            "RaiseRefund",
+            "ApproveRefund"
+          ]
+        }
+      ]
+    }
+  ]
+}

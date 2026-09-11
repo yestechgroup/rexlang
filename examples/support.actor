@@ -1,0 +1,41 @@
+import "support.mox"
+
+actors Support {
+    actor Customer
+    actor Agent extends Customer
+    actor Manager extends Agent
+    actor Finance
+
+    capability ReadTicket on Ticket
+    capability UpdateTicket on Ticket
+    capability ResolveTicket on Ticket
+    capability RaiseRefund on Ticket
+    capability ApproveRefund on Ticket
+
+    grant Customer {
+        permit ReadTicket when (!internal)
+    }
+
+    grant Agent {
+        permit ReadTicket
+        permit UpdateTicket when (!internal) obligation audit
+        permit RaiseRefund when (refundCents > 0 && refundCents <= 5000) obligation audit obligation notifyCustomer
+    }
+
+    grant Manager {
+        permit ReadTicket
+        permit UpdateTicket
+        permit ResolveTicket
+        cedar {
+            @why("internal tickets close at the manager's desk, not in the queue")
+            forbid(principal is Support::Manager, action == Support::Action::"ResolveTicket", resource is Support::Ticket) when { resource.internal };
+        }
+    }
+
+    grant Finance {
+        permit ApproveRefund when (refundCents <= 100000)
+        forbid ResolveTicket
+    }
+
+    never_both { RaiseRefund, ApproveRefund }
+}

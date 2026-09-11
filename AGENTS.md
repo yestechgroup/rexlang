@@ -4,9 +4,9 @@ Rust cargo workspace. `.mox` modeling sources compile to a Core IR artifact; bac
 
 ## Pipeline (crate ownership)
 
-`rex-syntax` (logos lexer, chumsky parser, **fmt**) → `rex-driver` (salsa resolve/validate/lower, navigation index, diagnostics) → `rex-ir` (Core IR = the product) → `rex-backend-rust` / `rex-backend-jsonschema` / `rex-backend-cedar`. Plus `rex-expr` (expression parser/typechecker), `rex-vocab` (providers/lockfile), `rex-runtime` (generated code's support lib), `rex-lsp`, `rex-cli` (the `rexlang` binary).
+`rex-syntax` (logos lexer, chumsky parser, **fmt**) → `rex-driver` (salsa resolve/validate/lower, navigation index, diagnostics) → `rex-ir` (Core IR = the product) → `rex-backend-rust` / `rex-backend-jsonschema` / `rex-backend-cedar`. Plus `rex-expr` (expression parser/typechecker), `rex-vocab` (providers/lockfile), `rex-runtime` (generated code's support lib), `rex-lsp`, `rex-cli` (the `rexlang` binary). `.actor` policy files (standalone `import` + `actors` surface) compile via `compile_actors_str` to a separate `rex_ir::ActorModel` artifact that feeds `rex-backend-cedar` as the policy dimension alongside the domain `Model`.
 
-- Backends must consume **only** `rex_ir::Model` — never the AST. Lowering happens in `rex-driver`.
+- Backends must consume **only** `rex_ir::Model` (and, for Cedar, the `ActorModel` pair) — never the AST. Lowering happens in `rex-driver`.
 - The serialized IR is a versioned wire format: camelCase, adjacent tagging, `formatVersion` gate. Contract and rules live in the `rex-ir` crate docs. New fields must be `#[serde(default)]` (+ `skip_serializing_if`) so body-less/vocabulary-less models stay **byte-identical** — golden tests enforce this.
 
 ## Commands

@@ -1,8 +1,10 @@
 //! Examples conformance harness (Cedar backend side): the canonical
 //! `support` example — the suite's actors-model showcase — must generate a
 //! policy set and schema that the real `cedar-policy` crate parses, loads,
-//! and accepts under strict validation. Mirrors the per-crate `EXAMPLES`
-//! list convention of `examples_schemas.rs`.
+//! and accepts under strict validation. The actors surface lives in
+//! `examples/support.actor`, compiled as a pair against the domain model it
+//! imports (`examples/support.mox`). Mirrors the per-crate `EXAMPLES` list
+//! convention of `examples_schemas.rs`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -11,9 +13,9 @@ use std::sync::OnceLock;
 
 use cedar_policy::{PolicySet, Schema, ValidationMode, Validator};
 use rex_backend_cedar::generate;
-use rex_driver::compile_str;
+use rex_driver::{compile_actors_str, compile_str};
 
-/// Canonical examples whose source contains an actors block.
+/// Canonical examples whose `.actor` file contains the actors surface.
 const EXAMPLES: [&str; 1] = ["support"];
 
 fn workspace_root() -> &'static Path {
@@ -26,38 +28,56 @@ fn workspace_root() -> &'static Path {
     })
 }
 
-fn example_path(name: &str) -> PathBuf {
-    workspace_root()
+fn example_source(extension: &str, name: &str) -> (PathBuf, String) {
+    let path = workspace_root()
         .join("examples")
-        .join(format!("{name}.mox"))
-}
-
-fn example_source(name: &str) -> String {
-    let path = example_path(name);
-    std::fs::read_to_string(&path).unwrap_or_else(|error| {
+        .join(format!("{name}.{extension}"));
+    let source = std::fs::read_to_string(&path).unwrap_or_else(|error| {
         panic!(
-            "missing canonical example {}: {error} — the examples suite is part of the harness",
-            path.display()
+            "missing canonical example {name}.{extension}: {error} — the examples \
+             suite is part of the harness"
         )
-    })
+    });
+    (path, source)
 }
 
-fn compile_example(name: &str) -> rex_ir::Model {
-    let path = example_path(name);
-    let compilation = compile_str(
-        path.to_str().expect("utf-8 example path"),
-        &example_source(name),
+/// Compiles the example's actor/domain pair: the `.actor` file against the
+/// `.mox` domain it imports. The domain path string is exactly the import
+/// string, so driver import matching resolves.
+fn compile_example_pair(name: &str) -> (rex_ir::ActorModel, rex_ir::Model) {
+    let (actor_path, actor_source) = example_source("actor", name);
+    let (domain_path, domain_source) = example_source("mox", name);
+    let compilation = compile_actors_str(
+        actor_path.to_str().expect("utf-8 example path"),
+        &actor_source,
+        &[(format!("{name}.mox"), domain_source.clone())],
     );
     assert!(
         compilation.diagnostics.is_empty(),
-        "example {name}.mox must compile with zero diagnostics: {:?}",
+        "example {name}.actor must compile with zero diagnostics: {:?}",
         compilation.diagnostics
     );
-    compilation.model.expect("example {name} lowered to IR")
+    let actor_model = compilation
+        .model
+        .unwrap_or_else(|| panic!("example {name}.actor lowered to an actor model"));
+    let domain = compile_str(
+        domain_path.to_str().expect("utf-8 example path"),
+        &domain_source,
+    );
+    assert!(
+        domain.diagnostics.is_empty(),
+        "example {name}.mox must compile with zero diagnostics: {:?}",
+        domain.diagnostics
+    );
+    let domain_model = domain
+        .model
+        .unwrap_or_else(|| panic!("example {name}.mox lowered to IR"));
+    (actor_model, domain_model)
 }
 
 fn generated(name: &str) -> BTreeMap<String, String> {
-    generate(&compile_example(name)).expect("generate cedar output")
+    let (actors, model) = compile_example_pair(name);
+    generate(&actors, &model).expect("generate cedar output")
 }
 
 #[test]

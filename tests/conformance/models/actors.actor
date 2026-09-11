@@ -1,0 +1,10 @@
+import "actors.mox"
+
+actors Escalation {
+    actor Finance
+    capability EscalateTicket on Ticket
+
+    grant Finance {
+        permit EscalateTicket when (amount > 0)
+    }
+}
