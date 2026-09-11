@@ -330,6 +330,32 @@ actors Support {
 }
 
 #[test]
+fn actor_extending_unknown_actor_is_an_error() {
+    let source = r#"
+package demo
+
+class Ticket { String title }
+
+    actors Support {
+        actor Customer
+        actor X extends NoSuchActor
+    }
+    "#;
+    let compilation = compile(source);
+    assert!(compilation.model.is_none(), "errors block lowering");
+    let diagnostic = single_diagnostic(
+        &compilation,
+        "actor `X` extends unknown actor `NoSuchActor`",
+    );
+    assert!(diagnostic.is_error());
+    assert_eq!(
+        diagnostic.span,
+        Some(span_of(source, "NoSuchActor", 0)),
+        "span must sit on the extends name"
+    );
+}
+
+#[test]
 fn multiple_grants_for_one_actor_are_allowed() {
     let source = r#"
 package demo

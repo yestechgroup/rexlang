@@ -20,6 +20,7 @@ rex-driver = { workspace = true }
 rex-lsp = { workspace = true }
 rex-backend-rust = { workspace = true }
 rex-backend-jsonschema = { workspace = true }
+rex-backend-cedar = { workspace = true }
 rex-runtime = { workspace = true }
 rex-vocab = { workspace = true }
 clap = { workspace = true }

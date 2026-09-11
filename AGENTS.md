@@ -4,7 +4,7 @@ Rust cargo workspace. `.mox` modeling sources compile to a Core IR artifact; bac
 
 ## Pipeline (crate ownership)
 
-`rex-syntax` (logos lexer, chumsky parser, **fmt**) → `rex-driver` (salsa resolve/validate/lower, navigation index, diagnostics) → `rex-ir` (Core IR = the product) → `rex-backend-rust` / `rex-backend-jsonschema`. Plus `rex-expr` (expression parser/typechecker), `rex-vocab` (providers/lockfile), `rex-runtime` (generated code's support lib), `rex-lsp`, `rex-cli` (the `rexlang` binary).
+`rex-syntax` (logos lexer, chumsky parser, **fmt**) → `rex-driver` (salsa resolve/validate/lower, navigation index, diagnostics) → `rex-ir` (Core IR = the product) → `rex-backend-rust` / `rex-backend-jsonschema` / `rex-backend-cedar`. Plus `rex-expr` (expression parser/typechecker), `rex-vocab` (providers/lockfile), `rex-runtime` (generated code's support lib), `rex-lsp`, `rex-cli` (the `rexlang` binary).
 
 - Backends must consume **only** `rex_ir::Model` — never the AST. Lowering happens in `rex-driver`.
 - The serialized IR is a versioned wire format: camelCase, adjacent tagging, `formatVersion` gate. Contract and rules live in the `rex-ir` crate docs. New fields must be `#[serde(default)]` (+ `skip_serializing_if`) so body-less/vocabulary-less models stay **byte-identical** — golden tests enforce this.

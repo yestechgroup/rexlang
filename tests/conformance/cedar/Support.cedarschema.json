@@ -1,0 +1,97 @@
+{
+  "Support": {
+    "actions": {
+      "ApproveRefund": {
+        "appliesTo": {
+          "context": {
+            "attributes": {},
+            "type": "Record"
+          },
+          "principalTypes": [
+            "Support::Finance"
+          ],
+          "resourceTypes": [
+            "Support::Ticket"
+          ]
+        }
+      },
+      "RaiseRefund": {
+        "appliesTo": {
+          "context": {
+            "attributes": {},
+            "type": "Record"
+          },
+          "principalTypes": [
+            "Support::Agent"
+          ],
+          "resourceTypes": [
+            "Support::Ticket"
+          ]
+        }
+      },
+      "ReadTicket": {
+        "appliesTo": {
+          "context": {
+            "attributes": {},
+            "type": "Record"
+          },
+          "principalTypes": [
+            "Support::Customer",
+            "Support::Agent",
+            "Support::Manager"
+          ],
+          "resourceTypes": [
+            "Support::Ticket"
+          ]
+        }
+      },
+      "ResolveTicket": {
+        "appliesTo": {
+          "context": {
+            "attributes": {},
+            "type": "Record"
+          },
+          "principalTypes": [
+            "Support::Manager"
+          ],
+          "resourceTypes": [
+            "Support::Ticket"
+          ]
+        }
+      }
+    },
+    "entityTypes": {
+      "Agent": {
+        "memberOfTypes": [
+          "Support::Customer"
+        ]
+      },
+      "Customer": {},
+      "Finance": {},
+      "Manager": {
+        "memberOfTypes": [
+          "Support::Agent"
+        ]
+      },
+      "Ticket": {
+        "shape": {
+          "attributes": {
+            "amount": {
+              "type": "Long"
+            },
+            "id": {
+              "type": "String"
+            },
+            "internal": {
+              "type": "Boolean"
+            },
+            "title": {
+              "type": "String"
+            }
+          },
+          "type": "Record"
+        }
+      }
+    }
+  }
+}

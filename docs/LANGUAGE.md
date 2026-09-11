@@ -136,6 +136,7 @@ property, not an aspiration.
 | `rexlang ir <file> -o <out>` | emit the Core IR artifact |
 | `rexlang gen rust <file> -o <dir>` | arena-based Rust models |
 | `rexlang gen json-schema <file> --profile wire\|api -o <dir>` | JSON Schema |
+| `rexlang gen cedar <file> -o <dir>` | Cedar policies + schema |
 | `rexlang vocab fetch <file>` | vendor + pin vocabulary snapshots |
 | `rexlang fmt [--check] <files>\|-` | canonical formatting (comments kept) |
 | `rexlang lsp` | language server (stdio) |

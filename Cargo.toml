@@ -7,6 +7,7 @@ members = [
     "crates/rex-driver",
     "crates/rex-backend-rust",
     "crates/rex-backend-jsonschema",
+    "crates/rex-backend-cedar",
     "crates/rex-vocab",
     "crates/rex-lsp",
     "crates/rex-runtime",
@@ -34,6 +35,7 @@ rex-expr = { path = "crates/rex-expr" }
 rex-driver = { path = "crates/rex-driver" }
 rex-backend-rust = { path = "crates/rex-backend-rust" }
 rex-backend-jsonschema = { path = "crates/rex-backend-jsonschema" }
+rex-backend-cedar = { path = "crates/rex-backend-cedar" }
 rex-vocab = { path = "crates/rex-vocab" }
 rex-lsp = { path = "crates/rex-lsp" }
 rex-runtime = { path = "crates/rex-runtime" }

@@ -49,10 +49,29 @@ pub fn generate(model: &Model, profile: Profile) -> anyhow::Result<BTreeMap<Stri
         Profile::Wire => wire_schema(&context)?,
         Profile::Api => api_schema(&context)?,
     };
-    let json = serde_json::to_string_pretty(&schema)?;
+    let json = serde_json::to_string_pretty(&canonical_key_order(schema))?;
     let mut files = BTreeMap::new();
     files.insert("schema.json".to_string(), json);
     Ok(files)
+}
+
+/// Recursively re-inserts object keys in alphabetical order, so the emitted
+/// bytes are pinned no matter which key order `serde_json::Map` uses (it is
+/// a `BTreeMap` unless some crate in the build graph enables the
+/// `preserve_order` feature, which flips it to insertion order).
+fn canonical_key_order(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut entries: Vec<(String, serde_json::Value)> = map.into_iter().collect();
+            entries.sort_by(|left, right| left.0.cmp(&right.0));
+            entries
+                .into_iter()
+                .map(|(key, value)| (key, canonical_key_order(value)))
+                .collect::<serde_json::Map<String, serde_json::Value>>()
+                .into()
+        }
+        other => other,
+    }
 }
 
 /// Generates the JSON Schema for `model` and writes it into `out_dir`.

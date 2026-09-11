@@ -1536,6 +1536,15 @@ fn lower_actors(
         }
         let mut ir_actor = ir::ActorDef::new(&actor.name.text);
         if let Some(parent) = &actor.extends {
+            if !actor_names.iter().any(|(name, _)| *name == parent.text) {
+                diags.push(Diagnostic::error(
+                    format!(
+                        "actor `{}` extends unknown actor `{}`",
+                        actor.name.text, parent.text
+                    ),
+                    Some(parent.span),
+                ));
+            }
             ir_actor = ir_actor.extends(&parent.text);
         }
         def = def.actor(ir_actor);

@@ -102,6 +102,15 @@ enum GenTarget {
         #[arg(short, long, value_name = "DIR")]
         out: PathBuf,
     },
+    /// Generate Cedar policies + schema for the model's `actors` blocks
+    /// (`<Block>.cedar` + `<Block>.cedarschema.json`).
+    Cedar {
+        /// Path to the `.mox` source file.
+        file: PathBuf,
+        /// Directory to write generated files into.
+        #[arg(short, long, value_name = "DIR")]
+        out: PathBuf,
+    },
 }
 
 /// The JSON Schema flavor to generate.
@@ -178,6 +187,19 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             };
             rex_backend_jsonschema::generate_to_dir(&model, profile, &out)?;
             println!("generated JSON Schema into {}", out.display());
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Gen {
+            target: GenTarget::Cedar { file, out },
+        } => {
+            let (path, source) = read_source(&file)?;
+            let compilation = compile_str(&path, &source);
+            report_diagnostics(&path, &source, &compilation);
+            let Some(model) = compilation.model else {
+                return Ok(ExitCode::FAILURE);
+            };
+            rex_backend_cedar::generate_to_dir(&model, &out)?;
+            println!("generated Cedar policies and schema into {}", out.display());
             Ok(ExitCode::SUCCESS)
         }
         Command::Fmt { check, files } => {
