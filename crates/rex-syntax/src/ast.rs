@@ -401,6 +401,29 @@ pub struct NeverBothDecl {
     pub span: Span,
 }
 
+/// An `import "path"` declaration of an `.actor` file: a dependency on
+/// another source, resolved by the driver.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportDecl {
+    /// The imported path (the unescaped string literal payload).
+    pub path: String,
+    /// Span of the whole declaration, `import` keyword included.
+    pub span: Span,
+}
+
+/// The root node of a parsed `.actor` source: `import` declarations
+/// followed by `actors` blocks. The block grammar is identical to the
+/// inline [`ActorsDecl`] of `.mox` sources. An `import` after an actors
+/// block is a syntax error; an empty import or block list is legal, and so
+/// are duplicate imports — those are semantic questions for the driver.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActorFile {
+    /// The `import` declarations in source order.
+    pub imports: Vec<ImportDecl>,
+    /// The `actors` blocks in source order.
+    pub blocks: Vec<ActorsDecl>,
+}
+
 /// A contextual feature modifier: the `id` or `readonly` keyword written
 /// before a feature's type. The lexer emits both as ordinary identifiers;
 /// they act as modifiers only in modifier position (before the feature).

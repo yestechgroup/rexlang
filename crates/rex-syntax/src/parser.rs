@@ -783,7 +783,9 @@ enum ActorsItem {
     NeverBoth(NeverBothDecl),
 }
 
-fn actors_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>> + Clone {
+/// The `actors <name> { ... }` block grammar, shared verbatim by the inline
+/// `.mox` declaration (see [`actors_decl`]) and standalone `.actor` files.
+fn actors_block<'src>() -> impl Parser<'src, Tokens<'src>, ActorsDecl, MoxExtra<'src>> + Clone {
     let actor_decl = kw(Token::Actor)
         .ignore_then(name())
         .then(kw(Token::Extends).ignore_then(name()).or_not())
@@ -891,14 +893,31 @@ fn actors_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>> 
                     ActorsItem::NeverBoth(decl) => never_both.push(decl),
                 }
             }
-            Decl::Actors(ActorsDecl {
+            ActorsDecl {
                 name,
                 actors,
                 capabilities,
                 grants,
                 never_both,
                 span: e.span(),
-            })
+            }
+        })
+}
+
+/// The inline `actors { ... }` declaration of a `.mox` source: the shared
+/// [`actors_block`] grammar wrapped as a top-level declaration.
+fn actors_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>> + Clone {
+    actors_block().map(Decl::Actors)
+}
+
+/// An `import "path"` declaration of an `.actor` file. The path is a string
+/// literal with the standard escapes.
+fn import_decl<'src>() -> impl Parser<'src, Tokens<'src>, ImportDecl, MoxExtra<'src>> + Clone {
+    kw(Token::Import)
+        .ignore_then(string_lit())
+        .map_with(|path, e| ImportDecl {
+            path,
+            span: e.span(),
         })
 }
 
@@ -982,6 +1001,115 @@ pub fn parse(source: &str) -> ParseResult {
     };
     let (ast, errors) = model().parse(Tokens::new(&tokens)).into_output_errors();
     ParseResult {
+        ast,
+        errors: errors
+            .into_iter()
+            .map(|error| ParseError {
+                message: error.to_string(),
+                span: *error.span(),
+            })
+            .collect(),
+    }
+}
+
+#[derive(Clone)]
+enum ActorFileItem {
+    Import(ImportDecl),
+    Block(ActorsDecl),
+    Junk,
+}
+
+/// Consumes a run of tokens up to the next `import`/`actors` keyword (or end
+/// of input). Declaration-level recovery for `.actor` files: always consumes
+/// at least one token (guaranteeing progress) and emits an error for the
+/// skipped region.
+fn junk_actor_file<'src>() -> impl Parser<'src, Tokens<'src>, (), MoxExtra<'src>> + Clone {
+    let rest = select! { t if !matches!(t, Token::Import | Token::Actors) => () };
+    any()
+        .ignore_then(rest.repeated().ignored())
+        .validate(|(), e, emitter| {
+            emitter.emit(Rich::custom(e.span(), "expected an import or actors block"));
+        })
+}
+
+fn fold_actor_file(items: Vec<ActorFileItem>) -> (ActorFile, Option<Span>) {
+    let mut imports = Vec::new();
+    let mut blocks = Vec::new();
+    // Span of the first `import` that follows an actors block (a syntax
+    // error reported by the caller's `validate`).
+    let mut late_import = None;
+    for item in items {
+        match item {
+            ActorFileItem::Import(decl) => {
+                if blocks.is_empty() {
+                    imports.push(decl);
+                } else if late_import.is_none() {
+                    late_import = Some(decl.span);
+                }
+            }
+            ActorFileItem::Block(decl) => blocks.push(decl),
+            ActorFileItem::Junk => {}
+        }
+    }
+    (ActorFile { imports, blocks }, late_import)
+}
+
+fn actor_file<'src>() -> impl Parser<'src, Tokens<'src>, ActorFile, MoxExtra<'src>> + Clone {
+    let item = choice((
+        import_decl().map(ActorFileItem::Import),
+        actors_block().map(ActorFileItem::Block),
+    ))
+    .or(junk_actor_file().to(ActorFileItem::Junk));
+
+    item.repeated()
+        .collect::<Vec<_>>()
+        .then_ignore(end())
+        .map(fold_actor_file)
+        .validate(|(file, late_import), _, emitter| {
+            if let Some(span) = late_import {
+                emitter.emit(Rich::custom(span, "`import` after an actors block"));
+            }
+            file
+        })
+}
+
+/// The outcome of parsing an `.actor` source: as much of the file as could be
+/// recovered, plus all encountered errors. Parsing never panics and always
+/// produces a result.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActorsParseResult {
+    /// The recovered actor file, or `None` if no output could be produced at all.
+    pub ast: Option<ActorFile>,
+    /// All errors encountered during lexing and parsing.
+    pub errors: Vec<ParseError>,
+}
+
+/// Lex and parse an `.actor` source text: `import` declarations followed by
+/// `actors` blocks, the block grammar being identical to the inline actors
+/// declarations of `.mox` sources.
+///
+/// This function never panics and always recovers as much of the AST as
+/// possible; check [`ActorsParseResult::errors`] for syntax problems. An
+/// `import` after an actors block is a syntax error; empty import and block
+/// lists are legal, and so are duplicate imports — those are semantic
+/// questions for the driver.
+pub fn parse_actors(source: &str) -> ActorsParseResult {
+    let tokens = match lex(source) {
+        Ok(tokens) => tokens,
+        Err(error) => {
+            return ActorsParseResult {
+                ast: None,
+                errors: vec![ParseError {
+                    message: error.to_string(),
+                    span: error.span,
+                }],
+            }
+        }
+    };
+    let (ast, errors) = actor_file()
+        .parse(Tokens::new(&tokens))
+        .into_output_errors();
+    ActorsParseResult {
         ast,
         errors: errors
             .into_iter()

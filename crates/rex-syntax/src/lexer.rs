@@ -84,6 +84,8 @@ pub enum Token<'src> {
     NeverBoth,
     #[token("cedar")]
     Cedar,
+    #[token("import")]
+    Import,
 
     /// An identifier: `[A-Za-z_][A-Za-z0-9_]*`.
     #[regex("[A-Za-z_][A-Za-z0-9_]*", |lexer| lexer.slice())]
@@ -192,6 +194,7 @@ impl Token<'_> {
             Token::On => "on",
             Token::NeverBoth => "never_both",
             Token::Cedar => "cedar",
+            Token::Import => "import",
             _ => return None,
         })
     }
@@ -387,6 +390,15 @@ mod tests {
         // Spans still cover the raw text including the caret.
         assert_eq!(tokens[0].1, (0..7).into());
         assert_eq!(tokens[4].1, (25..36).into());
+    }
+
+    #[test]
+    fn import_lexes_as_keyword_and_escapes() {
+        assert_eq!(kinds("import"), vec![Token::Import]);
+        let tokens = lex("^import").unwrap();
+        assert_eq!(tokens[0].0, Token::IdentEscaped("import"));
+        // Span still covers the raw text including the caret.
+        assert_eq!(tokens[0].1, (0..7).into());
     }
 
     #[test]

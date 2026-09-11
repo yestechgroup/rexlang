@@ -47,6 +47,10 @@
 //!   constraint renders on one line. A `when (...)` condition's inner bytes
 //!   are raw too: they are emitted verbatim (ends trimmed), so conditions
 //!   are a fixpoint just like target bodies.
+//! * An `.actor` source (see [`format_actors`]) formats its imports first in
+//!   source order (one per line, tight — no blank lines between them), then
+//!   its actors blocks; exactly one blank line separates the import section
+//!   from the first block.
 
 use crate::ast::Span;
 use crate::lexer::{lex_with_comments, CommentKind, LexError, Token};
@@ -67,6 +71,20 @@ pub fn format(source: &str) -> Result<String, FormatError> {
     let (tokens, comments) = lex_with_comments(source)?;
     let mut fmt = Formatter::new(source, tokens, comments);
     Ok(fmt.run())
+}
+
+/// Format an `.actor` source text, preserving comments verbatim.
+///
+/// The imports come first in source order, one per line with no blank lines
+/// between them; actors blocks follow with the canonical block formatting,
+/// and exactly one blank line separates the import section from the first
+/// block. Returns the formatted text ending in exactly one `\n` (empty input
+/// formats to empty output), or [`FormatError::Lex`] if the source cannot be
+/// tokenized.
+pub fn format_actors(source: &str) -> Result<String, FormatError> {
+    let (tokens, comments) = lex_with_comments(source)?;
+    let mut fmt = Formatter::new(source, tokens, comments);
+    Ok(fmt.run_actors())
 }
 
 /// One node of the merged stream the formatter walks: a token or a comment,
@@ -213,6 +231,24 @@ impl<'src> Formatter<'src> {
                     Token::Vocabulary => self.scan_vocabulary(),
                     Token::Actors => self.scan_actors(),
                     _ => self.scan_top_junk(),
+                },
+            }
+        }
+        self.finish()
+    }
+
+    /// Like [`Formatter::run`], but for `.actor` files: the only recognized
+    /// top-level constructs are `import` declarations and `actors` blocks.
+    fn run_actors(&mut self) -> String {
+        loop {
+            let front = self.front().cloned();
+            match front {
+                None => break,
+                Some(Node::Comment { .. }) => self.advance(),
+                Some(Node::Token(token, _)) => match token {
+                    Token::Import => self.scan_import(),
+                    Token::Actors => self.scan_actors(),
+                    _ => self.scan_top_junk_actors(),
                 },
             }
         }
@@ -1088,6 +1124,33 @@ impl<'src> Formatter<'src> {
         self.advance();
         self.take_name();
         self.scan_body(BodyKind::Actors);
+    }
+
+    /// Consumes and emits one `import "path"` declaration. Imports form a
+    /// tight section: consecutive lines, no blank lines between them (so
+    /// unlike the declaration scanners this deliberately skips
+    /// [`Formatter::begin_top_decl`]); the exactly-one blank line before a
+    /// following actors block comes from that block's `begin_top_decl`.
+    fn scan_import(&mut self) {
+        self.flush_line();
+        self.flush_pending(0);
+        self.advance();
+        self.take_if(|token| matches!(token, Token::Str(_)));
+        self.flush_line();
+    }
+
+    /// Unrecognized top-level tokens of an `.actor` file: emit them on one
+    /// line, stopping at the next `import`/`actors` keyword (mirrors the
+    /// parser's declaration-level recovery for actor files).
+    fn scan_top_junk_actors(&mut self) {
+        self.begin_top_decl();
+        loop {
+            match self.peek_tok() {
+                Some(token) if !matches!(token, Token::Import | Token::Actors) => self.advance(),
+                _ => break,
+            }
+        }
+        self.flush_line();
     }
 
     /// Unrecognized top-level tokens: emit them on one line, stopping at the
