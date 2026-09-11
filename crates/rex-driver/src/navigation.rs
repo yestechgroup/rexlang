@@ -32,6 +32,14 @@
 //!   cross-references, containers, operations, derived features), owned by
 //!   their class; enum literals are owned by their enum; vocabulary facets
 //!   are owned by their vocabulary.
+//! * An `actors` block is one definition; its actors, capabilities, grants
+//!   (keyed by actor name), and `never_both` groups are member definitions
+//!   owned by the block (indexed like vocabulary facets). Block-local names
+//!   resolve best-effort: `extends` parents and grant actor names resolve to
+//!   actor members, entry capability names and `never_both` names resolve to
+//!   capability members. Unnamed members (grants, never_both groups) carry
+//!   their keyword as the identifier span, so the name tokens they mention
+//!   stay resolvable references.
 
 use std::collections::HashMap;
 
@@ -88,6 +96,8 @@ pub enum SymbolKind {
     Datatype,
     /// A `vocabulary ... from ...` declaration.
     Vocabulary,
+    /// An `actors { ... }` authorization-model declaration.
+    Actors,
     /// A feature of a class, interface member, or vocabulary facet.
     Feature(FeatureSymbolKind),
     /// An enum literal, owned by its enum.
@@ -200,8 +210,13 @@ impl NavigationIndex {
                 mox::Decl::Enum(decl) => (&decl.name, decl.literals.len()),
                 mox::Decl::Datatype(decl) => (&decl.name, 0),
                 mox::Decl::Vocabulary(decl) => (&decl.name, decl.facets.len()),
-                // Actors symbols are a later milestone; skip for now.
-                mox::Decl::Actors(_) => continue,
+                mox::Decl::Actors(decl) => (
+                    &decl.name,
+                    decl.actors.len()
+                        + decl.capabilities.len()
+                        + decl.grants.len()
+                        + decl.never_both.len(),
+                ),
                 mox::Decl::Annotation(_) => continue,
             };
             top_level.entry(name.text.as_str()).or_insert(next_id);
@@ -221,8 +236,7 @@ impl NavigationIndex {
                 mox::Decl::Enum(decl) => (&decl.name, SymbolKind::Enum),
                 mox::Decl::Datatype(decl) => (&decl.name, SymbolKind::Datatype),
                 mox::Decl::Vocabulary(decl) => (&decl.name, SymbolKind::Vocabulary),
-                // Actors symbols are a later milestone; skip for now.
-                mox::Decl::Actors(_) => continue,
+                mox::Decl::Actors(decl) => (&decl.name, SymbolKind::Actors),
                 mox::Decl::Annotation(_) => continue,
             };
             let extends_text = match decl {
@@ -395,10 +409,114 @@ impl NavigationIndex {
                         .map(|body| body.target.text.clone())
                         .collect();
                 }
+                mox::Decl::Actors(decl) => {
+                    // Members index in AST-list order (actors, capabilities,
+                    // grants, never_both), so the block-local name maps are
+                    // complete before any reference resolves. Actor names
+                    // and capability names live in separate namespaces;
+                    // duplicates resolve to the first declaration, mirroring
+                    // the resolver.
+                    let mut actor_ids: HashMap<&str, DefId> = HashMap::new();
+                    for actor in &decl.actors {
+                        let id = index.push(
+                            actor.name.text.clone(),
+                            SymbolKind::Feature(FeatureSymbolKind::Attribute),
+                            actor.name.span,
+                            Some(decl_id),
+                            actor.span,
+                        );
+                        index.definitions[id].extends_text =
+                            actor.extends.as_ref().map(|parent| parent.text.clone());
+                        actor_ids.entry(actor.name.text.as_str()).or_insert(id);
+                    }
+                    let mut capability_ids: HashMap<&str, DefId> = HashMap::new();
+                    for capability in &decl.capabilities {
+                        let id = index.push(
+                            capability.name.text.clone(),
+                            SymbolKind::Feature(FeatureSymbolKind::Attribute),
+                            capability.name.span,
+                            Some(decl_id),
+                            capability.span,
+                        );
+                        index.definitions[id].type_text = Some(capability.class.name.full_name());
+                        capability_ids
+                            .entry(capability.name.text.as_str())
+                            .or_insert(id);
+                    }
+                    for grant in &decl.grants {
+                        // Grants are keyed by actor name; the identifier
+                        // position is the `grant` keyword itself — the actor
+                        // token is a reference to the actor declaration.
+                        index.push(
+                            grant.actor.text.clone(),
+                            SymbolKind::Feature(FeatureSymbolKind::Attribute),
+                            (grant.span.start..grant.span.start + "grant".len()).into(),
+                            Some(decl_id),
+                            grant.span,
+                        );
+                    }
+                    for constraint in &decl.never_both {
+                        // never_both groups are unnamed; their identifier is
+                        // the `never_both` keyword, the name the joined
+                        // capability names.
+                        let name = constraint
+                            .capabilities
+                            .iter()
+                            .map(|name| name.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        index.push(
+                            name,
+                            SymbolKind::Feature(FeatureSymbolKind::Attribute),
+                            (constraint.span.start..constraint.span.start + "never_both".len())
+                                .into(),
+                            Some(decl_id),
+                            constraint.span,
+                        );
+                    }
+                    // References: capability class type refs resolve through
+                    // the standard type rules; `extends` parents, grant
+                    // actor names, entry capability names, and never_both
+                    // names resolve block-locally (best-effort).
+                    for capability in &decl.capabilities {
+                        index.add_type_reference(&capability.class, &package, &top_level);
+                    }
+                    for actor in &decl.actors {
+                        if let Some(parent) = &actor.extends {
+                            index.references.push(Reference {
+                                span: parent.span,
+                                target: actor_ids.get(parent.text.as_str()).copied(),
+                            });
+                        }
+                    }
+                    for grant in &decl.grants {
+                        index.references.push(Reference {
+                            span: grant.actor.span,
+                            target: actor_ids.get(grant.actor.text.as_str()).copied(),
+                        });
+                        for entry in &grant.entries {
+                            if let mox::GrantEntryDecl::Effect(effect) = entry {
+                                index.references.push(Reference {
+                                    span: effect.capability.span,
+                                    target: capability_ids
+                                        .get(effect.capability.text.as_str())
+                                        .copied(),
+                                });
+                            }
+                        }
+                    }
+                    for constraint in &decl.never_both {
+                        for name in &constraint.capabilities {
+                            index.references.push(Reference {
+                                span: name.span,
+                                target: capability_ids.get(name.text.as_str()).copied(),
+                            });
+                        }
+                    }
+                }
                 // Interfaces hold only target bindings (no names to index);
-                // annotations are unnamed; actors symbols are a later
-                // milestone.
-                mox::Decl::Interface(_) | mox::Decl::Annotation(_) | mox::Decl::Actors(_) => {}
+                // annotations are unnamed.
+                mox::Decl::Interface(_) | mox::Decl::Annotation(_) => {}
             }
         }
 

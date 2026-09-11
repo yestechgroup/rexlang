@@ -22,6 +22,7 @@ enum TopKind {
     Enum,
     Datatype,
     Vocabulary,
+    Actors,
 }
 
 /// A fully classified type reference.
@@ -205,6 +206,20 @@ struct ClassRecord {
     operations: Vec<ir::Operation>,
 }
 
+/// A per-block record kept alongside the IR for cross-declaration actors
+/// validation (inheritance cycles, separation of duty, self-narrowing).
+struct ActorsRecord {
+    def: ir::ActorsDef,
+    /// Actor names with their declaration-name spans, in declaration order.
+    actor_names: Vec<(String, Span)>,
+    /// Actor → parent actor name (`extends`), in declaration order.
+    parents: Vec<(String, Option<String>)>,
+    /// `never_both` constraints: capability names plus the decl span.
+    never_both: Vec<(Vec<String>, Span)>,
+    /// `forbid` entries: (actor, capability, capability-name span).
+    forbids: Vec<(String, String, Span)>,
+}
+
 /// Resolves and validates a parsed model and lowers it into the Core IR.
 ///
 /// Returns the IR (with `Model::rex_version` and `formatVersion` set) or
@@ -243,8 +258,7 @@ pub(crate) fn compile(
             mox::Decl::Enum(decl) => (TopKind::Enum, &decl.name),
             mox::Decl::Datatype(decl) => (TopKind::Datatype, &decl.name),
             mox::Decl::Vocabulary(decl) => (TopKind::Vocabulary, &decl.name),
-            // Actors semantics are a later milestone; ignore for now.
-            mox::Decl::Actors(_) => continue,
+            mox::Decl::Actors(decl) => (TopKind::Actors, &decl.name),
             mox::Decl::Annotation(_) => continue,
         };
         if kinds.contains_key(name.text.as_str()) {
@@ -289,11 +303,13 @@ pub(crate) fn compile(
     // Lower declarations in source order.
     let mut out = ir::Package::new(package.clone());
     let mut classes: Vec<ClassRecord> = Vec::new();
+    let mut actors: Vec<ActorsRecord> = Vec::new();
     for decl in &model.declarations {
         match decl {
             mox::Decl::Vocabulary(_) => {}
-            // Actors semantics are a later milestone; ignore for now.
-            mox::Decl::Actors(_) => {}
+            mox::Decl::Actors(decl) => {
+                actors.push(lower_actors(decl, source, &package, &kinds, &mut diags))
+            }
             mox::Decl::Annotation(annotation) => out.annotations.push(ir::Annotation {
                 source: annotation.value.clone(),
                 details: Default::default(),
@@ -319,9 +335,22 @@ pub(crate) fn compile(
     detect_inheritance_cycles(&classes, &mut diags);
     validate_opposites(&classes, &mut diags);
 
+    // Actors validation: name-resolution errors were emitted during
+    // lowering; cycle detection runs before the ancestor walks, which are
+    // skipped entirely for cyclic blocks (their results would be
+    // meaningless).
+    let cyclic = detect_actor_cycles(&actors, &mut diags);
+    if !cyclic {
+        validate_actor_never_both(&actors, &mut diags);
+        validate_actor_self_narrowing(&actors, &mut diags);
+    }
+
     for mut class in classes {
         class.def.operations = std::mem::take(&mut class.operations);
         out.classes.push(class.def);
+    }
+    for record in actors {
+        out.actors.push(record.def);
     }
 
     let blocked = diags.iter().any(Diagnostic::is_error);
@@ -380,6 +409,18 @@ fn resolve(
                 TopKind::Enum => Resolved::Enum,
                 TopKind::Datatype => Resolved::Datatype,
                 TopKind::Vocabulary => Resolved::Vocabulary,
+                TopKind::Actors => {
+                    diags.push(
+                        Diagnostic::error(
+                            format!("type '{full_name}' is an actors block, not a data type"),
+                            Some(type_ref.span),
+                        )
+                        .with_help(
+                            "actors blocks declare authorization models and cannot be used as types",
+                        ),
+                    );
+                    return None;
+                }
             };
             Some(Resolution {
                 kind,
@@ -1437,5 +1478,333 @@ fn expected_description(kind: FKind, class: &str) -> String {
         FKind::Container => format!("a `contains` feature of type '{class}'"),
         FKind::Reference => format!("a `refers` feature of type '{class}'"),
         _ => String::new(),
+    }
+}
+
+/// The verbatim text inside a `when (...)` condition: strictly inside the
+/// parens, ends-trimmed (the same span-to-text convention as target bodies).
+fn when_text(source: &str, span: Span) -> &str {
+    source[span.start + 1..span.end - 1].trim()
+}
+
+/// Syntax-checks a `when` condition with the neutral expression parser
+/// (`rex-expr`, syntax only — bare condition names are resource features
+/// whose typing is a backend concern). Every parse error is re-spanned into
+/// the file: the error's byte offsets are relative to the condition text, so
+/// they are shifted onto the condition's inner region (clamped to it).
+fn check_when_syntax(source: &str, when_span: Span, diags: &mut Vec<Diagnostic>) {
+    let raw = &source[when_span.start + 1..when_span.end - 1];
+    let text = raw.trim();
+    let base = when_span.start + 1 + (raw.len() - raw.trim_start().len());
+    let inner_start = when_span.start + 1;
+    let inner_end = when_span.end - 1;
+    for error in rex_expr::parse(text).errors {
+        let start = (base + error.span.start).clamp(inner_start, inner_end);
+        let end = (base + error.span.end).clamp(start, inner_end);
+        diags.push(Diagnostic::error(
+            format!("invalid `when` condition: {}", error.message),
+            Some((start..end).into()),
+        ));
+    }
+}
+
+/// Lowers an `actors` declaration: duplicate actor/capability checks,
+/// capability class resolution, grant-entry capability checks, `when`
+/// condition syntax checks, and `never_both` shape checks. Cross-declaration
+/// rules (cycles, separation of duty, self-narrowing) run in the passes
+/// below.
+fn lower_actors(
+    decl: &mox::ActorsDecl,
+    source: &str,
+    package: &str,
+    kinds: &HashMap<&str, TopKind>,
+    diags: &mut Vec<Diagnostic>,
+) -> ActorsRecord {
+    let mut def = ir::ActorsDef::new(decl.name.text.clone());
+    let mut actor_names: Vec<(String, Span)> = Vec::new();
+    let mut parents: Vec<(String, Option<String>)> = Vec::new();
+    let mut forbids: Vec<(String, String, Span)> = Vec::new();
+    let mut never_both: Vec<(Vec<String>, Span)> = Vec::new();
+
+    let mut seen_actors = HashSet::new();
+    for actor in &decl.actors {
+        if !seen_actors.insert(actor.name.text.as_str()) {
+            diags.push(Diagnostic::error(
+                format!("duplicate actor `{}`", actor.name.text),
+                Some(actor.name.span),
+            ));
+        }
+        let mut ir_actor = ir::ActorDef::new(&actor.name.text);
+        if let Some(parent) = &actor.extends {
+            ir_actor = ir_actor.extends(&parent.text);
+        }
+        def = def.actor(ir_actor);
+        actor_names.push((actor.name.text.clone(), actor.name.span));
+        parents.push((
+            actor.name.text.clone(),
+            actor.extends.as_ref().map(|parent| parent.text.clone()),
+        ));
+    }
+
+    let mut seen_capabilities = HashSet::new();
+    let mut capabilities: HashSet<&str> = HashSet::new();
+    for capability in &decl.capabilities {
+        if !seen_capabilities.insert(capability.name.text.as_str()) {
+            diags.push(Diagnostic::error(
+                format!("duplicate capability `{}`", capability.name.text),
+                Some(capability.name.span),
+            ));
+        }
+        let resolution = resolve(&capability.class, package, kinds, diags);
+        if let Some(resolution) = &resolution {
+            if resolution.kind != Resolved::Class {
+                diags.push(
+                    Diagnostic::error(
+                        format!(
+                            "capability `{}` must be granted on a class, but `{}` is not a class",
+                            capability.name.text,
+                            capability.class.name.full_name()
+                        ),
+                        Some(capability.class.span),
+                    )
+                    .with_help("capabilities are granted on class instances"),
+                );
+            }
+        }
+        capabilities.insert(&capability.name.text);
+        def = def.capability(ir::CapabilityDef::new(
+            &capability.name.text,
+            ir_type_of(resolution.as_ref(), package, &capability.class),
+        ));
+    }
+
+    for grant in &decl.grants {
+        if !actor_names
+            .iter()
+            .any(|(name, _)| *name == grant.actor.text)
+        {
+            diags.push(Diagnostic::error(
+                format!("grant names unknown actor `{}`", grant.actor.text),
+                Some(grant.actor.span),
+            ));
+        }
+        let mut ir_grant = ir::GrantDef::new(&grant.actor.text);
+        for entry in &grant.entries {
+            match entry {
+                mox::GrantEntryDecl::Effect(effect) => {
+                    if !capabilities.contains(effect.capability.text.as_str()) {
+                        diags.push(Diagnostic::error(
+                            format!(
+                                "grant names unknown capability `{}`",
+                                effect.capability.text
+                            ),
+                            Some(effect.capability.span),
+                        ));
+                    }
+                    if effect.effect == mox::Effect::Forbid {
+                        forbids.push((
+                            grant.actor.text.clone(),
+                            effect.capability.text.clone(),
+                            effect.capability.span,
+                        ));
+                    }
+                    let ir_effect = match effect.effect {
+                        mox::Effect::Permit => ir::GrantEffect::Permit,
+                        mox::Effect::Forbid => ir::GrantEffect::Forbid,
+                    };
+                    let mut ir_entry = ir::GrantEntry::new(ir_effect, &effect.capability.text);
+                    if let Some(when_span) = effect.when {
+                        ir_entry = ir_entry.when(when_text(source, when_span));
+                        check_when_syntax(source, when_span, diags);
+                    }
+                    for obligation in &effect.obligations {
+                        ir_entry = ir_entry.obligation(&obligation.text);
+                    }
+                    ir_grant = ir_grant.entry(ir_entry);
+                }
+                mox::GrantEntryDecl::Cedar(body) => {
+                    // Cedar entries carry their verbatim policy text; the
+                    // effect/capability pair is unused and stays empty.
+                    ir_grant = ir_grant.entry(
+                        ir::GrantEntry::new(ir::GrantEffect::Permit, "")
+                            .cedar(body_text(source, body.span).trim()),
+                    );
+                }
+            }
+        }
+        def = def.grant(ir_grant);
+    }
+
+    for constraint in &decl.never_both {
+        if constraint.capabilities.len() != 2 {
+            diags.push(Diagnostic::error(
+                "never_both expects exactly two capabilities",
+                Some(constraint.span),
+            ));
+        }
+        for name in &constraint.capabilities {
+            if !capabilities.contains(name.text.as_str()) {
+                diags.push(Diagnostic::error(
+                    format!("grant names unknown capability `{}`", name.text),
+                    Some(name.span),
+                ));
+            }
+        }
+        let names: Vec<String> = constraint
+            .capabilities
+            .iter()
+            .map(|name| name.text.clone())
+            .collect();
+        def = def.never_both(ir::NeverBothDef {
+            capabilities: names.clone(),
+        });
+        never_both.push((names, constraint.span));
+    }
+
+    ActorsRecord {
+        def,
+        actor_names,
+        parents,
+        forbids,
+        never_both,
+    }
+}
+
+/// The actor → parent map of one block (only declared parents are edges).
+fn actor_parents(record: &ActorsRecord) -> HashMap<&str, &str> {
+    record
+        .parents
+        .iter()
+        .filter_map(|(name, parent)| parent.as_deref().map(|parent| (name.as_str(), parent)))
+        .collect()
+}
+
+/// Detects cycles in each block's actor `extends` graph, reporting the first
+/// cycle per block (span on the actor that closes it). Returns `true` when
+/// any cycle was found; callers skip the ancestor-walking passes.
+fn detect_actor_cycles(records: &[ActorsRecord], diags: &mut Vec<Diagnostic>) -> bool {
+    let mut cyclic = false;
+    for record in records {
+        let index = actor_parents(record);
+        let spans: HashMap<&str, Span> = record
+            .actor_names
+            .iter()
+            .map(|(name, span)| (name.as_str(), *span))
+            .collect();
+        let mut state: HashMap<&str, u8> = HashMap::new();
+        for (name, span) in &record.actor_names {
+            let mut path: Vec<&str> = Vec::new();
+            if let Some(cycle) = visit_actor(name.as_str(), &index, &mut state, &mut path) {
+                let span = spans.get(cycle[0]).copied().unwrap_or(*span);
+                diags.push(Diagnostic::error(
+                    format!("actor inheritance cycle: {}", cycle.join(" -> ")),
+                    Some(span),
+                ));
+                cyclic = true;
+                break;
+            }
+        }
+    }
+    cyclic
+}
+
+/// Iterative-depth-first visit over `extends` edges; returns the cycle path
+/// when a back edge is found. `state`: absent = unvisited, `1` = on the
+/// current path, `2` = done.
+fn visit_actor<'a>(
+    actor: &'a str,
+    index: &HashMap<&'a str, &'a str>,
+    state: &mut HashMap<&'a str, u8>,
+    path: &mut Vec<&'a str>,
+) -> Option<Vec<&'a str>> {
+    match state.get(actor) {
+        Some(1) => {
+            let start = path.iter().position(|name| *name == actor).unwrap_or(0);
+            let mut cycle: Vec<&str> = path[start..].to_vec();
+            cycle.push(actor);
+            return Some(cycle);
+        }
+        Some(_) => return None,
+        None => {}
+    }
+    state.insert(actor, 1);
+    path.push(actor);
+    if let Some(parent) = index.get(actor) {
+        if let Some(cycle) = visit_actor(parent, index, state, path) {
+            return Some(cycle);
+        }
+    }
+    path.pop();
+    state.insert(actor, 2);
+    None
+}
+
+/// The effective permit set of one actor: the permits of every grant naming
+/// the actor itself or any of its transitive `extends` ancestors. Cedar
+/// entries are opaque and never contribute. Only run on acyclic blocks (the
+/// lineage walk is cycle-guarded regardless).
+fn effective_permits<'a>(
+    record: &'a ActorsRecord,
+    parents: &HashMap<&'a str, &'a str>,
+    actor: &'a str,
+) -> HashSet<&'a str> {
+    let mut lineage: HashSet<&str> = HashSet::new();
+    let mut current = Some(actor);
+    while let Some(name) = current {
+        if !lineage.insert(name) {
+            break;
+        }
+        current = parents.get(name).copied();
+    }
+    record
+        .def
+        .grants
+        .iter()
+        .filter(|grant| lineage.contains(grant.actor.as_str()))
+        .flat_map(|grant| grant.entries.iter())
+        .filter(|entry| entry.effect == ir::GrantEffect::Permit && entry.cedar.is_none())
+        .map(|entry| entry.capability.as_str())
+        .collect()
+}
+
+/// Separation of duty: no actor's effective permit set may contain both
+/// capabilities of a `never_both` constraint. One error per (actor, pair),
+/// actors in declaration order.
+fn validate_actor_never_both(records: &[ActorsRecord], diags: &mut Vec<Diagnostic>) {
+    for record in records {
+        let parents = actor_parents(record);
+        for (pair, span) in &record.never_both {
+            let [a, b] = pair.as_slice() else {
+                continue; // malformed shape; already reported during lowering
+            };
+            for (name, _) in &record.actor_names {
+                let effective = effective_permits(record, &parents, name.as_str());
+                if effective.contains(a.as_str()) && effective.contains(b.as_str()) {
+                    diags.push(Diagnostic::error(
+                        format!("actor `{name}` is granted both `{a}` and `{b}` (never_both)"),
+                        Some(*span),
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// Self-narrowing: a `forbid` entry whose capability is already in the
+/// actor's effective permit set (own or inherited) can never fire — warn on
+/// the deny entry's capability name.
+fn validate_actor_self_narrowing(records: &[ActorsRecord], diags: &mut Vec<Diagnostic>) {
+    for record in records {
+        let parents = actor_parents(record);
+        for (actor, capability, span) in &record.forbids {
+            if effective_permits(record, &parents, actor.as_str()).contains(capability.as_str()) {
+                diags.push(Diagnostic::warning(
+                    format!(
+                        "actor `{actor}` forbids `{capability}` but inherits or declares a permit for it"
+                    ),
+                    Some(*span),
+                ));
+            }
+        }
     }
 }

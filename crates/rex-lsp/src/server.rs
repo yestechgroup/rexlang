@@ -390,6 +390,7 @@ fn lsp_symbol_kind(kind: SymbolKind) -> tower_lsp::lsp_types::SymbolKind {
         SymbolKind::Enum => tower_lsp::lsp_types::SymbolKind::ENUM,
         SymbolKind::Datatype => tower_lsp::lsp_types::SymbolKind::OBJECT,
         SymbolKind::Vocabulary => tower_lsp::lsp_types::SymbolKind::PACKAGE,
+        SymbolKind::Actors => tower_lsp::lsp_types::SymbolKind::NAMESPACE,
         SymbolKind::EnumLiteral => tower_lsp::lsp_types::SymbolKind::ENUM_MEMBER,
         SymbolKind::Feature(feature_kind) => match feature_kind {
             FeatureSymbolKind::Operation => tower_lsp::lsp_types::SymbolKind::METHOD,
@@ -534,6 +535,7 @@ fn type_completions(index: &NavigationIndex) -> Vec<CompletionItem> {
             SymbolKind::Enum => (CompletionItemKind::ENUM, "enum"),
             SymbolKind::Datatype => (CompletionItemKind::STRUCT, "datatype"),
             SymbolKind::Vocabulary => (CompletionItemKind::STRUCT, "vocabulary"),
+            SymbolKind::Actors => (CompletionItemKind::STRUCT, "actors"),
             SymbolKind::Feature(_) | SymbolKind::EnumLiteral => continue,
         };
         items.push(CompletionItem {

@@ -47,6 +47,7 @@ pub fn hover_markdown(index: &NavigationIndex, def_id: DefId) -> String {
             out
         }
         SymbolKind::Vocabulary => format!("**vocabulary {}**", definition.name),
+        SymbolKind::Actors => format!("**actors {}**", definition.name),
         SymbolKind::EnumLiteral => {
             let value = definition.value_text.as_deref();
             let owner = definition

@@ -1,0 +1,276 @@
+{
+  "formatVersion": 1,
+  "rexVersion": "0.1.0",
+  "packages": [
+    {
+      "name": "rex.conformance.actors",
+      "annotations": [],
+      "enums": [],
+      "datatypes": [],
+      "interfaces": [],
+      "classes": [
+        {
+          "name": "User",
+          "extends": [],
+          "features": [
+            {
+              "id": 0,
+              "name": "id",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": true,
+              "isReadOnly": false
+            },
+            {
+              "id": 1,
+              "name": "active",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "boolean"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            }
+          ]
+        },
+        {
+          "name": "Ticket",
+          "extends": [],
+          "features": [
+            {
+              "id": 0,
+              "name": "id",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": true,
+              "isReadOnly": false
+            },
+            {
+              "id": 1,
+              "name": "title",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            },
+            {
+              "id": 2,
+              "name": "internal",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "boolean"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            },
+            {
+              "id": 3,
+              "name": "amount",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "int"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            },
+            {
+              "id": 4,
+              "name": "assignee",
+              "kind": "crossReference",
+              "type": {
+                "type": "class",
+                "value": {
+                  "package": "rex.conformance.actors",
+                  "name": "User"
+                }
+              },
+              "multiplicity": {
+                "lower": 0,
+                "upper": "unbounded"
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            }
+          ]
+        }
+      ],
+      "actors": [
+        {
+          "name": "Support",
+          "actors": [
+            {
+              "name": "Customer"
+            },
+            {
+              "name": "Agent",
+              "extends": "Customer"
+            },
+            {
+              "name": "Manager",
+              "extends": "Agent"
+            },
+            {
+              "name": "Finance"
+            }
+          ],
+          "capabilities": [
+            {
+              "name": "ReadTicket",
+              "class": {
+                "type": "class",
+                "value": {
+                  "package": "rex.conformance.actors",
+                  "name": "Ticket"
+                }
+              }
+            },
+            {
+              "name": "ResolveTicket",
+              "class": {
+                "type": "class",
+                "value": {
+                  "package": "rex.conformance.actors",
+                  "name": "Ticket"
+                }
+              }
+            },
+            {
+              "name": "RaiseRefund",
+              "class": {
+                "type": "class",
+                "value": {
+                  "package": "rex.conformance.actors",
+                  "name": "Ticket"
+                }
+              }
+            },
+            {
+              "name": "ApproveRefund",
+              "class": {
+                "type": "class",
+                "value": {
+                  "package": "rex.conformance.actors",
+                  "name": "Ticket"
+                }
+              }
+            }
+          ],
+          "grants": [
+            {
+              "actor": "Customer",
+              "entries": [
+                {
+                  "effect": "permit",
+                  "capability": "ReadTicket"
+                }
+              ]
+            },
+            {
+              "actor": "Agent",
+              "entries": [
+                {
+                  "effect": "permit",
+                  "capability": "ReadTicket",
+                  "when": "!internal"
+                },
+                {
+                  "effect": "permit",
+                  "capability": "RaiseRefund",
+                  "when": "amount <= 1000",
+                  "obligations": [
+                    "audit"
+                  ]
+                }
+              ]
+            },
+            {
+              "actor": "Manager",
+              "entries": [
+                {
+                  "effect": "permit",
+                  "capability": "ReadTicket"
+                },
+                {
+                  "effect": "permit",
+                  "capability": "ResolveTicket"
+                }
+              ]
+            },
+            {
+              "actor": "Finance",
+              "entries": [
+                {
+                  "effect": "permit",
+                  "capability": "ApproveRefund"
+                }
+              ]
+            }
+          ],
+          "neverBoth": [
+            {
+              "capabilities": [
+                "RaiseRefund",
+                "ApproveRefund"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

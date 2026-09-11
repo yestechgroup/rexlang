@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 rex-syntax = { workspace = true }
 rex-ir = { workspace = true }
+rex-expr = { workspace = true }
 rex-vocab = { workspace = true }
 salsa = { workspace = true }
 ariadne = { workspace = true }

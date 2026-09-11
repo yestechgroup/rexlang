@@ -1793,6 +1793,7 @@ name = "rex-driver"
 version = "0.1.0"
 dependencies = [
  "ariadne",
+ "rex-expr",
  "rex-ir",
  "rex-syntax",
  "rex-vocab",
