@@ -1,0 +1,28 @@
+package nz.example.org
+
+class Department {
+    String name
+    contains Employee[] staff opposite department
+    contains Team[] teams opposite department
+}
+
+class Team {
+    String name
+    container Department department opposite teams
+    refers Employee[0..1] lead opposite leadsTeams
+    contains Employee[] members opposite memberOf
+    op boolean any_member_earns_over(int threshold) {
+        expr { members.any(m => m.salary > threshold) }
+    }
+    op int payroll() {
+        expr { members.map(m => m.salary).sum() }
+    }
+}
+
+class Employee {
+    String name
+    int salary
+    container Department department opposite staff
+    container Team memberOf opposite members
+    refers Team[] leadsTeams opposite lead
+}

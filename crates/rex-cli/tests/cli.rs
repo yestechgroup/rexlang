@@ -1,6 +1,6 @@
 //! End-to-end CLI tests: run the `rexlang` binary as a subprocess.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const GOOD: &str = "package demo\n\nclass Book { String title }\n";
@@ -719,6 +719,66 @@ fn fmt_help_works() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Usage:"), "stdout was: {stdout}");
     assert!(stdout.contains("--check"), "stdout was: {stdout}");
+}
+
+// --- the canonical examples suite --------------------------------------------
+
+/// The five canonical examples, hardcoded so a missing file fails loudly.
+const EXAMPLES: [&str; 5] = ["library", "ecommerce", "org", "iot", "shapes"];
+
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../")
+        .canonicalize()
+        .expect("workspace root")
+}
+
+#[test]
+fn examples_suite_checks_clean_and_is_fmt_canonical() {
+    let paths: Vec<PathBuf> = EXAMPLES
+        .iter()
+        .map(|name| {
+            workspace_root()
+                .join("examples")
+                .join(format!("{name}.mox"))
+        })
+        .collect();
+    for (name, path) in EXAMPLES.iter().zip(&paths) {
+        assert!(
+            path.is_file(),
+            "missing canonical example {}: the examples suite is part of the harness",
+            path.display()
+        );
+        let output = rexlang()
+            .args(["check", path.to_str().unwrap()])
+            .output()
+            .expect("run rexlang check");
+        assert!(
+            output.status.success(),
+            "rexlang check {name}.mox failed: {:?}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            format!("OK {}\n", path.display()),
+            "rexlang check {name}.mox stdout"
+        );
+    }
+
+    // The examples must be in canonical format (same gate the conformance
+    // models get in CI).
+    let mut check = rexlang();
+    check.arg("fmt").arg("--check");
+    for path in &paths {
+        check.arg(path.to_str().unwrap());
+    }
+    let output = check.output().expect("run rexlang fmt --check");
+    assert!(
+        output.status.success(),
+        "examples must be fmt-canonical. stdout: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).is_empty());
 }
 
 // --- `rexlang lsp` -----------------------------------------------------------

@@ -1,0 +1,30 @@
+package nz.example.iot
+
+type Mac wraps opaque {
+    create {
+        rust { Mac(it) }
+    }
+    convert {
+        rust { self.0.clone() }
+    }
+}
+
+enum DeviceState {
+    Online as "on" = 0
+    Offline as "off" = 1
+}
+
+class Device {
+    String name
+    DeviceState state
+    contains Sensor[] sensors opposite device
+    derived String displayName {
+        expr { if sensors.size() > 0 { name } else { "unprovisioned device" } }
+    }
+}
+
+class Sensor {
+    container Device device opposite sensors
+    id readonly String sensorId
+    Mac address
+}

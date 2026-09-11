@@ -1,0 +1,13 @@
+package nz.example.shapes
+
+class Animal {
+    String name
+}
+
+class Dog extends Animal {
+    String breed
+}
+
+class Cat extends Animal {
+    boolean indoor
+}

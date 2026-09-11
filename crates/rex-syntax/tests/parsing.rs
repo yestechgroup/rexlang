@@ -139,6 +139,7 @@ fn library_example_parses_without_errors() {
             return_type,
             params,
             body,
+            bodies,
             ..
         } = feature
         else {
@@ -148,7 +149,11 @@ fn library_example_parses_without_errors() {
         assert_eq!(params.len(), 1);
         assert_eq!(params[0].type_ref.name.full_name(), "String");
         assert_eq!(params[0].name.text, "title");
-        assert!(body.is_none());
+        // The flagship now carries a tagged `expr { ... }` body: the outer
+        // span is present and exactly one target block is captured.
+        assert!(body.is_some(), "tagged body sets the outer span");
+        assert_eq!(bodies.len(), 1);
+        assert_eq!(bodies[0].target.text, "expr");
     });
 
     // class Book { ... }
@@ -207,6 +212,7 @@ fn library_example_parses_without_errors() {
             type_ref,
             multiplicity,
             body,
+            bodies,
             ..
         } = feature
         else {
@@ -214,7 +220,10 @@ fn library_example_parses_without_errors() {
         };
         assert_eq!(type_ref.name.full_name(), "String");
         assert!(multiplicity.is_none());
-        assert!(body.is_none());
+        // The derived body is a single tagged `expr { ... }` block.
+        assert!(body.is_some(), "tagged body sets the outer span");
+        assert_eq!(bodies.len(), 1);
+        assert_eq!(bodies[0].target.text, "expr");
     });
 
     // class Writer { ... }

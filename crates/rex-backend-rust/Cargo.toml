@@ -16,3 +16,5 @@ anyhow = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+rex-driver = { workspace = true }
+serde_json = { workspace = true }

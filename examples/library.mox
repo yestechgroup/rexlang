@@ -14,7 +14,9 @@ type Date wraps opaque {
 class Library {
     String name = "Default Name"
     contains Book[] books opposite library
-    op Book getBook(String title)
+    op Book getBook(String title) {
+        expr { books.first(b => b.title == title) }
+    }
 }
 
 class Book {
@@ -24,7 +26,9 @@ class Book {
     Date copyright
     BookCategory category
     refers Writer[] authors opposite books
-    derived String citation
+    derived String citation {
+        expr { if pages > 400 { title } else { "short read" } }
+    }
 }
 
 class Writer {

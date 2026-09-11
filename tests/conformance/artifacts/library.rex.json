@@ -102,7 +102,10 @@
                     "value": "string"
                   }
                 }
-              ]
+              ],
+              "bodies": {
+                "expr": " books.first(b => b.title == title) "
+              }
             }
           ]
         },
@@ -252,7 +255,10 @@
               },
               "isDerived": true,
               "isId": false,
-              "isReadOnly": false
+              "isReadOnly": false,
+              "bodies": {
+                "expr": " if pages > 400 { title } else { \"short read\" } "
+              }
             }
           ]
         },

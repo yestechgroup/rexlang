@@ -3,8 +3,21 @@
 //! scratch crate, and run behavioral tests in that crate (arena semantics,
 //! opposite maintenance, navigation, enums, datatypes, defaults). A second
 //! scenario exercises vocabulary codegen with the conformance currency model.
+//!
+//! The scratch crate additionally embeds every canonical `examples/*.mox` as
+//! a namespaced module (`pub mod library; pub mod ecommerce; …`, generated
+//! through `rex_driver::compile_str` — see `scratch/examples_flow.rs`) with
+//! the behavioral assertions from `tests/scratch/example_assertions.rs`, so
+//! the same binary proves both the hand-built IR surface and the whole
+//! examples suite. The hand-built library IR is deliberately kept: it is the
+//! Tier-1-enriched sibling of the source flagship (rust-bodied `getBook`,
+//! `totalPages`/`anyLongBook` ops, Date create/convert bodies) and pins the
+//! conformance instance golden.
 
 use std::path::Path;
+
+#[path = "scratch/examples_flow.rs"]
+mod examples_flow;
 
 use rex_ir::{
     ClassDef, DatatypeDef, DefaultValue, EnumDef, EnumLiteral, Feature, FeatureKind, Model,
@@ -208,7 +221,15 @@ fn scratch_crate_files() -> Vec<(std::path::PathBuf, String)> {
         .canonicalize()
         .expect("rex-runtime path");
 
-    let lib_rs = format!("{models_rs}\n{}", include_str!("scratch/scratch_tests.rs"));
+    // The hand-built library IR stays at the crate root; the five canonical
+    // examples land as namespaced modules, and both assertion suites
+    // (hand-built + examples) are appended.
+    let lib_rs = format!(
+        "{models_rs}\n{}\n{}\n{}",
+        examples_flow::example_modules(),
+        include_str!("scratch/scratch_tests.rs"),
+        include_str!("scratch/example_assertions.rs"),
+    );
 
     vec![
         (
@@ -270,6 +291,7 @@ fn run_scratch_crate() {
             command.arg("--offline");
         }
         command.env("REX_INSTANCE_OUT", &instance_out);
+        command.env("REX_EXAMPLES_DIR", examples_flow::examples_dir());
         command.output().expect("spawn cargo")
     };
 

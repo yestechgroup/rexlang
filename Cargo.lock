@@ -1765,8 +1765,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "proptest",
+ "rex-driver",
  "rex-expr",
  "rex-ir",
+ "serde_json",
 ]
 
 [[package]]

@@ -98,13 +98,18 @@ fn library_example_compiles_with_zero_diagnostics() {
     );
 
     // Tier 1: ops lower into `ClassDef.operations` (not into `features`).
+    // The flagship now carries a Tier-2 `expr` body; it lowers verbatim.
     let get_book_op = library
         .operations
         .iter()
         .find(|op| op.name == "getBook")
         .expect("getBook lowers into operations");
     assert_eq!(get_book_op.return_type, class_ref("Book"));
-    assert!(get_book_op.bodies.is_empty(), "body-less op in the fixture");
+    assert_eq!(
+        get_book_op.bodies.get("expr").map(String::as_str),
+        Some(" books.first(b => b.title == title) "),
+        "the expr body is carried verbatim into the IR"
+    );
     assert!(library.features.iter().all(|f| f.name != "getBook"));
 
     let book = &package.classes[1];
@@ -155,6 +160,11 @@ fn library_example_compiles_with_zero_diagnostics() {
     assert!(citation.is_derived);
     assert_eq!(citation.kind, FeatureKind::Attribute);
     assert_eq!(citation.multiplicity, Multiplicity::OPTIONAL);
+    assert_eq!(
+        citation.bodies.get("expr").map(String::as_str),
+        Some(" if pages > 400 { title } else { \"short read\" } "),
+        "the derived body is carried verbatim into the IR"
+    );
 
     let writer = &package.classes[2];
     let books_ref = feature(writer, "books");

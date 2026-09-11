@@ -1,0 +1,24 @@
+{
+  "$type": "rex.instance",
+  "formatVersion": 1,
+  "model": "nz.example.shapes",
+  "objects": [
+    {
+      "$id": "animal/0",
+      "$type": "Animal",
+      "name": "Generic Animal"
+    },
+    {
+      "$id": "cat/0",
+      "$type": "Cat",
+      "indoor": true,
+      "name": "Tom"
+    },
+    {
+      "$id": "dog/0",
+      "$type": "Dog",
+      "breed": "Labrador",
+      "name": "Rex"
+    }
+  ]
+}

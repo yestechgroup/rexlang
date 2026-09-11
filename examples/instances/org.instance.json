@@ -1,0 +1,51 @@
+{
+  "$type": "rex.instance",
+  "formatVersion": 1,
+  "model": "nz.example.org",
+  "objects": [
+    {
+      "$id": "department/0",
+      "$type": "Department",
+      "name": "Engineering",
+      "staff": [
+        {
+          "$id": "employee/0",
+          "$type": "Employee",
+          "leadsTeams": [
+            {
+              "$ref": "team/0"
+            }
+          ],
+          "name": "Ada",
+          "salary": 200000
+        }
+      ],
+      "teams": [
+        {
+          "$id": "team/0",
+          "$type": "Team",
+          "lead": {
+            "$ref": "employee/0"
+          },
+          "members": [
+            {
+              "$id": "employee/1",
+              "$type": "Employee",
+              "leadsTeams": [],
+              "name": "Grace",
+              "salary": 150000
+            },
+            {
+              "$id": "employee/2",
+              "$type": "Employee",
+              "leadsTeams": [],
+              "name": "Alan",
+              "salary": 90000
+            }
+          ],
+          "name": "Platform"
+        }
+      ]
+    }
+  ]
+}

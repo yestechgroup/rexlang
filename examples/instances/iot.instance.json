@@ -1,0 +1,27 @@
+{
+  "$type": "rex.instance",
+  "formatVersion": 1,
+  "model": "nz.example.iot",
+  "objects": [
+    {
+      "$id": "device/0",
+      "$type": "Device",
+      "name": "Greenhouse Hub",
+      "sensors": [
+        {
+          "$id": "sensor/0",
+          "$type": "Sensor",
+          "address": "a1:b2:c3:d4:e5:f5",
+          "sensorId": "temp-01"
+        },
+        {
+          "$id": "sensor/1",
+          "$type": "Sensor",
+          "address": "a1:b2:c3:d4:e5:f6",
+          "sensorId": "hum-01"
+        }
+      ],
+      "state": "Online"
+    }
+  ]
+}

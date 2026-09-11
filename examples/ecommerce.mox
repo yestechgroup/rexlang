@@ -1,0 +1,35 @@
+package nz.example.shop
+
+vocabulary Currency from "iso:4217" {
+    version "2024-01-01"
+    key alpha3
+    facet String symbol
+    facet int minorUnits
+}
+
+class Customer {
+    String name
+    refers Order[] orders opposite customer
+}
+
+class Product {
+    String sku
+    int listPrice
+}
+
+class Order {
+    id readonly String orderNo
+    refers Customer[0..1] customer opposite orders
+    Currency currency
+    contains OrderLine[] lines opposite order
+    derived int total {
+        expr { lines.map(l => l.quantity * l.unitPrice).sum() }
+    }
+}
+
+class OrderLine {
+    container Order order opposite lines
+    String sku
+    int quantity
+    int unitPrice
+}

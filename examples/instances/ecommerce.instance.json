@@ -1,0 +1,49 @@
+{
+  "$type": "rex.instance",
+  "formatVersion": 1,
+  "model": "nz.example.shop",
+  "objects": [
+    {
+      "$id": "customer/0",
+      "$type": "Customer",
+      "name": "Alice",
+      "orders": [
+        {
+          "$ref": "order/0"
+        }
+      ]
+    },
+    {
+      "$id": "order/0",
+      "$type": "Order",
+      "currency": "EUR",
+      "customer": {
+        "$ref": "customer/0"
+      },
+      "lines": [
+        {
+          "$id": "order_line/0",
+          "$type": "OrderLine",
+          "quantity": 2,
+          "sku": "BOOK-DUNE",
+          "unitPrice": 1000
+        },
+        {
+          "$id": "order_line/1",
+          "$type": "OrderLine",
+          "quantity": 1,
+          "sku": "BOOK-HOBBIT",
+          "unitPrice": 2500
+        },
+        {
+          "$id": "order_line/2",
+          "$type": "OrderLine",
+          "quantity": 3,
+          "sku": "PEN",
+          "unitPrice": 500
+        }
+      ],
+      "orderNo": "SO-0001"
+    }
+  ]
+}
