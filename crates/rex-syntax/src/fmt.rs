@@ -696,7 +696,9 @@ impl<'src> Formatter<'src> {
                 self.scan_qname();
                 self.scan_multiplicity();
                 self.take_name();
-                self.scan_raw_body();
+                // Tier 2: same body shapes as an `op` — target-tagged blocks
+                // (`{ expr { ... } }`) or the bare `{ ... }` a driver rejects.
+                self.scan_op_body();
             }
             Some(Token::Ident(_) | Token::IdentEscaped(_)) => {
                 self.scan_qname();

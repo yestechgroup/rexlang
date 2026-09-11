@@ -85,6 +85,37 @@ fn library_model() -> Model {
         )
         .with_body("rust", GET_BOOK_BODY),
     );
+    // Tier 2: neutral `expr` bodies lower into typed methods — the derived
+    // `citation` accessor and two collection-algebra operations.
+    package.classes[0].operations.push(Operation::new(
+        "totalPages",
+        TypeRef::Primitive(PrimitiveType::Int),
+        vec![],
+    ));
+    package.classes[0].operations[1].bodies.insert(
+        "expr".to_string(),
+        "books.map(b => b.pages).sum()".to_string(),
+    );
+    package.classes[0].operations.push(Operation::new(
+        "anyLongBook",
+        TypeRef::Primitive(PrimitiveType::Boolean),
+        vec![],
+    ));
+    package.classes[0].operations[2].bodies.insert(
+        "expr".to_string(),
+        "books.any(b => b.pages > 300)".to_string(),
+    );
+    package.classes[0].operations.push(
+        Operation::new(
+            "findBook",
+            class_ref("Book"),
+            vec![OperationParam {
+                name: "title".to_string(),
+                type_: TypeRef::Primitive(PrimitiveType::String),
+            }],
+        )
+        .with_body("expr", "books.first(b => b.title == title)"),
+    );
     package.classes.push(ClassDef::new(
         "Book",
         vec![],
@@ -139,7 +170,8 @@ fn library_model() -> Model {
                 TypeRef::Primitive(PrimitiveType::String),
                 Multiplicity::OPTIONAL,
             )
-            .derived(),
+            .derived()
+            .with_body("expr", "if pages > 400 { title } else { \"short read\" }"),
         ],
     ));
     package.classes.push(ClassDef::new(

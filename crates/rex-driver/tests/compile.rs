@@ -418,7 +418,7 @@ class Calc {
     assert_eq!(warnings.len(), 1, "expected one warning");
     assert_eq!(
         warnings[0].message,
-        "unknown target 'kotlin' (known: rust, csharp, java)"
+        "unknown target 'kotlin' (known: rust, csharp, java, expr)"
     );
 }
 
@@ -441,6 +441,63 @@ class Calc {
             .diagnostics
             .iter()
             .any(|d| d.message == "duplicate target body 'rust' for operation 'compute'"),
+        "unexpected diagnostics: {:?}",
+        compilation.diagnostics
+    );
+}
+
+/// Tier 2: `expr` is a known body target carrying the neutral expression
+/// source text verbatim, and it conflicts with a `rust` body on the same
+/// operation.
+#[test]
+fn expr_target_captures_the_expression_verbatim() {
+    let source = r#"
+package demo
+
+class Library {
+    contains Book[] books
+    op Book getBook(String title) {
+        expr { books.first(b => b.title == title) }
+    }
+}
+
+class Book {
+    String title
+}
+"#;
+    let compilation = compile_str("expr.mox", source);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "expr must be a known target: {:?}",
+        compilation.diagnostics
+    );
+    let model = compilation.model.expect("a model on success");
+    let get_book = &model.packages[0].classes[0].operations[0];
+    assert_eq!(
+        get_book.bodies.get("expr").map(String::as_str),
+        Some(" books.first(b => b.title == title) ")
+    );
+}
+
+#[test]
+fn rust_and_expr_bodies_conflict() {
+    let source = r#"
+package demo
+
+class Calc {
+    op int compute(int x) {
+        rust { x + 1 }
+        expr { x + 1 }
+    }
+}
+"#;
+    let compilation = compile_str("conflict.mox", source);
+    assert!(compilation.model.is_none());
+    assert!(
+        compilation
+            .diagnostics
+            .iter()
+            .any(|d| d.message == "conflicting bodies for targets rust and expr"),
         "unexpected diagnostics: {:?}",
         compilation.diagnostics
     );
@@ -516,8 +573,11 @@ fn datatype_body_unknown_target_warns_and_duplicate_block_is_an_error() {
     );
 }
 
+/// Tier 2: a derived body must be the neutral expression language in a
+/// target-tagged `expr { ... }` block; bare and platform-targeted bodies are
+/// rejected with the guidance to use `expr`.
 #[test]
-fn derived_bodies_stay_rejected_tier_2() {
+fn derived_bare_body_is_rejected_with_expr_guidance() {
     let source = r#"
 package demo
 
@@ -527,10 +587,48 @@ class Calc {
 "#;
     let compilation = compile_str("calc.mox", source);
     assert!(compilation.model.is_none());
-    assert!(compilation
-        .diagnostics
-        .iter()
-        .any(|d| d.message == "derived get bodies are not supported yet (Tier 2)"));
+    assert!(compilation.diagnostics.iter().any(|d| d.message
+        == "derived bodies must use the neutral expression language: get { expr { ... } }"));
+}
+
+#[test]
+fn derived_platform_body_is_rejected_with_expr_guidance() {
+    let source = r#"
+package demo
+
+class Calc {
+    derived int total { rust { 42 } }
+}
+"#;
+    let compilation = compile_str("calc2.mox", source);
+    assert!(compilation.model.is_none());
+    assert!(compilation.diagnostics.iter().any(|d| d.message
+        == "derived bodies must use the neutral expression language: get { expr { ... } }"));
+}
+
+#[test]
+fn derived_expr_body_lowers_into_the_feature() {
+    let source = r#"
+package demo
+
+class Book {
+    String title
+    derived String label { expr { title } }
+}
+"#;
+    let compilation = compile_str("label.mox", source);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        compilation.diagnostics
+    );
+    let model = compilation.model.expect("a model on success");
+    let label = &model.packages[0].classes[0].features[1];
+    assert!(label.is_derived);
+    assert_eq!(
+        label.bodies.get("expr").map(String::as_str),
+        Some(" title ")
+    );
 }
 
 #[test]

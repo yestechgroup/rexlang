@@ -463,3 +463,86 @@ fn multiple_errors_are_collected_without_cascades() {
         .expect_err("expected errors");
     assert_eq!(errors.len(), 2);
 }
+
+// ---------------------------------------------------------------------------
+// Implicit-self scope (the `expr`-body context: op bodies and derived features)
+// ---------------------------------------------------------------------------
+
+/// A checker with the implicit `self` of `Library`, plus its `title` parameter.
+fn library_self_checker() -> TypeChecker {
+    TypeChecker::new(TypeContext::from_model(&library_model()))
+        .with_self(PKG, "Library")
+        .with_binding("title", Ty::string())
+}
+
+#[test]
+fn with_self_binds_class_features_so_bare_names_type_as_features() {
+    // The flagship `expr` body: bare `books` is the implicit self's feature.
+    let parsed = parse("books.first(b => b.title == title)");
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let ty = library_self_checker()
+        .type_of(parsed.ast.as_ref().expect("ast"))
+        .unwrap_or_else(|errors| panic!("{errors:?}"));
+    assert_eq!(ty, book().optional()); // A1: first yields Option(T)
+
+    let parsed = parse("books.map(b => b.pages).sum()");
+    let ty = library_self_checker()
+        .type_of(parsed.ast.as_ref().expect("ast"))
+        .unwrap_or_else(|errors| panic!("{errors:?}"));
+    assert_eq!(ty, Ty::int()); // A3 then A6
+}
+
+#[test]
+fn with_self_types_every_feature_kind() {
+    let checker =
+        TypeChecker::new(TypeContext::from_model(&library_model())).with_self(PKG, "Book");
+    let type_of = |source: &str| {
+        let parsed = parse(source);
+        assert!(parsed.errors.is_empty(), "{source:?}: {:?}", parsed.errors);
+        checker
+            .type_of(parsed.ast.as_ref().expect("ast"))
+            .unwrap_or_else(|errors| panic!("{source:?}: {errors:?}"))
+    };
+    assert_eq!(type_of("title"), Ty::string());
+    assert_eq!(type_of("pages"), Ty::int());
+    assert_eq!(type_of("downloads"), Ty::long());
+    assert_eq!(type_of("library"), book_self_library());
+    assert_eq!(type_of("citation"), Ty::string().optional());
+    assert_eq!(type_of("authors"), Ty::class(PKG, "Writer").list());
+    assert_eq!(type_of("library?.name"), Ty::string().optional());
+}
+
+fn book_self_library() -> Ty {
+    Ty::class(PKG, "Library").optional()
+}
+
+#[test]
+fn with_self_inherits_base_class_features() {
+    // `Shelf extends Library`: a shelf's implicit self sees `books` too.
+    let mut model = library_model();
+    model.packages[0]
+        .classes
+        .push(ClassDef::new("Shelf", vec![class_ref("Library")], vec![]));
+    let parsed = parse("books.size()");
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let ty = TypeChecker::new(TypeContext::from_model(&model))
+        .with_self(PKG, "Shelf")
+        .type_of(parsed.ast.as_ref().expect("ast"))
+        .unwrap_or_else(|errors| panic!("{errors:?}"));
+    assert_eq!(ty, Ty::int()); // A5
+}
+
+#[test]
+fn params_shadow_self_features_like_locals_do() {
+    // `title` is bound as a parameter AFTER with_self, so it shadows nothing
+    // on Library (no such feature) — but `name` exists: the param must win.
+    let checker = TypeChecker::new(TypeContext::from_model(&library_model()))
+        .with_self(PKG, "Library")
+        .with_binding("name", Ty::int());
+    let parsed = parse("name");
+    assert!(parsed.errors.is_empty());
+    let ty = checker
+        .type_of(parsed.ast.as_ref().expect("ast"))
+        .unwrap_or_else(|errors| panic!("{errors:?}"));
+    assert_eq!(ty, Ty::int(), "the explicit parameter shadows the feature");
+}

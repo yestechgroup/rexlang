@@ -436,7 +436,7 @@ pub enum FeatureDecl {
         /// Span of the whole feature, modifiers included.
         span: Span,
     },
-    /// `(modifier)* derived type_ref multiplicity? name raw_body?`
+    /// `(modifier)* derived type_ref multiplicity? name op_body?`
     Derived {
         /// Declared `id`/`readonly` modifiers.
         modifiers: Modifiers,
@@ -446,8 +446,15 @@ pub enum FeatureDecl {
         multiplicity: Option<Multiplicity>,
         /// Feature name.
         name: Name,
-        /// Span of the raw `{ ... }` body, if present. Contents are not parsed.
+        /// Span of the whole body, if present (braces inclusive): either a
+        /// bare `{ ... }` block (Tier 2: rejected by the driver) or the
+        /// outer braces of target-tagged blocks. Contents are not parsed.
         body: Option<Span>,
+        /// Target-tagged bodies `<target> { ... }` in source order. Empty
+        /// when the body is absent *or* is a bare (untagged) `{ ... }`
+        /// block. Tier 2: derived features carry their neutral expression
+        /// in a single `expr { ... }` block.
+        bodies: Vec<TargetBody>,
         /// Span of the whole feature, modifiers included.
         span: Span,
     },

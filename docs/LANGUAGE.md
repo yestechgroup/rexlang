@@ -41,8 +41,10 @@ attribute   := type_ref multiplicity? name ("=" default)?
 containment := "contains" type_ref multiplicity? name ("opposite" name)?
 reference   := "refers" type_ref multiplicity? name ("opposite" name)?
 container   := "container" type_ref name ("opposite" name)?
-op_decl     := "op" type_ref name "(" params? ")"
-derived_decl:= "derived" type_ref multiplicity? name
+op_decl     := "op" type_ref name "(" params? ")" op_body?
+derived_decl:= "derived" type_ref multiplicity? name op_body?
+op_body     := "{" target_body+ "}" | "{" raw "}"
+target_body := name "{" raw "}"
 multiplicity:= "[" (int (".." (int | "*"))?)? "]"
 ```
 
@@ -55,9 +57,17 @@ multiplicity:= "[" (int (".." (int | "*"))?)? "]"
 - **Modifiers**: `readonly` suppresses setters (and marks schema properties
   `readOnly`); `id` declares identity (carried; semantics land with Tier 1).
   Both warn when applied to `op`.
-- **`op`** bodies are Tier 0-unsupported: operations are abstract hooks,
-  implemented by hand in target code.
-- **`derived`** features are computed, not stored; `get` bodies are Tier 2.
+- **`op`** bodies are per-target: `{ rust { ... } csharp { ... } }` blocks
+  whose text is embedded **verbatim** by the backend that owns the target
+  (`rust` in Tier 1). `expr` is the Tier-2 pseudo-target: it holds the
+  neutral expression language, which every backend lowers (see
+  `docs/EXPRESSIONS.md`). A `rust` and an `expr` body on the same operation
+  conflict. Body-less operations stay abstract hooks, implemented by hand in
+  target code.
+- **`derived`** features are computed, not stored; a body must be the neutral
+  expression language in a single `expr { ... }` block (Tier 2), e.g.
+  `derived String citation { expr { title } }`. Backends lower it into a
+  getter; a bare `{ ... }` body is rejected.
 - **Defaults**: string/int/boolean literals or an enum literal name (for
   enum-typed attributes only).
 

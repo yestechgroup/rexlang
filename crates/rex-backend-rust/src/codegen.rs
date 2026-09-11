@@ -50,14 +50,29 @@
 //! your own modules (as in Tier 0). Instance JSON (see `serialize.rs`) is
 //! untouched by all of the above: operations and datatype behavior are never
 //! serialized.
+//!
+//! # Tier 2: neutral `expr` bodies
+//!
+//! An operation body tagged `expr` holds rexlang's neutral expression
+//! language (see `docs/EXPRESSIONS.md`). The body text is parsed and
+//! type-checked against the model (with the enclosing class as the implicit
+//! `self`: its features are in scope, plus the operation's parameters), then
+//! lowered to Rust by [`crate::expr_lower`] — the emitted method has the same
+//! fixed signature as Tier 1, with the return type mapped from the
+//! expression's checked type (`Option<..>` when the expression can be
+//! absent, e.g. `first`). Any parse, type, or lowering failure is a
+//! `generate` error naming the operation. A derived feature with an `expr`
+//! body lowers the same way into a `pub fn <name>(&self, res: &Resource)`
+//! accessor on its class. Declaring both a `rust` and an `expr` body for the
+//! same operation is a generation error.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::bail;
 use rex_ir::{
-    ClassDef, DatatypeDef, DefaultValue, EnumDef, Feature, FeatureKind, Model, PrimitiveType,
-    TypeRef, VocabularyDef, VocabularyEntry, VocabularyFacet,
+    ClassDef, DatatypeDef, DefaultValue, EnumDef, Feature, FeatureKind, Model, Operation,
+    PrimitiveType, TypeRef, VocabularyDef, VocabularyEntry, VocabularyFacet,
 };
 
 use crate::naming::{rust_ident, slotmap_field, snake_case};
@@ -89,6 +104,8 @@ pub fn generate_to_dir(model: &Model, out_dir: &Path) -> anyhow::Result<()> {
 /// A generated class with everything the emitter needs precomputed.
 pub(crate) struct ClassCtx<'a> {
     pub(crate) class: &'a ClassDef,
+    /// Owning package name (expressions resolve features within it).
+    pub(crate) package: String,
     pub(crate) id_type: String,
     pub(crate) slot_field: String,
     pub(crate) single: String,
@@ -96,6 +113,7 @@ pub(crate) struct ClassCtx<'a> {
 
 /// All resolved inputs for one generation unit.
 pub(crate) struct Unit<'a> {
+    pub(crate) model: &'a Model,
     pub(crate) type_name: String,
     pub(crate) classes: Vec<ClassCtx<'a>>,
     pub(crate) enums: Vec<&'a EnumDef>,
@@ -167,6 +185,7 @@ fn collect_unit(model: &Model) -> anyhow::Result<Unit<'_>> {
             }
             classes.push(ClassCtx {
                 class,
+                package: package.name.clone(),
                 id_type: format!("{}Id", rust_ident(&class.name)),
                 slot_field: slotmap_field(&class.name),
                 single: snake_case(&class.name),
@@ -179,6 +198,7 @@ fn collect_unit(model: &Model) -> anyhow::Result<Unit<'_>> {
         .map(|p| p.name.clone())
         .unwrap_or_else(|| "model".to_string());
     Ok(Unit {
+        model,
         type_name,
         classes,
         enums,
@@ -743,6 +763,216 @@ fn emit_vocabularies(e: &mut String, unit: &Unit<'_>) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Parses, type-checks, and lowers one operation `expr` body, returning the
+/// lowered Rust code together with the expression's checked type.
+///
+/// Generation is the point where the neutral language is *proved* for this
+/// model: a body that does not parse, does not type-check, or whose type is
+/// not the declared return type (or `Option` of it — an absent result, e.g.
+/// from `first`) fails `generate` with an error naming the operation.
+fn lower_op_expr_body(
+    model: &Model,
+    package: &str,
+    class: &ClassDef,
+    operation: &Operation,
+    source: &str,
+) -> anyhow::Result<(String, rex_expr::Ty)> {
+    use rex_expr::TypeChecker;
+
+    let parsed = rex_expr::parse(source);
+    let Some(ast) = parsed.ast else {
+        bail!(
+            "operation '{}' expr body could not be parsed: {}",
+            operation.name,
+            join_errors(&parsed.errors)
+        );
+    };
+    if !parsed.errors.is_empty() {
+        bail!(
+            "operation '{}' expr body has parse errors: {}",
+            operation.name,
+            join_errors(&parsed.errors)
+        );
+    }
+
+    let mut checker =
+        TypeChecker::new(rex_expr::TypeContext::from_model(model)).with_self(package, &class.name);
+    for param in &operation.params {
+        checker = checker.with_binding(&param.name, rex_expr::Ty::from_type_ref(&param.type_));
+    }
+    let expr_ty = checker.type_of(&ast).map_err(|errors| {
+        anyhow::anyhow!(
+            "operation '{}' expr body failed to type-check: {}",
+            operation.name,
+            join_errors(&errors)
+        )
+    })?;
+
+    let declared = rex_expr::Ty::from_type_ref(&operation.return_type);
+    let allowed = expr_ty == declared || expr_ty.inner().is_some_and(|inner| *inner == declared);
+    if !allowed {
+        bail!(
+            "operation '{}' expr body has type {}, but the operation returns {}",
+            operation.name,
+            expr_ty,
+            declared
+        );
+    }
+
+    let ctx = crate::expr_lower::LowerCtx::new(model, package, &class.name, &operation.params);
+    let code = crate::expr_lower::lower_expr(&ast, &expr_ty, &ctx).map_err(|error| {
+        anyhow::anyhow!(
+            "operation '{}' expr body failed to lower: {}",
+            operation.name,
+            error.message
+        )
+    })?;
+    Ok((code, expr_ty))
+}
+
+/// The checked expression type of a derived feature per the spec's feature
+/// typing: the declared type, `List`-wrapped when to-many, `Option`-wrapped
+/// when the lower bound is 0.
+fn derived_feature_ty(feature: &Feature) -> rex_expr::Ty {
+    let base = rex_expr::Ty::from_type_ref(&feature.type_);
+    if feature.multiplicity.is_many() {
+        base.list()
+    } else if feature.multiplicity.lower == 0 {
+        base.optional()
+    } else {
+        base
+    }
+}
+
+/// Parses, type-checks, and lowers one derived feature's `expr` body,
+/// returning the lowered Rust code together with the accessor's return type.
+///
+/// The expression must have the feature's declared type — or the inner type
+/// of it when the feature is optional, in which case the (total) expression
+/// simply never yields the absent state and is wrapped in `Some`.
+fn lower_derived_expr_body(
+    model: &Model,
+    package: &str,
+    class: &ClassDef,
+    feature: &Feature,
+    source: &str,
+) -> anyhow::Result<(String, String)> {
+    let parsed = rex_expr::parse(source);
+    let Some(ast) = parsed.ast else {
+        bail!(
+            "derived feature '{}' expr body could not be parsed: {}",
+            feature.name,
+            join_errors(&parsed.errors)
+        );
+    };
+    if !parsed.errors.is_empty() {
+        bail!(
+            "derived feature '{}' expr body has parse errors: {}",
+            feature.name,
+            join_errors(&parsed.errors)
+        );
+    }
+
+    let checker = rex_expr::TypeChecker::new(rex_expr::TypeContext::from_model(model))
+        .with_self(package, &class.name);
+    let expr_ty = checker.type_of(&ast).map_err(|errors| {
+        anyhow::anyhow!(
+            "derived feature '{}' expr body failed to type-check: {}",
+            feature.name,
+            join_errors(&errors)
+        )
+    })?;
+
+    let feature_ty = derived_feature_ty(feature);
+    let is_inner = feature_ty.inner().is_some_and(|inner| *inner == expr_ty);
+    if expr_ty != feature_ty && !is_inner {
+        bail!(
+            "derived feature '{}' expr body has type {}, but the feature is {}",
+            feature.name,
+            expr_ty,
+            feature_ty
+        );
+    }
+
+    let ctx = crate::expr_lower::LowerCtx::new(model, package, &class.name, &[]);
+    let lowered = crate::expr_lower::lower_expr(&ast, &expr_ty, &ctx).map_err(|error| {
+        anyhow::anyhow!(
+            "derived feature '{}' expr body failed to lower: {}",
+            feature.name,
+            error.message
+        )
+    })?;
+    let lowered = if is_inner {
+        format!("Some({lowered})")
+    } else {
+        lowered
+    };
+    Ok((lowered, expr_return_type(&feature_ty)?))
+}
+
+/// Comma-joins expression errors for a generation error message.
+fn join_errors(errors: &[rex_expr::ExprError]) -> String {
+    errors
+        .iter()
+        .map(|error| error.to_string())
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// The Rust return type for a lowered body: the expression's type mapped by
+/// the Tier-1 signature rules (`Option` of the mapped inner for an optional
+/// result).
+fn expr_return_type(expr_ty: &rex_expr::Ty) -> anyhow::Result<String> {
+    match expr_ty {
+        rex_expr::Ty::Option(inner) => Ok(format!("Option<{}>", expr_return_type(inner)?)),
+        rex_expr::Ty::List(_) => {
+            anyhow::bail!("list-typed expression results are not a valid body return ({expr_ty})")
+        }
+        other => {
+            let Some(type_ref) = type_ref_of(other) else {
+                anyhow::bail!("unsupported expression result type {other}");
+            };
+            op_type(&type_ref)
+        }
+    }
+}
+
+/// Converts a (non-`List`/`Option`) expression type back to its IR type
+/// reference so the Tier-1 signature mapping applies unchanged.
+fn type_ref_of(ty: &rex_expr::Ty) -> Option<TypeRef> {
+    use rex_expr::NamedKind;
+    Some(match ty {
+        rex_expr::Ty::Primitive(primitive) => TypeRef::Primitive(*primitive),
+        rex_expr::Ty::Named {
+            kind,
+            package,
+            name,
+        } => match kind {
+            NamedKind::Class => TypeRef::Class {
+                package: package.clone(),
+                name: name.clone(),
+            },
+            NamedKind::Enum => TypeRef::Enum {
+                package: package.clone(),
+                name: name.clone(),
+            },
+            NamedKind::Datatype => TypeRef::Datatype {
+                package: package.clone(),
+                name: name.clone(),
+            },
+            NamedKind::Interface => TypeRef::Interface {
+                package: package.clone(),
+                name: name.clone(),
+            },
+            NamedKind::Vocabulary => TypeRef::Vocabulary {
+                package: package.clone(),
+                name: name.clone(),
+            },
+        },
+        _ => return None,
+    })
+}
+
 fn emit_struct(e: &mut String, unit: &Unit<'_>, class: &ClassCtx<'_>) -> anyhow::Result<()> {
     let name = rust_ident(&class.class.name);
     if !class.class.extends.is_empty() {
@@ -792,7 +1022,8 @@ fn emit_struct(e: &mut String, unit: &Unit<'_>, class: &ClassCtx<'_>) -> anyhow:
     }
     e.push_str("        }\n    }\n}\n\n");
 
-    // Struct impl: attribute setters + reference navigation + operation
+    // Struct impl: attribute setters + reference navigation + derived
+    // accessors (Tier 2: an `expr` body becomes an accessor) + operation
     // bodies (Tier 1: a `rust` body becomes a method; body-less operations
     // are hand-written hooks and emit nothing).
     let mut methods = String::new();
@@ -856,10 +1087,43 @@ fn emit_struct(e: &mut String, unit: &Unit<'_>, class: &ClassCtx<'_>) -> anyhow:
             }
         }
     }
-    for operation in &class.class.operations {
-        let Some(body) = operation.bodies.get("rust") else {
+    // Derived-feature accessors (Tier 2): `expr` bodies lower like
+    // operations, with no parameters and the feature's declared typing as
+    // the return contract.
+    for feature in &class.class.features {
+        if !feature.is_derived {
+            continue;
+        }
+        let expr_body = feature.bodies.get("expr");
+        let rust_body = feature.bodies.get("rust");
+        if let (Some(_), Some(_)) = (expr_body, rust_body) {
+            bail!(
+                "derived feature '{}' has conflicting 'rust' and 'expr' bodies; \
+                 derived bodies must use the neutral expression language",
+                feature.name
+            );
+        }
+        let Some(expr_body) = expr_body else {
             continue;
         };
+        let (lowered, ret) =
+            lower_derived_expr_body(unit.model, &class.package, class.class, feature, expr_body)?;
+        methods.push_str(&format!(
+            "    /// Derived feature `{name}`, lowered from the neutral `expr` body.\n    pub fn {snake}(&self, res: &Resource) -> {ret} {{\n        {lowered}\n    }}\n\n",
+            name = feature.name,
+            snake = rust_ident(&snake_case(&feature.name)),
+        ));
+    }
+    for operation in &class.class.operations {
+        let expr_body = operation.bodies.get("expr");
+        let rust_body = operation.bodies.get("rust");
+        if let (Some(_), Some(_)) = (expr_body, rust_body) {
+            bail!(
+                "operation '{}' has conflicting 'rust' and 'expr' bodies; \
+                 declare exactly one body per operation",
+                operation.name
+            );
+        }
         let params = operation
             .params
             .iter()
@@ -876,6 +1140,25 @@ fn emit_struct(e: &mut String, unit: &Unit<'_>, class: &ClassCtx<'_>) -> anyhow:
             String::new()
         } else {
             format!(", {params}")
+        };
+        if let Some(expr_body) = expr_body {
+            let (lowered, expr_ty) = lower_op_expr_body(
+                unit.model,
+                &class.package,
+                class.class,
+                operation,
+                expr_body,
+            )?;
+            let ret = expr_return_type(&expr_ty)?;
+            methods.push_str(&format!(
+                "    /// Declared operation `{name}` (lowered from the neutral `expr` body).\n    pub fn {snake}(&self, res: &Resource{head}) -> {ret} {{\n        {lowered}\n    }}\n\n",
+                name = operation.name,
+                snake = rust_ident(&snake_case(&operation.name)),
+            ));
+            continue;
+        }
+        let Some(body) = rust_body else {
+            continue;
         };
         methods.push_str(&format!(
             "    /// Declared operation `{name}` (rust body embedded verbatim).\n    pub fn {snake}(&self, res: &Resource{head}) -> {ret} {{\n{body}\n    }}\n\n",
@@ -1825,6 +2108,217 @@ mod tests {
         assert!(
             code.contains("operations with a `rust` body are emitted"),
             "header must describe Tier 1 bodies:\n{code}"
+        );
+    }
+
+    // --- Tier 2: neutral `expr` bodies --------------------------------------
+
+    /// `op Book getBook(String title) { expr { books.first(b => b.title ==
+    /// title) } }`: the expression's type drives the return (`Option` of the
+    /// declared class id), and the body is the lowered Rust text.
+    #[test]
+    fn expr_body_op_lowers_to_a_typed_method() {
+        let mut model = Model::new();
+        let mut package = Package::new("demo");
+        package.classes.push(ClassDef::new(
+            "Library",
+            vec![],
+            vec![Feature::new(
+                "books",
+                FeatureKind::Containment,
+                TypeRef::Class {
+                    package: "demo".to_string(),
+                    name: "Book".to_string(),
+                },
+                Multiplicity::MANY,
+            )],
+        ));
+        package.classes[0].operations.push(
+            Operation::new(
+                "getBook",
+                TypeRef::Class {
+                    package: "demo".to_string(),
+                    name: "Book".to_string(),
+                },
+                vec![OperationParam {
+                    name: "title".to_string(),
+                    type_: TypeRef::Primitive(PrimitiveType::String),
+                }],
+            )
+            .with_body("expr", "books.first(b => b.title == title)"),
+        );
+        package.classes.push(ClassDef::new(
+            "Book",
+            vec![],
+            vec![Feature::new(
+                "title",
+                FeatureKind::Attribute,
+                TypeRef::Primitive(PrimitiveType::String),
+                Multiplicity::REQUIRED,
+            )],
+        ));
+        model.packages.push(package);
+
+        let code = generate(&model)
+            .expect("generate")
+            .remove("models.rs")
+            .expect("models.rs");
+        assert!(
+            code.contains(
+                "pub fn get_book(&self, res: &Resource, title: String) -> Option<BookId> {\n        self.books.clone().iter().find(|b| (res.book(**b).map(|o| o.title.clone()).expect(\"dangling `Book` id\") == title.clone())).copied()\n    }"
+            ),
+            "lowered method:\n{code}"
+        );
+        assert!(
+            code.contains("lowered from the neutral `expr` body"),
+            "doc comment must mark lowered bodies:\n{code}"
+        );
+    }
+
+    #[test]
+    fn expr_body_type_error_fails_generation_naming_the_operation() {
+        let mut model = Model::new();
+        let mut package = Package::new("demo");
+        package
+            .classes
+            .push(ClassDef::new("Library", vec![], vec![]));
+        package.classes[0].operations.push(
+            Operation::new("broken", TypeRef::Primitive(PrimitiveType::Int), vec![])
+                .with_body("expr", "\"text\" + 1"),
+        );
+        package.classes.push(ClassDef::new("Book", vec![], vec![]));
+        model.packages.push(package);
+
+        let error = generate(&model).expect_err("L2 violation must fail generation");
+        assert!(
+            error.to_string().contains("'broken'"),
+            "error must name the operation: {error:#}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("operator `+` requires numeric operands"),
+            "error must carry the checker message: {error:#}"
+        );
+    }
+
+    #[test]
+    fn expr_body_return_type_mismatch_fails_generation() {
+        let mut model = Model::new();
+        let mut package = Package::new("demo");
+        package
+            .classes
+            .push(ClassDef::new("Library", vec![], vec![]));
+        package.classes[0].operations.push(
+            Operation::new("wrong", TypeRef::Primitive(PrimitiveType::Int), vec![])
+                .with_body("expr", "\"text\""),
+        );
+        package.classes.push(ClassDef::new("Book", vec![], vec![]));
+        model.packages.push(package);
+
+        let error = generate(&model).expect_err("return mismatch must fail generation");
+        assert!(
+            error.to_string().contains("'wrong'") && error.to_string().contains("int"),
+            "error must name the operation and both types: {error:#}"
+        );
+    }
+
+    #[test]
+    fn conflicting_rust_and_expr_bodies_are_rejected() {
+        let mut model = Model::new();
+        let mut package = Package::new("demo");
+        package
+            .classes
+            .push(ClassDef::new("Library", vec![], vec![]));
+        package.classes[0].operations.push(
+            Operation::new("both", TypeRef::Primitive(PrimitiveType::Int), vec![])
+                .with_body("rust", " 42 ")
+                .with_body("expr", "42"),
+        );
+        package.classes.push(ClassDef::new("Book", vec![], vec![]));
+        model.packages.push(package);
+
+        let error = generate(&model).expect_err("conflicting bodies must fail generation");
+        assert!(
+            error.to_string().contains("'both'"),
+            "error must name the operation: {error:#}"
+        );
+    }
+
+    /// A derived feature with an `expr` body lowers into an accessor on the
+    /// class. The return type follows the feature's declared typing (a
+    /// 0..1 derived attribute is `Option<..>`); a total expression of the
+    /// inner type wraps in `Some` — it simply never yields the absent state.
+    #[test]
+    fn derived_expr_body_lowers_to_an_accessor() {
+        let mut model = Model::new();
+        let mut package = Package::new("demo");
+        package.classes.push(ClassDef::new(
+            "Book",
+            vec![],
+            vec![
+                Feature::new(
+                    "title",
+                    FeatureKind::Attribute,
+                    TypeRef::Primitive(PrimitiveType::String),
+                    Multiplicity::REQUIRED,
+                ),
+                Feature::new(
+                    "pages",
+                    FeatureKind::Attribute,
+                    TypeRef::Primitive(PrimitiveType::Int),
+                    Multiplicity::REQUIRED,
+                ),
+                Feature::new(
+                    "citation",
+                    FeatureKind::Attribute,
+                    TypeRef::Primitive(PrimitiveType::String),
+                    Multiplicity::OPTIONAL,
+                )
+                .derived()
+                .with_body("expr", "if pages > 400 { title } else { \"short read\" }"),
+            ],
+        ));
+        model.packages.push(package);
+
+        let code = generate(&model)
+            .expect("generate")
+            .remove("models.rs")
+            .expect("models.rs");
+        assert!(
+            code.contains(
+                "pub fn citation(&self, res: &Resource) -> Option<String> {\n        Some(if (self.pages > 400i32) { self.title.clone() } else { \"short read\".to_string() })\n    }"
+            ),
+            "lowered accessor:\n{code}"
+        );
+        assert!(
+            code.contains("Derived feature `citation`, lowered from the neutral `expr` body."),
+            "doc comment must mark the lowered accessor:\n{code}"
+        );
+    }
+
+    #[test]
+    fn derived_expr_body_type_error_fails_generation_naming_the_feature() {
+        let mut model = Model::new();
+        let mut package = Package::new("demo");
+        package.classes.push(ClassDef::new(
+            "Book",
+            vec![],
+            vec![Feature::new(
+                "citation",
+                FeatureKind::Attribute,
+                TypeRef::Primitive(PrimitiveType::String),
+                Multiplicity::OPTIONAL,
+            )
+            .derived()
+            .with_body("expr", "\"text\" + 1")],
+        ));
+        model.packages.push(package);
+
+        let error = generate(&model).expect_err("L2 violation must fail generation");
+        assert!(
+            error.to_string().contains("'citation'"),
+            "error must name the feature: {error:#}"
         );
     }
 }

@@ -117,6 +117,42 @@ impl TypeChecker {
         self
     }
 
+    /// Binds every feature of `package.class` (and of its class supertypes,
+    /// base classes first so subclass features shadow them) as a root name
+    /// typed per the IR feature rules — the implicit-`self` scope of an
+    /// `expr` operation or derived-feature body, where a bare feature name
+    /// refers to the enclosing object. Parameters bound afterwards shadow
+    /// same-named features.
+    pub fn with_self(mut self, package: &str, class: &str) -> Self {
+        // Collect the extends chain, cycle-safe, nearest superclass first.
+        let mut chain = Vec::new();
+        let mut queue = vec![(package.to_string(), class.to_string())];
+        let mut visited = BTreeSet::new();
+        while let Some(key) = queue.pop() {
+            if !visited.insert(key.clone()) {
+                continue;
+            }
+            let Some(info) = self.context.class(&key.0, &key.1) else {
+                continue;
+            };
+            chain.push(info.clone());
+            for extends in &info.extends {
+                if let TypeRef::Class { package, name } = extends {
+                    queue.push((package.clone(), name.clone()));
+                }
+            }
+        }
+        // Base classes first: a later binding shadows an earlier one, so the
+        // most-derived feature wins.
+        for info in chain.iter().rev() {
+            for feature in &info.features {
+                self.scope
+                    .push((feature.name.clone(), Some(feature_result_ty(feature))));
+            }
+        }
+        self
+    }
+
     /// Types the expression, or returns every type error found (spec: errors
     /// are collected without cascades).
     pub fn type_of(&self, expr: &Expr) -> Result<Ty, Vec<ExprError>> {

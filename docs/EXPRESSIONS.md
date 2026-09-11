@@ -17,7 +17,10 @@ classic four. Those are rules **R1–R4** below; they are numbered so tests and
 backends can cite them.
 
 Status: this document is the normative spec for the expression *surface and
-typing* (the front half). Backend lowering rules land with each backend.
+typing* (the front half). Backend lowering rules land with each backend; the
+**Rust** lowering is pinned below — each rule carries a "Rust lowering"
+subsection, and the exact Rust shapes for names, feature access, and the
+algebra are in ["Rust lowering"](#rust-lowering).
 
 ## Lexical rules
 
@@ -170,6 +173,13 @@ runtime panic per the contract above; `long` constant pairs never fold in
 practice because a literal only becomes `long` in a non-constant context (L1),
 so `long` overflow remains purely a runtime contract.
 
+**Rust lowering.** Plain `+`/`-`/`*` on the literal-suffixed operands
+(`2i32`/`2i64` per L1); Rust's debug-build overflow panic *is* the contract:
+
+```rust
+(self.pages * 2i32)   // `pages * 2`; panics on overflow in debug builds
+```
+
 ### R2 — STRING EQUALITY
 
 `==` (and its alias `=`) on `string` operands is **value equality**.
@@ -184,6 +194,18 @@ symmetrically); `null` compares with a value of any type.
 Typing: both operands must have the same type (L1 literal adaptation
 applies), or one of them must be the `null` literal. Comparing values of two
 different named/primitive types is a type error.
+
+**Rust lowering.** Plain `==`/`!=` (Rust `String` equality is value equality;
+`Option<T>`'s `PartialEq` is exactly the element-wise rule; `==` borrows both
+sides, so nothing moves). Against `null`: `is_none()` when the other operand
+is optional, otherwise the constant answer (`false`/`true` — a required value
+can never be absent). A string literal operand emits a bare `&str`, since
+`String == &str` is value equality:
+
+```rust
+self.title.clone() == "Dune"               // value equality, no allocation
+book.library.is_none()                     // `book.library == null`
+```
 
 ### R3 — OPTION/NULL PROPAGATION
 
@@ -201,6 +223,20 @@ yields `Option<T>`.
 - A **to-many** `contains`/`refers` feature yields `List<T>` — the empty list
   is a valid value; there is no `Option` around a collection.
 
+**Rust lowering.** `?.` over an optional receiver chains `and_then` (the
+lookup) with `map` (or a second `and_then` when the feature itself is
+optional-valued); `?.` over a non-optional receiver yields `Some(..)` unless
+the result already is an `Option`. `?:` lowers to `unwrap_or` — the default
+is evaluated **eagerly** in Rust (expressions are pure, so the only visible
+difference would be a panicking default):
+
+```rust
+lib_id.and_then(|id| res.library(id)).map(|o| o.name.clone())
+                                                     // `lib_id?.name`
+lib_id.and_then(|id| res.library(id)).map(|o| o.name.clone())
+     .unwrap_or("anon".to_string())                  // `... ?: "anon"`
+```
+
 ### R4 — DIVISION BY ZERO
 
 Integer division by zero is a **runtime panic contract** — the same behavior
@@ -213,6 +249,13 @@ behavior), for both `int` and `long`.
 
 Compile-time half: a **constant zero divisor** (any expression that folds to
 the integer constant `0`, including `-0`) is a **type-check error**.
+
+**Rust lowering.** Plain `/` — Rust integer division is already truncating
+toward zero and panics on a zero divisor, which is exactly the contract:
+
+```rust
+(self.pages / 2i32)   // truncating; panics when the divisor is zero
+```
 
 ## Collection algebra
 
@@ -234,6 +277,57 @@ lambda passed to an algebra call has the receiver's element type `T`. A lambda
 outside an algebra call (where its parameter type cannot be inferred) is a
 type error. Inside the lambda body the parameter shadows outer bindings of the
 same name (shadowing is always allowed).
+
+## Rust lowering
+
+The Rust backend (`rex-backend-rust`) lowers the typed tree with
+`expr_lower::lower_expr`. The shapes below are normative for the Rust target
+and pinned by `crates/rex-backend-rust/tests/expr_lower.rs`.
+
+**Values, names, and `self`.** Class-typed values are their typed ids
+(`BookId`, always `Copy`); every other type is its Rust value. The implicit
+`self` (the class owning the body) puts each of its features in scope as a
+bare name, read directly off the struct (`books` → `self.books.clone()`;
+derived features call the generated accessor, `citation` →
+`self.citation(res)`). Operation parameters and `let` bindings are locals:
+`Copy` values are used plainly, everything else clones on use — generated
+code is correct in every context and never moves out of `self`. Inside an
+emitted closure the same rule holds (`.clone()` compiles whether the capture
+was by reference or by move). `if` lowers to a Rust `if` expression, `let` to
+a scoped block `{ let x = ..; .. }`, list literals to `vec![..]`, and every
+binary node is parenthesized, so precedence is safe by construction.
+
+**Feature access through `res`.** Reading a feature of a class-typed receiver
+goes through the arena: `res.book(RECV).map(|o| FIELD).expect("dangling
+`Book` id")`. The `expect` asserts the arena invariant that stored ids resolve
+(generated mutators never delete objects); it is the one failure mode beyond
+R1/R4/`Option`. Field shapes on the resolved object `o: &Book`: value
+features clone when non-`Copy` (`o.title.clone()`) and read plainly when
+`Copy` (`o.pages`); reference/container features are the id or `Option<id>`
+field (`o.library`); to-many features clone the vector (`o.authors.clone()`).
+Safe navigation (`a?.b`) propagates `None` with `and_then`/`map` as described
+under R3. Operation calls become method calls on the resolved object:
+`res.book(b).expect("dangling `Book` id").find_book(title.clone())`.
+
+**A1–A6 in Rust.** The receiver expression `X` lowers independently and the
+closure parameter is the element reference (one reference layer for
+`map`/`any` items, two for the `find`/`filter` predicates' `&Self::Item`):
+
+| # | Form | Rust shape (result) |
+|---|---|---|
+| A1 | `X.first(p => PRED)` | `X.iter().find(\|b\| PRED).copied()` / `.cloned()` → `Option<T>` |
+| A1 | `X.first()` | `X.first().copied()` / `.cloned()` → `Option<T>` |
+| A2 | `X.filter(p => PRED)` | `X.iter().filter(\|b\| PRED).copied()/.cloned().collect::<Vec<_>>()` |
+| A3 | `X.map(p => BODY)` | `X.iter().map(\|b\| BODY).collect::<Vec<_>>()` |
+| A4 | `X.any(p => PRED)` | `X.iter().any(\|b\| PRED)` → `bool` |
+| A5 | `X.size()` | `X.len() as i32` → `int` |
+| A6 | `X.sum()` | `X.iter().sum::<i32/i64/…>()` (annotated element width; `0` when empty) |
+
+`.copied()` adapts `Copy` element types; `.cloned()` clones only the elements
+actually selected (for A2, only the matches). A6 sums by shared borrow (`iter`
++ `Sum<&T>`), so it works on stored fields and temporaries alike; the sum is
+plain `+`, keeping the R1 contract. An A1 result is naturally `Option`; the
+remaining forms yield plain values, so their `?.` forms wrap in `Some(..)`.
 
 ## Scoping and evaluation shape
 

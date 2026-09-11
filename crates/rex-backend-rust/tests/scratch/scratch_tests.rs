@@ -178,6 +178,45 @@ mod scratch_tests {
         assert_eq!(date.convert(), "1965-08-01".to_string());
     }
 
+    // ------------------------------------------------------------------
+    // Tier 2: neutral `expr` bodies — operations and a derived accessor
+    // lowered by the backend and evaluated here against built resources.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn expr_bodies_evaluate_against_the_resource() {
+        let res = conformance_resource();
+        let lib = res.libraries.iter().next().map(|(key, _)| key).unwrap();
+        let library = res.library(lib).unwrap();
+
+        // `op int totalPages() { expr { books.map(b => b.pages).sum() } }`
+        assert_eq!(library.total_pages(&res), 412 + 310);
+
+        // `op boolean anyLongBook() { expr { books.any(b => b.pages > 300) } }`
+        assert!(library.any_long_book(&res));
+
+        // `op Book findBook(String title) { expr { books.first(b => b.title
+        // == title) } }` — the optional result maps to `Option<BookId>`.
+        let dune = library.find_book(&res, "Dune".to_string());
+        assert_eq!(
+            dune.map(|id| res.book(id).unwrap().title.clone()),
+            Some("Dune".to_string())
+        );
+        assert_eq!(library.find_book(&res, "missing".to_string()), None);
+
+        // `derived String citation { expr { if pages > 400 { title } else {
+        // "short read" } } }` — both branches exercised.
+        let hobbit = library.find_book(&res, "The Hobbit".to_string()).unwrap();
+        assert_eq!(
+            res.book(dune.unwrap()).unwrap().citation(&res),
+            Some("Dune".to_string())
+        );
+        assert_eq!(
+            res.book(hobbit).unwrap().citation(&res),
+            Some("short read".to_string())
+        );
+    }
+
     #[test]
     fn unknown_ids_are_absent() {
         use slotmap::Key;

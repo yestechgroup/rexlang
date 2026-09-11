@@ -71,8 +71,10 @@ struct Resolution {
     name: String,
 }
 
-/// The per-target backends known in Tier 1, in warning-message order.
-const KNOWN_TARGETS: [&str; 3] = ["rust", "csharp", "java"];
+/// The per-target backends known to the driver, in warning-message order.
+/// `expr` is the Tier-2 pseudo-target holding the neutral expression
+/// language (the Rust backend lowers it; see `docs/EXPRESSIONS.md`).
+const KNOWN_TARGETS: [&str; 4] = ["rust", "csharp", "java", "expr"];
 
 /// The verbatim text inside a target body's braces. Spans are byte offsets
 /// into the same source the AST was parsed from; braces are one byte each,
@@ -83,7 +85,8 @@ fn body_text(source: &str, span: Span) -> &str {
 }
 
 /// Lowers target-tagged bodies into a verbatim `target -> code` map,
-/// warning on unknown target names and erroring on duplicates.
+/// warning on unknown target names, erroring on duplicates, and erroring on
+/// the `rust` + `expr` conflict (one operation, one body language).
 fn lower_target_bodies(
     bodies: &[mox::TargetBody],
     source: &str,
@@ -91,6 +94,7 @@ fn lower_target_bodies(
     diags: &mut Vec<Diagnostic>,
 ) -> BTreeMap<String, String> {
     let mut lowered = BTreeMap::new();
+    let mut spans: BTreeMap<String, Span> = BTreeMap::new();
     for body in bodies {
         if !KNOWN_TARGETS.contains(&body.target.text.as_str()) {
             diags.push(Diagnostic::warning(
@@ -114,6 +118,13 @@ fn lower_target_bodies(
                 Some(body.target.span),
             ));
         }
+        spans.insert(body.target.text.clone(), body.target.span);
+    }
+    if lowered.contains_key("rust") && lowered.contains_key("expr") {
+        diags.push(Diagnostic::error(
+            "conflicting bodies for targets rust and expr",
+            spans.get("expr").copied(),
+        ));
     }
     lowered
 }
@@ -996,29 +1007,53 @@ fn lower_class(
                 multiplicity,
                 name,
                 body,
+                bodies,
                 ..
             } => {
                 let resolution = resolve(type_ref, package, kinds, diags);
                 report_class_typed_feature(name, type_ref, resolution.as_ref(), diags);
-                if let Some(body) = body {
+                // Tier 2: a derived body must be the neutral expression
+                // language, in a single `expr { ... }` block.
+                if body.is_some() && bodies.is_empty() {
                     diags.push(Diagnostic::error(
-                        "derived get bodies are not supported yet (Tier 2)",
-                        Some(*body),
+                        "derived bodies must use the neutral expression language: \
+                         get { expr { ... } }",
+                        Some(body.expect("body span checked above")),
                     ));
+                }
+                let lowered_bodies = lower_target_bodies(
+                    bodies,
+                    source,
+                    &format!("derived feature '{}'", name.text),
+                    diags,
+                );
+                for target in lowered_bodies.keys() {
+                    if target != "expr" {
+                        let span = bodies
+                            .iter()
+                            .find(|body| body.target.text == *target)
+                            .map(|body| body.target.span);
+                        diags.push(Diagnostic::error(
+                            "derived bodies must use the neutral expression language: \
+                             get { expr { ... } }",
+                            span,
+                        ));
+                    }
                 }
                 let multiplicity = multiplicity
                     .as_ref()
                     .map(|m| lower_multiplicity(m, diags))
                     .unwrap_or(ir::Multiplicity::OPTIONAL);
                 let ir_type = ir_type_of(resolution.as_ref(), package, type_ref);
-                let ir_feature = ir::Feature::new(
+                let mut ir_feature = ir::Feature::new(
                     &name.text,
                     ir::FeatureKind::Attribute,
                     ir_type,
                     multiplicity,
                 )
                 .derived();
-                let ir_feature = apply_modifiers(ir_feature, feature.modifiers());
+                ir_feature = apply_modifiers(ir_feature, feature.modifiers());
+                ir_feature.bodies = lowered_bodies;
                 features.push(ir_feature);
                 records.push(FeatureRecord {
                     name: name.text.clone(),

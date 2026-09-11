@@ -443,14 +443,18 @@ fn derived_decl<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra
         .ignore_then(tref())
         .then(multiplicity().or_not())
         .then(name())
-        .then(raw_body().or_not())
+        // Tier 2: a derived body is the same shape as an operation body —
+        // target-tagged blocks (the neutral expression lives in a single
+        // `expr { ... }` block) or a bare `{ ... }` the driver rejects.
+        .then(op_body())
         .map_with(
-            |(((type_ref, multiplicity), name), body), e| FeatureDecl::Derived {
+            |(((type_ref, multiplicity), name), (body, bodies)), e| FeatureDecl::Derived {
                 modifiers: Modifiers::default(),
                 type_ref,
                 multiplicity,
                 name,
                 body,
+                bodies,
                 span: e.span(),
             },
         )

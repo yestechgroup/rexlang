@@ -55,6 +55,11 @@
 //!    artifacts for body-less models are byte-identical to pre-Tier-1
 //!    output. Bodies are **verbatim code strings** keyed by target name —
 //!    the IR never parses or reformats them.
+//! 8. **Derived-feature bodies (additive, Tier 2).** [`Feature::bodies`]
+//!    carries the neutral expression of a derived feature (keyed by target,
+//!    `"expr"` for the neutral language) under the same additive rules:
+//!    omitted when empty, so artifacts for models without derived bodies are
+//!    byte-identical to pre-Tier-2 output.
 //!
 //! [rexlang]: https://github.com/anton-makes/rexlang
 
@@ -485,6 +490,12 @@ pub struct Feature {
     /// (`readonly` modifier; reserved).
     #[serde(default)]
     pub is_read_only: bool,
+    /// Verbatim per-target bodies for derived features (Tier 2): the neutral
+    /// expression language is carried under the `"expr"` key, verbatim from
+    /// the source. Stored features have no bodies. Additive; omitted when
+    /// empty.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub bodies: BTreeMap<String, String>,
 }
 
 impl Feature {
@@ -508,6 +519,7 @@ impl Feature {
             is_derived: false,
             is_id: false,
             is_read_only: false,
+            bodies: BTreeMap::new(),
         }
     }
 
@@ -530,6 +542,13 @@ impl Feature {
     /// Chainable setter marking the feature as derived (computed).
     pub fn derived(mut self) -> Self {
         self.is_derived = true;
+        self
+    }
+
+    /// Chainable setter adding a verbatim per-target body to a derived
+    /// feature (Tier 2: the neutral expression is carried under `"expr"`).
+    pub fn with_body(mut self, target: impl Into<String>, code: impl Into<String>) -> Self {
+        self.bodies.insert(target.into(), code.into());
         self
     }
 

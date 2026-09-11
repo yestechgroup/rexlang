@@ -972,3 +972,53 @@ fn datatype_wraps_named_target_and_bare_bindings() {
     assert!(timestamp.wraps.is_none());
     assert_eq!(timestamp.bindings[0].key.text, "rust");
 }
+
+// ---------------------------------------------------------------------------
+// Tier 2: derived-feature bodies
+// ---------------------------------------------------------------------------
+
+#[test]
+fn derived_accepts_a_target_tagged_expr_body() {
+    let source = "class C { derived String citation { expr { title } } }";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let binding = result.ast.expect("ast");
+    let class = match &binding.declarations[0] {
+        Decl::Class(class) => class,
+        other => panic!("expected class, got {other:?}"),
+    };
+    let FeatureDecl::Derived { body, bodies, .. } = &class.features[0] else {
+        panic!("expected derived");
+    };
+    // The tagged shape carries the outer-brace span and the `expr` block;
+    // `TargetBody::span` covers only the target's inner braces (the exact
+    // text `body_text` slices).
+    assert_eq!(bodies.len(), 1);
+    assert_eq!(bodies[0].target.text, "expr");
+    assert_eq!(
+        &source[bodies[0].span.start..bodies[0].span.end],
+        "{ title }"
+    );
+    let outer = body.expect("outer span");
+    assert_eq!(&source[outer.start..outer.end], "{ expr { title } }");
+}
+
+#[test]
+fn derived_bare_body_still_parses_as_a_raw_body() {
+    // Parsing is permissive (balanced braces); the DRIVER rejects the bare
+    // shape with the Tier-2 guidance.
+    let source = "class C { derived int total { 42 } }";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let binding = result.ast.expect("ast");
+    let class = match &binding.declarations[0] {
+        Decl::Class(class) => class,
+        other => panic!("expected class, got {other:?}"),
+    };
+    let FeatureDecl::Derived { body, bodies, .. } = &class.features[0] else {
+        panic!("expected derived");
+    };
+    assert!(bodies.is_empty(), "a bare body has no tagged targets");
+    let bare = body.expect("bare span");
+    assert_eq!(&source[bare.start..bare.end], "{ 42 }");
+}
