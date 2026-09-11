@@ -676,7 +676,10 @@ fn self_declared_permit_with_forbid_also_warns() {
     let source = r#"
 package demo
 
-class Ticket { String title }
+class Ticket {
+    String title
+    boolean internal
+}
 
 actors Support {
     actor Customer
@@ -785,11 +788,95 @@ actors Support {
 }
 
 #[test]
-fn when_condition_text_is_ends_trimmed() {
+fn when_condition_must_be_boolean() {
+    let source = r#"
+package demo
+
+class Ticket { int amount }
+
+actors Support {
+    actor Customer
+
+    capability ReadTicket on Ticket
+
+    grant Customer {
+        permit ReadTicket when (amount)
+    }
+}
+"#;
+    let compilation = compile(source);
+    assert!(compilation.model.is_none(), "errors block lowering");
+    let diagnostic = single_diagnostic(&compilation, "invalid `when` condition:");
+    assert!(diagnostic.is_error());
+    assert_eq!(
+        diagnostic.message,
+        "invalid `when` condition: condition must be boolean, found int"
+    );
+}
+
+#[test]
+fn when_condition_unknown_feature_is_a_type_error() {
     let source = r#"
 package demo
 
 class Ticket { String title }
+
+actors Support {
+    actor Customer
+
+    capability ReadTicket on Ticket
+
+    grant Customer {
+        permit ReadTicket when (!internal)
+    }
+}
+"#;
+    let compilation = compile(source);
+    assert!(compilation.model.is_none(), "errors block lowering");
+    let diagnostic = single_diagnostic(&compilation, "invalid `when` condition:");
+    assert_eq!(
+        diagnostic.message,
+        "invalid `when` condition: unknown name `internal`"
+    );
+    assert_eq!(diagnostic.span, Some(span_of(source, "internal", 0)));
+}
+
+#[test]
+fn when_condition_typechecks_against_the_capability_class() {
+    let source = r#"
+package demo
+
+class Ticket {
+    boolean internal
+    int amount
+}
+
+actors Support {
+    actor Customer
+
+    capability ReadTicket on Ticket
+    capability RaiseRefund on Ticket
+
+    grant Customer {
+        permit ReadTicket when (!internal)
+        permit RaiseRefund when (amount <= 1000)
+    }
+}
+"#;
+    let compilation = compile(source);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        compilation.diagnostics
+    );
+}
+
+#[test]
+fn when_condition_text_is_ends_trimmed() {
+    let source = r#"
+package demo
+
+class Ticket { boolean internal }
 
 actors Support {
     actor Customer

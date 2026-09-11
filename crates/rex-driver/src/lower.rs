@@ -8,6 +8,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use rex_expr::{Ty, TypeChecker, TypeContext};
 use rex_ir as ir;
 use rex_syntax::ast as mox;
 use rex_syntax::Span;
@@ -68,8 +69,240 @@ impl Resolved {
 /// The outcome of resolving one type reference.
 struct Resolution {
     kind: Resolved,
+    /// The package that owns the resolved type.
+    package: String,
     /// The local (final-segment) type name.
     name: String,
+}
+
+/// The type namespace of one imported domain package (`.actor` files).
+struct DomainPackage {
+    name: String,
+    kinds: HashMap<String, TopKind>,
+}
+
+/// The namespace a block resolves type references against: either a single
+/// `.mox` package (the inline blocks of a plain model compile) or the
+/// combined namespace of the imported domain packages (`.actor` files).
+enum Scope<'a> {
+    Single {
+        package: &'a str,
+        kinds: &'a HashMap<&'a str, TopKind>,
+    },
+    Domains {
+        packages: &'a [DomainPackage],
+    },
+}
+
+impl Scope<'_> {
+    /// The package named in unresolved-type fallbacks (the model is
+    /// discarded whenever errors exist, so the exact value does not matter
+    /// for the union path).
+    fn fallback_package(&self) -> &str {
+        match self {
+            Scope::Single { package, .. } => package,
+            Scope::Domains { packages } => packages
+                .first()
+                .map(|package| package.name.as_str())
+                .unwrap_or(""),
+        }
+    }
+
+    /// Resolves a type reference, emitting a diagnostic (and returning
+    /// `None`) when it cannot be resolved.
+    fn resolve(&self, type_ref: &mox::TypeRef, diags: &mut Vec<Diagnostic>) -> Option<Resolution> {
+        match self {
+            Scope::Single { package, kinds } => resolve_single(type_ref, package, kinds, diags),
+            Scope::Domains { packages } => resolve_domains(type_ref, packages, diags),
+        }
+    }
+}
+
+/// Resolves within a single package: primitives and single-segment names are
+/// package-local; the only qualified form accepted is `<package>.<Name>`.
+fn resolve_single(
+    type_ref: &mox::TypeRef,
+    package: &str,
+    kinds: &HashMap<&str, TopKind>,
+    diags: &mut Vec<Diagnostic>,
+) -> Option<Resolution> {
+    let segments = &type_ref.name.segments;
+    let full_name = type_ref.name.full_name();
+
+    let local = match segments.len() {
+        1 => &segments[0].text,
+        2 if segments[0].text == *package => &segments[1].text,
+        _ => {
+            diags.push(Diagnostic::error(
+                "cross-package type references are not supported yet",
+                Some(type_ref.span),
+            ));
+            return None;
+        }
+    };
+
+    if segments.len() == 1 {
+        if let Some(primitive) = primitive_type(local) {
+            return Some(Resolution {
+                kind: Resolved::Primitive(primitive),
+                package: package.to_string(),
+                name: local.clone(),
+            });
+        }
+    }
+
+    let resolved = classify(
+        &full_name,
+        local,
+        type_ref.span,
+        kinds.get(local.as_str()),
+        diags,
+    )?;
+    Some(Resolution {
+        kind: resolved,
+        package: package.to_string(),
+        name: local.clone(),
+    })
+}
+
+/// Resolves against the combined namespace of the imported domain packages:
+/// a single-segment name is looked up in every package (ambiguous when found
+/// in more than one); a qualified name's leading segments must name exactly
+/// one package.
+fn resolve_domains(
+    type_ref: &mox::TypeRef,
+    packages: &[DomainPackage],
+    diags: &mut Vec<Diagnostic>,
+) -> Option<Resolution> {
+    let segments = &type_ref.name.segments;
+    let full_name = type_ref.name.full_name();
+
+    if segments.len() >= 2 {
+        let package_name = segments[..segments.len() - 1]
+            .iter()
+            .map(|segment| segment.text.as_str())
+            .collect::<Vec<_>>()
+            .join(".");
+        let local = &segments[segments.len() - 1].text;
+        if let Some(package) = packages.iter().find(|package| package.name == package_name) {
+            let resolved = classify(
+                &full_name,
+                local,
+                type_ref.span,
+                package.kinds.get(local.as_str()),
+                diags,
+            )?;
+            return Some(Resolution {
+                kind: resolved,
+                package: package.name.clone(),
+                name: local.clone(),
+            });
+        }
+        diags.push(Diagnostic::error(
+            format!("unknown type '{full_name}'"),
+            Some(type_ref.span),
+        ));
+        return None;
+    }
+
+    let local = &segments[0].text;
+    if let Some(primitive) = primitive_type(local) {
+        return Some(Resolution {
+            kind: Resolved::Primitive(primitive),
+            package: String::new(),
+            name: local.clone(),
+        });
+    }
+    let matches: Vec<&DomainPackage> = packages
+        .iter()
+        .filter(|package| package.kinds.contains_key(local.as_str()))
+        .collect();
+    match matches.len() {
+        0 => {
+            diags.push(Diagnostic::error(
+                format!("unknown type '{full_name}'"),
+                Some(type_ref.span),
+            ));
+            None
+        }
+        1 => {
+            let package = matches[0];
+            let resolved = classify(
+                &full_name,
+                local,
+                type_ref.span,
+                package.kinds.get(local.as_str()),
+                diags,
+            )?;
+            Some(Resolution {
+                kind: resolved,
+                package: package.name.clone(),
+                name: local.clone(),
+            })
+        }
+        _ => {
+            let mut names: Vec<&str> = matches
+                .iter()
+                .map(|package| package.name.as_str())
+                .collect();
+            names.sort();
+            diags.push(
+                Diagnostic::error(
+                    format!(
+                        "ambiguous type `{local}`; qualify as `{}.{local}`",
+                        names[0]
+                    ),
+                    Some(type_ref.span),
+                )
+                .with_help(format!(
+                    "matching types: {}",
+                    names
+                        .iter()
+                        .map(|name| format!("{name}.{local}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )),
+            );
+            None
+        }
+    }
+}
+
+/// Classifies a found namespace entry; `None` (with a diagnostic) when the
+/// name is unknown or is an actors block, which is not a data type.
+fn classify(
+    full_name: &str,
+    _local: &str,
+    span: Span,
+    found: Option<&TopKind>,
+    diags: &mut Vec<Diagnostic>,
+) -> Option<Resolved> {
+    match found {
+        Some(TopKind::Class) => Some(Resolved::Class),
+        Some(TopKind::Interface) => Some(Resolved::Interface),
+        Some(TopKind::Enum) => Some(Resolved::Enum),
+        Some(TopKind::Datatype) => Some(Resolved::Datatype),
+        Some(TopKind::Vocabulary) => Some(Resolved::Vocabulary),
+        Some(TopKind::Actors) => {
+            diags.push(
+                Diagnostic::error(
+                    format!("type '{full_name}' is an actors block, not a data type"),
+                    Some(span),
+                )
+                .with_help(
+                    "actors blocks declare authorization models and cannot be used as types",
+                ),
+            );
+            None
+        }
+        None => {
+            diags.push(Diagnostic::error(
+                format!("unknown type '{full_name}'"),
+                Some(span),
+            ));
+            None
+        }
+    }
 }
 
 /// The per-target backends known to the driver, in warning-message order.
@@ -209,6 +442,9 @@ struct ClassRecord {
 /// A per-block record kept alongside the IR for cross-declaration actors
 /// validation (inheritance cycles, separation of duty, self-narrowing).
 struct ActorsRecord {
+    /// The file the block was lowered from: diagnostics produced by the
+    /// cross-file passes are tagged with it.
+    file: String,
     def: ir::ActorsDef,
     /// Actor names with their declaration-name spans, in declaration order.
     actor_names: Vec<(String, Span)>,
@@ -218,6 +454,91 @@ struct ActorsRecord {
     never_both: Vec<(Vec<String>, Span)>,
     /// `forbid` entries: (actor, capability, capability-name span).
     forbids: Vec<(String, String, Span)>,
+}
+
+/// A `when` condition awaiting type checking once the class universe is
+/// known. Lowering only syntax-checks conditions (so parse errors keep their
+/// source order); the type check runs after every class is lowered.
+struct PendingCondition {
+    /// The file whose spans the condition refers to.
+    file: String,
+    /// The trimmed condition text.
+    text: String,
+    /// Host-file offset of the condition text's first byte.
+    base: usize,
+    /// The condition's inner region (strictly between the parens); mapped
+    /// spans are clamped to it.
+    inner_start: usize,
+    inner_end: usize,
+    /// The capability's owning class (package, name); `None` when the
+    /// capability's class failed to resolve (that error is already reported).
+    class: Option<(String, String)>,
+}
+
+/// Slices a `when (...)` span into a deferred type-check entry.
+fn pending_condition(
+    file: &str,
+    source: &str,
+    when_span: Span,
+    class: Option<(String, String)>,
+) -> PendingCondition {
+    let raw = &source[when_span.start + 1..when_span.end - 1];
+    let text = raw.trim();
+    PendingCondition {
+        file: file.to_string(),
+        text: text.to_string(),
+        base: when_span.start + 1 + (raw.len() - raw.trim_start().len()),
+        inner_start: when_span.start + 1,
+        inner_end: when_span.end - 1,
+        class,
+    }
+}
+
+/// Type-checks every deferred `when` condition against its resolved
+/// capability class per docs/EXPRESSIONS.md: bare names are that class's
+/// features, options propagate per R3, literals adapt per L1, and so on.
+/// Parse errors were already reported during lowering. The condition must
+/// type as `boolean`. Diagnostics are tagged with the host file.
+fn check_pending_conditions(
+    pending: &[PendingCondition],
+    context: &TypeContext,
+) -> Vec<(String, Diagnostic)> {
+    let mut diags = Vec::new();
+    for condition in pending {
+        let Some((package, class)) = &condition.class else {
+            continue;
+        };
+        let parsed = rex_expr::parse(&condition.text);
+        if !parsed.errors.is_empty() || parsed.ast.is_none() {
+            continue;
+        }
+        let checker = TypeChecker::new(context.clone()).with_self(package, class);
+        match checker.type_of(parsed.ast.as_ref().expect("ast checked above")) {
+            Ok(ty) if ty == Ty::boolean() => {}
+            Ok(ty) => diags.push((
+                condition.file.clone(),
+                Diagnostic::error(
+                    format!("invalid `when` condition: condition must be boolean, found {ty}"),
+                    Some((condition.inner_start..condition.inner_end).into()),
+                ),
+            )),
+            Err(errors) => {
+                for error in errors {
+                    let start = (condition.base + error.span.start)
+                        .clamp(condition.inner_start, condition.inner_end);
+                    let end = (condition.base + error.span.end).clamp(start, condition.inner_end);
+                    diags.push((
+                        condition.file.clone(),
+                        Diagnostic::error(
+                            format!("invalid `when` condition: {}", error.message),
+                            Some((start..end).into()),
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    diags
 }
 
 /// Resolves and validates a parsed model and lowers it into the Core IR.
@@ -302,13 +623,20 @@ pub(crate) fn compile(
 
     // Lower declarations in source order.
     let mut out = ir::Package::new(package.clone());
+    let scope = Scope::Single {
+        package: &package,
+        kinds: &kinds,
+    };
     let mut classes: Vec<ClassRecord> = Vec::new();
     let mut actors: Vec<ActorsRecord> = Vec::new();
+    let mut pending: Vec<PendingCondition> = Vec::new();
     for decl in &model.declarations {
         match decl {
             mox::Decl::Vocabulary(_) => {}
             mox::Decl::Actors(decl) => {
-                actors.push(lower_actors(decl, source, &package, &kinds, &mut diags))
+                let (record, conditions) = lower_actors(decl, source, path, &scope, &mut diags);
+                actors.push(record);
+                pending.extend(conditions);
             }
             mox::Decl::Annotation(annotation) => out.annotations.push(ir::Annotation {
                 source: annotation.value.clone(),
@@ -322,8 +650,7 @@ pub(crate) fn compile(
             mox::Decl::Class(decl) => classes.push(lower_class(
                 decl,
                 source,
-                &package,
-                &kinds,
+                &scope,
                 &enum_decls,
                 &vocab_keys,
                 &mut diags,
@@ -339,11 +666,13 @@ pub(crate) fn compile(
     // lowering; cycle detection runs before the ancestor walks, which are
     // skipped entirely for cyclic blocks (their results would be
     // meaningless).
-    let cyclic = detect_actor_cycles(&actors, &mut diags);
+    let mut tagged = Vec::new();
+    let cyclic = detect_actor_cycles(&actors, &mut tagged);
     if !cyclic {
-        validate_actor_never_both(&actors, &mut diags);
-        validate_actor_self_narrowing(&actors, &mut diags);
+        validate_actor_never_both(&actors, &mut tagged);
+        validate_actor_self_narrowing(&actors, &mut tagged);
     }
+    diags.extend(tagged.into_iter().map(|(_, diagnostic)| diagnostic));
 
     for mut class in classes {
         class.def.operations = std::mem::take(&mut class.operations);
@@ -353,88 +682,27 @@ pub(crate) fn compile(
         out.actors.push(record.def);
     }
 
+    let mut model = ir::Model::new();
+    model.packages.push(out);
+    // Feature ids are assigned by `ClassDef::new` in declaration order;
+    // keep them in sync with the final feature lists.
+    for class in &mut model.packages[0].classes {
+        class.assign_feature_ids();
+    }
+
+    // Every `when` condition is now fully type-checked against its
+    // capability's class (docs/EXPRESSIONS.md), which needs the complete
+    // class universe assembled above.
+    let context = TypeContext::from_model(&model);
+    diags.extend(
+        check_pending_conditions(&pending, &context)
+            .into_iter()
+            .map(|(_, diagnostic)| diagnostic),
+    );
+
     let blocked = diags.iter().any(Diagnostic::is_error);
-    let model = (!blocked).then(|| {
-        let mut model = ir::Model::new();
-        model.packages.push(out);
-        // Feature ids are assigned by `ClassDef::new` in declaration order;
-        // keep them in sync with the final feature lists.
-        for class in &mut model.packages[0].classes {
-            class.assign_feature_ids();
-        }
-        model
-    });
+    let model = (!blocked).then_some(model);
     (model, diags)
-}
-
-/// Resolves a type reference, emitting a diagnostic (and returning `None`)
-/// when it cannot be resolved within the file's single package.
-fn resolve(
-    type_ref: &mox::TypeRef,
-    package: &str,
-    kinds: &HashMap<&str, TopKind>,
-    diags: &mut Vec<Diagnostic>,
-) -> Option<Resolution> {
-    let segments = &type_ref.name.segments;
-    let full_name = type_ref.name.full_name();
-
-    // Primitives and single-segment names are package-local; the only
-    // qualified form accepted is `<package>.<Name>`.
-    let local = match segments.len() {
-        1 => &segments[0].text,
-        2 if segments[0].text == *package => &segments[1].text,
-        _ => {
-            diags.push(Diagnostic::error(
-                "cross-package type references are not supported yet",
-                Some(type_ref.span),
-            ));
-            return None;
-        }
-    };
-
-    if segments.len() == 1 {
-        if let Some(primitive) = primitive_type(local) {
-            return Some(Resolution {
-                kind: Resolved::Primitive(primitive),
-                name: local.clone(),
-            });
-        }
-    }
-
-    match kinds.get(local.as_str()) {
-        Some(top_kind) => {
-            let kind = match top_kind {
-                TopKind::Class => Resolved::Class,
-                TopKind::Interface => Resolved::Interface,
-                TopKind::Enum => Resolved::Enum,
-                TopKind::Datatype => Resolved::Datatype,
-                TopKind::Vocabulary => Resolved::Vocabulary,
-                TopKind::Actors => {
-                    diags.push(
-                        Diagnostic::error(
-                            format!("type '{full_name}' is an actors block, not a data type"),
-                            Some(type_ref.span),
-                        )
-                        .with_help(
-                            "actors blocks declare authorization models and cannot be used as types",
-                        ),
-                    );
-                    return None;
-                }
-            };
-            Some(Resolution {
-                kind,
-                name: local.clone(),
-            })
-        }
-        None => {
-            diags.push(Diagnostic::error(
-                format!("unknown type '{full_name}'"),
-                Some(type_ref.span),
-            ));
-            None
-        }
-    }
 }
 
 /// The built-in primitive names, matched case-insensitively.
@@ -461,7 +729,7 @@ fn ir_type_of(
     type_ref: &mox::TypeRef,
 ) -> ir::TypeRef {
     match resolution {
-        Some(resolution) => resolution.kind.to_ir(package, &resolution.name),
+        Some(resolution) => resolution.kind.to_ir(&resolution.package, &resolution.name),
         None => ir::TypeRef::Class {
             package: package.to_string(),
             name: type_ref
@@ -840,18 +1108,17 @@ fn primitive_facet_type(type_ref: &mox::TypeRef) -> Option<ir::PrimitiveType> {
 fn lower_class(
     decl: &mox::ClassDecl,
     source: &str,
-    package: &str,
-    kinds: &HashMap<&str, TopKind>,
+    scope: &Scope<'_>,
     enum_decls: &HashMap<&str, &mox::EnumDecl>,
     vocab_keys: &HashMap<&str, HashSet<&str>>,
     diags: &mut Vec<Diagnostic>,
 ) -> ClassRecord {
     let mut extends = Vec::new();
     for type_ref in &decl.extends {
-        if let Some(resolution) = resolve(type_ref, package, kinds, diags) {
+        if let Some(resolution) = scope.resolve(type_ref, diags) {
             match resolution.kind {
                 Resolved::Class | Resolved::Interface => {
-                    extends.push(resolution.kind.to_ir(package, &resolution.name));
+                    extends.push(resolution.kind.to_ir(&resolution.package, &resolution.name));
                 }
                 _ => diags.push(
                     Diagnostic::error(
@@ -891,13 +1158,13 @@ fn lower_class(
                 default,
                 ..
             } => {
-                let resolution = resolve(type_ref, package, kinds, diags);
+                let resolution = scope.resolve(type_ref, diags);
                 report_class_typed_feature(name, type_ref, resolution.as_ref(), diags);
                 let multiplicity = multiplicity
                     .as_ref()
                     .map(|m| lower_multiplicity(m, diags))
                     .unwrap_or(ir::Multiplicity::REQUIRED);
-                let ir_type = ir_type_of(resolution.as_ref(), package, type_ref);
+                let ir_type = ir_type_of(resolution.as_ref(), scope.fallback_package(), type_ref);
                 let ir_feature = ir::Feature::new(
                     &name.text,
                     ir::FeatureKind::Attribute,
@@ -936,8 +1203,7 @@ fn lower_class(
                     multiplicity.as_ref(),
                     name,
                     opposite.as_ref(),
-                    package,
-                    kinds,
+                    scope,
                     diags,
                 );
                 features.push(apply_modifiers(ir_feature, feature.modifiers()));
@@ -956,8 +1222,7 @@ fn lower_class(
                     multiplicity.as_ref(),
                     name,
                     opposite.as_ref(),
-                    package,
-                    kinds,
+                    scope,
                     diags,
                 );
                 features.push(apply_modifiers(ir_feature, feature.modifiers()));
@@ -977,8 +1242,7 @@ fn lower_class(
                     None,
                     name,
                     opposite.as_ref(),
-                    package,
-                    kinds,
+                    scope,
                     diags,
                 );
                 features.push(apply_modifiers(ir_feature, feature.modifiers()));
@@ -1022,18 +1286,26 @@ fn lower_class(
                     &format!("operation '{}'", name.text),
                     diags,
                 );
-                let return_resolution = resolve(return_type, package, kinds, diags);
+                let return_resolution = scope.resolve(return_type, diags);
                 let mut lowered_params = Vec::new();
                 for param in params {
-                    let resolution = resolve(&param.type_ref, package, kinds, diags);
+                    let resolution = scope.resolve(&param.type_ref, diags);
                     lowered_params.push(ir::OperationParam {
                         name: param.name.text.clone(),
-                        type_: ir_type_of(resolution.as_ref(), package, &param.type_ref),
+                        type_: ir_type_of(
+                            resolution.as_ref(),
+                            scope.fallback_package(),
+                            &param.type_ref,
+                        ),
                     });
                 }
                 let mut operation = ir::Operation::new(
                     &name.text,
-                    ir_type_of(return_resolution.as_ref(), package, return_type),
+                    ir_type_of(
+                        return_resolution.as_ref(),
+                        scope.fallback_package(),
+                        return_type,
+                    ),
                     lowered_params,
                 );
                 operation.bodies = lowered_bodies;
@@ -1055,7 +1327,7 @@ fn lower_class(
                 bodies,
                 ..
             } => {
-                let resolution = resolve(type_ref, package, kinds, diags);
+                let resolution = scope.resolve(type_ref, diags);
                 report_class_typed_feature(name, type_ref, resolution.as_ref(), diags);
                 // Tier 2: a derived body must be the neutral expression
                 // language, in a single `expr { ... }` block.
@@ -1089,7 +1361,7 @@ fn lower_class(
                     .as_ref()
                     .map(|m| lower_multiplicity(m, diags))
                     .unwrap_or(ir::Multiplicity::OPTIONAL);
-                let ir_type = ir_type_of(resolution.as_ref(), package, type_ref);
+                let ir_type = ir_type_of(resolution.as_ref(), scope.fallback_package(), type_ref);
                 let mut ir_feature = ir::Feature::new(
                     &name.text,
                     ir::FeatureKind::Attribute,
@@ -1162,11 +1434,10 @@ fn lower_relation(
     multiplicity: Option<&mox::Multiplicity>,
     name: &mox::Name,
     opposite: Option<&mox::Name>,
-    package: &str,
-    kinds: &HashMap<&str, TopKind>,
+    scope: &Scope<'_>,
     diags: &mut Vec<Diagnostic>,
 ) -> (ir::Feature, FeatureRecord) {
-    let resolution = resolve(type_ref, package, kinds, diags);
+    let resolution = scope.resolve(type_ref, diags);
     if let Some(resolution) = &resolution {
         if resolution.kind != Resolved::Class {
             diags.push(Diagnostic::error(
@@ -1187,7 +1458,7 @@ fn lower_relation(
             .map(|m| lower_multiplicity(m, diags))
             .unwrap_or(ir::Multiplicity::MANY),
     };
-    let ir_type = ir_type_of(resolution.as_ref(), package, type_ref);
+    let ir_type = ir_type_of(resolution.as_ref(), scope.fallback_package(), type_ref);
     let mut ir_feature = ir::Feature::new(
         &name.text,
         kind.ir_kind()
@@ -1272,6 +1543,7 @@ fn apply_default(
             Some(Resolution {
                 kind: Resolved::Enum,
                 name: enum_name,
+                ..
             }) => {
                 if let Some(enum_decl) = enum_decls.get(enum_name.as_str()) {
                     if !enum_decl
@@ -1290,6 +1562,7 @@ fn apply_default(
             Some(Resolution {
                 kind: Resolved::Vocabulary,
                 name: vocab_name,
+                ..
             }) => {
                 // An absent key set means the vocabulary failed to load; that
                 // error is already reported, so the default adds nothing.
@@ -1509,18 +1782,21 @@ fn check_when_syntax(source: &str, when_span: Span, diags: &mut Vec<Diagnostic>)
 }
 
 /// Lowers an `actors` declaration: duplicate actor/capability checks,
-/// capability class resolution, grant-entry capability checks, `when`
-/// condition syntax checks, and `never_both` shape checks. Cross-declaration
-/// rules (cycles, separation of duty, self-narrowing) run in the passes
-/// below.
+/// capability class resolution against the given [`Scope`], grant-entry
+/// capability checks, `when` condition syntax checks (type checking is
+/// deferred — see [`PendingCondition`]), and `never_both` shape checks.
+/// Cross-declaration rules (cycles, separation of duty, self-narrowing) run
+/// in the passes below, per-block for single-file compiles and over the
+/// union for `.actor` compiles.
 fn lower_actors(
     decl: &mox::ActorsDecl,
     source: &str,
-    package: &str,
-    kinds: &HashMap<&str, TopKind>,
+    file: &str,
+    scope: &Scope<'_>,
     diags: &mut Vec<Diagnostic>,
-) -> ActorsRecord {
+) -> (ActorsRecord, Vec<PendingCondition>) {
     let mut def = ir::ActorsDef::new(decl.name.text.clone());
+    let mut pending: Vec<PendingCondition> = Vec::new();
     let mut actor_names: Vec<(String, Span)> = Vec::new();
     let mut parents: Vec<(String, Option<String>)> = Vec::new();
     let mut forbids: Vec<(String, String, Span)> = Vec::new();
@@ -1557,6 +1833,7 @@ fn lower_actors(
 
     let mut seen_capabilities = HashSet::new();
     let mut capabilities: HashSet<&str> = HashSet::new();
+    let mut capability_classes: HashMap<&str, Option<(String, String)>> = HashMap::new();
     for capability in &decl.capabilities {
         if !seen_capabilities.insert(capability.name.text.as_str()) {
             diags.push(Diagnostic::error(
@@ -1564,9 +1841,12 @@ fn lower_actors(
                 Some(capability.name.span),
             ));
         }
-        let resolution = resolve(&capability.class, package, kinds, diags);
+        let resolution = scope.resolve(&capability.class, diags);
+        let mut class = None;
         if let Some(resolution) = &resolution {
-            if resolution.kind != Resolved::Class {
+            if resolution.kind == Resolved::Class {
+                class = Some((resolution.package.clone(), resolution.name.clone()));
+            } else {
                 diags.push(
                     Diagnostic::error(
                         format!(
@@ -1583,8 +1863,13 @@ fn lower_actors(
         capabilities.insert(&capability.name.text);
         def = def.capability(ir::CapabilityDef::new(
             &capability.name.text,
-            ir_type_of(resolution.as_ref(), package, &capability.class),
+            ir_type_of(
+                resolution.as_ref(),
+                scope.fallback_package(),
+                &capability.class,
+            ),
         ));
+        capability_classes.insert(&capability.name.text, class);
     }
 
     for grant in &decl.grants {
@@ -1625,6 +1910,11 @@ fn lower_actors(
                     if let Some(when_span) = effect.when {
                         ir_entry = ir_entry.when(when_text(source, when_span));
                         check_when_syntax(source, when_span, diags);
+                        let class = capability_classes
+                            .get(effect.capability.text.as_str())
+                            .cloned()
+                            .flatten();
+                        pending.push(pending_condition(file, source, when_span, class));
                     }
                     for obligation in &effect.obligations {
                         ir_entry = ir_entry.obligation(&obligation.text);
@@ -1670,13 +1960,17 @@ fn lower_actors(
         never_both.push((names, constraint.span));
     }
 
-    ActorsRecord {
-        def,
-        actor_names,
-        parents,
-        forbids,
-        never_both,
-    }
+    (
+        ActorsRecord {
+            file: file.to_string(),
+            def,
+            actor_names,
+            parents,
+            forbids,
+            never_both,
+        },
+        pending,
+    )
 }
 
 /// The actor → parent map of one block (only declared parents are edges).
@@ -1689,9 +1983,10 @@ fn actor_parents(record: &ActorsRecord) -> HashMap<&str, &str> {
 }
 
 /// Detects cycles in each block's actor `extends` graph, reporting the first
-/// cycle per block (span on the actor that closes it). Returns `true` when
-/// any cycle was found; callers skip the ancestor-walking passes.
-fn detect_actor_cycles(records: &[ActorsRecord], diags: &mut Vec<Diagnostic>) -> bool {
+/// cycle per block (span on the actor that closes it). Each diagnostic is
+/// tagged with the block's own file. Returns `true` when any cycle was
+/// found; callers skip the ancestor-walking passes.
+fn detect_actor_cycles(records: &[ActorsRecord], diags: &mut Vec<(String, Diagnostic)>) -> bool {
     let mut cyclic = false;
     for record in records {
         let index = actor_parents(record);
@@ -1705,9 +2000,12 @@ fn detect_actor_cycles(records: &[ActorsRecord], diags: &mut Vec<Diagnostic>) ->
             let mut path: Vec<&str> = Vec::new();
             if let Some(cycle) = visit_actor(name.as_str(), &index, &mut state, &mut path) {
                 let span = spans.get(cycle[0]).copied().unwrap_or(*span);
-                diags.push(Diagnostic::error(
-                    format!("actor inheritance cycle: {}", cycle.join(" -> ")),
-                    Some(span),
+                diags.push((
+                    record.file.clone(),
+                    Diagnostic::error(
+                        format!("actor inheritance cycle: {}", cycle.join(" -> ")),
+                        Some(span),
+                    ),
                 ));
                 cyclic = true;
                 break;
@@ -1776,10 +2074,10 @@ fn effective_permits<'a>(
         .collect()
 }
 
-/// Separation of duty: no actor's effective permit set may contain both
-/// capabilities of a `never_both` constraint. One error per (actor, pair),
-/// actors in declaration order.
-fn validate_actor_never_both(records: &[ActorsRecord], diags: &mut Vec<Diagnostic>) {
+/// Separation of duty, per block: no actor's effective permit set may
+/// contain both capabilities of the block's `never_both` constraint. One
+/// error per (actor, pair), actors in declaration order.
+fn validate_actor_never_both(records: &[ActorsRecord], diags: &mut Vec<(String, Diagnostic)>) {
     for record in records {
         let parents = actor_parents(record);
         for (pair, span) in &record.never_both {
@@ -1789,9 +2087,12 @@ fn validate_actor_never_both(records: &[ActorsRecord], diags: &mut Vec<Diagnosti
             for (name, _) in &record.actor_names {
                 let effective = effective_permits(record, &parents, name.as_str());
                 if effective.contains(a.as_str()) && effective.contains(b.as_str()) {
-                    diags.push(Diagnostic::error(
-                        format!("actor `{name}` is granted both `{a}` and `{b}` (never_both)"),
-                        Some(*span),
+                    diags.push((
+                        record.file.clone(),
+                        Diagnostic::error(
+                            format!("actor `{name}` is granted both `{a}` and `{b}` (never_both)"),
+                            Some(*span),
+                        ),
                     ));
                 }
             }
@@ -1799,21 +2100,283 @@ fn validate_actor_never_both(records: &[ActorsRecord], diags: &mut Vec<Diagnosti
     }
 }
 
-/// Self-narrowing: a `forbid` entry whose capability is already in the
-/// actor's effective permit set (own or inherited) can never fire — warn on
-/// the deny entry's capability name.
-fn validate_actor_self_narrowing(records: &[ActorsRecord], diags: &mut Vec<Diagnostic>) {
+/// Self-narrowing, per block: a `forbid` entry whose capability is already
+/// in the actor's effective permit set (own or inherited) can never fire —
+/// warn on the deny entry's capability name.
+fn validate_actor_self_narrowing(records: &[ActorsRecord], diags: &mut Vec<(String, Diagnostic)>) {
     for record in records {
         let parents = actor_parents(record);
         for (actor, capability, span) in &record.forbids {
             if effective_permits(record, &parents, actor.as_str()).contains(capability.as_str()) {
-                diags.push(Diagnostic::warning(
-                    format!(
-                        "actor `{actor}` forbids `{capability}` but inherits or declares a permit for it"
+                diags.push((
+                    record.file.clone(),
+                    Diagnostic::warning(
+                        format!(
+                            "actor `{actor}` forbids `{capability}` but inherits or declares a permit for it"
+                        ),
+                        Some(*span),
                     ),
-                    Some(*span),
                 ));
             }
         }
     }
+}
+
+/// The set of actor names across the whole union, in order of first
+/// appearance.
+fn union_actor_names(records: &[ActorsRecord]) -> Vec<&str> {
+    let mut names: Vec<&str> = Vec::new();
+    for record in records {
+        for (name, _) in &record.actor_names {
+            if !names.contains(&name.as_str()) {
+                names.push(name.as_str());
+            }
+        }
+    }
+    names
+}
+
+/// Whether any block of the union effectively grants `actor` the capability
+/// (same-named actors across blocks pool their permits in the union).
+fn union_grants(records: &[ActorsRecord], actor: &str, capability: &str) -> bool {
+    records
+        .iter()
+        .any(|record| effective_permits(record, &actor_parents(record), actor).contains(capability))
+}
+
+/// Separation of duty over the union: same-named actors pool their permits
+/// across blocks, so a permit granted by an imported domain's inline block
+/// satisfies a `never_both` declared in the actor file (and vice versa). One
+/// error per (actor, pair), constraints in union order, actors in
+/// first-appearance order. Violations a domain already reported on its own
+/// are deduplicated by the caller (identical file, message, and span).
+fn validate_actor_never_both_union(
+    records: &[ActorsRecord],
+    diags: &mut Vec<(String, Diagnostic)>,
+) {
+    let names = union_actor_names(records);
+    for record in records {
+        for (pair, span) in &record.never_both {
+            let [a, b] = pair.as_slice() else {
+                continue; // malformed shape; already reported during lowering
+            };
+            for name in names.iter().copied() {
+                if union_grants(records, name, a) && union_grants(records, name, b) {
+                    diags.push((
+                        record.file.clone(),
+                        Diagnostic::error(
+                            format!("actor `{name}` is granted both `{a}` and `{b}` (never_both)"),
+                            Some(*span),
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// Self-narrowing over the union: a `forbid` entry whose capability any
+/// block of the union grants the actor can never fire.
+fn validate_actor_self_narrowing_union(
+    records: &[ActorsRecord],
+    diags: &mut Vec<(String, Diagnostic)>,
+) {
+    for record in records {
+        for (actor, capability, span) in &record.forbids {
+            if union_grants(records, actor, capability) {
+                diags.push((
+                    record.file.clone(),
+                    Diagnostic::warning(
+                        format!(
+                            "actor `{actor}` forbids `{capability}` but inherits or declares a permit for it"
+                        ),
+                        Some(*span),
+                    ),
+                ));
+            }
+        }
+    }
+}
+
+/// One imported domain model handed to [`compile_actor_file`]: its lowered
+/// model (when error-free), its AST, and its own diagnostics.
+pub(crate) struct DomainUnit<'a> {
+    /// The path the actor file's import named (and the file was provided
+    /// under); tags the unit's diagnostics and spans.
+    pub path: &'a str,
+    /// The domain's full source text (condition and body slicing).
+    pub source: &'a str,
+    /// The lowered domain model, `None` when the domain has errors (its
+    /// blocks then stay out of the union).
+    pub model: Option<ir::Model>,
+    /// The domain's parsed AST.
+    pub ast: Option<&'a mox::Model>,
+    /// The domain's own compile diagnostics (tagged with `path` here).
+    pub diagnostics: &'a [Diagnostic],
+}
+
+/// Compiles an `.actor` file against its imported domain models:
+///
+/// 1. every import must name a provided domain (duplicates are fine — the
+///    domain joins the union once);
+/// 2. the union policy set is the actor file's blocks (source order)
+///    followed by each domain's inline blocks (imports in first-appearance
+///    order), each block keeping its own name (duplicate block names error
+///    on the later occurrence);
+/// 3. capability `on X` resolves against the combined namespace of all
+///    domains;
+/// 4. cycles, separation of duty, and self-narrowing are validated over the
+///    union, and every `when` condition is type-checked against the resolved
+///    capability class;
+/// 5. any error (in any file) blocks the artifact.
+///
+/// Returns the actor model (or `None`) plus diagnostics from every file,
+/// each tagged with its path. Duplicate diagnostics (a domain already
+/// reported an issue on its own that the union passes re-find) are removed.
+pub(crate) fn compile_actor_file(
+    actor_path: &str,
+    actor_source: &str,
+    actor_ast: Option<&mox::ActorFile>,
+    actor_diagnostics: &[Diagnostic],
+    domains: &[DomainUnit<'_>],
+) -> (Option<ir::ActorModel>, Vec<(String, Diagnostic)>) {
+    let mut diags: Vec<(String, Diagnostic)> = Vec::new();
+    for diagnostic in actor_diagnostics {
+        diags.push((actor_path.to_string(), diagnostic.clone()));
+    }
+
+    // Import resolution: each import must name one of the provided domains.
+    let imports = actor_ast
+        .map(|ast| ast.imports.as_slice())
+        .unwrap_or_default();
+    for import in imports {
+        if !domains.iter().any(|unit| unit.path == import.path) {
+            diags.push((
+                actor_path.to_string(),
+                Diagnostic::error(
+                    format!("imported file \"{}\" was not provided", import.path),
+                    Some(import.span),
+                ),
+            ));
+        }
+    }
+
+    // Domain diagnostics propagate under their own file, in import order.
+    for unit in domains {
+        for diagnostic in unit.diagnostics {
+            diags.push((unit.path.to_string(), diagnostic.clone()));
+        }
+    }
+
+    // The combined namespace of the usable domains (imported and
+    // error-free), in first-appearance order.
+    let packages: Vec<DomainPackage> = domains
+        .iter()
+        .filter_map(|unit| {
+            let model = unit.model.as_ref()?;
+            let ast = unit.ast?;
+            let mut kinds: HashMap<String, TopKind> = HashMap::new();
+            for decl in &ast.declarations {
+                let (kind, name) = match decl {
+                    mox::Decl::Class(decl) => (TopKind::Class, &decl.name),
+                    mox::Decl::Interface(decl) => (TopKind::Interface, &decl.name),
+                    mox::Decl::Enum(decl) => (TopKind::Enum, &decl.name),
+                    mox::Decl::Datatype(decl) => (TopKind::Datatype, &decl.name),
+                    mox::Decl::Vocabulary(decl) => (TopKind::Vocabulary, &decl.name),
+                    mox::Decl::Actors(decl) => (TopKind::Actors, &decl.name),
+                    mox::Decl::Annotation(_) => continue,
+                };
+                kinds.entry(name.text.clone()).or_insert(kind);
+            }
+            Some(DomainPackage {
+                name: model.packages[0].name.clone(),
+                kinds,
+            })
+        })
+        .collect();
+    let scope = Scope::Domains {
+        packages: &packages,
+    };
+
+    // Lower the union policy set: actor-file blocks first, then each
+    // domain's inline blocks.
+    let mut records: Vec<ActorsRecord> = Vec::new();
+    let mut pending: Vec<PendingCondition> = Vec::new();
+    let mut block_names: Vec<(String, Span, String)> = Vec::new();
+    {
+        let mut lower_block = |decl: &mox::ActorsDecl, source: &str, file: &str| {
+            let mut local = Vec::new();
+            let (record, conditions) = lower_actors(decl, source, file, &scope, &mut local);
+            diags.extend(local.into_iter().map(|d| (file.to_string(), d)));
+            records.push(record);
+            pending.extend(conditions);
+            block_names.push((decl.name.text.clone(), decl.name.span, file.to_string()));
+        };
+        if let Some(ast) = actor_ast {
+            for decl in &ast.blocks {
+                lower_block(decl, actor_source, actor_path);
+            }
+        }
+        for unit in domains {
+            if unit.model.is_none() {
+                continue;
+            }
+            if let Some(ast) = unit.ast {
+                for decl in &ast.declarations {
+                    if let mox::Decl::Actors(decl) = decl {
+                        lower_block(decl, unit.source, unit.path);
+                    }
+                }
+            }
+        }
+    }
+
+    // Duplicate block names across the union: the later occurrence errors.
+    for (index, (name, span, file)) in block_names.iter().enumerate() {
+        if block_names[..index].iter().any(|(seen, _, _)| seen == name) {
+            diags.push((
+                file.clone(),
+                Diagnostic::error(format!("duplicate actors block `{name}`"), Some(*span)),
+            ));
+        }
+    }
+
+    // Set-level validation over the union.
+    let cyclic = detect_actor_cycles(&records, &mut diags);
+    if !cyclic {
+        validate_actor_never_both_union(&records, &mut diags);
+        validate_actor_self_narrowing_union(&records, &mut diags);
+    }
+
+    // Condition typing over the combined class universe.
+    let mut context_model = ir::Model::new();
+    for unit in domains {
+        if let Some(model) = &unit.model {
+            context_model
+                .packages
+                .extend(model.packages.iter().cloned());
+        }
+    }
+    let context = TypeContext::from_model(&context_model);
+    diags.extend(check_pending_conditions(&pending, &context));
+
+    // Drop diagnostics the domains already reported on their own and the
+    // union passes re-found (identical file, severity, message, span).
+    let mut unique: Vec<(String, Diagnostic)> = Vec::new();
+    for entry in diags {
+        if !unique.contains(&entry) {
+            unique.push(entry);
+        }
+    }
+    let diags = unique;
+
+    let blocked = diags.iter().any(|(_, diagnostic)| diagnostic.is_error());
+    let model = (!blocked).then(|| {
+        let mut actor_model = ir::ActorModel::new();
+        for record in records {
+            actor_model = actor_model.block(record.def);
+        }
+        actor_model
+    });
+    (model, diags)
 }

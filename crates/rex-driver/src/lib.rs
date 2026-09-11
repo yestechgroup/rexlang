@@ -107,6 +107,107 @@ pub fn compile(db: &dyn Db, file: SourceFile) -> Compiled {
     Compiled { model, diagnostics }
 }
 
+/// The outcome of parsing a [`SourceFile`] as an `.actor` file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActorsParseOutput {
+    /// The recovered actor file, or `None` when nothing could be produced.
+    pub ast: Option<rex_syntax::ActorFile>,
+    /// All syntax errors, as diagnostics.
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Lexes and parses a [`SourceFile`] as an `.actor` file (memoized by
+/// salsa).
+#[salsa::tracked]
+pub fn parse_actors_query(db: &dyn Db, file: SourceFile) -> ActorsParseOutput {
+    let source = file.text(db);
+    let parsed = rex_syntax::parse_actors(&source);
+    ActorsParseOutput {
+        ast: parsed.ast,
+        diagnostics: parsed
+            .errors
+            .into_iter()
+            .map(|error| Diagnostic::error(error.message, Some(error.span)))
+            .collect(),
+    }
+}
+
+/// The result of compiling a [`SourceFile`] as an `.actor` file against its
+/// imported domain models.
+///
+/// Diagnostics come from every file involved, so each is tagged with its
+/// path; group or render them per file (see
+/// [`render`](crate::render)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActorCompilation {
+    /// The standalone actor-policy artifact, or `None` when any
+    /// error-severity diagnostic was produced in any file. Warnings do not
+    /// block lowering.
+    pub model: Option<rex_ir::ActorModel>,
+    /// Diagnostics from the actor file and each imported domain, each
+    /// tagged with its file's path, in compilation order.
+    pub diagnostics: Vec<(String, Diagnostic)>,
+}
+
+/// Compiles an `.actor` file against its imported domain models to the
+/// standalone [`rex_ir::ActorModel`] (memoized by salsa): parse the actor
+/// file, compile every named domain with [`compile`], then resolve and
+/// validate the union policy set.
+///
+/// Extra provided domains no import names are ignored; domain files with
+/// errors contribute their diagnostics but no blocks.
+#[salsa::tracked]
+pub fn compile_actors(
+    db: &dyn Db,
+    actor: SourceFile,
+    domains: Vec<SourceFile>,
+) -> ActorCompilation {
+    let actor_path = actor.path(db);
+    let actor_source = actor.text(db);
+    let parsed = parse_actors_query(db, actor);
+
+    // Resolve imports to provided domains, deduplicated by path, in
+    // first-appearance order. Only imported domains are compiled; extras
+    // are ignored (their diagnostics must not leak).
+    let mut lookups: Vec<(String, Compiled, ParseOutput, String)> = Vec::new();
+    if let Some(ast) = &parsed.ast {
+        for import in &ast.imports {
+            if lookups.iter().any(|(path, _, _, _)| *path == import.path) {
+                continue;
+            }
+            if let Some(domain) = domains.iter().find(|file| file.path(db) == import.path) {
+                let compiled = compile(db, *domain);
+                let parse_output = parse_query(db, *domain);
+                lookups.push((
+                    import.path.clone(),
+                    compiled,
+                    parse_output,
+                    domain.text(db).clone(),
+                ));
+            }
+        }
+    }
+    let units: Vec<lower::DomainUnit<'_>> = lookups
+        .iter()
+        .map(|(path, compiled, parse_output, source)| lower::DomainUnit {
+            path,
+            source,
+            model: compiled.model.clone(),
+            ast: parse_output.ast.as_ref(),
+            diagnostics: &compiled.diagnostics,
+        })
+        .collect();
+
+    let (model, diagnostics) = lower::compile_actor_file(
+        &actor_path,
+        &actor_source,
+        parsed.ast.as_ref(),
+        &parsed.diagnostics,
+        &units,
+    );
+    ActorCompilation { model, diagnostics }
+}
+
 /// The salsa database for the rexlang driver.
 #[salsa::db]
 #[derive(Clone)]
@@ -155,4 +256,41 @@ pub fn compile_str(path: &str, source: &str) -> Compilation {
         model: compiled.model,
         diagnostics: compiled.diagnostics,
     }
+}
+
+/// Compiles an `.actor` file against its imported domain models in one call.
+///
+/// Each domain is a `(path, source)` pair; an actor-file import resolves by
+/// exact path match. Extra pairs no import names are ignored.
+///
+/// ```
+/// let domains = [(
+///     "support.mox".to_string(),
+///     "package support\n\nclass Ticket { String title }".to_string(),
+/// )];
+/// let source = "import \"support.mox\"\n\nactors Ops {\n    actor Agent\n}";
+/// let compilation = rex_driver::compile_actors_str("ops.actor", source, &domains);
+/// assert!(compilation.diagnostics.is_empty());
+/// assert_eq!(compilation.model.unwrap().blocks.len(), 1);
+/// ```
+pub fn compile_actors_str(
+    actor_path: &str,
+    actor_source: &str,
+    domains: &[(String, String)],
+) -> ActorCompilation {
+    let db = Database::new();
+    let actor = SourceFile::new(&db, actor_path.to_string(), actor_source.to_string());
+    let mut seen: Vec<&str> = Vec::new();
+    let files: Vec<SourceFile> = domains
+        .iter()
+        .filter(|(path, _)| {
+            if seen.contains(&path.as_str()) {
+                return false;
+            }
+            seen.push(path.as_str());
+            true
+        })
+        .map(|(path, source)| SourceFile::new(&db, path.clone(), source.clone()))
+        .collect();
+    compile_actors(&db, actor, files)
 }
