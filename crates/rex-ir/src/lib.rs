@@ -68,6 +68,16 @@
 //!    models are byte-identical to pre-actors output. `when` conditions and
 //!    `cedar` bodies are **verbatim source strings** — the IR never parses
 //!    or reformats them.
+//! 10. **Standalone actor-policy artifacts.** [`ActorModel`] is a separate,
+//!     self-contained wire artifact aggregating `actors` blocks (from any
+//!     origin) into one policy set, consumed by authorization backends such
+//!     as Cedar. It follows the same rules as [`Model`] — camelCase, adjacent
+//!     tagging, version gate — but carries its own
+//!     [`ACTOR_MODEL_FORMAT_VERSION`] marker, and `blocks` is omitted when
+//!     empty so a block-less artifact serializes as exactly
+//!     `{"formatVersion":1}`. The blocks themselves are plain [`ActorsDef`]s,
+//!     identical in shape to inline [`Package::actors`] (rule 9); the domain
+//!     model never embeds an [`ActorModel`].
 //!
 //! [rexlang]: https://github.com/anton-makes/rexlang
 
@@ -82,12 +92,20 @@ use serde::{Deserialize, Serialize};
 /// contract](crate#wire-format-contract).
 pub const FORMAT_VERSION: u32 = 1;
 
+/// The artifact format version this crate writes and accepts for standalone
+/// actor-policy artifacts ([`ActorModel`]).
+///
+/// Versioned independently of [`FORMAT_VERSION`] (the domain-model marker);
+/// bump whenever the actor wire format changes incompatibly; see the [wire
+/// format contract](crate#wire-format-contract).
+pub const ACTOR_MODEL_FORMAT_VERSION: u32 = 1;
+
 /// Errors produced when reading rexlang IR artifacts.
 #[derive(Debug, thiserror::Error)]
 pub enum IrError {
-    /// The artifact declares a [`Model::format_version`] (or none at all) that
-    /// this crate cannot read. Re-serialize the model with a matching rex-ir
-    /// version.
+    /// The artifact declares a `format_version` (or none at all) that
+    /// this crate cannot read — for a [`Model`] or an [`ActorModel`]
+    /// alike. Re-serialize the artifact with a matching rex-ir version.
     #[error("unsupported artifact format_version: found {found}, expected {expected}")]
     UnsupportedFormatVersion {
         /// The version found in the artifact (0 if the field was absent).
@@ -1055,6 +1073,78 @@ impl NeverBothDef {
         Self {
             capabilities: vec![a.into(), b.into()],
         }
+    }
+}
+
+/// A standalone actor-policy artifact: the set of `actors` blocks aggregated
+/// from any origin into one versioned policy artifact, separate from the
+/// domain [`Model`]. This is the policy dimension authorization backends
+/// (Cedar) consume; a JSON Schema backend never sees it.
+///
+/// The blocks are plain [`ActorsDef`]s, identical in shape to inline
+/// [`Package::actors`] — both surfaces feed the same block type. See the
+/// [wire format contract](crate#wire-format-contract), rule 10.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActorModel {
+    /// Artifact format version. Always [`ACTOR_MODEL_FORMAT_VERSION`] for
+    /// artifacts this crate writes; [`ActorModel::from_json`] rejects
+    /// anything else.
+    pub format_version: u32,
+    /// The union policy set, in compile order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks: Vec<ActorsDef>,
+}
+
+impl ActorModel {
+    /// Creates an empty actor-policy artifact with
+    /// [`ACTOR_MODEL_FORMAT_VERSION`].
+    pub fn new() -> Self {
+        Self {
+            format_version: ACTOR_MODEL_FORMAT_VERSION,
+            blocks: Vec::new(),
+        }
+    }
+
+    /// Chainable setter appending an actors block.
+    pub fn block(mut self, block: ActorsDef) -> Self {
+        self.blocks.push(block);
+        self
+    }
+
+    /// Serializes the artifact to pretty-printed (2-space indent) JSON.
+    pub fn to_json_pretty(&self) -> Result<String, IrError> {
+        Ok(serde_json::to_string_pretty(self)?)
+    }
+
+    /// Serializes the artifact to compact JSON.
+    pub fn to_json(&self) -> Result<String, IrError> {
+        Ok(serde_json::to_string(self)?)
+    }
+
+    /// Deserializes an actor-policy artifact from JSON, rejecting artifacts
+    /// whose `formatVersion` is not [`ACTOR_MODEL_FORMAT_VERSION`].
+    ///
+    /// Unknown fields are ignored for forward compatibility.
+    pub fn from_json(json: &str) -> Result<Self, IrError> {
+        let value: serde_json::Value = serde_json::from_str(json)?;
+        let found = value
+            .get("formatVersion")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_default() as u32;
+        if found != ACTOR_MODEL_FORMAT_VERSION {
+            return Err(IrError::UnsupportedFormatVersion {
+                found,
+                expected: ACTOR_MODEL_FORMAT_VERSION,
+            });
+        }
+        Ok(serde_json::from_value(value)?)
+    }
+}
+
+impl Default for ActorModel {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
