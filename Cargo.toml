@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/rex-syntax",
     "crates/rex-ir",
+    "crates/rex-expr",
     "crates/rex-driver",
     "crates/rex-backend-rust",
     "crates/rex-backend-jsonschema",
@@ -29,6 +30,7 @@ all = "warn"
 [workspace.dependencies]
 rex-syntax = { path = "crates/rex-syntax" }
 rex-ir = { path = "crates/rex-ir" }
+rex-expr = { path = "crates/rex-expr" }
 rex-driver = { path = "crates/rex-driver" }
 rex-backend-rust = { path = "crates/rex-backend-rust" }
 rex-backend-jsonschema = { path = "crates/rex-backend-jsonschema" }

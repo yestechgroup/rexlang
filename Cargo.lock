@@ -1800,6 +1800,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rex-expr"
+version = "0.1.0"
+dependencies = [
+ "chumsky",
+ "logos",
+ "rex-ir",
+ "thiserror",
+]
+
+[[package]]
 name = "rex-ir"
 version = "0.1.0"
 dependencies = [

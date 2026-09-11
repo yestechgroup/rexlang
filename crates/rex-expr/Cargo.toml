@@ -1,0 +1,16 @@
+[package]
+name = "rex-expr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+logos = { workspace = true }
+chumsky = { workspace = true }
+rex-ir = { workspace = true }
+thiserror = { workspace = true }
