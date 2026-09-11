@@ -1,0 +1,46 @@
+package rex.conformance.actors
+
+class User {
+    id String id
+    boolean active
+}
+
+class Ticket {
+    id String id
+    String title
+    boolean internal
+    int amount
+    refers User assignee
+}
+
+actors Support {
+    actor Customer
+    actor Agent extends Customer
+    actor Manager extends Agent
+    actor Finance
+
+    capability ReadTicket on Ticket
+    capability ResolveTicket on Ticket
+    capability RaiseRefund on Ticket
+    capability ApproveRefund on Ticket
+
+    grant Customer {
+        permit ReadTicket
+    }
+
+    grant Agent {
+        permit ReadTicket when (!internal)
+        permit RaiseRefund when (amount <= 1000) obligation audit
+    }
+
+    grant Manager {
+        permit ReadTicket
+        permit ResolveTicket
+    }
+
+    grant Finance {
+        permit ApproveRefund
+    }
+
+    never_both { RaiseRefund, ApproveRefund }
+}

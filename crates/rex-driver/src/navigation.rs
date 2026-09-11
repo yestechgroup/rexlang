@@ -200,6 +200,8 @@ impl NavigationIndex {
                 mox::Decl::Enum(decl) => (&decl.name, decl.literals.len()),
                 mox::Decl::Datatype(decl) => (&decl.name, 0),
                 mox::Decl::Vocabulary(decl) => (&decl.name, decl.facets.len()),
+                // Actors symbols are a later milestone; skip for now.
+                mox::Decl::Actors(_) => continue,
                 mox::Decl::Annotation(_) => continue,
             };
             top_level.entry(name.text.as_str()).or_insert(next_id);
@@ -219,6 +221,8 @@ impl NavigationIndex {
                 mox::Decl::Enum(decl) => (&decl.name, SymbolKind::Enum),
                 mox::Decl::Datatype(decl) => (&decl.name, SymbolKind::Datatype),
                 mox::Decl::Vocabulary(decl) => (&decl.name, SymbolKind::Vocabulary),
+                // Actors symbols are a later milestone; skip for now.
+                mox::Decl::Actors(_) => continue,
                 mox::Decl::Annotation(_) => continue,
             };
             let extends_text = match decl {
@@ -392,8 +396,9 @@ impl NavigationIndex {
                         .collect();
                 }
                 // Interfaces hold only target bindings (no names to index);
-                // annotations are unnamed.
-                mox::Decl::Interface(_) | mox::Decl::Annotation(_) => {}
+                // annotations are unnamed; actors symbols are a later
+                // milestone.
+                mox::Decl::Interface(_) | mox::Decl::Annotation(_) | mox::Decl::Actors(_) => {}
             }
         }
 

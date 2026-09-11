@@ -243,6 +243,8 @@ pub(crate) fn compile(
             mox::Decl::Enum(decl) => (TopKind::Enum, &decl.name),
             mox::Decl::Datatype(decl) => (TopKind::Datatype, &decl.name),
             mox::Decl::Vocabulary(decl) => (TopKind::Vocabulary, &decl.name),
+            // Actors semantics are a later milestone; ignore for now.
+            mox::Decl::Actors(_) => continue,
             mox::Decl::Annotation(_) => continue,
         };
         if kinds.contains_key(name.text.as_str()) {
@@ -290,6 +292,8 @@ pub(crate) fn compile(
     for decl in &model.declarations {
         match decl {
             mox::Decl::Vocabulary(_) => {}
+            // Actors semantics are a later milestone; ignore for now.
+            mox::Decl::Actors(_) => {}
             mox::Decl::Annotation(annotation) => out.annotations.push(ir::Annotation {
                 source: annotation.value.clone(),
                 details: Default::default(),

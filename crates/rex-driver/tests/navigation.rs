@@ -369,7 +369,7 @@ fn resolve_id_returns_the_target_id_of_a_reference() {
     let source = "package demo\n\n\
         class Library {\n\
         \x20   contains Book[] books opposite library\n\
-        \x20   Date when\n\
+        \x20   Date ^when\n\
         }\n\n\
         class Book { container Library library opposite books }\n";
     let index = index_of(source);

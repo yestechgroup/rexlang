@@ -161,6 +161,8 @@ pub enum Decl {
     Annotation(AnnotationDecl),
     /// A `vocabulary ... from ...` declaration.
     Vocabulary(VocabularyDecl),
+    /// An `actors { ... }` declaration.
+    Actors(ActorsDecl),
 }
 
 impl Decl {
@@ -173,6 +175,7 @@ impl Decl {
             Decl::Datatype(decl) => decl.span,
             Decl::Annotation(decl) => decl.span,
             Decl::Vocabulary(decl) => decl.span,
+            Decl::Actors(decl) => decl.span,
         }
     }
 
@@ -186,6 +189,7 @@ impl Decl {
             Decl::Datatype(decl) => Some(&decl.name),
             Decl::Annotation(decl) => decl.name.as_ref(),
             Decl::Vocabulary(decl) => Some(&decl.name),
+            Decl::Actors(decl) => Some(&decl.name),
         }
     }
 }
@@ -295,6 +299,105 @@ pub struct VocabularyFacetDecl {
     /// The facet name.
     pub name: Name,
     /// Span of the whole facet declaration.
+    pub span: Span,
+}
+
+/// An `actors { ... }` declaration: an actor/authorization model in the
+/// Cedar spirit. Actors, capabilities, grants and `never_both` exclusivity
+/// constraints are collected in source order into separate lists.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActorsDecl {
+    /// The actors-block name.
+    pub name: Name,
+    /// Declared actors, in source order.
+    pub actors: Vec<ActorDecl>,
+    /// Declared capabilities, in source order.
+    pub capabilities: Vec<CapabilityDecl>,
+    /// Declared grants, in source order.
+    pub grants: Vec<GrantDecl>,
+    /// Declared `never_both` exclusivity constraints, in source order.
+    pub never_both: Vec<NeverBothDecl>,
+    /// Span of the whole declaration.
+    pub span: Span,
+}
+
+/// A single `actor <name> ("extends" <name>)?` member of an [`ActorsDecl`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActorDecl {
+    /// The actor name.
+    pub name: Name,
+    /// The direct parent actor from the `extends` clause, if any.
+    pub extends: Option<Name>,
+    /// Span of the whole actor declaration.
+    pub span: Span,
+}
+
+/// A single `capability <name> on <type_ref>` member of an [`ActorsDecl`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct CapabilityDecl {
+    /// The capability name.
+    pub name: Name,
+    /// The type the capability is granted on.
+    pub class: TypeRef,
+    /// Span of the whole capability declaration.
+    pub span: Span,
+}
+
+/// A `grant <actor> { ... }` block: the entries granted to one actor.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GrantDecl {
+    /// The actor the entries are granted to.
+    pub actor: Name,
+    /// Grant entries in source order. Empty bodies are allowed.
+    pub entries: Vec<GrantEntryDecl>,
+    /// Span of the whole grant declaration.
+    pub span: Span,
+}
+
+/// One entry of a [`GrantDecl`]: a `permit`/`forbid` effect or a raw `cedar`
+/// policy body.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GrantEntryDecl {
+    /// `("permit" | "forbid") <capability> ("when" (...))? obligation*`
+    Effect(GrantEffectDecl),
+    /// `cedar { ... }` — the raw body is captured verbatim (braces
+    /// inclusive), exactly like an operation's target body.
+    Cedar(TargetBody),
+}
+
+/// The effect of a [`GrantEffectDecl`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Effect {
+    /// `permit` — the capability is allowed.
+    Permit,
+    /// `forbid` — the capability is denied.
+    Forbid,
+}
+
+/// A `permit`/`forbid` entry of a [`GrantDecl`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct GrantEffectDecl {
+    /// Whether the capability is permitted or forbidden.
+    pub effect: Effect,
+    /// The capability the effect applies to.
+    pub capability: Name,
+    /// Span of the raw `(...)` condition, parens inclusive. The condition
+    /// text is the source strictly inside this span (same convention as
+    /// [`TargetBody`]); its contents are not parsed.
+    pub when: Option<Span>,
+    /// Obligation names attached to the effect, in source order.
+    pub obligations: Vec<Name>,
+    /// Span of the whole effect entry.
+    pub span: Span,
+}
+
+/// A `never_both { <name>, <name> (, ...)? }` exclusivity constraint of an
+/// [`ActorsDecl`]. Fewer than two names is a syntax error.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NeverBothDecl {
+    /// The mutually exclusive capability names (at least two).
+    pub capabilities: Vec<Name>,
+    /// Span of the whole constraint.
     pub span: Span,
 }
 

@@ -40,7 +40,13 @@
 //!   output is a fixpoint. A bare (untagged) body still renders inline on
 //!   the feature's line (the driver rejects it semantically). The same
 //!   rendering applies to a datatype's `create { ... }`/`convert { ... }`
-//!   blocks.
+//!   blocks and to a grant's raw `cedar { ... }` entry.
+//! * Inside `actors { ... }` and `grant { ... }` bodies, items keep their
+//!   grouping: at most one separating blank line between items is preserved
+//!   (all other bodies drop interior blank lines). A `never_both { A, B }`
+//!   constraint renders on one line. A `when (...)` condition's inner bytes
+//!   are raw too: they are emitted verbatim (ends trimmed), so conditions
+//!   are a fixpoint just like target bodies.
 
 use crate::ast::Span;
 use crate::lexer::{lex_with_comments, CommentKind, LexError, Token};
@@ -99,6 +105,20 @@ enum BodyKind {
     Bindings,
     /// `version`/`key`/`facet` items.
     Vocabulary,
+    /// `actor`/`capability`/`grant`/`never_both` items.
+    Actors,
+    /// `permit`/`forbid`/`cedar` entries of a `grant` block.
+    Grant,
+}
+
+impl BodyKind {
+    /// Whether separating blank lines between items are preserved (collapsed
+    /// to at most one). Only the new `actors`/`grant` bodies keep them —
+    /// their items form visual groups — while every other body kind drops
+    /// interior blank lines.
+    fn keeps_blank_lines(self) -> bool {
+        matches!(self, BodyKind::Actors | BodyKind::Grant)
+    }
 }
 
 struct Formatter<'src> {
@@ -191,6 +211,7 @@ impl<'src> Formatter<'src> {
                     Token::Enum => self.scan_enum(),
                     Token::Type => self.scan_datatype(),
                     Token::Vocabulary => self.scan_vocabulary(),
+                    Token::Actors => self.scan_actors(),
                     _ => self.scan_top_junk(),
                 },
             }
@@ -365,17 +386,27 @@ impl<'src> Formatter<'src> {
     // --- shared scans --------------------------------------------------------
 
     fn scan_qname(&mut self) {
-        if !self.take_name() {
+        if !self.take_ref_name() {
             return;
         }
         while matches!(self.peek_tok(), Some(Token::Dot)) {
             self.advance();
-            self.take_name();
+            self.take_ref_name();
         }
     }
 
     fn take_name(&mut self) -> bool {
         self.take_if(|token| matches!(token, Token::Ident(_) | Token::IdentEscaped(_)))
+    }
+
+    /// Like [`Formatter::take_name`], but also accepts keyword tokens:
+    /// inside a dotted reference a keyword is just a name (e.g. the trailing
+    /// `actors` in `package rex.conformance.actors`), matching the parser's
+    /// `qname_segment`.
+    fn take_ref_name(&mut self) -> bool {
+        self.take_if(|token| {
+            matches!(token, Token::Ident(_) | Token::IdentEscaped(_)) || token.keyword().is_some()
+        })
     }
 
     /// Consumes and emits an optional `[...]` multiplicity, normalized as a
@@ -466,8 +497,63 @@ impl<'src> Formatter<'src> {
         }
     }
 
+    /// Consumes and emits a balanced `(...)` region (the raw condition of a
+    /// `when` clause). The inner bytes are not grammar: they are emitted
+    /// verbatim (ends trimmed) — inline on the current line when they
+    /// contain no newline, otherwise as-is between the `(` line and a `)`
+    /// at the current indent — mirroring target bodies, so re-formatting is
+    /// a fixpoint.
+    fn scan_raw_parens(&mut self) {
+        let Some(Node::Token(Token::LParen, open_span)) = self.front() else {
+            return;
+        };
+        let open_span = *open_span;
+        // The `(` is re-emitted below with the canonical `when (` spacing.
+        self.bump_token();
+        // Find the matching close paren by depth over the token stream
+        // (parens inside comments or string tokens never count).
+        let mut depth = 1usize;
+        let mut close_index = self.pos;
+        while depth > 0 {
+            match self.nodes.get(close_index) {
+                None => break,
+                Some(Node::Token(Token::LParen, _)) => {
+                    depth += 1;
+                    close_index += 1;
+                }
+                Some(Node::Token(Token::RParen, _)) => {
+                    depth -= 1;
+                    close_index += 1;
+                }
+                Some(_) => close_index += 1,
+            }
+        }
+        // `close_index - 1` is the matching `)` (or the last node when the
+        // region was never closed).
+        let content_end = self
+            .nodes
+            .get(close_index - 1)
+            .map(|node| node.span().start)
+            .unwrap_or(open_span.end);
+        let content = &self.source[open_span.end..content_end.max(open_span.end)];
+        // Every node inside the parens (tokens *and* comments) is already
+        // covered by the verbatim slice; skip them without emitting.
+        self.pos = close_index;
+        if content.contains('\n') {
+            self.push_text("(", false);
+            self.flush_line();
+            let text = content.strip_prefix('\n').unwrap_or(content).trim_end();
+            self.out.push_str(text);
+            self.out.push('\n');
+            self.out.push_str(&indent_str(self.indent));
+            self.out.push_str(")\n");
+        } else {
+            self.push_text(&format!("({})", content.trim()), false);
+        }
+    }
+
     /// Consumes and emits the body of an `op` feature: a target-tagged body
-    /// list (`{ rust { ... } java { ... } }`) when it has that shape, else a
+    /// (`{ rust { ... } java { ... } }`) when it has that shape, else a
     /// bare body rendered inline as before.
     fn scan_op_body(&mut self) {
         let tagged = matches!(
@@ -603,17 +689,32 @@ impl<'src> Formatter<'src> {
         }
         self.flush_line();
         self.indent += 1;
+        let mut first_item = true;
         loop {
             match self.front() {
                 Some(Node::Token(Token::RBrace, _)) | None => break,
                 _ => {}
             }
-            self.flush_pending(self.indent);
+            // Actors/grant bodies keep their item grouping: a blank line in
+            // the source becomes at most one blank line in the output (never
+            // before the first item, never before the closing brace).
+            if !first_item && kind.keeps_blank_lines() && self.blank_line_precedes_front() {
+                self.flush_line();
+                self.flush_pending(self.indent);
+                if !self.out.is_empty() && !self.out.ends_with("\n\n") {
+                    self.out.push('\n');
+                }
+            } else {
+                self.flush_pending(self.indent);
+            }
+            first_item = false;
             match kind {
                 BodyKind::Class => self.scan_class_item(),
                 BodyKind::Enum => self.scan_enum_literal(),
                 BodyKind::Bindings => self.scan_binding(),
                 BodyKind::Vocabulary => self.scan_vocabulary_item(),
+                BodyKind::Actors => self.scan_actors_item(),
+                BodyKind::Grant => self.scan_grant_entry(),
             }
             self.flush_line();
         }
@@ -640,6 +741,30 @@ impl<'src> Formatter<'src> {
                 _ => break,
             }
         }
+    }
+
+    /// Whether the source has a blank line immediately before the front node
+    /// (two or more newlines in the whitespace run directly preceding it).
+    /// Reading the raw source (not the node stream) keeps this independent of
+    /// how many comment nodes were drained in between.
+    fn blank_line_precedes_front(&self) -> bool {
+        let Some(node) = self.front() else {
+            return false;
+        };
+        let bytes = self.source.as_bytes();
+        let mut index = node.span().start;
+        let mut newlines = 0;
+        while index > 0 {
+            match bytes[index - 1] {
+                b'\n' => {
+                    newlines += 1;
+                    index -= 1;
+                }
+                b' ' | b'\t' | b'\r' | 0x0c => index -= 1,
+                _ => break,
+            }
+        }
+        newlines >= 2
     }
 
     // --- class body ----------------------------------------------------------
@@ -806,6 +931,91 @@ impl<'src> Formatter<'src> {
         }
     }
 
+    // --- actors bodies -------------------------------------------------------
+
+    fn scan_actors_item(&mut self) {
+        match self.peek_tok() {
+            Some(Token::Actor) => {
+                self.advance();
+                self.take_name();
+                if self.take_if(|token| matches!(token, Token::Extends)) {
+                    self.take_name();
+                }
+            }
+            Some(Token::Capability) => {
+                self.advance();
+                self.take_name();
+                if self.take_if(|token| matches!(token, Token::On)) {
+                    self.scan_qname();
+                }
+            }
+            Some(Token::Grant) => {
+                self.advance();
+                self.take_name();
+                self.scan_body(BodyKind::Grant);
+            }
+            Some(Token::NeverBoth) => self.scan_never_both(),
+            _ => self.scan_junk_until(|token| {
+                matches!(
+                    token,
+                    Token::RBrace
+                        | Token::Actor
+                        | Token::Capability
+                        | Token::Grant
+                        | Token::NeverBoth
+                )
+            }),
+        }
+    }
+
+    fn scan_grant_entry(&mut self) {
+        match self.peek_tok() {
+            Some(Token::Permit | Token::Forbid) => {
+                self.advance();
+                self.take_name();
+                if self.take_if(|token| matches!(token, Token::When)) {
+                    self.scan_raw_parens();
+                }
+                while self.take_if(|token| matches!(token, Token::Obligation)) {
+                    self.take_name();
+                }
+            }
+            // `cedar { ... }` renders exactly like a `<target> { ... }` body.
+            Some(Token::Cedar)
+                if matches!(
+                    self.nodes.get(self.pos + 1),
+                    Some(Node::Token(Token::LBrace, _))
+                ) =>
+            {
+                self.scan_target_block();
+            }
+            _ => self.scan_junk_until(|token| {
+                matches!(
+                    token,
+                    Token::RBrace | Token::Permit | Token::Forbid | Token::Cedar
+                )
+            }),
+        }
+    }
+
+    /// Consumes and emits a `never_both { A, B }` exclusivity constraint on
+    /// the current line.
+    fn scan_never_both(&mut self) {
+        self.advance();
+        if !self.take_if(|token| matches!(token, Token::LBrace)) {
+            return;
+        }
+        loop {
+            if !self.take_name() {
+                break;
+            }
+            if !self.take_if(|token| matches!(token, Token::Comma)) {
+                break;
+            }
+        }
+        self.take_if(|token| matches!(token, Token::RBrace));
+    }
+
     // --- top-level declarations ----------------------------------------------
 
     fn scan_package(&mut self) {
@@ -873,6 +1083,13 @@ impl<'src> Formatter<'src> {
         self.scan_body(BodyKind::Vocabulary);
     }
 
+    fn scan_actors(&mut self) {
+        self.begin_top_decl();
+        self.advance();
+        self.take_name();
+        self.scan_body(BodyKind::Actors);
+    }
+
     /// Unrecognized top-level tokens: emit them on one line, stopping at the
     /// next declaration keyword (mirrors the parser's declaration-level
     /// recovery).
@@ -904,6 +1121,7 @@ fn is_top_keyword(token: &Token<'_>) -> bool {
             | Token::Enum
             | Token::Type
             | Token::Vocabulary
+            | Token::Actors
     )
 }
 

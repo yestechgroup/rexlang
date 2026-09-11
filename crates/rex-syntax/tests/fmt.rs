@@ -232,6 +232,78 @@ fn vocabulary_body_items_one_per_line() {
     );
 }
 
+// --- actors ------------------------------------------------------------------
+
+#[test]
+fn actors_body_items_one_per_line() {
+    // Deliberately messy one-liner: the formatter must normalize it to one
+    // item per line, grant entries included, `never_both` inline.
+    assert_eq!(
+        fmt(concat!(
+            "actors  Support  { actor Customer actor Agent extends Customer ",
+            "capability ReadTicket on  Ticket grant  Customer { permit ReadTicket ",
+            "permit RaiseRefund when (amount<=1000) obligation audit } ",
+            "never_both { RaiseRefund , ApproveRefund } }"
+        )),
+        concat!(
+            "actors Support {\n",
+            "    actor Customer\n",
+            "    actor Agent extends Customer\n",
+            "    capability ReadTicket on Ticket\n",
+            "    grant Customer {\n",
+            "        permit ReadTicket\n",
+            "        permit RaiseRefund when (amount<=1000) obligation audit\n",
+            "    }\n",
+            "    never_both { RaiseRefund, ApproveRefund }\n",
+            "}\n"
+        )
+    );
+}
+
+#[test]
+fn empty_grant_stays_inline() {
+    assert_eq!(
+        fmt("actors S { grant G { } }"),
+        "actors S {\n    grant G {}\n}\n"
+    );
+}
+
+#[test]
+fn actors_interior_blank_line_groups_survive_once() {
+    // Unlike class/vocabulary bodies, `actors` and `grant` bodies keep
+    // grouping blank lines (collapsed to at most one).
+    assert_eq!(
+        fmt("actors S {\n    actor A\n\n\n    actor B\n}"),
+        "actors S {\n    actor A\n\n    actor B\n}\n"
+    );
+    assert_eq!(
+        fmt("actors S {\n    grant G {\n        permit A\n\n\n        permit B\n    }\n}"),
+        "actors S {\n    grant G {\n        permit A\n\n        permit B\n    }\n}\n"
+    );
+}
+
+#[test]
+fn when_condition_bytes_are_preserved_verbatim() {
+    // Inner spacing survives verbatim; only the boundary whitespace next to
+    // the parens is collapsed (mirroring the ends-trimmed target bodies).
+    let formatted = fmt("actors S { grant G { permit C when ( x  <=  f(1,2) ) } }");
+    assert_eq!(
+        formatted,
+        "actors S {\n    grant G {\n        permit C when (x  <=  f(1,2))\n    }\n}\n"
+    );
+    assert_eq!(fmt(&formatted), formatted, "not a fixpoint");
+}
+
+#[test]
+fn cedar_entry_formats_like_target_bodies() {
+    let formatted = fmt("actors S { grant G { cedar { if x { y } } } }");
+    assert_eq!(
+        formatted,
+        "actors S {\n    grant G {\n        cedar { if x { y } }\n    }\n}\n"
+    );
+    assert_eq!(fmt(&formatted), formatted, "not a fixpoint");
+}
+
 // --- blank lines -------------------------------------------------------------
 
 #[test]
@@ -387,6 +459,11 @@ fn idempotent_on_conformance_currency() {
     assert_idempotent(include_str!(
         "../../../tests/conformance/models/currency.mox"
     ));
+}
+
+#[test]
+fn idempotent_on_conformance_actors() {
+    assert_idempotent(include_str!("../../../tests/conformance/models/actors.mox"));
 }
 
 #[test]
@@ -632,6 +709,7 @@ fn stable_on_conformance_models() {
     assert_still_parses(include_str!(
         "../../../tests/conformance/models/currency.mox"
     ));
+    assert_still_parses(include_str!("../../../tests/conformance/models/actors.mox"));
 }
 
 #[test]
@@ -656,6 +734,10 @@ const GOLDENS: &[(&str, &str)] = &[
     (
         "tests/conformance/models/currency.mox",
         "tests/conformance/fmt/currency.fmt.mox",
+    ),
+    (
+        "tests/conformance/models/actors.mox",
+        "tests/conformance/fmt/actors.fmt.mox",
     ),
 ];
 

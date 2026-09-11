@@ -194,11 +194,29 @@ fn int_lit<'src>() -> impl Parser<'src, Tokens<'src>, i64, MoxExtra<'src>> + Clo
     select! { Token::Int(value) => value }
 }
 
+/// A qualified-name segment: an identifier or — exceptionally — a keyword
+/// token (e.g. the trailing `actors` in `package rex.conformance.actors`).
+/// Keywords only introduce grammar constructs in statement position; inside
+/// a dotted reference they are just names. Escaped forms are handled by
+/// [`name`].
+fn qname_segment<'src>() -> impl Parser<'src, Tokens<'src>, Name, MoxExtra<'src>> + Clone {
+    name().or(
+        any().try_map(|token: Token<'src>, span| match token.keyword() {
+            Some(keyword) => Ok(Name {
+                text: keyword.to_string(),
+                span,
+                escaped: false,
+            }),
+            None => Err(Rich::custom(span, "expected a name")),
+        }),
+    )
+}
+
 fn qname<'src>() -> impl Parser<'src, Tokens<'src>, QualifiedName, MoxExtra<'src>> + Clone {
-    name()
+    qname_segment()
         .then(
             kw(Token::Dot)
-                .ignore_then(name())
+                .ignore_then(qname_segment())
                 .repeated()
                 .collect::<Vec<_>>(),
         )
@@ -303,6 +321,26 @@ fn raw_body<'src>() -> impl Parser<'src, Tokens<'src>, Span, MoxExtra<'src>> + C
     kw(Token::LBrace)
         .ignore_then(balanced)
         .then_ignore(kw(Token::RBrace))
+        .map_with(|(), e| e.span())
+}
+
+/// Scans a raw `(...)` region with balanced parens and returns the span
+/// covering everything from the opening to the closing paren, inclusive
+/// (mirrors [`raw_body`], which is braces inclusive). The contents are
+/// deliberately not parsed; the driver slices the condition text strictly
+/// inside these bounds, same convention as [`TargetBody`].
+fn raw_parens<'src>() -> impl Parser<'src, Tokens<'src>, Span, MoxExtra<'src>> + Clone {
+    let balanced = recursive(|body| {
+        let atom = select! { t if !matches!(t, Token::LParen | Token::RParen) => () };
+        atom.or(kw(Token::LParen)
+            .ignore_then(body)
+            .then_ignore(kw(Token::RParen)))
+            .repeated()
+            .ignored()
+    });
+    kw(Token::LParen)
+        .ignore_then(balanced)
+        .then_ignore(kw(Token::RParen))
         .map_with(|(), e| e.span())
 }
 
@@ -737,6 +775,133 @@ fn vocabulary_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'sr
         })
 }
 
+/// One body item of an `actors` declaration.
+enum ActorsItem {
+    Actor(ActorDecl),
+    Capability(CapabilityDecl),
+    Grant(GrantDecl),
+    NeverBoth(NeverBothDecl),
+}
+
+fn actors_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>> + Clone {
+    let actor_decl = kw(Token::Actor)
+        .ignore_then(name())
+        .then(kw(Token::Extends).ignore_then(name()).or_not())
+        .map_with(|(name, extends), e| ActorDecl {
+            name,
+            extends,
+            span: e.span(),
+        });
+    let capability_decl = kw(Token::Capability)
+        .ignore_then(name())
+        .then_ignore(kw(Token::On))
+        .then(tref())
+        .map_with(|(name, class), e| CapabilityDecl {
+            name,
+            class,
+            span: e.span(),
+        });
+    let never_both_decl = kw(Token::NeverBoth)
+        .ignore_then(kw(Token::LBrace))
+        .ignore_then(
+            name()
+                .then(
+                    kw(Token::Comma)
+                        .ignore_then(name())
+                        .repeated()
+                        .collect::<Vec<_>>(),
+                )
+                .map(|(first, rest)| once(first).chain(rest).collect::<Vec<_>>()),
+        )
+        .then_ignore(kw(Token::RBrace))
+        .map_with(|capabilities, e| NeverBothDecl {
+            capabilities,
+            span: e.span(),
+        })
+        .validate(|decl, e, emitter| {
+            if decl.capabilities.len() < 2 {
+                emitter.emit(Rich::custom(
+                    e.span(),
+                    "`never_both` requires at least two capability names",
+                ));
+            }
+            decl
+        });
+    let obligation = kw(Token::Obligation).ignore_then(name());
+    let effect = kw(Token::Permit)
+        .to(Effect::Permit)
+        .or(kw(Token::Forbid).to(Effect::Forbid));
+    let effect_entry = effect
+        .then(name())
+        .then(kw(Token::When).ignore_then(raw_parens()).or_not())
+        .then(obligation.repeated().collect::<Vec<_>>())
+        .map_with(|(((effect, capability), when), obligations), e| {
+            GrantEntryDecl::Effect(GrantEffectDecl {
+                effect,
+                capability,
+                when,
+                obligations,
+                span: e.span(),
+            })
+        });
+    let cedar_entry = kw(Token::Cedar)
+        .then(raw_body())
+        .map_with(|(target_span, span), _| {
+            GrantEntryDecl::Cedar(TargetBody {
+                target: Name {
+                    text: "cedar".to_string(),
+                    span: target_span,
+                    escaped: false,
+                },
+                span,
+            })
+        });
+    let entry = choice((effect_entry, cedar_entry));
+    let grant_decl = kw(Token::Grant)
+        .ignore_then(name())
+        .then_ignore(kw(Token::LBrace))
+        .then(entry.repeated().collect::<Vec<_>>())
+        .then_ignore(kw(Token::RBrace))
+        .map_with(|(actor, entries), e| GrantDecl {
+            actor,
+            entries,
+            span: e.span(),
+        });
+    let item = choice((
+        actor_decl.map(ActorsItem::Actor),
+        capability_decl.map(ActorsItem::Capability),
+        grant_decl.map(ActorsItem::Grant),
+        never_both_decl.map(ActorsItem::NeverBoth),
+    ));
+    kw(Token::Actors)
+        .ignore_then(name())
+        .then_ignore(kw(Token::LBrace))
+        .then(item.repeated().collect::<Vec<_>>())
+        .then_ignore(kw(Token::RBrace))
+        .map_with(|(name, items), e| {
+            let mut actors = Vec::new();
+            let mut capabilities = Vec::new();
+            let mut grants = Vec::new();
+            let mut never_both = Vec::new();
+            for item in items {
+                match item {
+                    ActorsItem::Actor(decl) => actors.push(decl),
+                    ActorsItem::Capability(decl) => capabilities.push(decl),
+                    ActorsItem::Grant(decl) => grants.push(decl),
+                    ActorsItem::NeverBoth(decl) => never_both.push(decl),
+                }
+            }
+            Decl::Actors(ActorsDecl {
+                name,
+                actors,
+                capabilities,
+                grants,
+                never_both,
+                span: e.span(),
+            })
+        })
+}
+
 #[derive(Clone)]
 enum Item {
     Package(QualifiedName),
@@ -752,7 +917,7 @@ fn junk_decl<'src>() -> impl Parser<'src, Tokens<'src>, (), MoxExtra<'src>> + Cl
     let rest = select! {
         t if !matches!(
             t,
-            Token::Package | Token::Annotation | Token::Class | Token::Interface | Token::Enum | Token::Type | Token::Vocabulary
+            Token::Package | Token::Annotation | Token::Class | Token::Interface | Token::Enum | Token::Type | Token::Vocabulary | Token::Actors
         ) =>
         ()
     };
@@ -788,6 +953,7 @@ fn model<'src>() -> impl Parser<'src, Tokens<'src>, Model, MoxExtra<'src>> + Clo
         enum_decl().map(Item::Decl),
         datatype_decl().map(Item::Decl),
         vocabulary_decl().map(Item::Decl),
+        actors_decl().map(Item::Decl),
     ))
     .or(junk_decl().to(Item::Junk));
 

@@ -62,6 +62,28 @@ pub enum Token<'src> {
     Key,
     #[token("facet")]
     Facet,
+    #[token("actors")]
+    Actors,
+    #[token("actor")]
+    Actor,
+    #[token("capability")]
+    Capability,
+    #[token("grant")]
+    Grant,
+    #[token("permit")]
+    Permit,
+    #[token("forbid")]
+    Forbid,
+    #[token("when")]
+    When,
+    #[token("obligation")]
+    Obligation,
+    #[token("on")]
+    On,
+    #[token("never_both")]
+    NeverBoth,
+    #[token("cedar")]
+    Cedar,
 
     /// An identifier: `[A-Za-z_][A-Za-z0-9_]*`.
     #[regex("[A-Za-z_][A-Za-z0-9_]*", |lexer| lexer.slice())]
@@ -159,6 +181,17 @@ impl Token<'_> {
             Token::Version => "version",
             Token::Key => "key",
             Token::Facet => "facet",
+            Token::Actors => "actors",
+            Token::Actor => "actor",
+            Token::Capability => "capability",
+            Token::Grant => "grant",
+            Token::Permit => "permit",
+            Token::Forbid => "forbid",
+            Token::When => "when",
+            Token::Obligation => "obligation",
+            Token::On => "on",
+            Token::NeverBoth => "never_both",
+            Token::Cedar => "cedar",
             _ => return None,
         })
     }
@@ -319,6 +352,41 @@ mod tests {
         assert_eq!(tokens[2].0, Token::IdentEscaped("vocabulary"));
         // Spans still cover the raw text including the caret.
         assert_eq!(tokens[0].1, (0..6).into());
+    }
+
+    #[test]
+    fn actor_keywords_lex_as_keywords() {
+        assert_eq!(
+            kinds(
+                "actors actor capability grant permit forbid when obligation on never_both cedar"
+            ),
+            vec![
+                Token::Actors,
+                Token::Actor,
+                Token::Capability,
+                Token::Grant,
+                Token::Permit,
+                Token::Forbid,
+                Token::When,
+                Token::Obligation,
+                Token::On,
+                Token::NeverBoth,
+                Token::Cedar,
+            ]
+        );
+    }
+
+    #[test]
+    fn actor_keywords_escape_like_any_keyword() {
+        let tokens = lex("^actors ^when ^on ^cedar ^never_both").unwrap();
+        assert_eq!(tokens[0].0, Token::IdentEscaped("actors"));
+        assert_eq!(tokens[1].0, Token::IdentEscaped("when"));
+        assert_eq!(tokens[2].0, Token::IdentEscaped("on"));
+        assert_eq!(tokens[3].0, Token::IdentEscaped("cedar"));
+        assert_eq!(tokens[4].0, Token::IdentEscaped("never_both"));
+        // Spans still cover the raw text including the caret.
+        assert_eq!(tokens[0].1, (0..7).into());
+        assert_eq!(tokens[4].1, (25..36).into());
     }
 
     #[test]

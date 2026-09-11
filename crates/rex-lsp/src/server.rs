@@ -785,7 +785,7 @@ mod tests {
 
     // --- goto definition ----------------------------------------------------
 
-    const NAV: &str = "package demo\n\nclass Library {\n    contains Book[] books opposite library\n    op Date when()\n}\n\nclass Book {\n    container Library library opposite books\n    Date copyright\n}\n";
+    const NAV: &str = "package demo\n\nclass Library {\n    contains Book[] books opposite library\n    op Date ^when()\n}\n\nclass Book {\n    container Library library opposite books\n    Date copyright\n}\n";
 
     async fn goto_definition_at(
         service: &mut LspService<RexBackend>,
