@@ -4,20 +4,29 @@ A multi-target modeling language inspired by [Eclipse Xcore](https://eclipse.dev
 
 `.mox` sources compile to a **Core IR** (an Ecore-like structural metamodel) that is
 serialized as a stable artifact. Code generators for multiple target languages
-(Rust, JSON Schema, ...) consume only that IR. The language reference lives in
+(Rust, JSON Schema, Cedar, ...) consume only that IR. A complementary
+`.actor` policy dimension compiles to its own artifact and feeds the Cedar
+backend. The language reference lives in
 [docs/LANGUAGE.md](docs/LANGUAGE.md).
 
 ```
 .mox source -> lexer/parser -> AST -> resolve & validate -> Core IR (.rex.json)
                                                                  |
-                                    +----------------+-----------+----------+
-                                    v                v                      v
-                               rust backend     csharp backend          json-schema
+                                     +----------------+---------+-----------+
+                                     v                v                     v
+                                rust backend   json-schema backend      cedar backend
+                                                                      ^
+.actor policy file -> imports + actors blocks -> resolve & check ----+-+
+                                                    -> ActorModel (.actors.rex.json)
 ```
 
 ## Status
 
-Milestones 1-3 (front-end, Core IR, Rust backend, canonical JSON instances) — in progress.
+Front-end, Core IR, wire format, Rust backend, canonical JSON instances,
+JSON Schema (wire/api), the Tier-2 expression language, hermetic
+vocabularies, and the `.actor` authorization dimension with Cedar policy
+generation — implemented and CI-enforced. C#/Java backends and filter/query
+predicates are future work.
 
 ## Usage
 
@@ -26,9 +35,47 @@ rexlang check model.mox           # validate, render diagnostics
 rexlang ir model.mox -o model.rex.json
 rexlang gen rust model.mox -o src-gen/
 rexlang gen json-schema model.mox --profile wire -o schemas/
+rexlang gen cedar model.mox -o policies/      # from inline actors blocks
+rexlang gen cedar policy.actor -o policies/   # from a standalone actor file
 rexlang vocab fetch model.mox --provider file:vocab-sources/
 rexlang lsp                       # start the language server (stdio)
 ```
+
+## Actor policies (.actor)
+
+Authorization is a **separate dimension** from the domain model: actors,
+capabilities, grants, obligations, and prohibitions never appear in the
+domain IR or its JSON Schemas. They live in `.actor` files that import the
+domain so everything stays type safe:
+
+```
+import "support.mox"
+
+actors Support {
+    actor Agent extends Customer
+    capability RaiseRefund on Ticket
+
+    grant Agent {
+        permit RaiseRefund when (refundCents <= 5000) obligation audit
+    }
+
+    never_both { RaiseRefund, ApproveRefund }
+}
+```
+
+- `when` conditions are **fully type-checked** against the imported classes
+  (a typo'd feature is a compile error, not a silent Cedar mismatch).
+- Policy checks run over the **union** of an `.actor` file's blocks and any
+  inline `actors` blocks in the imported domain models: separation of duty
+  (`never_both`), inheritance cycles, and self-narrowing are caught across
+  files.
+- `rexlang gen cedar` emits a Cedar policy set plus a Cedar entity schema;
+  generated policies are validated against the real `cedar-policy` crate in
+  CI (strict mode). Obligations become Cedar annotations; `never_both`
+  groups become review evidence comments.
+- Inline `actors` blocks in `.mox` files remain legal for small policies;
+  both surfaces feed the same `ActorModel` artifact.
+
 
 ## Language server
 

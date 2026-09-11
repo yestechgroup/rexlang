@@ -26,4 +26,4 @@ jobs:
       - name: Format check
         run: |
           cargo fmt --all -- --check
-          cargo run -q -p rex-cli -- fmt --check examples/*.mox tests/conformance/models/library.mox tests/conformance/models/currency.mox
+          cargo run -q -p rex-cli -- fmt --check examples/*.mox examples/*.actor tests/conformance/models/*.mox tests/conformance/models/*.actor
