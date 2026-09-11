@@ -60,6 +60,14 @@
 //!    `"expr"` for the neutral language) under the same additive rules:
 //!    omitted when empty, so artifacts for models without derived bodies are
 //!    byte-identical to pre-Tier-2 output.
+//! 9. **Actors (additive, v1).** [`Package::actors`] carries the resolved
+//!    authorization model (`actors` blocks: [`ActorsDef`] with its
+//!    [`ActorDef`], [`CapabilityDef`], [`GrantDef`], and [`NeverBothDef`])
+//!    under the same additive rules as vocabularies (rule 6): every field is
+//!    `#[serde(default)]` and omitted when empty, so artifacts for actor-less
+//!    models are byte-identical to pre-actors output. `when` conditions and
+//!    `cedar` bodies are **verbatim source strings** — the IR never parses
+//!    or reformats them.
 //!
 //! [rexlang]: https://github.com/anton-makes/rexlang
 
@@ -185,6 +193,11 @@ pub struct Package {
     /// artifacts stay self-contained (no snapshot files needed downstream).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub vocabularies: Vec<VocabularyDef>,
+    /// Authorization-model (`actors` block) definitions, in declaration
+    /// order. Additive (wire contract rule 9); omitted when empty so
+    /// artifacts for actor-less models stay byte-identical.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actors: Vec<ActorsDef>,
 }
 
 impl Package {
@@ -198,6 +211,7 @@ impl Package {
             interfaces: Vec::new(),
             classes: Vec::new(),
             vocabularies: Vec::new(),
+            actors: Vec::new(),
         }
     }
 }
@@ -805,6 +819,243 @@ pub struct VocabularyEntry {
     /// Facet values by facet name.
     #[serde(default)]
     pub facets: BTreeMap<String, DefaultValue>,
+}
+
+/// An `actors` declaration: a named authorization model (Cedar spirit)
+/// declaring actors, capabilities, grants, and `never_both` exclusivity
+/// constraints, each collected in source order.
+///
+/// Additive to v1 (wire contract rule 9): [`Package::actors`] is omitted when
+/// empty, so artifacts for actor-less models stay byte-identical.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActorsDef {
+    /// The actors-block name, e.g. `"Support"`.
+    pub name: String,
+    /// Declared actors, in source order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actors: Vec<ActorDef>,
+    /// Declared capabilities, in source order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<CapabilityDef>,
+    /// Declared grants, in source order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grants: Vec<GrantDef>,
+    /// Declared `never_both` exclusivity constraints, in source order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub never_both: Vec<NeverBothDef>,
+}
+
+impl ActorsDef {
+    /// Creates an empty actors block with the given name.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            actors: Vec::new(),
+            capabilities: Vec::new(),
+            grants: Vec::new(),
+            never_both: Vec::new(),
+        }
+    }
+
+    /// Chainable setter appending an actor.
+    pub fn actor(mut self, actor: ActorDef) -> Self {
+        self.actors.push(actor);
+        self
+    }
+
+    /// Chainable setter appending a capability.
+    pub fn capability(mut self, capability: CapabilityDef) -> Self {
+        self.capabilities.push(capability);
+        self
+    }
+
+    /// Chainable setter appending a grant.
+    pub fn grant(mut self, grant: GrantDef) -> Self {
+        self.grants.push(grant);
+        self
+    }
+
+    /// Chainable setter appending a `never_both` exclusivity constraint.
+    pub fn never_both(mut self, never_both: NeverBothDef) -> Self {
+        self.never_both.push(never_both);
+        self
+    }
+}
+
+/// A single `actor` of an [`ActorsDef`]: a principal capabilities can be
+/// granted to, optionally extending a parent actor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActorDef {
+    /// Actor name, unique within its block.
+    pub name: String,
+    /// The direct parent actor from the `extends` clause, if any. An
+    /// actor-local name; resolved by the driver.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extends: Option<String>,
+}
+
+impl ActorDef {
+    /// Creates a root actor with no parent.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            extends: None,
+        }
+    }
+
+    /// Chainable setter for the `extends` parent (an actor-local name).
+    pub fn extends(mut self, parent: impl Into<String>) -> Self {
+        self.extends = Some(parent.into());
+        self
+    }
+}
+
+/// A single `capability <name> on <class>` of an [`ActorsDef`]: an action
+/// that can be granted to actors, on a resolved class.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilityDef {
+    /// Capability name, unique within its block.
+    pub name: String,
+    /// The resolved class the capability is granted on.
+    pub class: TypeRef,
+}
+
+impl CapabilityDef {
+    /// Creates a capability on the given class.
+    pub fn new(name: impl Into<String>, class: TypeRef) -> Self {
+        Self {
+            name: name.into(),
+            class,
+        }
+    }
+}
+
+/// A `grant <actor> { ... }` block: the entries granted to one actor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GrantDef {
+    /// The actor the entries are granted to.
+    pub actor: String,
+    /// Grant entries in source order. Empty grants are allowed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entries: Vec<GrantEntry>,
+}
+
+impl GrantDef {
+    /// Creates a grant with no entries yet.
+    pub fn new(actor: impl Into<String>) -> Self {
+        Self {
+            actor: actor.into(),
+            entries: Vec::new(),
+        }
+    }
+
+    /// Chainable setter appending a grant entry.
+    pub fn entry(mut self, entry: GrantEntry) -> Self {
+        self.entries.push(entry);
+        self
+    }
+}
+
+/// The effect of a [`GrantEntry`].
+///
+/// Serializes as a bare camelCase tag string: `"permit"`, `"forbid"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GrantEffect {
+    /// `permit` — the capability is allowed.
+    Permit,
+    /// `forbid` — the capability is denied.
+    Forbid,
+}
+
+/// One entry of a [`GrantDef`]: a `permit`/`forbid` effect on a capability,
+/// with an optional condition, obligations, and an optional verbatim `cedar`
+/// policy body.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GrantEntry {
+    /// Whether the capability is permitted or forbidden.
+    pub effect: GrantEffect,
+    /// The capability the effect applies to (block-local name).
+    pub capability: String,
+    /// The condition source text, strictly inside the `when (...)` parens
+    /// (ends-trimmed). Verbatim: the IR never parses or reformats it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<String>,
+    /// Obligation names attached to the effect, in source order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub obligations: Vec<String>,
+    /// Verbatim `cedar { ... }` body text (ends-trimmed, like target
+    /// bodies). The IR never parses or reformats it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cedar: Option<String>,
+}
+
+impl GrantEntry {
+    /// Creates an entry with the given effect and no optional parts.
+    pub fn new(effect: GrantEffect, capability: impl Into<String>) -> Self {
+        Self {
+            effect,
+            capability: capability.into(),
+            when: None,
+            obligations: Vec::new(),
+            cedar: None,
+        }
+    }
+
+    /// Creates a `permit` entry with no condition, obligations, or cedar
+    /// body.
+    pub fn permit(capability: impl Into<String>) -> Self {
+        Self::new(GrantEffect::Permit, capability)
+    }
+
+    /// Creates a `forbid` entry with no condition, obligations, or cedar
+    /// body.
+    pub fn forbid(capability: impl Into<String>) -> Self {
+        Self::new(GrantEffect::Forbid, capability)
+    }
+
+    /// Chainable setter for the `when (...)` condition source text.
+    pub fn when(mut self, condition: impl Into<String>) -> Self {
+        self.when = Some(condition.into());
+        self
+    }
+
+    /// Chainable setter appending an obligation name.
+    pub fn obligation(mut self, name: impl Into<String>) -> Self {
+        self.obligations.push(name.into());
+        self
+    }
+
+    /// Chainable setter for the verbatim `cedar { ... }` body.
+    pub fn cedar(mut self, body: impl Into<String>) -> Self {
+        self.cedar = Some(body.into());
+        self
+    }
+}
+
+/// A `never_both { <a>, <b> }` exclusivity constraint of an [`ActorsDef`]:
+/// capabilities that must never both be granted to the same actor. Exactly
+/// two capabilities; the driver validates this.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NeverBothDef {
+    /// The mutually exclusive capability names (exactly two).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
+}
+
+impl NeverBothDef {
+    /// Creates a constraint over exactly two capabilities.
+    pub fn new(a: impl Into<String>, b: impl Into<String>) -> Self {
+        Self {
+            capabilities: vec![a.into(), b.into()],
+        }
+    }
 }
 
 /// The built-in primitives (Xcore's Java-style primitives).
