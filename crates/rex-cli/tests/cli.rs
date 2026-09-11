@@ -812,8 +812,8 @@ fn fmt_help_works() {
 
 // --- the canonical examples suite --------------------------------------------
 
-/// The five canonical examples, hardcoded so a missing file fails loudly.
-const EXAMPLES: [&str; 5] = ["library", "ecommerce", "org", "iot", "shapes"];
+/// The six canonical examples, hardcoded so a missing file fails loudly.
+const EXAMPLES: [&str; 6] = ["library", "ecommerce", "org", "iot", "shapes", "support"];
 
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

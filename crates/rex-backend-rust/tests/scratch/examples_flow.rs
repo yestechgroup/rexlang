@@ -1,4 +1,4 @@
-//! Shared flow for the examples harness: locates the five canonical
+//! Shared flow for the examples harness: locates the six canonical
 //! examples, compiles each through [`rex_driver::compile_str`], and turns
 //! the generated Rust code into a namespaced module for the scratch crates
 //! (`target/scratch/rex-codegen-test` and `target/scratch/rex-examples-test`).
@@ -13,9 +13,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-/// The five canonical examples. Order is also the module declaration order
+/// The six canonical examples. Order is also the module declaration order
 /// in the scratch crate's `lib.rs`.
-pub const EXAMPLES: [&str; 5] = ["library", "ecommerce", "org", "iot", "shapes"];
+pub const EXAMPLES: [&str; 6] = ["library", "ecommerce", "org", "iot", "shapes", "support"];
 
 pub fn workspace_root() -> &'static Path {
     static ROOT: OnceLock<PathBuf> = OnceLock::new();

@@ -1,5 +1,5 @@
 //! Examples conformance harness (Rust backend side), driven test-first
-//! against the five canonical examples in `examples/`:
+//! against the six canonical examples in `examples/`:
 //!
 //! 1. Every example compiles through [`rex_driver::compile_str`] with zero
 //!    diagnostics.
@@ -17,7 +17,7 @@ mod examples_flow;
 use examples_flow::{example_path, example_source, examples_scratch_files, EXAMPLES};
 
 #[test]
-fn all_five_canonical_examples_compile_with_zero_diagnostics() {
+fn all_canonical_examples_compile_with_zero_diagnostics() {
     for name in EXAMPLES {
         let path = example_path(name);
         let source = example_source(name);
@@ -112,7 +112,7 @@ fn every_example_generates_a_namespaced_rust_module() {
 /// their bytes equal the mutator-built serialization.
 #[test]
 fn canonical_instance_documents_exist_for_byte_agreement_examples() {
-    for name in ["library", "ecommerce", "org"] {
+    for name in ["library", "ecommerce", "org", "support"] {
         let path = examples_flow::instance_path(name);
         assert!(
             path.is_file(),

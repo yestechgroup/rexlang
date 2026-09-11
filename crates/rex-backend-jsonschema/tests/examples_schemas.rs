@@ -13,7 +13,7 @@ use std::sync::OnceLock;
 use rex_backend_jsonschema::{generate, Profile};
 use rex_driver::compile_str;
 
-const EXAMPLES: [&str; 5] = ["library", "ecommerce", "org", "iot", "shapes"];
+const EXAMPLES: [&str; 6] = ["library", "ecommerce", "org", "iot", "shapes", "support"];
 
 fn workspace_root() -> &'static Path {
     static ROOT: OnceLock<PathBuf> = OnceLock::new();

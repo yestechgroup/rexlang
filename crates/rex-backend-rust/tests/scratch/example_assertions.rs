@@ -3,11 +3,11 @@
 // <example>` module above and builds its resources through generated
 // mutators only, so opposite pairs stay consistent by construction.
 //
-// Canonical-instance agreement: for `library`, `ecommerce`, and `org` the
-// mutator-built resource's `to_instance_json()` must byte-match
-// `examples/instances/<name>.instance.json` (checked when the harness sets
-// `REX_EXAMPLES_DIR`; rewritten with `REX_UPDATE_FIXTURES=1`, the same
-// convention as the workspace goldens). `iot` and `shapes` are
+// Canonical-instance agreement: for `library`, `ecommerce`, `org`, and
+// `support` the mutator-built resource's `to_instance_json()` must
+// byte-match `examples/instances/<name>.instance.json` (checked when the
+// harness sets `REX_EXAMPLES_DIR`; rewritten with `REX_UPDATE_FIXTURES=1`,
+// the same convention as the workspace goldens). `iot` and `shapes` are
 // schema-validated in the `rex-backend-jsonschema` harness instead:
 // `Sensor.sensorId` is `readonly` (no generated mutator can set it), and
 // `shapes` inheritance is not materialized in Rust codegen, so their Rust
@@ -488,6 +488,133 @@ mod example_assertions {
             // Plain construction needs no resource.
             let puppy = Dog::default();
             assert_eq!(puppy.breed, "");
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // support — the actors-model showcase: refers↔refers pair between two
+    // root classes, readonly identity features, labeled enum state, and a
+    // derived boolean. The `actors Support { ... }` block itself has no
+    // Rust-codegen surface; its Cedar, schema, and policy-set guarantees
+    // are pinned by the rex-backend-cedar examples harness.
+    // ------------------------------------------------------------------
+    mod support_example {
+        use crate::support::*;
+
+        /// Two users and two tickets wired through the assignee /
+        /// assignedTickets opposite pair. As in `ecommerce`, the `id
+        /// readonly` features have no generated setters, so their one-time
+        /// initialization is the only direct field write here.
+        fn support_resource() -> (Resource, UserId, UserId, TicketId, TicketId) {
+            let mut res = Resource::default();
+
+            let ada = res.new_user();
+            {
+                let slot = res.user_mut(ada).unwrap();
+                slot.user_id = "USR-001".to_string();
+                slot.set_name("Ada".to_string());
+                slot.set_active(true);
+            }
+            let grace = res.new_user();
+            {
+                let slot = res.user_mut(grace).unwrap();
+                slot.user_id = "USR-002".to_string();
+                slot.set_name("Grace".to_string());
+                slot.set_active(false);
+            }
+
+            let password_reset = res.new_ticket();
+            {
+                let slot = res.ticket_mut(password_reset).unwrap();
+                slot.ticket_no = "TCK-0001".to_string();
+                slot.set_title("Password reset".to_string());
+                slot.set_internal(false);
+                slot.set_refund_cents(0);
+                slot.set_state(TicketState::Open);
+            }
+            let data_export = res.new_ticket();
+            {
+                let slot = res.ticket_mut(data_export).unwrap();
+                slot.ticket_no = "TCK-0002".to_string();
+                slot.set_title("Data export".to_string());
+                slot.set_internal(true);
+                slot.set_refund_cents(2500);
+                slot.set_state(TicketState::InProgress);
+            }
+
+            res.ticket_set_assignee(password_reset, Some(ada));
+            res.ticket_set_assignee(data_export, Some(grace));
+            res.user_add_assigned_tickets(ada, password_reset);
+            res.user_add_assigned_tickets(grace, data_export);
+            (res, ada, grace, password_reset, data_export)
+        }
+
+        #[test]
+        fn assignee_relation_navigates_both_ways() {
+            let (res, ada, grace, password_reset, data_export) = support_resource();
+
+            // Ticket → assignee.
+            assert_eq!(res.ticket(password_reset).unwrap().assignee, Some(ada));
+            assert_eq!(
+                res.ticket(password_reset)
+                    .unwrap()
+                    .assignee(&res)
+                    .map(|user| user.name.clone()),
+                Some("Ada".to_string())
+            );
+
+            // …and user → assigned tickets.
+            let assigned: Vec<String> = res
+                .user(grace)
+                .unwrap()
+                .assigned_tickets(&res)
+                .iter()
+                .map(|ticket| ticket.title.clone())
+                .collect();
+            assert_eq!(assigned, vec!["Data export".to_string()]);
+            assert_eq!(
+                res.ticket(data_export).unwrap().assignee,
+                Some(grace),
+                "the opposite side of the pair stays consistent by construction"
+            );
+        }
+
+        #[test]
+        fn ticket_state_enum_round_trips_by_value_and_label() {
+            assert_eq!(TicketState::Open.name(), "Open");
+            assert_eq!(TicketState::Open.label(), "open");
+            assert_eq!(TicketState::Open.value(), 0);
+            assert_eq!(TicketState::InProgress.label(), "in_progress");
+            assert_eq!(TicketState::Resolved.value(), 2);
+            assert_eq!(TicketState::try_from(1), Ok(TicketState::InProgress));
+            assert!(TicketState::try_from(9).is_err());
+        }
+
+        #[test]
+        fn derived_needs_refund_follows_the_refund_cents() {
+            let (res, _ada, _grace, password_reset, data_export) = support_resource();
+            assert_eq!(
+                res.ticket(password_reset).unwrap().needs_refund(&res),
+                Some(false),
+                "a ticket without a refund does not need one"
+            );
+            assert_eq!(
+                res.ticket(data_export).unwrap().needs_refund(&res),
+                Some(true),
+                "a ticket with a refund balance needs a refund"
+            );
+        }
+
+        #[test]
+        fn canonical_instance_matches_the_example_file_and_round_trips() {
+            let (res, _ada, _grace, _password_reset, _data_export) = support_resource();
+            let json = res.to_instance_json();
+
+            let loaded = Resource::from_instance_json(&json).expect("load canonical instance");
+            assert_eq!(loaded, res, "load(save(x)) != x");
+            assert_eq!(loaded.to_instance_json(), json, "re-saved bytes drifted");
+
+            super::assert_instance_json("support", &json);
         }
     }
 }

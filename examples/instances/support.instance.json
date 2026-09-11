@@ -1,0 +1,55 @@
+{
+  "$type": "rex.instance",
+  "formatVersion": 1,
+  "model": "nz.example.support",
+  "objects": [
+    {
+      "$id": "user/0",
+      "$type": "User",
+      "active": true,
+      "assignedTickets": [
+        {
+          "$ref": "ticket/0"
+        }
+      ],
+      "name": "Ada",
+      "userId": "USR-001"
+    },
+    {
+      "$id": "user/1",
+      "$type": "User",
+      "active": false,
+      "assignedTickets": [
+        {
+          "$ref": "ticket/1"
+        }
+      ],
+      "name": "Grace",
+      "userId": "USR-002"
+    },
+    {
+      "$id": "ticket/0",
+      "$type": "Ticket",
+      "assignee": {
+        "$ref": "user/0"
+      },
+      "internal": false,
+      "refundCents": 0,
+      "state": "Open",
+      "ticketNo": "TCK-0001",
+      "title": "Password reset"
+    },
+    {
+      "$id": "ticket/1",
+      "$type": "Ticket",
+      "assignee": {
+        "$ref": "user/1"
+      },
+      "internal": true,
+      "refundCents": 2500,
+      "state": "InProgress",
+      "ticketNo": "TCK-0002",
+      "title": "Data export"
+    }
+  ]
+}

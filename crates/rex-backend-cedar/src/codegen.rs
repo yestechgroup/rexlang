@@ -92,11 +92,14 @@ fn policy_set(actors: &ActorsDef, model: &Model) -> anyhow::Result<String> {
                 None => {
                     let class = capability_class(actors, model, &entry.capability)?;
                     let mut paragraph = String::new();
-                    for obligation in &entry.obligations {
-                        paragraph.push_str(&format!(
-                            "@obligation({})\n",
-                            cedar_string_literal(obligation)
-                        ));
+                    // One `@obligation` annotation per policy: Cedar
+                    // annotations carry exactly one string value and reject
+                    // duplicate keys, so multiple obligations on one entry
+                    // join into a single comma-separated value (names are
+                    // identifiers, so no comma can occur).
+                    if !entry.obligations.is_empty() {
+                        let joined = cedar_string_literal(&entry.obligations.join(","));
+                        paragraph.push_str(&format!("@obligation({joined})\n"));
                     }
                     paragraph.push_str(&format!(
                         "{effect}(principal is {namespace}::{actor}, action == \
@@ -682,10 +685,24 @@ mod tests {
         let cedar = cedar_of(&fixture_model(actors));
         assert!(
             cedar.contains(
-                "@obligation(\"audit\")\n@obligation(\"four-eyes\")\npermit(\
+                "@obligation(\"audit,four-eyes\")\npermit(\
                  principal is Support::Agent"
             ),
-            "annotations: {cedar}"
+            "multiple obligations join one annotation value (Cedar rejects \
+             duplicate annotation keys): {cedar}"
+        );
+    }
+
+    #[test]
+    fn a_single_obligation_stays_a_bare_annotation() {
+        let actors = fixture_actors(vec![grant(
+            "Agent",
+            vec![GrantEntry::permit("RaiseRefund").obligation("audit")],
+        )]);
+        let cedar = cedar_of(&fixture_model(actors));
+        assert!(
+            cedar.contains("@obligation(\"audit\")\npermit(principal is Support::Agent"),
+            "single obligation: {cedar}"
         );
     }
 
