@@ -463,7 +463,8 @@ struct PrepMaps<'a> {
 }
 
 /// A per-block record kept alongside the IR for cross-declaration actors
-/// validation (inheritance cycles, separation of duty, self-narrowing).
+/// validation (inheritance cycles, separation of duty, self-narrowing,
+/// delegations).
 struct ActorsRecord {
     /// The file the block was lowered from: diagnostics produced by the
     /// cross-file passes are tagged with it.
@@ -471,12 +472,36 @@ struct ActorsRecord {
     def: ir::ActorsDef,
     /// Actor names with their declaration-name spans, in declaration order.
     actor_names: Vec<(String, Span)>,
+    /// Declared actor kinds, parallel to `actor_names`; `None` for plain
+    /// `actor` declarations (only `agent` declares a kind).
+    actor_kinds: Vec<(String, Option<ir::ActorKind>)>,
     /// Actor → parent actor name (`extends`), in declaration order.
     parents: Vec<(String, Option<String>)>,
+    /// Declared purposes with their declaration-name spans, in declaration
+    /// order.
+    purposes: Vec<(String, Span)>,
     /// `never_both` constraints: capability names plus the decl span.
     never_both: Vec<(Vec<String>, Span)>,
     /// `forbid` entries: (actor, capability, capability-name span).
     forbids: Vec<(String, String, Span)>,
+    /// Delegations, in declaration order.
+    delegations: Vec<DelegationRecord>,
+}
+
+/// A per-delegation record kept alongside the IR for the delegation passes
+/// (endpoint resolution, target-kind check, permit invariant): the endpoint
+/// names with their spans and the `permit` entries with theirs.
+struct DelegationRecord {
+    name: String,
+    from: String,
+    from_span: Span,
+    to: String,
+    to_span: Span,
+    /// The delegation's declared purpose with its name span, if any.
+    purpose: Option<(String, Span)>,
+    /// `permit` entries whose capability is declared: (capability,
+    /// capability-name span).
+    permits: Vec<(String, Span)>,
 }
 
 /// A `when` condition awaiting type checking once the class universe is
@@ -797,12 +822,14 @@ pub(crate) fn compile_multi(
     validate_opposites(&classes, &mut tagged);
 
     // Inline actors blocks from every file join one union policy set: cycle
-    // detection runs per block first; separation of duty and self-narrowing
-    // span the union (same-named actors pool their permits across files).
+    // detection runs per block first; separation of duty, self-narrowing,
+    // and delegations span the union (same-named actors pool their permits
+    // across files).
     let cyclic = detect_actor_cycles(&actors, &mut tagged);
     if !cyclic {
         validate_actor_never_both_union(&actors, &mut tagged);
         validate_actor_self_narrowing_union(&actors, &mut tagged);
+        validate_actor_delegations_union(&actors, &mut tagged);
     }
 
     let mut model = ir::Model::new();
@@ -1007,6 +1034,7 @@ pub(crate) fn compile(
     if !cyclic {
         validate_actor_never_both(&actors, &mut tagged);
         validate_actor_self_narrowing(&actors, &mut tagged);
+        validate_actor_delegations(&actors, &mut tagged);
     }
     diags.extend(tagged.into_iter().map(|(_, diagnostic)| diagnostic));
 
@@ -2559,9 +2587,12 @@ fn lower_actors(
     let mut def = ir::ActorsDef::new(decl.name.text.clone());
     let mut pending: Vec<PendingCondition> = Vec::new();
     let mut actor_names: Vec<(String, Span)> = Vec::new();
+    let mut actor_kinds: Vec<(String, Option<ir::ActorKind>)> = Vec::new();
     let mut parents: Vec<(String, Option<String>)> = Vec::new();
+    let mut purposes: Vec<(String, Span)> = Vec::new();
     let mut forbids: Vec<(String, String, Span)> = Vec::new();
     let mut never_both: Vec<(Vec<String>, Span)> = Vec::new();
+    let mut delegations: Vec<DelegationRecord> = Vec::new();
 
     let mut seen_actors = HashSet::new();
     for actor in &decl.actors {
@@ -2584,8 +2615,16 @@ fn lower_actors(
             }
             ir_actor = ir_actor.extends(&parent.text);
         }
+        let ir_kind = match actor.kind {
+            mox::ActorKind::Human => None,
+            mox::ActorKind::Agent => Some(ir::ActorKind::Agent),
+        };
+        if let Some(kind) = ir_kind {
+            ir_actor = ir_actor.kind(kind);
+        }
         def = def.actor(ir_actor);
         actor_names.push((actor.name.text.clone(), actor.name.span));
+        actor_kinds.push((actor.name.text.clone(), ir_kind));
         parents.push((
             actor.name.text.clone(),
             actor.extends.as_ref().map(|parent| parent.text.clone()),
@@ -2631,6 +2670,18 @@ fn lower_actors(
             ),
         ));
         capability_classes.insert(&capability.name.text, class);
+    }
+
+    let mut seen_purposes = HashSet::new();
+    for purpose in &decl.purposes {
+        if !seen_purposes.insert(purpose.name.text.as_str()) {
+            diags.push(Diagnostic::error(
+                format!("duplicate purpose `{}`", purpose.name.text),
+                Some(purpose.name.span),
+            ));
+        }
+        def = def.purpose(&purpose.name.text);
+        purposes.push((purpose.name.text.clone(), purpose.name.span));
     }
 
     for grant in &decl.grants {
@@ -2695,6 +2746,71 @@ fn lower_actors(
         def = def.grant(ir_grant);
     }
 
+    let mut seen_delegations = HashSet::new();
+    for delegation in &decl.delegations {
+        if !seen_delegations.insert(delegation.name.text.as_str()) {
+            diags.push(Diagnostic::error(
+                format!("duplicate delegation `{}`", delegation.name.text),
+                Some(delegation.name.span),
+            ));
+        }
+        let mut ir_delegation = ir::DelegationDef::new(
+            &delegation.name.text,
+            &delegation.from.text,
+            &delegation.to.text,
+        );
+        if let Some(purpose) = &delegation.purpose {
+            ir_delegation = ir_delegation.purpose(&purpose.text);
+        }
+        let mut permits: Vec<(String, Span)> = Vec::new();
+        for entry in &delegation.entries {
+            let declared = capabilities.contains(entry.capability.text.as_str());
+            if !declared {
+                diags.push(Diagnostic::error(
+                    format!(
+                        "delegation `{}` names unknown capability `{}`",
+                        delegation.name.text, entry.capability.text
+                    ),
+                    Some(entry.capability.span),
+                ));
+            }
+            let ir_effect = match entry.effect {
+                mox::Effect::Permit => ir::GrantEffect::Permit,
+                mox::Effect::Forbid => ir::GrantEffect::Forbid,
+            };
+            let mut ir_entry = ir::GrantEntry::new(ir_effect, &entry.capability.text);
+            if let Some(when_span) = entry.when {
+                ir_entry = ir_entry.when(when_text(source, when_span));
+                check_when_syntax(source, when_span, diags);
+                let class = capability_classes
+                    .get(entry.capability.text.as_str())
+                    .cloned()
+                    .flatten();
+                pending.push(pending_condition(file, source, when_span, class));
+            }
+            for obligation in &entry.obligations {
+                ir_entry = ir_entry.obligation(&obligation.text);
+            }
+            if declared && ir_effect == ir::GrantEffect::Permit {
+                permits.push((entry.capability.text.clone(), entry.capability.span));
+            }
+            ir_delegation = ir_delegation.entry(ir_entry);
+        }
+        def = def.delegation(ir_delegation);
+        delegations.push(DelegationRecord {
+            name: delegation.name.text.clone(),
+            from: delegation.from.text.clone(),
+            from_span: delegation.from.span,
+            to: delegation.to.text.clone(),
+            to_span: delegation.to.span,
+            purpose: delegation
+                .purpose
+                .as_ref()
+                .map(|name| (name.text.clone(), name.span)),
+            permits,
+        });
+    }
+
     for constraint in &decl.never_both {
         if constraint.capabilities.len() != 2 {
             diags.push(Diagnostic::error(
@@ -2726,9 +2842,12 @@ fn lower_actors(
             file: file.to_string(),
             def,
             actor_names,
+            actor_kinds,
             parents,
+            purposes,
             forbids,
             never_both,
+            delegations,
         },
         pending,
     )
@@ -2807,15 +2926,9 @@ fn visit_actor<'a>(
     None
 }
 
-/// The effective permit set of one actor: the permits of every grant naming
-/// the actor itself or any of its transitive `extends` ancestors. Cedar
-/// entries are opaque and never contribute. Only run on acyclic blocks (the
-/// lineage walk is cycle-guarded regardless).
-fn effective_permits<'a>(
-    record: &'a ActorsRecord,
-    parents: &HashMap<&'a str, &'a str>,
-    actor: &'a str,
-) -> HashSet<&'a str> {
+/// The actor's own name plus every transitive `extends` ancestor
+/// (cycle-guarded).
+fn actor_lineage<'a>(parents: &HashMap<&'a str, &'a str>, actor: &'a str) -> HashSet<&'a str> {
     let mut lineage: HashSet<&str> = HashSet::new();
     let mut current = Some(actor);
     while let Some(name) = current {
@@ -2824,6 +2937,16 @@ fn effective_permits<'a>(
         }
         current = parents.get(name).copied();
     }
+    lineage
+}
+
+/// The permit capabilities reaching one lineage through grants alone: every
+/// `permit` entry of every grant naming a lineage member. Cedar entries are
+/// opaque and never contribute.
+fn effective_grant_permits<'a>(
+    record: &'a ActorsRecord,
+    lineage: &HashSet<&'a str>,
+) -> HashSet<&'a str> {
     record
         .def
         .grants
@@ -2833,6 +2956,27 @@ fn effective_permits<'a>(
         .filter(|entry| entry.effect == ir::GrantEffect::Permit && entry.cedar.is_none())
         .map(|entry| entry.capability.as_str())
         .collect()
+}
+
+/// The effective permit set of one actor: grant permits (see
+/// [`effective_grant_permits`]) plus the permits delegated to any lineage
+/// member. Only run on acyclic blocks (the lineage walk is cycle-guarded
+/// regardless).
+fn effective_permits<'a>(record: &'a ActorsRecord, lineage: &HashSet<&'a str>) -> HashSet<&'a str> {
+    let mut permits = effective_grant_permits(record, lineage);
+    permits.extend(
+        record
+            .delegations
+            .iter()
+            .filter(|delegation| lineage.contains(delegation.to.as_str()))
+            .flat_map(|delegation| {
+                delegation
+                    .permits
+                    .iter()
+                    .map(|(capability, _)| capability.as_str())
+            }),
+    );
+    permits
 }
 
 /// Separation of duty, per block: no actor's effective permit set may
@@ -2846,7 +2990,8 @@ fn validate_actor_never_both(records: &[ActorsRecord], diags: &mut Vec<(String, 
                 continue; // malformed shape; already reported during lowering
             };
             for (name, _) in &record.actor_names {
-                let effective = effective_permits(record, &parents, name.as_str());
+                let lineage = actor_lineage(&parents, name.as_str());
+                let effective = effective_permits(record, &lineage);
                 if effective.contains(a.as_str()) && effective.contains(b.as_str()) {
                     diags.push((
                         record.file.clone(),
@@ -2868,7 +3013,8 @@ fn validate_actor_self_narrowing(records: &[ActorsRecord], diags: &mut Vec<(Stri
     for record in records {
         let parents = actor_parents(record);
         for (actor, capability, span) in &record.forbids {
-            if effective_permits(record, &parents, actor.as_str()).contains(capability.as_str()) {
+            let lineage = actor_lineage(&parents, actor.as_str());
+            if effective_permits(record, &lineage).contains(capability.as_str()) {
                 diags.push((
                     record.file.clone(),
                     Diagnostic::warning(
@@ -2898,11 +3044,13 @@ fn union_actor_names(records: &[ActorsRecord]) -> Vec<&str> {
 }
 
 /// Whether any block of the union effectively grants `actor` the capability
-/// (same-named actors across blocks pool their permits in the union).
+/// (same-named actors pool their permits in the union).
 fn union_grants(records: &[ActorsRecord], actor: &str, capability: &str) -> bool {
-    records
-        .iter()
-        .any(|record| effective_permits(record, &actor_parents(record), actor).contains(capability))
+    records.iter().any(|record| {
+        let parents = actor_parents(record);
+        let lineage = actor_lineage(&parents, actor);
+        effective_permits(record, &lineage).contains(capability)
+    })
 }
 
 /// Separation of duty over the union: same-named actors pool their permits
@@ -2954,6 +3102,262 @@ fn validate_actor_self_narrowing_union(
                         Some(*span),
                     ),
                 ));
+            }
+        }
+    }
+}
+
+/// The kind `record` declares for `actor`, if any.
+fn declared_kind(record: &ActorsRecord, actor: &str) -> Option<ir::ActorKind> {
+    record
+        .actor_kinds
+        .iter()
+        .find_map(|(name, kind)| (name.as_str() == actor).then_some(*kind).flatten())
+}
+
+/// The kind the union declares for `actor` (first block wins).
+fn union_declared_kind(records: &[ActorsRecord], actor: &str) -> Option<ir::ActorKind> {
+    records
+        .iter()
+        .find_map(|record| declared_kind(record, actor))
+}
+
+/// The actor → parent map across a union: the first declared `extends` edge
+/// per actor name wins.
+fn union_parents(records: &[ActorsRecord]) -> HashMap<&str, &str> {
+    let mut map = HashMap::new();
+    for record in records {
+        for (name, parent) in &record.parents {
+            if let Some(parent) = parent {
+                map.entry(name.as_str()).or_insert(parent.as_str());
+            }
+        }
+    }
+    map
+}
+
+/// The effective kind of one actor: the declared kind of the actor itself
+/// or, walking its `extends` chain (cycle-guarded), the nearest ancestor
+/// with a declared kind; `Human` when no lineage member declares one.
+fn lineage_kind(
+    actor: &str,
+    parents: &HashMap<&str, &str>,
+    declared: &dyn Fn(&str) -> Option<ir::ActorKind>,
+) -> ir::ActorKind {
+    let mut current = Some(actor);
+    let mut seen = HashSet::new();
+    while let Some(name) = current {
+        if !seen.insert(name) {
+            break;
+        }
+        if let Some(kind) = declared(name) {
+            return kind;
+        }
+        current = parents.get(name).copied();
+    }
+    ir::ActorKind::Human
+}
+
+fn delegation_unknown_actor(name: &str, actor: &str) -> String {
+    format!("delegation `{name}` names unknown actor `{actor}`")
+}
+
+fn delegation_not_agent(name: &str, actor: &str) -> String {
+    format!("delegation `{name}` targets actor `{actor}`, which is not an agent")
+}
+
+fn delegation_unbacked_permit(name: &str, capability: &str, actor: &str) -> String {
+    format!(
+        "delegation `{name}` delegates `{capability}` to actor `{actor}`, \
+         which has no effective permit for it"
+    )
+}
+
+fn delegation_unknown_purpose(name: &str, purpose: &str) -> String {
+    format!("delegation `{name}` names unknown purpose `{purpose}`")
+}
+
+/// The union namespace of declared purpose names across every block (purpose
+/// declarations pool across the whole policy set; only same-block duplicates
+/// error at lowering time).
+fn union_purposes(records: &[ActorsRecord]) -> HashSet<&str> {
+    records
+        .iter()
+        .flat_map(|record| record.purposes.iter().map(|(name, _)| name.as_str()))
+        .collect()
+}
+
+/// Delegation validation, per block: endpoints must name declared actors,
+/// the target's effective kind must be `agent`, and every `permit` entry
+/// must delegate a capability the target already holds as an effective
+/// grant permit — other delegations are never authority sources. A declared
+/// `purpose` must name a purpose of the union namespace (checked after the
+/// endpoint gates, mirroring the other checks' cascade suppression).
+/// Runs only on acyclic blocks (callers skip it alongside the other
+/// ancestor-walking passes).
+fn validate_actor_delegations(records: &[ActorsRecord], diags: &mut Vec<(String, Diagnostic)>) {
+    let purposes = union_purposes(records);
+    for record in records {
+        let parents = actor_parents(record);
+        for delegation in &record.delegations {
+            let from_known = record
+                .actor_names
+                .iter()
+                .any(|(name, _)| *name == delegation.from);
+            let to_known = record
+                .actor_names
+                .iter()
+                .any(|(name, _)| *name == delegation.to);
+            if !from_known {
+                diags.push((
+                    record.file.clone(),
+                    Diagnostic::error(
+                        delegation_unknown_actor(&delegation.name, &delegation.from),
+                        Some(delegation.from_span),
+                    ),
+                ));
+            }
+            if !to_known {
+                diags.push((
+                    record.file.clone(),
+                    Diagnostic::error(
+                        delegation_unknown_actor(&delegation.name, &delegation.to),
+                        Some(delegation.to_span),
+                    ),
+                ));
+                continue;
+            }
+            let kind = lineage_kind(&delegation.to, &parents, &|name| {
+                declared_kind(record, name)
+            });
+            if kind != ir::ActorKind::Agent {
+                diags.push((
+                    record.file.clone(),
+                    Diagnostic::error(
+                        delegation_not_agent(&delegation.name, &delegation.to),
+                        Some(delegation.to_span),
+                    ),
+                ));
+            }
+            let lineage = actor_lineage(&parents, &delegation.to);
+            for (capability, span) in &delegation.permits {
+                if !effective_grant_permits(record, &lineage).contains(capability.as_str()) {
+                    diags.push((
+                        record.file.clone(),
+                        Diagnostic::error(
+                            delegation_unbacked_permit(
+                                &delegation.name,
+                                capability,
+                                &delegation.to,
+                            ),
+                            Some(*span),
+                        ),
+                    ));
+                }
+            }
+            if let Some((purpose, span)) = &delegation.purpose {
+                if !purposes.contains(purpose.as_str()) {
+                    diags.push((
+                        record.file.clone(),
+                        Diagnostic::error(
+                            delegation_unknown_purpose(&delegation.name, purpose),
+                            Some(*span),
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// Whether any block of the union grants `actor` the capability via grants
+/// alone — delegations are never authority sources.
+fn union_grant_permits(
+    records: &[ActorsRecord],
+    parents: &HashMap<&str, &str>,
+    actor: &str,
+    capability: &str,
+) -> bool {
+    let lineage = actor_lineage(parents, actor);
+    records
+        .iter()
+        .any(|record| effective_grant_permits(record, &lineage).contains(capability))
+}
+
+/// Delegation validation over the union: endpoints resolve against every
+/// block's actors (same-named actors pool), kinds and grant permits are
+/// computed union-wide, so a delegation in the `.actor` file may target an
+/// agent declared in an imported domain's inline block. A declared
+/// `purpose` must name a purpose declared in any block of the union (same
+/// cross-file visibility). Violations a domain already reported on its own
+/// are deduplicated by the caller (identical file, message, and span).
+fn validate_actor_delegations_union(
+    records: &[ActorsRecord],
+    diags: &mut Vec<(String, Diagnostic)>,
+) {
+    let names = union_actor_names(records);
+    let purposes = union_purposes(records);
+    let parents = union_parents(records);
+    for record in records {
+        for delegation in &record.delegations {
+            let from_known = names.contains(&delegation.from.as_str());
+            let to_known = names.contains(&delegation.to.as_str());
+            if !from_known {
+                diags.push((
+                    record.file.clone(),
+                    Diagnostic::error(
+                        delegation_unknown_actor(&delegation.name, &delegation.from),
+                        Some(delegation.from_span),
+                    ),
+                ));
+            }
+            if !to_known {
+                diags.push((
+                    record.file.clone(),
+                    Diagnostic::error(
+                        delegation_unknown_actor(&delegation.name, &delegation.to),
+                        Some(delegation.to_span),
+                    ),
+                ));
+                continue;
+            }
+            let kind = lineage_kind(&delegation.to, &parents, &|name| {
+                union_declared_kind(records, name)
+            });
+            if kind != ir::ActorKind::Agent {
+                diags.push((
+                    record.file.clone(),
+                    Diagnostic::error(
+                        delegation_not_agent(&delegation.name, &delegation.to),
+                        Some(delegation.to_span),
+                    ),
+                ));
+            }
+            for (capability, span) in &delegation.permits {
+                if !union_grant_permits(records, &parents, &delegation.to, capability) {
+                    diags.push((
+                        record.file.clone(),
+                        Diagnostic::error(
+                            delegation_unbacked_permit(
+                                &delegation.name,
+                                capability,
+                                &delegation.to,
+                            ),
+                            Some(*span),
+                        ),
+                    ));
+                }
+            }
+            if let Some((purpose, span)) = &delegation.purpose {
+                if !purposes.contains(purpose.as_str()) {
+                    diags.push((
+                        record.file.clone(),
+                        Diagnostic::error(
+                            delegation_unknown_purpose(&delegation.name, purpose),
+                            Some(*span),
+                        ),
+                    ));
+                }
             }
         }
     }
@@ -3107,6 +3511,7 @@ pub(crate) fn compile_actor_file(
     if !cyclic {
         validate_actor_never_both_union(&records, &mut diags);
         validate_actor_self_narrowing_union(&records, &mut diags);
+        validate_actor_delegations_union(&records, &mut diags);
     }
 
     // Condition typing over the combined class universe.

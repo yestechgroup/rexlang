@@ -321,3 +321,540 @@ fn garbage_actors_inputs_do_not_panic() {
         let _ = format!("{result:?}"); // must be debuggable and must not panic
     }
 }
+
+// --- agents -------------------------------------------------------------------
+
+#[test]
+fn agent_decl_parses_with_agent_kind() {
+    let result = parse("actors A { agent Bot }");
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.unwrap();
+    let actors = expect_actors(&model.declarations[0], "A");
+    assert_eq!(actors.actors.len(), 1);
+    assert_eq!(actors.actors[0].kind, ActorKind::Agent);
+    assert_eq!(actors.actors[0].name.text, "Bot");
+    assert!(actors.actors[0].extends.is_none());
+}
+
+#[test]
+fn agent_decl_with_extends_parses() {
+    let result = parse("actors A { agent Bot extends Human }");
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.unwrap();
+    let actors = expect_actors(&model.declarations[0], "A");
+    assert_eq!(actors.actors[0].kind, ActorKind::Agent);
+    assert_eq!(
+        actors.actors[0]
+            .extends
+            .as_ref()
+            .map(|name| name.text.as_str()),
+        Some("Human")
+    );
+}
+
+#[test]
+fn actor_decl_kind_defaults_to_human() {
+    assert_eq!(ActorKind::default(), ActorKind::Human);
+    let result = parse("actors A { actor Human }");
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.unwrap();
+    let actors = expect_actors(&model.declarations[0], "A");
+    assert_eq!(actors.actors[0].kind, ActorKind::Human);
+}
+
+#[test]
+fn actor_and_agent_items_fold_in_source_order() {
+    let source = "actors A { actor H agent B1 agent B2 extends H actor H2 }";
+    let result = parse(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.unwrap();
+    let actors = expect_actors(&model.declarations[0], "A");
+    assert_eq!(
+        actors
+            .actors
+            .iter()
+            .map(|actor| (actor.name.text.as_str(), actor.kind))
+            .collect::<Vec<_>>(),
+        vec![
+            ("H", ActorKind::Human),
+            ("B1", ActorKind::Agent),
+            ("B2", ActorKind::Agent),
+            ("H2", ActorKind::Human),
+        ]
+    );
+}
+
+// --- delegations ----------------------------------------------------------------
+
+#[test]
+fn delegation_happy_path_parses() {
+    let source = concat!(
+        "actors A { ",
+        "delegation Triage { ",
+        "from SupportUser to TriageAgent ",
+        "permit RaiseTicket obligation audit ",
+        "forbid CloseTicket when (ticket.open) ",
+        "} }"
+    );
+    let result = parse(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.unwrap();
+    let actors = expect_actors(&model.declarations[0], "A");
+    assert_eq!(actors.delegations.len(), 1);
+    let delegation = &actors.delegations[0];
+    assert_eq!(delegation.name.text, "Triage");
+    assert!(
+        source[delegation.span.start..].starts_with("delegation Triage"),
+        "the declaration span covers the `delegation` keyword"
+    );
+    assert_eq!(delegation.from.text, "SupportUser");
+    assert_eq!(delegation.to.text, "TriageAgent");
+    assert_eq!(delegation.entries.len(), 2);
+    let GrantEffectDecl {
+        effect,
+        capability,
+        when,
+        obligations,
+        ..
+    } = &delegation.entries[0];
+    assert_eq!(*effect, Effect::Permit);
+    assert_eq!(capability.text, "RaiseTicket");
+    assert!(when.is_none());
+    assert_eq!(
+        obligations
+            .iter()
+            .map(|name| name.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["audit"]
+    );
+    let GrantEffectDecl {
+        effect,
+        capability,
+        when,
+        ..
+    } = &delegation.entries[1];
+    assert_eq!(*effect, Effect::Forbid);
+    assert_eq!(capability.text, "CloseTicket");
+    let when = when.expect("`when` span");
+    assert_eq!(&source[when.start..when.end], "(ticket.open)");
+}
+
+#[test]
+fn delegation_without_entries_is_legal() {
+    let result = parse("actors A { delegation D { from X to Y } }");
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.unwrap();
+    let actors = expect_actors(&model.declarations[0], "A");
+    assert_eq!(actors.delegations.len(), 1);
+    assert!(actors.delegations[0].entries.is_empty());
+}
+
+#[test]
+fn delegation_missing_from_is_an_error() {
+    for source in [
+        "actors A { delegation D { } }",
+        "actors A { delegation D { to Y } }",
+        "actors A { delegation D { permit C to Y } }",
+    ] {
+        let result = parse(source);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|error| error.message == "delegation requires `from`"),
+            "{source}: expected a `delegation requires `from`` error, got {:?}",
+            result.errors
+        );
+    }
+}
+
+#[test]
+fn delegation_missing_to_is_an_error() {
+    for source in [
+        "actors A { delegation D { from X } }",
+        "actors A { delegation D { from X permit C } }",
+    ] {
+        let result = parse(source);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|error| error.message == "delegation requires `to`"),
+            "{source}: expected a `delegation requires `to`` error, got {:?}",
+            result.errors
+        );
+    }
+}
+
+#[test]
+fn entries_before_from_are_an_error() {
+    let result = parse("actors A { delegation D { permit C from X to Y } }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "delegation requires `from`"),
+        "expected a `delegation requires `from`` error, got {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn cedar_entry_inside_delegation_is_an_error() {
+    let source = "actors A { delegation D { from X to Y cedar { permit if (x) } } }";
+    let result = parse(source);
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "`cedar` entries are not allowed inside a delegation"),
+        "expected the pinned cedar-in-delegation error, got {:?}",
+        result.errors
+    );
+    let model = result.ast.expect("expected a recovered AST");
+    let actors = expect_actors(&model.declarations[0], "A");
+    assert!(
+        actors.delegations[0].entries.is_empty(),
+        "the rejected cedar entry must not fold into the entries"
+    );
+}
+
+#[test]
+fn duplicate_from_and_to_in_delegation_are_errors() {
+    let result = parse("actors A { delegation D { from X from Y to Z } }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "duplicate `from` in delegation"),
+        "expected a duplicate `from` error, got {:?}",
+        result.errors
+    );
+    let result = parse("actors A { delegation D { from X to Y to Z } }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "duplicate `to` in delegation"),
+        "expected a duplicate `to` error, got {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn to_before_from_in_delegation_is_an_error() {
+    let result = parse("actors A { delegation D { to Y from X } }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "delegation requires `from`"),
+        "expected a `delegation requires `from`` error, got {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn delegations_fold_in_source_order_with_other_items() {
+    let source = concat!(
+        "actors A { ",
+        "actor H agent B ",
+        "capability C on T ",
+        "grant H { permit C } ",
+        "delegation D1 { from H to B } ",
+        "delegation D2 { from B to H permit C } ",
+        "never_both { C, C2 } ",
+        "}"
+    );
+    let result = parse(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.unwrap();
+    let actors = expect_actors(&model.declarations[0], "A");
+    assert_eq!(actors.actors.len(), 2);
+    assert_eq!(actors.capabilities.len(), 1);
+    assert_eq!(actors.grants.len(), 1);
+    assert_eq!(actors.never_both.len(), 1);
+    assert_eq!(
+        actors
+            .delegations
+            .iter()
+            .map(|delegation| delegation.name.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["D1", "D2"]
+    );
+}
+
+#[test]
+fn delegation_with_escaped_identifiers_parses() {
+    let source = concat!(
+        "actors ^actors { ",
+        "agent ^agent ",
+        "capability ^delegation on T ",
+        "grant ^agent { permit ^delegation } ",
+        "delegation ^delegation { from ^agent to ^to permit ^permit obligation ^obligation } ",
+        "}"
+    );
+    let result = parse(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.unwrap();
+    let actors = expect_actors(&model.declarations[0], "actors");
+    assert!(actors.name.escaped);
+    assert_eq!(actors.actors[0].kind, ActorKind::Agent);
+    assert_eq!(actors.actors[0].name.text, "agent");
+    assert!(actors.actors[0].name.escaped);
+    assert_eq!(actors.capabilities[0].name.text, "delegation");
+    let delegation = &actors.delegations[0];
+    assert_eq!(delegation.name.text, "delegation");
+    assert!(delegation.name.escaped);
+    assert_eq!(delegation.from.text, "agent");
+    assert!(delegation.from.escaped);
+    assert_eq!(delegation.to.text, "to");
+    assert!(delegation.to.escaped);
+    assert_eq!(delegation.entries[0].capability.text, "permit");
+    assert!(delegation.entries[0].capability.escaped);
+    assert_eq!(delegation.entries[0].obligations[0].text, "obligation");
+}
+
+#[test]
+fn garbage_delegation_inputs_do_not_panic() {
+    let nasty = [
+        "actors A { delegation",
+        "actors A { delegation D",
+        "actors A { delegation D {",
+        "actors A { delegation D { from",
+        "actors A { delegation D { from X",
+        "actors A { delegation D { from X to",
+        "actors A { delegation D { from X to Y",
+        "actors A { delegation D { cedar { x } }",
+        "actors A { delegation D { from X to Y cedar",
+        "actors A { delegation D { permit",
+        "actors A { delegation D { from X to Y permit C when",
+        "actors A { delegation D { from X to Y purpose",
+        "actors A { delegation D { purpose",
+        "actors A { delegation D { purpose purpose purpose } }",
+        "agents A { agent B }",
+        "agent X",
+        "delegation D { from X to Y }",
+    ];
+    for input in nasty {
+        let result = parse(input);
+        let _ = format!("{result:?}"); // must be debuggable and must not panic
+    }
+}
+
+// --- purposes ------------------------------------------------------------------
+
+#[test]
+fn purpose_decls_parse_and_fold_in_source_order() {
+    let source = concat!(
+        "actors A { ",
+        "actor H capability C on T ",
+        "purpose P1 ",
+        "grant H { permit C } ",
+        "purpose P2 ",
+        "never_both { C, C2 } ",
+        "}"
+    );
+    let result = parse(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.unwrap();
+    let actors = expect_actors(&model.declarations[0], "A");
+    assert_eq!(
+        actors
+            .purposes
+            .iter()
+            .map(|purpose| purpose.name.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["P1", "P2"]
+    );
+    assert!(!actors.purposes[0].name.escaped);
+    assert!(
+        source[actors.purposes[0].span.start..].starts_with("purpose P1"),
+        "the declaration span covers the `purpose` keyword"
+    );
+    // The other groups still fold alongside the purposes.
+    assert_eq!(actors.actors.len(), 1);
+    assert_eq!(actors.capabilities.len(), 1);
+    assert_eq!(actors.grants.len(), 1);
+    assert_eq!(actors.never_both.len(), 1);
+}
+
+#[test]
+fn multiple_purposes_are_syntactically_legal() {
+    // Duplicate purpose names are a semantic question for the driver, like
+    // duplicate imports — never a syntax error.
+    let result = parse("actors A { purpose Same purpose Same }");
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.unwrap();
+    let actors = expect_actors(&model.declarations[0], "A");
+    assert_eq!(
+        actors
+            .purposes
+            .iter()
+            .map(|purpose| purpose.name.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Same", "Same"]
+    );
+}
+
+#[test]
+fn delegation_with_purpose_parses() {
+    let source = concat!(
+        "actors A { ",
+        "delegation Triage { ",
+        "from SupportUser to TriageAgent ",
+        "purpose customer_support ",
+        "permit RaiseTicket obligation audit ",
+        "} }"
+    );
+    let result = parse(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.unwrap();
+    let actors = expect_actors(&model.declarations[0], "A");
+    assert_eq!(actors.delegations.len(), 1);
+    let delegation = &actors.delegations[0];
+    let purpose = delegation.purpose.as_ref().expect("expected a purpose");
+    assert_eq!(purpose.text, "customer_support");
+    assert!(!purpose.escaped);
+    assert_eq!(delegation.from.text, "SupportUser");
+    assert_eq!(delegation.to.text, "TriageAgent");
+    assert_eq!(delegation.entries.len(), 1);
+    assert_eq!(delegation.entries[0].capability.text, "RaiseTicket");
+    assert_eq!(
+        delegation.entries[0]
+            .obligations
+            .iter()
+            .map(|name| name.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["audit"]
+    );
+}
+
+#[test]
+fn delegation_without_purpose_has_none() {
+    let result = parse("actors A { delegation D { from X to Y permit C } }");
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.unwrap();
+    let actors = expect_actors(&model.declarations[0], "A");
+    assert!(actors.delegations[0].purpose.is_none());
+}
+
+#[test]
+fn duplicate_purpose_in_delegation_is_an_error() {
+    let result = parse("actors A { delegation D { from X to Y purpose P purpose Q } }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "duplicate `purpose` in delegation"),
+        "expected a duplicate `purpose` error, got {:?}",
+        result.errors
+    );
+    // Recovery keeps the delegation with the first purpose.
+    let model = result.ast.expect("expected a recovered AST");
+    let actors = expect_actors(&model.declarations[0], "A");
+    assert_eq!(
+        actors.delegations[0]
+            .purpose
+            .as_ref()
+            .map(|name| name.text.as_str()),
+        Some("P")
+    );
+}
+
+#[test]
+fn purpose_before_from_or_to_in_delegation_is_an_error() {
+    let result = parse("actors A { delegation D { purpose P from X to Y } }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "delegation requires `from`"),
+        "expected a `delegation requires `from`` error, got {:?}",
+        result.errors
+    );
+    let result = parse("actors A { delegation D { from X purpose P to Y } }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "delegation requires `to`"),
+        "expected a `delegation requires `to`` error, got {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn escaped_purpose_is_usable_as_an_identifier() {
+    let source = concat!(
+        "actors ^purpose { ",
+        "purpose ^purpose ",
+        "capability ^grant on ^grant ",
+        "delegation ^delegation { from ^from to ^to purpose ^purpose } ",
+        "}"
+    );
+    let result = parse(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.unwrap();
+    let actors = expect_actors(&model.declarations[0], "purpose");
+    assert!(actors.name.escaped);
+    assert_eq!(actors.purposes[0].name.text, "purpose");
+    assert!(actors.purposes[0].name.escaped);
+    assert_eq!(actors.capabilities[0].name.text, "grant");
+    let delegation = &actors.delegations[0];
+    let purpose = delegation.purpose.as_ref().expect("expected a purpose");
+    assert_eq!(purpose.text, "purpose");
+    assert!(purpose.escaped);
+}

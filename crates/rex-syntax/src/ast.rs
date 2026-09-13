@@ -349,8 +349,9 @@ pub struct VocabularyFacetDecl {
 }
 
 /// An `actors { ... }` declaration: an actor/authorization model in the
-/// Cedar spirit. Actors, capabilities, grants and `never_both` exclusivity
-/// constraints are collected in source order into separate lists.
+/// Cedar spirit. Actors, capabilities, purposes, grants, delegations and
+/// `never_both` exclusivity constraints are collected in source order into
+/// separate lists.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ActorsDecl {
     /// The actors-block name.
@@ -359,19 +360,37 @@ pub struct ActorsDecl {
     pub actors: Vec<ActorDecl>,
     /// Declared capabilities, in source order.
     pub capabilities: Vec<CapabilityDecl>,
+    /// Declared purposes, in source order.
+    pub purposes: Vec<PurposeDecl>,
     /// Declared grants, in source order.
     pub grants: Vec<GrantDecl>,
+    /// Declared delegations, in source order.
+    pub delegations: Vec<DelegationDecl>,
     /// Declared `never_both` exclusivity constraints, in source order.
     pub never_both: Vec<NeverBothDecl>,
     /// Span of the whole declaration.
     pub span: Span,
 }
 
-/// A single `actor <name> ("extends" <name>)?` member of an [`ActorsDecl`].
+/// Whether an [`ActorDecl`] was introduced by `actor` (a human principal) or
+/// `agent` (an autonomous LLM agent).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ActorKind {
+    /// `actor <name>` — a human actor.
+    #[default]
+    Human,
+    /// `agent <name>` — an LLM agent.
+    Agent,
+}
+
+/// A single `actor <name> ("extends" <name>)?` or `agent <name>
+/// ("extends" <name>)?` member of an [`ActorsDecl`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct ActorDecl {
     /// The actor name.
     pub name: Name,
+    /// Whether this is a human `actor` or an `agent`.
+    pub kind: ActorKind,
     /// The direct parent actor from the `extends` clause, if any.
     pub extends: Option<Name>,
     /// Span of the whole actor declaration.
@@ -386,6 +405,16 @@ pub struct CapabilityDecl {
     /// The type the capability is granted on.
     pub class: TypeRef,
     /// Span of the whole capability declaration.
+    pub span: Span,
+}
+
+/// A `purpose <name>` member of an [`ActorsDecl`]: a named purpose of the
+/// authorization model, usable as a grouping/authorization dimension.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PurposeDecl {
+    /// The purpose name.
+    pub name: Name,
+    /// Span of the whole purpose declaration.
     pub span: Span,
 }
 
@@ -434,6 +463,27 @@ pub struct GrantEffectDecl {
     /// Obligation names attached to the effect, in source order.
     pub obligations: Vec<Name>,
     /// Span of the whole effect entry.
+    pub span: Span,
+}
+
+/// A `delegation <name> { from <actor> to <actor> ... }` member of an
+/// [`ActorsDecl`]: effect entries delegated from one actor to another. The
+/// entries reuse [`GrantEffectDecl`], but `cedar { ... }` entries are a
+/// syntax error inside a delegation and never appear here.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DelegationDecl {
+    /// The delegation name.
+    pub name: Name,
+    /// The delegating actor (the required `from` line).
+    pub from: Name,
+    /// The receiving actor (the required `to` line).
+    pub to: Name,
+    /// The optional `purpose` line (the required order is `from` → `to` →
+    /// `purpose` → entries).
+    pub purpose: Option<Name>,
+    /// Delegated effect entries in source order. Zero entries is legal.
+    pub entries: Vec<GrantEffectDecl>,
+    /// Span of the whole delegation declaration.
     pub span: Span,
 }
 

@@ -2,9 +2,24 @@ import "actors.mox"
 
 actors Escalation {
     actor Finance
+    agent Helper extends Finance
     capability EscalateTicket on Ticket
+    capability ReadTicket on Ticket
 
     grant Finance {
         permit EscalateTicket when (amount > 0)
+    }
+
+    delegation EscalateHelp {
+        from Finance
+        to Helper
+        permit EscalateTicket
+    }
+
+    delegation SupportHelp {
+        from Finance
+        to Agent
+        purpose RefundTriage
+        permit ReadTicket
     }
 }

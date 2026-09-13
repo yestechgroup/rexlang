@@ -851,8 +851,18 @@ fn vocabulary_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'sr
 enum ActorsItem {
     Actor(ActorDecl),
     Capability(CapabilityDecl),
+    Purpose(PurposeDecl),
     Grant(GrantDecl),
+    Delegation(DelegationDecl),
     NeverBoth(NeverBothDecl),
+}
+
+/// One body item of a `delegation` declaration.
+enum DelegationItem {
+    From(Name),
+    To(Name),
+    Purpose(Name),
+    Entry(GrantEntryDecl),
 }
 
 /// The `actors <name> { ... }` block grammar, shared verbatim by the inline
@@ -862,6 +872,16 @@ fn actors_block<'src>() -> impl Parser<'src, Tokens<'src>, ActorsDecl, MoxExtra<
         .ignore_then(name())
         .then(kw(Token::Extends).ignore_then(name()).or_not())
         .map_with(|(name, extends), e| ActorDecl {
+            kind: ActorKind::Human,
+            name,
+            extends,
+            span: e.span(),
+        });
+    let agent_decl = kw(Token::Agent)
+        .ignore_then(name())
+        .then(kw(Token::Extends).ignore_then(name()).or_not())
+        .map_with(|(name, extends), e| ActorDecl {
+            kind: ActorKind::Agent,
             name,
             extends,
             span: e.span(),
@@ -873,6 +893,12 @@ fn actors_block<'src>() -> impl Parser<'src, Tokens<'src>, ActorsDecl, MoxExtra<
         .map_with(|(name, class), e| CapabilityDecl {
             name,
             class,
+            span: e.span(),
+        });
+    let purpose_decl = kw(Token::Purpose)
+        .ignore_then(name())
+        .map_with(|name, e| PurposeDecl {
+            name,
             span: e.span(),
         });
     let never_both_decl = kw(Token::NeverBoth)
@@ -934,17 +960,51 @@ fn actors_block<'src>() -> impl Parser<'src, Tokens<'src>, ActorsDecl, MoxExtra<
     let grant_decl = kw(Token::Grant)
         .ignore_then(name())
         .then_ignore(kw(Token::LBrace))
-        .then(entry.repeated().collect::<Vec<_>>())
+        .then(entry.clone().repeated().collect::<Vec<_>>())
         .then_ignore(kw(Token::RBrace))
         .map_with(|(actor, entries), e| GrantDecl {
             actor,
             entries,
             span: e.span(),
         });
+    let from_item = kw(Token::From)
+        .ignore_then(name())
+        .map(DelegationItem::From);
+    let to_item = select! { Token::Ident(text) if text == "to" => () }
+        .ignore_then(name())
+        .map(DelegationItem::To);
+    let purpose_item = kw(Token::Purpose)
+        .ignore_then(name())
+        .map(DelegationItem::Purpose);
+    let delegation_item = choice((
+        from_item,
+        to_item,
+        purpose_item,
+        entry.map(DelegationItem::Entry),
+    ));
+    let delegation_decl = kw(Token::Delegation)
+        .ignore_then(name())
+        .then_ignore(kw(Token::LBrace))
+        .then(delegation_item.repeated().collect::<Vec<_>>())
+        .then_ignore(kw(Token::RBrace))
+        .map_with(|(name, items), e| {
+            let (mut decl, problems) = fold_delegation(name, items);
+            decl.span = e.span();
+            (decl, problems)
+        })
+        .validate(|(decl, problems), _, emitter| {
+            for (span, message) in problems {
+                emitter.emit(Rich::custom(span, message));
+            }
+            decl
+        });
     let item = choice((
         actor_decl.map(ActorsItem::Actor),
+        agent_decl.map(ActorsItem::Actor),
         capability_decl.map(ActorsItem::Capability),
+        purpose_decl.map(ActorsItem::Purpose),
         grant_decl.map(ActorsItem::Grant),
+        delegation_decl.map(ActorsItem::Delegation),
         never_both_decl.map(ActorsItem::NeverBoth),
     ));
     kw(Token::Actors)
@@ -955,13 +1015,17 @@ fn actors_block<'src>() -> impl Parser<'src, Tokens<'src>, ActorsDecl, MoxExtra<
         .map_with(|(name, items), e| {
             let mut actors = Vec::new();
             let mut capabilities = Vec::new();
+            let mut purposes = Vec::new();
             let mut grants = Vec::new();
+            let mut delegations = Vec::new();
             let mut never_both = Vec::new();
             for item in items {
                 match item {
                     ActorsItem::Actor(decl) => actors.push(decl),
                     ActorsItem::Capability(decl) => capabilities.push(decl),
+                    ActorsItem::Purpose(decl) => purposes.push(decl),
                     ActorsItem::Grant(decl) => grants.push(decl),
+                    ActorsItem::Delegation(decl) => delegations.push(decl),
                     ActorsItem::NeverBoth(decl) => never_both.push(decl),
                 }
             }
@@ -969,7 +1033,9 @@ fn actors_block<'src>() -> impl Parser<'src, Tokens<'src>, ActorsDecl, MoxExtra<
                 name,
                 actors,
                 capabilities,
+                purposes,
                 grants,
+                delegations,
                 never_both,
                 span: e.span(),
             }
@@ -980,6 +1046,88 @@ fn actors_block<'src>() -> impl Parser<'src, Tokens<'src>, ActorsDecl, MoxExtra<
 /// [`actors_block`] grammar wrapped as a top-level declaration.
 fn actors_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>> + Clone {
     actors_block().map(Decl::Actors)
+}
+
+/// Folds the body items of a delegation into a [`DelegationDecl`], enforcing
+/// the required `from` → `to` → `purpose` ordering and rejecting `cedar`
+/// entries. The returned problems are (span, message) pairs the caller emits
+/// as errors; the AST recovers as much as possible regardless.
+fn fold_delegation(
+    name: Name,
+    items: Vec<DelegationItem>,
+) -> (DelegationDecl, Vec<(Span, String)>) {
+    let mut from: Option<Name> = None;
+    let mut to: Option<Name> = None;
+    let mut purpose: Option<Name> = None;
+    let mut entries = Vec::new();
+    let mut problems = Vec::new();
+    // 0 = expecting `from`, 1 = expecting `to`, 2 = collecting entries,
+    // 3 = collecting entries after the (optional) `purpose` line.
+    let mut stage = 0;
+    for item in items {
+        match item {
+            DelegationItem::From(actor) => {
+                if stage == 0 {
+                    from = Some(actor);
+                    stage = 1;
+                } else {
+                    problems.push((actor.span, "duplicate `from` in delegation".to_string()));
+                }
+            }
+            DelegationItem::To(actor) => match stage {
+                1 => {
+                    to = Some(actor);
+                    stage = 2;
+                }
+                0 => problems.push((actor.span, "delegation requires `from`".to_string())),
+                _ => problems.push((actor.span, "duplicate `to` in delegation".to_string())),
+            },
+            DelegationItem::Purpose(name) => match stage {
+                2 => {
+                    purpose = Some(name);
+                    stage = 3;
+                }
+                0 => problems.push((name.span, "delegation requires `from`".to_string())),
+                1 => problems.push((name.span, "delegation requires `to`".to_string())),
+                _ => problems.push((name.span, "duplicate `purpose` in delegation".to_string())),
+            },
+            DelegationItem::Entry(GrantEntryDecl::Cedar(body)) => {
+                problems.push((
+                    body.target.span,
+                    "`cedar` entries are not allowed inside a delegation".to_string(),
+                ));
+            }
+            DelegationItem::Entry(GrantEntryDecl::Effect(effect)) => {
+                match stage {
+                    0 => problems.push((effect.span, "delegation requires `from`".to_string())),
+                    1 => problems.push((effect.span, "delegation requires `to`".to_string())),
+                    _ => {}
+                }
+                entries.push(effect);
+            }
+        }
+    }
+    match stage {
+        0 => problems.push((name.span, "delegation requires `from`".to_string())),
+        1 => problems.push((name.span, "delegation requires `to`".to_string())),
+        _ => {}
+    }
+    let missing = Name {
+        text: String::new(),
+        span: name.span,
+        escaped: false,
+    };
+    (
+        DelegationDecl {
+            name,
+            from: from.unwrap_or_else(|| missing.clone()),
+            to: to.unwrap_or_else(|| missing.clone()),
+            purpose,
+            entries,
+            span: (0..0).into(),
+        },
+        problems,
+    )
 }
 
 /// An `import "path"` declaration of an `.actor` file. The path is a string

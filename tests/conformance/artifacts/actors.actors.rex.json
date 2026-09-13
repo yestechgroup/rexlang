@@ -6,11 +6,26 @@
       "actors": [
         {
           "name": "Finance"
+        },
+        {
+          "name": "Helper",
+          "extends": "Finance",
+          "kind": "agent"
         }
       ],
       "capabilities": [
         {
           "name": "EscalateTicket",
+          "class": {
+            "type": "class",
+            "value": {
+              "package": "rex.conformance.actors",
+              "name": "Ticket"
+            }
+          }
+        },
+        {
+          "name": "ReadTicket",
           "class": {
             "type": "class",
             "value": {
@@ -31,6 +46,31 @@
             }
           ]
         }
+      ],
+      "delegations": [
+        {
+          "name": "EscalateHelp",
+          "from": "Finance",
+          "to": "Helper",
+          "entries": [
+            {
+              "effect": "permit",
+              "capability": "EscalateTicket"
+            }
+          ]
+        },
+        {
+          "name": "SupportHelp",
+          "from": "Finance",
+          "to": "Agent",
+          "purpose": "RefundTriage",
+          "entries": [
+            {
+              "effect": "permit",
+              "capability": "ReadTicket"
+            }
+          ]
+        }
       ]
     },
     {
@@ -41,7 +81,8 @@
         },
         {
           "name": "Agent",
-          "extends": "Customer"
+          "extends": "Customer",
+          "kind": "agent"
         },
         {
           "name": "Manager",
@@ -93,6 +134,9 @@
           }
         }
       ],
+      "purposes": [
+        "RefundTriage"
+      ],
       "grants": [
         {
           "actor": "Customer",
@@ -140,6 +184,24 @@
             {
               "effect": "permit",
               "capability": "ApproveRefund"
+            }
+          ]
+        }
+      ],
+      "delegations": [
+        {
+          "name": "RefundIntake",
+          "from": "Customer",
+          "to": "Agent",
+          "purpose": "RefundTriage",
+          "entries": [
+            {
+              "effect": "permit",
+              "capability": "ReadTicket",
+              "when": "!internal",
+              "obligations": [
+                "ack"
+              ]
             }
           ]
         }

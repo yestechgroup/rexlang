@@ -304,6 +304,65 @@ fn cedar_entry_formats_like_target_bodies() {
     assert_eq!(fmt(&formatted), formatted, "not a fixpoint");
 }
 
+#[test]
+fn purpose_items_format_one_per_line() {
+    assert_eq!(
+        fmt(concat!(
+            "actors  A  { actor H purpose  P1 capability C on T grant H { permit C } ",
+            "purpose P2 never_both { C , C2 } }"
+        )),
+        concat!(
+            "actors A {\n",
+            "    actor H\n",
+            "    purpose P1\n",
+            "    capability C on T\n",
+            "    grant H {\n",
+            "        permit C\n",
+            "    }\n",
+            "    purpose P2\n",
+            "    never_both { C, C2 }\n",
+            "}\n"
+        )
+    );
+    let once = fmt("actors A { purpose P }");
+    assert_eq!(once, "actors A {\n    purpose P\n}\n");
+    assert_eq!(fmt(&once), once, "not a fixpoint");
+}
+
+#[test]
+fn delegation_purpose_line_formats_after_to() {
+    let messy = "actors A { delegation Triage { from SupportUser to TriageAgent purpose customer_support\n\npermit RaiseTicket obligation audit } }";
+    let canonical = concat!(
+        "actors A {\n",
+        "    delegation Triage {\n",
+        "        from SupportUser\n",
+        "        to TriageAgent\n",
+        "        purpose customer_support\n",
+        "\n",
+        "        permit RaiseTicket obligation audit\n",
+        "    }\n",
+        "}\n",
+    );
+    assert_eq!(fmt(messy), canonical);
+    assert_eq!(fmt(canonical), canonical, "not a fixpoint");
+}
+
+#[test]
+fn delegation_without_purpose_stays_byte_identical() {
+    assert_eq!(
+        fmt("actors A { delegation Triage { from SupportUser to TriageAgent permit RaiseTicket obligation audit } }"),
+        concat!(
+            "actors A {\n",
+            "    delegation Triage {\n",
+            "        from SupportUser\n",
+            "        to TriageAgent\n",
+            "        permit RaiseTicket obligation audit\n",
+            "    }\n",
+            "}\n",
+        )
+    );
+}
+
 // --- blank lines -------------------------------------------------------------
 
 #[test]
@@ -730,6 +789,7 @@ fn stable_on_inline_models() {
     assert_still_parses("interface I { rust \"x\" }");
     assert_still_parses("annotation \"dep\" as Old");
     assert_still_parses("class A extends B, C { op int get(String k) }");
+    assert_still_parses("actors S { agent B delegation D { from A to B permit C obligation o } }");
 }
 
 // --- golden fixtures ---------------------------------------------------------

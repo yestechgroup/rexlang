@@ -32,14 +32,15 @@
 //!   cross-references, containers, operations, derived features), owned by
 //!   their class; enum literals are owned by their enum; vocabulary facets
 //!   are owned by their vocabulary.
-//! * An `actors` block is one definition; its actors, capabilities, grants
-//!   (keyed by actor name), and `never_both` groups are member definitions
-//!   owned by the block (indexed like vocabulary facets). Block-local names
-//!   resolve best-effort: `extends` parents and grant actor names resolve to
-//!   actor members, entry capability names and `never_both` names resolve to
-//!   capability members. Unnamed members (grants, never_both groups) carry
-//!   their keyword as the identifier span, so the name tokens they mention
-//!   stay resolvable references.
+//! * An `actors` block is one definition; its actors, capabilities, purposes,
+//!   grants (keyed by actor name), delegations, and `never_both` groups are
+//!   member definitions owned by the block (indexed like vocabulary facets).
+//!   Block-local names resolve best-effort: `extends` parents, grant actor
+//!   names, entry capability names, delegation purposes, and `never_both`
+//!   names resolve to their block-local declarations (actors, capabilities,
+//!   purposes). Unnamed members (grants, never_both groups) carry their
+//!   keyword as the identifier span, so the name tokens they mention stay
+//!   resolvable references.
 
 use std::collections::HashMap;
 
@@ -216,6 +217,7 @@ impl NavigationIndex {
                     &decl.name,
                     decl.actors.len()
                         + decl.capabilities.len()
+                        + decl.purposes.len()
                         + decl.grants.len()
                         + decl.never_both.len(),
                 ),
@@ -423,11 +425,12 @@ impl NavigationIndex {
                 }
                 mox::Decl::Actors(decl) => {
                     // Members index in AST-list order (actors, capabilities,
-                    // grants, never_both), so the block-local name maps are
-                    // complete before any reference resolves. Actor names
-                    // and capability names live in separate namespaces;
-                    // duplicates resolve to the first declaration, mirroring
-                    // the resolver.
+                    // purposes, grants, delegations, never_both), so the
+                    // block-local name maps are complete before any
+                    // reference resolves. Actor names, capability names, and
+                    // purpose names live in separate namespaces; duplicates
+                    // resolve to the first declaration, mirroring the
+                    // resolver.
                     let mut actor_ids: HashMap<&str, DefId> = HashMap::new();
                     for actor in &decl.actors {
                         let id = index.push(
@@ -455,6 +458,17 @@ impl NavigationIndex {
                             .entry(capability.name.text.as_str())
                             .or_insert(id);
                     }
+                    let mut purpose_ids: HashMap<&str, DefId> = HashMap::new();
+                    for purpose in &decl.purposes {
+                        let id = index.push(
+                            purpose.name.text.clone(),
+                            SymbolKind::Feature(FeatureSymbolKind::Attribute),
+                            purpose.name.span,
+                            Some(decl_id),
+                            purpose.span,
+                        );
+                        purpose_ids.entry(purpose.name.text.as_str()).or_insert(id);
+                    }
                     for grant in &decl.grants {
                         // Grants are keyed by actor name; the identifier
                         // position is the `grant` keyword itself — the actor
@@ -465,6 +479,17 @@ impl NavigationIndex {
                             (grant.span.start..grant.span.start + "grant".len()).into(),
                             Some(decl_id),
                             grant.span,
+                        );
+                    }
+                    for delegation in &decl.delegations {
+                        // Delegations are named members; their identifier is
+                        // the delegation name itself.
+                        index.push(
+                            delegation.name.text.clone(),
+                            SymbolKind::Feature(FeatureSymbolKind::Attribute),
+                            delegation.name.span,
+                            Some(decl_id),
+                            delegation.span,
                         );
                     }
                     for constraint in &decl.never_both {
@@ -488,8 +513,9 @@ impl NavigationIndex {
                     }
                     // References: capability class type refs resolve through
                     // the standard type rules; `extends` parents, grant
-                    // actor names, entry capability names, and never_both
-                    // names resolve block-locally (best-effort).
+                    // actor names, entry capability names, delegation
+                    // purposes, and never_both names resolve block-locally
+                    // (best-effort).
                     for capability in &decl.capabilities {
                         index.add_type_reference(&capability.class, &package, &top_level);
                     }
@@ -515,6 +541,28 @@ impl NavigationIndex {
                                         .copied(),
                                 });
                             }
+                        }
+                    }
+                    for delegation in &decl.delegations {
+                        index.references.push(Reference {
+                            span: delegation.from.span,
+                            target: actor_ids.get(delegation.from.text.as_str()).copied(),
+                        });
+                        index.references.push(Reference {
+                            span: delegation.to.span,
+                            target: actor_ids.get(delegation.to.text.as_str()).copied(),
+                        });
+                        if let Some(purpose) = &delegation.purpose {
+                            index.references.push(Reference {
+                                span: purpose.span,
+                                target: purpose_ids.get(purpose.text.as_str()).copied(),
+                            });
+                        }
+                        for entry in &delegation.entries {
+                            index.references.push(Reference {
+                                span: entry.capability.span,
+                                target: capability_ids.get(entry.capability.text.as_str()).copied(),
+                            });
                         }
                     }
                     for constraint in &decl.never_both {

@@ -66,6 +66,8 @@ pub enum Token<'src> {
     Actors,
     #[token("actor")]
     Actor,
+    #[token("agent")]
+    Agent,
     #[token("capability")]
     Capability,
     #[token("grant")]
@@ -82,6 +84,10 @@ pub enum Token<'src> {
     On,
     #[token("never_both")]
     NeverBoth,
+    #[token("delegation")]
+    Delegation,
+    #[token("purpose")]
+    Purpose,
     #[token("cedar")]
     Cedar,
     #[token("import")]
@@ -185,6 +191,7 @@ impl Token<'_> {
             Token::Facet => "facet",
             Token::Actors => "actors",
             Token::Actor => "actor",
+            Token::Agent => "agent",
             Token::Capability => "capability",
             Token::Grant => "grant",
             Token::Permit => "permit",
@@ -193,6 +200,8 @@ impl Token<'_> {
             Token::Obligation => "obligation",
             Token::On => "on",
             Token::NeverBoth => "never_both",
+            Token::Delegation => "delegation",
+            Token::Purpose => "purpose",
             Token::Cedar => "cedar",
             Token::Import => "import",
             _ => return None,
@@ -447,6 +456,37 @@ mod tests {
         // Spans still cover the raw text including the caret.
         assert_eq!(tokens[0].1, (0..7).into());
         assert_eq!(tokens[4].1, (25..36).into());
+    }
+
+    #[test]
+    fn agent_delegation_keywords_lex_as_keywords() {
+        assert_eq!(
+            kinds("agent delegation"),
+            vec![Token::Agent, Token::Delegation]
+        );
+    }
+
+    #[test]
+    fn agent_delegation_keywords_escape_like_any_keyword() {
+        let tokens = lex("^agent ^delegation").unwrap();
+        assert_eq!(tokens[0].0, Token::IdentEscaped("agent"));
+        assert_eq!(tokens[1].0, Token::IdentEscaped("delegation"));
+        // Spans still cover the raw text including the caret.
+        assert_eq!(tokens[0].1, (0..6).into());
+        assert_eq!(tokens[1].1, (7..18).into());
+    }
+
+    #[test]
+    fn purpose_keyword_lexes_as_keyword() {
+        assert_eq!(kinds("purpose"), vec![Token::Purpose]);
+    }
+
+    #[test]
+    fn purpose_keyword_escapes_like_any_keyword() {
+        let tokens = lex("^purpose").unwrap();
+        assert_eq!(tokens[0].0, Token::IdentEscaped("purpose"));
+        // Span still covers the raw text including the caret.
+        assert_eq!(tokens[0].1, (0..8).into());
     }
 
     #[test]

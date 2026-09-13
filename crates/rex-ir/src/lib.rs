@@ -62,10 +62,13 @@
 //!    byte-identical to pre-Tier-2 output.
 //! 9. **Actors (additive, v1).** [`Package::actors`] carries the resolved
 //!    authorization model (`actors` blocks: [`ActorsDef`] with its
-//!    [`ActorDef`], [`CapabilityDef`], [`GrantDef`], and [`NeverBothDef`])
-//!    under the same additive rules as vocabularies (rule 6): every field is
-//!    `#[serde(default)]` and omitted when empty, so artifacts for actor-less
-//!    models are byte-identical to pre-actors output. `when` conditions and
+//!    [`ActorDef`], [`CapabilityDef`], [`GrantDef`], [`DelegationDef`], and
+//!    [`NeverBothDef`]) under the same additive rules as vocabularies
+//!    (rule 6): every field is `#[serde(default)]` and omitted when empty,
+//!    so artifacts for actor-less models are byte-identical to pre-actors
+//!    output. An actor's [`ActorKind`] marker and delegations follow the
+//!    same rules: absent/empty for every model that does not use them, so
+//!    existing artifacts stay byte-identical. `when` conditions and
 //!    `cedar` bodies are **verbatim source strings** — the IR never parses
 //!    or reformats them.
 //! 10. **Standalone actor-policy artifacts.** [`ActorModel`] is a separate,
@@ -940,8 +943,8 @@ pub struct VocabularyEntry {
 }
 
 /// An `actors` declaration: a named authorization model (Cedar spirit)
-/// declaring actors, capabilities, grants, and `never_both` exclusivity
-/// constraints, each collected in source order.
+/// declaring actors, capabilities, grants, delegations, and `never_both`
+/// exclusivity constraints, each collected in source order.
 ///
 /// Additive to v1 (wire contract rule 9): [`Package::actors`] is omitted when
 /// empty, so artifacts for actor-less models stay byte-identical.
@@ -956,9 +959,16 @@ pub struct ActorsDef {
     /// Declared capabilities, in source order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<CapabilityDef>,
+    /// Declared purposes, in source order. Additive (wire contract rule 9):
+    /// absent for blocks without purposes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub purposes: Vec<String>,
     /// Declared grants, in source order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub grants: Vec<GrantDef>,
+    /// Declared delegations, in source order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delegations: Vec<DelegationDef>,
     /// Declared `never_both` exclusivity constraints, in source order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub never_both: Vec<NeverBothDef>,
@@ -971,7 +981,9 @@ impl ActorsDef {
             name: name.into(),
             actors: Vec::new(),
             capabilities: Vec::new(),
+            purposes: Vec::new(),
             grants: Vec::new(),
+            delegations: Vec::new(),
             never_both: Vec::new(),
         }
     }
@@ -988,9 +1000,21 @@ impl ActorsDef {
         self
     }
 
+    /// Chainable setter appending a purpose name.
+    pub fn purpose(mut self, name: impl Into<String>) -> Self {
+        self.purposes.push(name.into());
+        self
+    }
+
     /// Chainable setter appending a grant.
     pub fn grant(mut self, grant: GrantDef) -> Self {
         self.grants.push(grant);
+        self
+    }
+
+    /// Chainable setter appending a delegation.
+    pub fn delegation(mut self, delegation: DelegationDef) -> Self {
+        self.delegations.push(delegation);
         self
     }
 
@@ -1012,6 +1036,10 @@ pub struct ActorDef {
     /// actor-local name; resolved by the driver.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extends: Option<String>,
+    /// Whether the actor is a human principal or an LLM agent, if declared.
+    /// Additive (wire contract rule 9): absent for actors without a `kind`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<ActorKind>,
 }
 
 impl ActorDef {
@@ -1020,6 +1048,7 @@ impl ActorDef {
         Self {
             name: name.into(),
             extends: None,
+            kind: None,
         }
     }
 
@@ -1028,6 +1057,24 @@ impl ActorDef {
         self.extends = Some(parent.into());
         self
     }
+
+    /// Chainable setter for the actor kind (human or LLM agent).
+    pub fn kind(mut self, kind: ActorKind) -> Self {
+        self.kind = Some(kind);
+        self
+    }
+}
+
+/// Whether an [`ActorDef`] is a human principal or an LLM agent.
+///
+/// Serializes as a bare camelCase tag string: `"human"`, `"agent"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ActorKind {
+    /// `human` — a human principal.
+    Human,
+    /// `agent` — an LLM agent acting on a principal's behalf.
+    Agent,
 }
 
 /// A single `capability <name> on <class>` of an [`ActorsDef`]: an action
@@ -1152,6 +1199,66 @@ impl GrantEntry {
     /// Chainable setter for the verbatim `cedar { ... }` body.
     pub fn cedar(mut self, body: impl Into<String>) -> Self {
         self.cedar = Some(body.into());
+        self
+    }
+}
+
+/// A delegation of an [`ActorsDef`]: grant entries carried from one actor
+/// (the delegating principal, `from`) to another (`to`, typically an
+/// [`ActorKind::Agent`]). Reuses [`GrantEntry`] unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DelegationDef {
+    /// Delegation name, unique within its block.
+    pub name: String,
+    /// The delegating actor (an actor-local name; resolved by the driver).
+    pub from: String,
+    /// The actor receiving the delegated entries (an actor-local name;
+    /// resolved by the driver).
+    pub to: String,
+    /// The delegation's purpose, if declared. Additive (wire contract
+    /// rule 9): absent for delegations without a purpose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<String>,
+    /// Delegated grant entries in source order. Empty delegations are
+    /// allowed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entries: Vec<GrantEntry>,
+}
+
+impl DelegationDef {
+    /// Creates a delegation with no entries yet.
+    pub fn new(name: impl Into<String>, from: impl Into<String>, to: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            from: from.into(),
+            to: to.into(),
+            purpose: None,
+            entries: Vec::new(),
+        }
+    }
+
+    /// Chainable setter for the delegation's purpose.
+    pub fn purpose(mut self, purpose: impl Into<String>) -> Self {
+        self.purpose = Some(purpose.into());
+        self
+    }
+
+    /// Chainable setter appending a `permit` entry.
+    pub fn permit(mut self, capability: impl Into<String>) -> Self {
+        self.entries.push(GrantEntry::permit(capability));
+        self
+    }
+
+    /// Chainable setter appending a `forbid` entry.
+    pub fn forbid(mut self, capability: impl Into<String>) -> Self {
+        self.entries.push(GrantEntry::forbid(capability));
+        self
+    }
+
+    /// Chainable setter appending a grant entry.
+    pub fn entry(mut self, entry: GrantEntry) -> Self {
+        self.entries.push(entry);
         self
     }
 }

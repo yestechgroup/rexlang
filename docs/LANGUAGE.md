@@ -153,7 +153,14 @@ the Cedar backend:
 ```
 actor_file  := import_decl* actors_block+
 import_decl := "import" string
-actors_block:= "actors" name "{" actor* capability* grant* never_both* "}"
+actors_block:= "actors" name "{" (actor_decl | agent_decl)* capability*
+                purpose_decl* grant* delegation* never_both* "}"
+actor_decl  := "actor" name ("extends" name)?
+agent_decl  := "agent" name ("extends" name)?
+purpose_decl := "purpose" name
+delegation  := "delegation" name "{" "from" name "to" name
+                purpose_decl? delegation_entry* "}"
+delegation_entry := ("permit" | "forbid") name ("when" expr)? obligation*
 ```
 
 The `actors` block grammar is identical to the inline `actors` block of a
@@ -164,6 +171,31 @@ actor file's blocks followed by every imported domain's inline blocks
 (in that order), so capabilities typecheck against the imported domain's
 classes (`permit EscalateTicket when (amount > 0)` resolves `amount` on
 `Ticket`), and the separation-of-duty checks span files.
+
+`agent` declares an autonomous LLM agent; the plain `actor` remains the
+human principal. Both take the same optional `extends` clause, and a
+declared kind is inherited: an actor that declares no kind takes the
+nearest ancestor's declared kind, defaulting to human.
+
+A `delegation` is a named transfer of authority from one actor to another:
+`from` and `to` are required, in that order, and the body holds only effect
+entries (`cedar { ... }` is rejected inside a delegation; an empty body is
+legal). Blocks declare purposes with `purpose <name>` lines: several per
+block are allowed, duplicates within a block are errors, and the same name
+in different blocks is legal. A delegation may carry one optional `purpose`
+line — after `to`, before the entries — naming a purpose declared in the
+union of the file's blocks and every imported domain's inline blocks; an
+undeclared name is a compile error naming the delegation and the purpose.
+The driver enforces a containment invariant: every capability a
+delegation permits must already be an effective permit of the target agent
+— through its own grants, inherited ones included — so a delegation cannot
+confer authority the target does not already hold, and `to` must name an
+agent. `never_both` exclusivity is checked over grant and delegation
+permits combined. In Cedar output delegations surface only as evidence
+comments (`// delegation Name: from -> to (N capabilities)`, suffixed
+` purpose: <P>` when a purpose is declared); like `never_both`, the driver
+enforces them at compile time, and runtime enforcement — of permits and
+purpose alike — belongs to the authorization gateway.
 
 `rexlang fmt` formats `.actor` files with the same canonical layout rules
 (imports first, one per line; then blocks).
