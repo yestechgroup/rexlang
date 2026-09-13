@@ -126,6 +126,14 @@ enum GenTarget {
         #[arg(short, long, value_name = "DIR")]
         out: PathBuf,
     },
+    /// Generate the per-agent tool manifests of the `actors` blocks as JSON
+    /// on stdout (`.mox`: inline blocks; `.actor`: file plus its imported
+    /// domain models).
+    Tools {
+        /// Paths to compile: `.mox`/`.actor` files, or directories scanned
+        /// recursively for `*.mox`.
+        files: Vec<PathBuf>,
+    },
 }
 
 /// The JSON Schema flavor to generate.
@@ -272,6 +280,35 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 println!("generated Cedar policies and schema into {}", out.display());
                 Ok(ExitCode::SUCCESS)
             }
+        }
+        Command::Gen {
+            target: GenTarget::Tools { files },
+        } => {
+            let files = expand_inputs(&files)?;
+            if files.len() == 1 && is_actor_file(&files[0]) {
+                let pair = read_actor_pair(&files[0])?;
+                let compilation = compile_actors_str(&pair.path, &pair.source, &pair.domains);
+                report_actor_diagnostics(&pair, &compilation);
+                let Some(actor_model) = compilation.model else {
+                    return Ok(ExitCode::FAILURE);
+                };
+                print_tool_manifests(&actor_model)?;
+            } else {
+                let sources = read_sources(&files)?;
+                let compilation = compile_sources(&sources);
+                report_multi_diagnostics(&sources, &compilation.diagnostics);
+                let Some(model) = compilation.model else {
+                    return Ok(ExitCode::FAILURE);
+                };
+                let mut actor_model = rex_ir::ActorModel::new();
+                for package in &model.packages {
+                    for actors in &package.actors {
+                        actor_model.blocks.push(actors.clone());
+                    }
+                }
+                print_tool_manifests(&actor_model)?;
+            }
+            Ok(ExitCode::SUCCESS)
         }
         Command::Fmt { check, files } => {
             if files.is_empty() || files.iter().any(|file| file == Path::new("-")) {
@@ -722,6 +759,16 @@ fn merged_domain_model(domains: &[(String, String)]) -> rex_ir::Model {
         }
     }
     merged
+}
+
+/// Prints the per-agent tool manifests of a compiled actor model as a
+/// single pretty JSON document to stdout.
+fn print_tool_manifests(actor_model: &rex_ir::ActorModel) -> anyhow::Result<()> {
+    let document = rex_driver::manifest::ToolManifestDocument {
+        agents: rex_driver::manifest::agent_tool_manifests(actor_model),
+    };
+    println!("{}", document.to_json_pretty()?);
+    Ok(())
 }
 
 /// Renders an actor compilation's diagnostics grouped per file: each file's

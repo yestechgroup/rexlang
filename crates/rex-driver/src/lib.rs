@@ -28,6 +28,7 @@
 
 pub mod diagnostic;
 pub(crate) mod lower;
+pub mod manifest;
 pub mod navigation;
 
 pub use diagnostic::{render, Diagnostic, DiagnosticCode, Severity};

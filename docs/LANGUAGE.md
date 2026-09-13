@@ -195,7 +195,10 @@ permits combined. In Cedar output delegations surface only as evidence
 comments (`// delegation Name: from -> to (N capabilities)`, suffixed
 ` purpose: <P>` when a purpose is declared); like `never_both`, the driver
 enforces them at compile time, and runtime enforcement — of permits and
-purpose alike — belongs to the authorization gateway.
+purpose alike — belongs to the authorization gateway. `rexlang gen tools`
+projects this authorization model into each agent's tool manifest — the
+agent's effective grant permits plus the delegation bindings scoped to it;
+human actors are omitted.
 
 `rexlang fmt` formats `.actor` files with the same canonical layout rules
 (imports first, one per line; then blocks).
@@ -239,6 +242,7 @@ property, not an aspiration.
 | `rexlang gen rust <file>... -o <dir>` | arena-based Rust models |
 | `rexlang gen json-schema <file>... --profile wire\|api -o <dir>` | JSON Schema |
 | `rexlang gen cedar <file>... -o <dir>` | Cedar policies + schema (`.mox`: inline blocks; `.actor`: file + imported domains) |
+| `rexlang gen tools <file>...` | per-agent tool manifest JSON on stdout (`.mox`: inline blocks; `.actor`: file + imported domains) |
 | `rexlang vocab fetch <file>` | vendor + pin vocabulary snapshots |
 | `rexlang fmt [--check] <files>\|-` | canonical formatting (comments kept) |
 | `rexlang lsp` | language server (stdio) |
