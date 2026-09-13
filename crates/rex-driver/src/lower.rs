@@ -75,7 +75,9 @@ struct Resolution {
     name: String,
 }
 
-/// The type namespace of one imported domain package (`.actor` files).
+/// The type namespace of one package in a combined multi-package namespace
+/// (imported domains of `.actor` files, or the files of a multi-file
+/// compile).
 struct DomainPackage {
     name: String,
     kinds: HashMap<String, TopKind>,
@@ -419,10 +421,13 @@ impl FKind {
 struct FeatureRecord {
     name: String,
     kind: FKind,
-    /// Name of the target class when the declared type resolved to a class.
-    type_class: Option<String>,
+    /// `(package, name)` of the target class when the declared type resolved
+    /// to a class.
+    type_class: Option<(String, String)>,
     /// The declared type as written (for messages).
     type_text: String,
+    /// Span of the declared type reference.
+    type_span: Option<Span>,
     /// The declared `opposite <name>` (the opposite feature's name).
     opposite: Option<String>,
     /// Span of the `opposite <name>` clause.
@@ -431,12 +436,30 @@ struct FeatureRecord {
 
 /// A per-class record kept alongside the IR for cross-class validation.
 struct ClassRecord {
+    /// The package (and file) the class was declared in.
+    package: String,
+    file: String,
     name: String,
     name_span: Span,
     def: ir::ClassDef,
     features: Vec<FeatureRecord>,
     /// Lowered operations; appended to `def.operations` after validation.
     operations: Vec<ir::Operation>,
+}
+
+/// The type-knowledge tables shared by attribute lowering (default checks
+/// and constraint family checks), keyed by `(package, type name)` so
+/// cross-package references resolve in multi-file compiles.
+struct PrepMaps<'a> {
+    /// Enum declarations by owning package and local name (literal defaults
+    /// and constraint closure checks).
+    enum_decls: HashMap<(&'a str, &'a str), &'a mox::EnumDecl>,
+    /// Entry-key sets of successfully lowered vocabularies.
+    vocab_keys: HashMap<(&'a str, &'a str), HashSet<&'a str>>,
+    /// The declared primitive type of each vocabulary's key facet, which
+    /// classifies the constraint families admitted on vocabulary-typed
+    /// attributes (see `lower_constraints`).
+    vocab_key_facet_types: HashMap<(&'a str, &'a str), ir::PrimitiveType>,
 }
 
 /// A per-block record kept alongside the IR for cross-declaration actors
@@ -541,6 +564,292 @@ fn check_pending_conditions(
     diags
 }
 
+/// One `.mox` source of a multi-file compilation: its path, source, parsed
+/// AST (when parseable), and the file's own parse diagnostics.
+pub(crate) struct MultiFile<'a> {
+    /// The file's path (tags diagnostics; locates `vocab/` snapshots).
+    pub path: &'a str,
+    /// The file's full source text.
+    pub source: &'a str,
+    /// The parsed AST, `None` when nothing could be produced.
+    pub ast: Option<&'a mox::Model>,
+    /// The file's own parse diagnostics.
+    pub parse_diagnostics: &'a [Diagnostic],
+}
+
+/// Compiles several `.mox` files — one package per file — into one
+/// multi-package model.
+///
+/// Every file lowers against the union namespace of all packages
+/// ([`Scope::Domains`]), so declarations may reference types across
+/// packages (`refers`, `extends`, attribute types; a bare name must be
+/// unique across packages, a qualified `<package>.<Name>` must match one).
+/// Cross-file rules run over the assembled universe: inheritance cycles are
+/// detected across packages, while `contains`/`container` targets and
+/// opposites are restricted to the declaring package. Inline `actors` blocks
+/// from every file join one union policy set. Returns the model (or `None`
+/// when any error exists) plus diagnostics tagged with their file's path,
+/// each file's diagnostics contiguous and in input order.
+pub(crate) fn compile_multi(
+    files: &[MultiFile<'_>],
+) -> (Option<ir::Model>, Vec<(String, Diagnostic)>) {
+    // Per-file diagnostic buckets keep each file's diagnostics contiguous;
+    // the cross-file passes append their (already tagged) diagnostics after.
+    let mut buckets: Vec<Vec<Diagnostic>> = files.iter().map(|_| Vec::new()).collect();
+    for (index, file) in files.iter().enumerate() {
+        buckets[index].extend(file.parse_diagnostics.iter().cloned());
+    }
+
+    // Package declarations and per-file namespaces. Every file joins the
+    // union namespace — including files with a duplicate package name (the
+    // duplicate errors on the later file, but its unique declarations still
+    // resolve for the remaining diagnostics).
+    let mut packages: Vec<DomainPackage> = Vec::new();
+    let mut file_package: Vec<Option<usize>> = vec![None; files.len()];
+    let mut winning_enums: Vec<(usize, &mox::EnumDecl)> = Vec::new();
+    for (index, file) in files.iter().enumerate() {
+        let Some(ast) = file.ast else {
+            continue; // parse diagnostics already reported; nothing to lower
+        };
+        let Some(package_decl) = &ast.package else {
+            buckets[index].push(
+                Diagnostic::error("missing `package` declaration", None).with_help(
+                    "add a package clause at the top of the file, e.g. `package com.example.model`",
+                ),
+            );
+            continue;
+        };
+        let name = package_decl.full_name();
+        if packages.iter().any(|package| package.name == name) {
+            buckets[index].push(
+                Diagnostic::error(format!("duplicate package '{name}'"), Some(package_decl.span))
+                    .with_help(
+                        "each file must declare a distinct package; rename one package or merge the files",
+                    ),
+            );
+        }
+        let mut kinds: HashMap<String, TopKind> = HashMap::new();
+        for decl in &ast.declarations {
+            let (kind, decl_name) = match decl {
+                mox::Decl::Class(decl) => (TopKind::Class, &decl.name),
+                mox::Decl::Interface(decl) => (TopKind::Interface, &decl.name),
+                mox::Decl::Enum(decl) => (TopKind::Enum, &decl.name),
+                mox::Decl::Datatype(decl) => (TopKind::Datatype, &decl.name),
+                mox::Decl::Vocabulary(decl) => (TopKind::Vocabulary, &decl.name),
+                mox::Decl::Actors(decl) => (TopKind::Actors, &decl.name),
+                mox::Decl::Annotation(_) => continue,
+            };
+            if kinds.contains_key(&decl_name.text) {
+                buckets[index].push(
+                    Diagnostic::error(
+                        format!("duplicate declaration of '{}'", decl_name.text),
+                        Some(decl_name.span),
+                    )
+                    .with_help(format!(
+                        "'{0}' is already declared in this package",
+                        decl_name.text
+                    )),
+                );
+            } else {
+                kinds.insert(decl_name.text.clone(), kind);
+                if let mox::Decl::Enum(enum_decl) = decl {
+                    winning_enums.push((index, enum_decl));
+                }
+            }
+        }
+        file_package[index] = Some(packages.len());
+        packages.push(DomainPackage { name, kinds });
+    }
+
+    // Qualified constraint prep maps across all files, so enum closure
+    // checks and vocabulary key-facet family checks work for cross-package
+    // attribute types.
+    let mut enum_decls: HashMap<(&str, &str), &mox::EnumDecl> = HashMap::new();
+    for (index, enum_decl) in &winning_enums {
+        let package = packages[file_package[*index].expect("enum files declare a package")]
+            .name
+            .as_str();
+        enum_decls.insert((package, enum_decl.name.text.as_str()), enum_decl);
+    }
+    let mut vocab_key_facet_types: HashMap<(&str, &str), ir::PrimitiveType> = HashMap::new();
+    for (index, file) in files.iter().enumerate() {
+        let Some(package_index) = file_package[index] else {
+            continue;
+        };
+        let Some(ast) = file.ast else {
+            continue;
+        };
+        let package = packages[package_index].name.as_str();
+        for decl in &ast.declarations {
+            if let mox::Decl::Vocabulary(decl) = decl {
+                if let Some(key) = &decl.key {
+                    if let Some(facet) =
+                        decl.facets.iter().find(|facet| facet.name.text == key.text)
+                    {
+                        if let Some(primitive) = primitive_facet_type(&facet.type_ref) {
+                            vocab_key_facet_types
+                                .insert((package, decl.name.text.as_str()), primitive);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Vocabularies lower per file (snapshots resolve against the file's own
+    // directory) and must be known before any class lowers.
+    let mut vocab_defs: Vec<Vec<ir::VocabularyDef>> = files.iter().map(|_| Vec::new()).collect();
+    for (index, file) in files.iter().enumerate() {
+        if file_package[index].is_none() {
+            continue;
+        }
+        let base_dir = Path::new(file.path)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let Some(ast) = file.ast else {
+            continue;
+        };
+        for decl in &ast.declarations {
+            if let mox::Decl::Vocabulary(decl) = decl {
+                if let Some(def) = lower_vocabulary(decl, &base_dir, &mut buckets[index]) {
+                    vocab_defs[index].push(def);
+                }
+            }
+        }
+    }
+    let mut vocab_keys: HashMap<(&str, &str), HashSet<&str>> = HashMap::new();
+    for (index, defs) in vocab_defs.iter().enumerate() {
+        let Some(package_index) = file_package[index] else {
+            continue;
+        };
+        let package = packages[package_index].name.as_str();
+        for def in defs {
+            vocab_keys.insert(
+                (package, def.name.as_str()),
+                def.entries.iter().map(|entry| entry.key.as_str()).collect(),
+            );
+        }
+    }
+    let prep = PrepMaps {
+        enum_decls,
+        vocab_keys,
+        vocab_key_facet_types,
+    };
+
+    // Lower every file against the union namespace.
+    let scope = Scope::Domains {
+        packages: &packages,
+    };
+    let mut out_packages: Vec<ir::Package> = Vec::new();
+    let mut classes: Vec<ClassRecord> = Vec::new();
+    let mut class_files: Vec<usize> = Vec::new();
+    let mut actors: Vec<ActorsRecord> = Vec::new();
+    let mut pending: Vec<PendingCondition> = Vec::new();
+    for (index, file) in files.iter().enumerate() {
+        let Some(package_index) = file_package[index] else {
+            continue;
+        };
+        let Some(ast) = file.ast else {
+            continue;
+        };
+        let mut out = ir::Package::new(packages[package_index].name.clone());
+        for decl in &ast.declarations {
+            match decl {
+                mox::Decl::Vocabulary(_) => {}
+                mox::Decl::Actors(decl) => {
+                    let (record, conditions) =
+                        lower_actors(decl, file.source, file.path, &scope, &mut buckets[index]);
+                    actors.push(record);
+                    pending.extend(conditions);
+                }
+                mox::Decl::Annotation(annotation) => out.annotations.push(ir::Annotation {
+                    source: annotation.value.clone(),
+                    details: Default::default(),
+                }),
+                mox::Decl::Enum(decl) => out.enums.push(lower_enum(decl, &mut buckets[index])),
+                mox::Decl::Datatype(decl) => {
+                    out.datatypes
+                        .push(lower_datatype(decl, file.source, &mut buckets[index]))
+                }
+                mox::Decl::Interface(decl) => out.interfaces.push(lower_interface(decl)),
+                mox::Decl::Class(decl) => {
+                    classes.push(lower_class(
+                        decl,
+                        file.source,
+                        file.path,
+                        &packages[package_index].name,
+                        &scope,
+                        &prep,
+                        &mut buckets[index],
+                    ));
+                    class_files.push(index);
+                }
+            }
+        }
+        out_packages.push(out);
+    }
+
+    // Cross-file class-graph passes over the assembled class universe.
+    let mut tagged: Vec<(String, Diagnostic)> = Vec::new();
+    detect_inheritance_cycles(&classes, &mut tagged);
+    validate_opposites(&classes, &mut tagged);
+
+    // Inline actors blocks from every file join one union policy set: cycle
+    // detection runs per block first; separation of duty and self-narrowing
+    // span the union (same-named actors pool their permits across files).
+    let cyclic = detect_actor_cycles(&actors, &mut tagged);
+    if !cyclic {
+        validate_actor_never_both_union(&actors, &mut tagged);
+        validate_actor_self_narrowing_union(&actors, &mut tagged);
+    }
+
+    let mut model = ir::Model::new();
+    model.packages = out_packages;
+
+    // Classes join their package after the cross-file passes; operations
+    // move into the def first, as in the single-file path. The out packages
+    // were pushed in file order, so a file's package index is its out index.
+    for (class, file_index) in classes.into_iter().zip(class_files) {
+        let mut class = class;
+        class.def.operations = std::mem::take(&mut class.operations);
+        let package_index = file_package[file_index].expect("class files declare a package");
+        model.packages[package_index].classes.push(class.def);
+    }
+
+    // Vocabularies join their package now that class lowering — the last
+    // prep-map consumer borrowing the definitions — is done.
+    for (index, defs) in vocab_defs.into_iter().enumerate() {
+        if let Some(package_index) = file_package[index] {
+            model.packages[package_index].vocabularies = defs;
+        }
+    }
+
+    // Feature ids are assigned by `ClassDef::new` in declaration order;
+    // keep them in sync with the final feature lists.
+    for package in &mut model.packages {
+        for class in &mut package.classes {
+            class.assign_feature_ids();
+        }
+    }
+
+    // Every `when` condition is now fully type-checked against its
+    // capability's class in the complete multi-package class universe.
+    let context = TypeContext::from_model(&model);
+    tagged.extend(check_pending_conditions(&pending, &context));
+
+    let mut diags: Vec<(String, Diagnostic)> = Vec::new();
+    for (index, file) in files.iter().enumerate() {
+        diags.extend(buckets[index].drain(..).map(|d| (file.path.to_string(), d)));
+    }
+    diags.extend(tagged);
+
+    let blocked = diags.iter().any(|(_, diagnostic)| diagnostic.is_error());
+    let model = (!blocked).then_some(model);
+    (model, diags)
+}
+
 /// Resolves and validates a parsed model and lowers it into the Core IR.
 ///
 /// Returns the IR (with `Model::rex_version` and `formatVersion` set) or
@@ -571,7 +880,7 @@ pub(crate) fn compile(
 
     // Index the package namespace and report duplicate declarations.
     let mut kinds: HashMap<&str, TopKind> = HashMap::new();
-    let mut enum_decls: HashMap<&str, &mox::EnumDecl> = HashMap::new();
+    let mut enum_decls: HashMap<(&str, &str), &mox::EnumDecl> = HashMap::new();
     for decl in &model.declarations {
         let (kind, name) = match decl {
             mox::Decl::Class(decl) => (TopKind::Class, &decl.name),
@@ -596,7 +905,7 @@ pub(crate) fn compile(
         } else {
             kinds.insert(&name.text, kind);
             if let mox::Decl::Enum(enum_decl) = decl {
-                enum_decls.insert(&enum_decl.name.text, enum_decl);
+                enum_decls.insert((package.as_str(), &enum_decl.name.text), enum_decl);
             }
         }
     }
@@ -611,15 +920,42 @@ pub(crate) fn compile(
             }
         }
     }
-    let vocab_keys: HashMap<&str, HashSet<&str>> = vocabulary_defs
+    let vocab_keys: HashMap<(&str, &str), HashSet<&str>> = vocabulary_defs
         .iter()
         .map(|def| {
             (
-                def.name.as_str(),
+                (package.as_str(), def.name.as_str()),
                 def.entries.iter().map(|entry| entry.key.as_str()).collect(),
             )
         })
         .collect();
+
+    // The declared primitive type of each vocabulary's key facet, which
+    // classifies the constraint families admitted on vocabulary-typed
+    // attributes (see `lower_constraints`).
+    let vocab_key_facet_types: HashMap<(&str, &str), ir::PrimitiveType> = model
+        .declarations
+        .iter()
+        .filter_map(|decl| match decl {
+            mox::Decl::Vocabulary(decl) => {
+                let key = decl.key.as_ref()?;
+                let facet = decl
+                    .facets
+                    .iter()
+                    .find(|facet| facet.name.text == key.text)?;
+                Some((
+                    (package.as_str(), decl.name.text.as_str()),
+                    primitive_facet_type(&facet.type_ref)?,
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    let prep = PrepMaps {
+        enum_decls,
+        vocab_keys,
+        vocab_key_facet_types,
+    };
 
     // Lower declarations in source order.
     let mut out = ir::Package::new(package.clone());
@@ -648,19 +984,19 @@ pub(crate) fn compile(
             }
             mox::Decl::Interface(decl) => out.interfaces.push(lower_interface(decl)),
             mox::Decl::Class(decl) => classes.push(lower_class(
-                decl,
-                source,
-                &scope,
-                &enum_decls,
-                &vocab_keys,
-                &mut diags,
+                decl, source, path, &package, &scope, &prep, &mut diags,
             )),
         }
     }
     out.vocabularies = vocabulary_defs;
 
-    detect_inheritance_cycles(&classes, &mut diags);
-    validate_opposites(&classes, &mut diags);
+    // The class-graph passes produce tagged diagnostics (the multi-file path
+    // needs the file); here every tag is this same file, so they are
+    // stripped to keep the single-file diagnostic shape unchanged.
+    let mut class_diags: Vec<(String, Diagnostic)> = Vec::new();
+    detect_inheritance_cycles(&classes, &mut class_diags);
+    validate_opposites(&classes, &mut class_diags);
+    diags.extend(class_diags.into_iter().map(|(_, diagnostic)| diagnostic));
 
     // Actors validation: name-resolution errors were emitted during
     // lowering; cycle detection runs before the ancestor walks, which are
@@ -744,8 +1080,16 @@ fn ir_type_of(
 
 /// `Some(class name)` when the resolution classified the type as a class.
 fn class_of(resolution: Option<&Resolution>) -> Option<String> {
+    class_location(resolution).map(|(_, name)| name)
+}
+
+/// `Some((package, name))` of the target when the resolution classified the
+/// type as a class.
+fn class_location(resolution: Option<&Resolution>) -> Option<(String, String)> {
     match resolution {
-        Some(resolution) if resolution.kind == Resolved::Class => Some(resolution.name.clone()),
+        Some(resolution) if resolution.kind == Resolved::Class => {
+            Some((resolution.package.clone(), resolution.name.clone()))
+        }
         _ => None,
     }
 }
@@ -763,6 +1107,328 @@ fn apply_modifiers(feature: ir::Feature, modifiers: &mox::Modifiers) -> ir::Feat
     } else {
         feature
     }
+}
+
+/// The constraint space an attribute's resolved type admits.
+#[derive(Clone, Copy)]
+enum ConstraintSpace<'a> {
+    /// Only the string family applies (`string` primitives, opaque
+    /// datatypes, `String`-keyed vocabularies).
+    String,
+    /// Only the numeric family applies (numeric primitives, numeric-keyed
+    /// vocabularies).
+    Numeric,
+    /// Neither family applies (`char`, `boolean`).
+    Neither,
+    /// Both families apply: string constraints bound literal names, numeric
+    /// constraints bound literal values.
+    Enum(&'a mox::EnumDecl),
+}
+
+impl ConstraintSpace<'_> {
+    fn admits_string_family(self) -> bool {
+        matches!(self, Self::String | Self::Enum(_))
+    }
+
+    fn admits_numeric_family(self) -> bool {
+        matches!(self, Self::Numeric | Self::Enum(_))
+    }
+}
+
+/// The diagnostic for a constraint keyword whose family the attribute's
+/// type does not admit. The message names the deciding type knowledge so
+/// the fix is apparent from the error alone.
+fn family_mismatch(
+    keyword: &str,
+    family: &str,
+    subject: &str,
+    resolution: Option<&Resolution>,
+    prep: &PrepMaps<'_>,
+    span: Option<Span>,
+) -> Diagnostic {
+    let message = match resolution {
+        Some(Resolution {
+            kind: Resolved::Datatype,
+            name,
+            ..
+        }) => format!(
+            "constraint '{keyword}' requires a {family} attribute; datatype '{name}' has an opaque platform type"
+        ),
+        Some(Resolution {
+            kind: Resolved::Vocabulary,
+            name,
+            package,
+        }) => match prep
+            .vocab_key_facet_types
+            .get(&(package.as_str(), name.as_str()))
+        {
+            Some(primitive) => format!(
+                "constraint '{keyword}' requires a {family} attribute; the key facet of vocabulary '{name}' is {primitive}"
+            ),
+            None => format!(
+                "constraint '{keyword}' requires a {family} attribute; vocabulary '{name}' has no resolvable key facet"
+            ),
+        },
+        _ => format!("constraint '{keyword}' requires a {family} attribute, which {subject} is not"),
+    };
+    Diagnostic::error(message, span)
+}
+
+/// Lowers an attribute's declared constraints into the IR, type-checking
+/// them against the attribute's resolved type. For a many-valued attribute
+/// the constraints apply to the elements.
+///
+/// A constraint family is admitted by the most explicit type knowledge
+/// available (violations are errors, never silently dropped):
+/// - `pattern`, `minLength`, `maxLength` (the string family) require a
+///   `string` attribute; `minimum`, `maximum` (the numeric family) require
+///   a numeric attribute (`char` and `boolean` fall under neither rule);
+/// - a datatype-typed attribute defaults to the string family — its platform
+///   type is opaque — and rejects numeric bounds;
+/// - a vocabulary-typed attribute follows its `key` facet's declared
+///   primitive type (`String` admits the string family, a numeric key the
+///   numeric family); constraints are rejected outright when the key facet
+///   cannot be resolved;
+/// - an enum-typed attribute carries a dual value space: all five keywords
+///   apply, the string family bounding literal names and the numeric family
+///   literal values, and both may coexist. A numeric or length bound that
+///   admits zero literals is a compile error; `pattern` is never statically
+///   validated;
+/// - class and interface types take no constraints;
+/// - length bounds must be non-negative and ordered; numeric bounds must be
+///   ordered.
+fn lower_constraints(
+    constraints: &[mox::Constraint],
+    resolution: Option<&Resolution>,
+    prep: &PrepMaps<'_>,
+    feature_name: &str,
+    diags: &mut Vec<Diagnostic>,
+) -> ir::FeatureConstraints {
+    let mut lowered = ir::FeatureConstraints::default();
+    if constraints.is_empty() {
+        return lowered;
+    }
+    let subject = format!("attribute '{feature_name}'");
+    // The attribute's constraint space, or `None` when checks are skipped:
+    // either resolution failed (the resolver already reported the error) or
+    // a diagnostic was just raised here — both avoid cascading noise.
+    let space = match resolution {
+        None => None,
+        Some(resolution) => match resolution.kind {
+            Resolved::Primitive(ir::PrimitiveType::String) => Some(ConstraintSpace::String),
+            Resolved::Primitive(primitive) if primitive.is_numeric() => {
+                Some(ConstraintSpace::Numeric)
+            }
+            Resolved::Primitive(_) => Some(ConstraintSpace::Neither),
+            Resolved::Datatype => Some(ConstraintSpace::String),
+            Resolved::Enum => prep
+                .enum_decls
+                .get(&(resolution.package.as_str(), resolution.name.as_str()))
+                .copied()
+                .map(ConstraintSpace::Enum),
+            Resolved::Vocabulary => {
+                match prep
+                    .vocab_key_facet_types
+                    .get(&(resolution.package.as_str(), resolution.name.as_str()))
+                {
+                    Some(ir::PrimitiveType::String) => Some(ConstraintSpace::String),
+                    Some(primitive) if primitive.is_numeric() => Some(ConstraintSpace::Numeric),
+                    _ => {
+                        diags.push(
+                            Diagnostic::error(
+                                format!(
+                                    "constraints on {subject} cannot be checked: vocabulary '{}' has no resolvable key facet",
+                                    resolution.name
+                                ),
+                                Some(constraints[0].name.span),
+                            )
+                            .with_help(
+                                "declare the key facet (e.g. `facet String alpha3`) so its value space is known",
+                            ),
+                        );
+                        None
+                    }
+                }
+            }
+            Resolved::Class | Resolved::Interface => {
+                diags.push(Diagnostic::error(
+                    format!(
+                        "constraints are only allowed on primitive, datatype, vocabulary, and enum-typed attributes, but {subject} has type '{}'",
+                        resolution.name
+                    ),
+                    Some(constraints[0].name.span),
+                ));
+                None
+            }
+        },
+    };
+    let Some(space) = space else {
+        return lowered;
+    };
+    let mut minimum_span = None;
+    let mut maximum_span = None;
+    let mut min_length_span = None;
+    let mut max_length_span = None;
+    for constraint in constraints {
+        let span = Some(constraint.name.span);
+        match (constraint.name.text.as_str(), &constraint.value) {
+            ("pattern", mox::ConstraintValue::Str { value, .. }) => {
+                if space.admits_string_family() {
+                    if lowered.pattern.is_none() {
+                        lowered.pattern = Some(value.clone());
+                    }
+                } else {
+                    diags.push(family_mismatch(
+                        "pattern", "string", &subject, resolution, prep, span,
+                    ));
+                }
+            }
+            (keyword @ ("minLength" | "maxLength"), mox::ConstraintValue::Int { value, .. }) => {
+                if !space.admits_string_family() {
+                    diags.push(family_mismatch(
+                        keyword, "string", &subject, resolution, prep, span,
+                    ));
+                } else if *value < 0 {
+                    diags.push(Diagnostic::error(
+                        format!("constraint '{keyword}' must be non-negative, found {value}"),
+                        span,
+                    ));
+                } else if keyword == "minLength" {
+                    lowered.min_length = Some(*value as u64);
+                    min_length_span = span;
+                } else {
+                    lowered.max_length = Some(*value as u64);
+                    max_length_span = span;
+                }
+            }
+            (keyword @ ("minimum" | "maximum"), mox::ConstraintValue::Int { value, .. }) => {
+                if !space.admits_numeric_family() {
+                    diags.push(family_mismatch(
+                        keyword, "numeric", &subject, resolution, prep, span,
+                    ));
+                } else if keyword == "minimum" {
+                    lowered.minimum = Some(*value);
+                    minimum_span = span;
+                } else {
+                    lowered.maximum = Some(*value);
+                    maximum_span = span;
+                }
+            }
+            (keyword, mox::ConstraintValue::Str { .. } | mox::ConstraintValue::Int { .. }) => {
+                diags.push(Diagnostic::error(
+                    format!(
+                        "constraint '{keyword}' takes a quoted string (`pattern`) or an integer (length and numeric bounds)"
+                    ),
+                    span,
+                ));
+            }
+        }
+    }
+    if let (Some(minimum), Some(maximum)) = (lowered.minimum, lowered.maximum) {
+        if minimum > maximum {
+            diags.push(Diagnostic::error(
+                format!(
+                    "attribute '{feature_name}': minimum ({minimum}) must not exceed maximum ({maximum})"
+                ),
+                Some(constraints[0].name.span),
+            ));
+        }
+    }
+    if let (Some(min_length), Some(max_length)) = (lowered.min_length, lowered.max_length) {
+        if min_length > max_length {
+            diags.push(Diagnostic::error(
+                format!(
+                    "attribute '{feature_name}': minLength ({min_length}) must not exceed maxLength ({max_length})"
+                ),
+                Some(constraints[0].name.span),
+            ));
+        }
+    }
+    // Enums get closure checks: a bound admitting zero literals is surely a
+    // typo. Inverted ranges were already reported above, so the closure
+    // check stays silent for them — one clear error each.
+    if let ConstraintSpace::Enum(enum_decl) = space {
+        let enum_name = &enum_decl.name.text;
+        if lowered.minimum.is_some() || lowered.maximum.is_some() {
+            let ordered = match (lowered.minimum, lowered.maximum) {
+                (Some(min), Some(max)) => min <= max,
+                _ => true,
+            };
+            let admits = |value: i64| {
+                lowered.minimum.is_none_or(|min| value >= min)
+                    && lowered.maximum.is_none_or(|max| value <= max)
+            };
+            let any = enum_decl
+                .literals
+                .iter()
+                .filter_map(|literal| literal.value)
+                .any(admits);
+            if ordered && !any {
+                let (keyword, span, detail) = match (lowered.minimum, lowered.maximum) {
+                    (Some(min), None) => (
+                        "minimum",
+                        minimum_span,
+                        format!("no literal value is >= {min}"),
+                    ),
+                    (None, Some(max)) => (
+                        "maximum",
+                        maximum_span,
+                        format!("no literal value is <= {max}"),
+                    ),
+                    (Some(min), Some(max)) => (
+                        "minimum",
+                        minimum_span,
+                        format!("no literal value lies in [{min}, {max}]"),
+                    ),
+                    (None, None) => unreachable!("range is bounded"),
+                };
+                diags.push(Diagnostic::error(
+                    format!("constraint '{keyword}' on attribute '{feature_name}' admits no literal of enum '{enum_name}': {detail}"),
+                    span,
+                ));
+            }
+        }
+        if lowered.min_length.is_some() || lowered.max_length.is_some() {
+            let ordered = match (lowered.min_length, lowered.max_length) {
+                (Some(min), Some(max)) => min <= max,
+                _ => true,
+            };
+            let admits = |length: usize| {
+                lowered.min_length.is_none_or(|min| length >= min as usize)
+                    && lowered.max_length.is_none_or(|max| length <= max as usize)
+            };
+            let any = enum_decl
+                .literals
+                .iter()
+                .map(|literal| literal.name.text.chars().count())
+                .any(admits);
+            if ordered && !any {
+                let (keyword, span, detail) = match (lowered.min_length, lowered.max_length) {
+                    (Some(min), None) => (
+                        "minLength",
+                        min_length_span,
+                        format!("no literal name has at least {min} characters"),
+                    ),
+                    (None, Some(max)) => (
+                        "maxLength",
+                        max_length_span,
+                        format!("no literal name has at most {max} characters"),
+                    ),
+                    (Some(min), Some(max)) => (
+                        "minLength",
+                        min_length_span,
+                        format!("no literal name has between {min} and {max} characters"),
+                    ),
+                    (None, None) => unreachable!("range is bounded"),
+                };
+                diags.push(Diagnostic::error(
+                    format!("constraint '{keyword}' on attribute '{feature_name}' admits no literal of enum '{enum_name}': {detail}"),
+                    span,
+                ));
+            }
+        }
+    }
+    lowered
 }
 
 fn lower_enum(decl: &mox::EnumDecl, diags: &mut Vec<Diagnostic>) -> ir::EnumDef {
@@ -791,13 +1457,14 @@ fn lower_enum(decl: &mox::EnumDecl, diags: &mut Vec<Diagnostic>) -> ir::EnumDef 
                 0
             }
         };
-        literals.push(ir::EnumLiteral::new(
-            &literal.name.text,
-            literal.label.clone(),
-            value,
-        ));
+        let mut lowered_literal =
+            ir::EnumLiteral::new(&literal.name.text, literal.label.clone(), value);
+        lowered_literal.description = literal.doc.clone();
+        literals.push(lowered_literal);
     }
-    ir::EnumDef::new(&decl.name.text, literals)
+    let mut enum_def = ir::EnumDef::new(&decl.name.text, literals);
+    enum_def.description = decl.doc.clone();
+    enum_def
 }
 
 fn lower_datatype(
@@ -810,6 +1477,7 @@ fn lower_datatype(
         Some(mox::Wraps::Opaque(_)) | None => None,
     };
     let mut datatype = ir::DatatypeDef::new(&decl.name.text, platform);
+    datatype.description = decl.doc.clone();
     for binding in &decl.bindings {
         datatype = datatype.bind(&binding.key.text, &binding.value);
     }
@@ -831,6 +1499,7 @@ fn lower_datatype(
 
 fn lower_interface(decl: &mox::InterfaceDecl) -> ir::InterfaceDef {
     let mut interface = ir::InterfaceDef::new(&decl.name.text);
+    interface.description = decl.doc.clone();
     for binding in &decl.bindings {
         interface = interface.bind(&binding.key.text, &binding.value);
     }
@@ -1023,6 +1692,7 @@ fn lower_vocabulary(
 
     Some(ir::VocabularyDef {
         name: name.clone(),
+        description: decl.doc.clone(),
         source: decl.source.clone(),
         version: Some(version),
         key: key.text.clone(),
@@ -1108,9 +1778,10 @@ fn primitive_facet_type(type_ref: &mox::TypeRef) -> Option<ir::PrimitiveType> {
 fn lower_class(
     decl: &mox::ClassDecl,
     source: &str,
+    path: &str,
+    package: &str,
     scope: &Scope<'_>,
-    enum_decls: &HashMap<&str, &mox::EnumDecl>,
-    vocab_keys: &HashMap<&str, HashSet<&str>>,
+    prep: &PrepMaps<'_>,
     diags: &mut Vec<Diagnostic>,
 ) -> ClassRecord {
     let mut extends = Vec::new();
@@ -1152,10 +1823,12 @@ fn lower_class(
         }
         match feature {
             mox::FeatureDecl::Attribute {
+                doc,
                 type_ref,
                 multiplicity,
                 name,
                 default,
+                constraints,
                 ..
             } => {
                 let resolution = scope.resolve(type_ref, diags);
@@ -1175,22 +1848,26 @@ fn lower_class(
                     ir_feature,
                     default.as_ref(),
                     resolution.as_ref(),
-                    enum_decls,
-                    vocab_keys,
+                    prep,
                     diags,
                 );
-                let ir_feature = apply_modifiers(ir_feature, feature.modifiers());
+                let mut ir_feature = apply_modifiers(ir_feature, feature.modifiers());
+                ir_feature.description = doc.clone();
+                ir_feature.constraints =
+                    lower_constraints(constraints, resolution.as_ref(), prep, &name.text, diags);
                 features.push(ir_feature);
                 records.push(FeatureRecord {
                     name: name.text.clone(),
                     kind: FKind::Attribute,
-                    type_class: class_of(resolution.as_ref()),
+                    type_class: class_location(resolution.as_ref()),
                     type_text: type_ref.name.full_name(),
+                    type_span: Some(type_ref.span),
                     opposite: None,
                     opposite_span: None,
                 });
             }
             mox::FeatureDecl::Containment {
+                doc,
                 type_ref,
                 multiplicity,
                 name,
@@ -1206,10 +1883,13 @@ fn lower_class(
                     scope,
                     diags,
                 );
-                features.push(apply_modifiers(ir_feature, feature.modifiers()));
+                let mut ir_feature = apply_modifiers(ir_feature, feature.modifiers());
+                ir_feature.description = doc.clone();
+                features.push(ir_feature);
                 records.push(record);
             }
             mox::FeatureDecl::Reference {
+                doc,
                 type_ref,
                 multiplicity,
                 name,
@@ -1225,10 +1905,13 @@ fn lower_class(
                     scope,
                     diags,
                 );
-                features.push(apply_modifiers(ir_feature, feature.modifiers()));
+                let mut ir_feature = apply_modifiers(ir_feature, feature.modifiers());
+                ir_feature.description = doc.clone();
+                features.push(ir_feature);
                 records.push(record);
             }
             mox::FeatureDecl::Container {
+                doc,
                 type_ref,
                 name,
                 opposite,
@@ -1245,10 +1928,13 @@ fn lower_class(
                     scope,
                     diags,
                 );
-                features.push(apply_modifiers(ir_feature, feature.modifiers()));
+                let mut ir_feature = apply_modifiers(ir_feature, feature.modifiers());
+                ir_feature.description = doc.clone();
+                features.push(ir_feature);
                 records.push(record);
             }
             mox::FeatureDecl::Op {
+                doc,
                 return_type,
                 name,
                 params,
@@ -1308,6 +1994,7 @@ fn lower_class(
                     ),
                     lowered_params,
                 );
+                operation.description = doc.clone();
                 operation.bodies = lowered_bodies;
                 operations.push(operation);
                 records.push(FeatureRecord {
@@ -1315,11 +2002,13 @@ fn lower_class(
                     kind: FKind::Op,
                     type_class: None,
                     type_text: return_type.name.full_name(),
+                    type_span: None,
                     opposite: None,
                     opposite_span: None,
                 });
             }
             mox::FeatureDecl::Derived {
+                doc,
                 type_ref,
                 multiplicity,
                 name,
@@ -1370,13 +2059,15 @@ fn lower_class(
                 )
                 .derived();
                 ir_feature = apply_modifiers(ir_feature, feature.modifiers());
+                ir_feature.description = doc.clone();
                 ir_feature.bodies = lowered_bodies;
                 features.push(ir_feature);
                 records.push(FeatureRecord {
                     name: name.text.clone(),
                     kind: FKind::Derived,
-                    type_class: class_of(resolution.as_ref()),
+                    type_class: class_location(resolution.as_ref()),
                     type_text: type_ref.name.full_name(),
+                    type_span: Some(type_ref.span),
                     opposite: None,
                     opposite_span: None,
                 });
@@ -1384,10 +2075,14 @@ fn lower_class(
         }
     }
 
+    let mut class_def = ir::ClassDef::new(&decl.name.text, extends, features);
+    class_def.description = decl.doc.clone();
     ClassRecord {
+        package: package.to_string(),
+        file: path.to_string(),
         name: decl.name.text.clone(),
         name_span: decl.name.span,
-        def: ir::ClassDef::new(&decl.name.text, extends, features),
+        def: class_def,
         features: records,
         operations,
     }
@@ -1473,8 +2168,9 @@ fn lower_relation(
     let record = FeatureRecord {
         name: name.text.clone(),
         kind,
-        type_class: class_of(resolution.as_ref()),
+        type_class: class_location(resolution.as_ref()),
         type_text: type_ref.name.full_name(),
+        type_span: Some(type_ref.span),
         opposite: opposite.map(|opposite| opposite.text.clone()),
         opposite_span: opposite.map(|opposite| opposite.span),
     };
@@ -1524,8 +2220,7 @@ fn apply_default(
     feature: ir::Feature,
     default: Option<&mox::DefaultValue>,
     resolution: Option<&Resolution>,
-    enum_decls: &HashMap<&str, &mox::EnumDecl>,
-    vocab_keys: &HashMap<&str, HashSet<&str>>,
+    prep: &PrepMaps<'_>,
     diags: &mut Vec<Diagnostic>,
 ) -> ir::Feature {
     let Some(default) = default else {
@@ -1543,9 +2238,11 @@ fn apply_default(
             Some(Resolution {
                 kind: Resolved::Enum,
                 name: enum_name,
-                ..
+                package,
             }) => {
-                if let Some(enum_decl) = enum_decls.get(enum_name.as_str()) {
+                if let Some(enum_decl) =
+                    prep.enum_decls.get(&(package.as_str(), enum_name.as_str()))
+                {
                     if !enum_decl
                         .literals
                         .iter()
@@ -1562,11 +2259,14 @@ fn apply_default(
             Some(Resolution {
                 kind: Resolved::Vocabulary,
                 name: vocab_name,
-                ..
+                package,
             }) => {
                 // An absent key set means the vocabulary failed to load; that
                 // error is already reported, so the default adds nothing.
-                if let Some(keys) = vocab_keys.get(vocab_name.as_str()) {
+                if let Some(keys) = prep
+                    .vocab_keys
+                    .get(&(package.as_str(), vocab_name.as_str()))
+                {
                     if !keys.contains(name.text.as_str()) {
                         diags.push(Diagnostic::error(
                             format!("vocabulary '{vocab_name}' has no entry '{}'", name.text),
@@ -1595,23 +2295,31 @@ fn apply_default(
 }
 
 /// Detects cycles in the class inheritance graph (class → class `extends`
-/// edges), reporting the first cycle found.
-fn detect_inheritance_cycles(classes: &[ClassRecord], diags: &mut Vec<Diagnostic>) {
-    let index: HashMap<&str, &ClassRecord> = classes
+/// edges, keyed by `(package, name)` so cross-package edges are followed),
+/// reporting the first cycle found. Diagnostics are tagged with the file
+/// that closes the cycle.
+fn detect_inheritance_cycles(classes: &[ClassRecord], diags: &mut Vec<(String, Diagnostic)>) {
+    let index: HashMap<(&str, &str), &ClassRecord> = classes
         .iter()
-        .map(|class| (class.name.as_str(), class))
+        .map(|class| ((class.package.as_str(), class.name.as_str()), class))
         .collect();
-    let mut state: HashMap<&str, u8> = HashMap::new();
+    let mut state: HashMap<(&str, &str), u8> = HashMap::new();
     for class in classes {
-        let mut path: Vec<&str> = Vec::new();
-        if let Some(cycle) = visit_class(class.name.as_str(), &index, &mut state, &mut path) {
-            let span = index
-                .get(cycle[0])
-                .map(|record| record.name_span)
-                .unwrap_or_else(|| (0..0).into());
-            diags.push(Diagnostic::error(
-                format!("inheritance cycle detected: {}", cycle.join(" extends ")),
-                Some(span),
+        let mut path: Vec<(&str, &str)> = Vec::new();
+        if let Some(cycle) = visit_class(
+            (class.package.as_str(), class.name.as_str()),
+            &index,
+            &mut state,
+            &mut path,
+        ) {
+            let record = index.get(&cycle[0]).expect("cycle member is indexed");
+            let names: Vec<&str> = cycle.iter().map(|(_, name)| *name).collect();
+            diags.push((
+                record.file.clone(),
+                Diagnostic::error(
+                    format!("inheritance cycle detected: {}", names.join(" extends ")),
+                    Some(record.name_span),
+                ),
             ));
             return;
         }
@@ -1621,15 +2329,15 @@ fn detect_inheritance_cycles(classes: &[ClassRecord], diags: &mut Vec<Diagnostic
 /// Iterative-depth-first visit; returns the cycle path when a back edge is
 /// found. `state`: absent = unvisited, `1` = on the current path, `2` = done.
 fn visit_class<'a>(
-    class: &'a str,
-    index: &HashMap<&'a str, &'a ClassRecord>,
-    state: &mut HashMap<&'a str, u8>,
-    path: &mut Vec<&'a str>,
-) -> Option<Vec<&'a str>> {
-    match state.get(class) {
+    class: (&'a str, &'a str),
+    index: &HashMap<(&'a str, &'a str), &'a ClassRecord>,
+    state: &mut HashMap<(&'a str, &'a str), u8>,
+    path: &mut Vec<(&'a str, &'a str)>,
+) -> Option<Vec<(&'a str, &'a str)>> {
+    match state.get(&class) {
         Some(1) => {
-            let start = path.iter().position(|name| *name == class).unwrap_or(0);
-            let mut cycle: Vec<&str> = path[start..].to_vec();
+            let start = path.iter().position(|member| *member == class).unwrap_or(0);
+            let mut cycle: Vec<(&str, &str)> = path[start..].to_vec();
             cycle.push(class);
             return Some(cycle);
         }
@@ -1638,13 +2346,13 @@ fn visit_class<'a>(
     }
     state.insert(class, 1);
     path.push(class);
-    if let Some(record) = index.get(class) {
+    if let Some(record) = index.get(&class) {
         for superclass in record
             .def
             .extends
             .iter()
             .filter_map(|type_ref| match type_ref {
-                ir::TypeRef::Class { name, .. } => Some(name.as_str()),
+                ir::TypeRef::Class { package, name, .. } => Some((package.as_str(), name.as_str())),
                 _ => None,
             })
         {
@@ -1665,10 +2373,15 @@ fn visit_class<'a>(
 ///
 /// and requires each side's `opposite` to name the other feature back. Each
 /// violated declaration produces one error naming both sides.
-fn validate_opposites(classes: &[ClassRecord], diags: &mut Vec<Diagnostic>) {
-    let index: HashMap<&str, &ClassRecord> = classes
+///
+/// Relations are same-package only: a `contains`/`container` targeting a
+/// foreign-package class is rejected outright (ownership does not span
+/// packages), and a `refers` may only cross packages one-sided. Diagnostics
+/// are tagged with the declaring file.
+fn validate_opposites(classes: &[ClassRecord], diags: &mut Vec<(String, Diagnostic)>) {
+    let index: HashMap<(&str, &str), &ClassRecord> = classes
         .iter()
-        .map(|class| (class.name.as_str(), class))
+        .map(|class| ((class.package.as_str(), class.name.as_str()), class))
         .collect();
     for class in classes {
         for feature in &class.features {
@@ -1678,13 +2391,49 @@ fn validate_opposites(classes: &[ClassRecord], diags: &mut Vec<Diagnostic>) {
             ) {
                 continue;
             }
-            let (Some(target), Some(opposite)) = (&feature.type_class, &feature.opposite) else {
+            if let Some((target_package, _)) = &feature.type_class {
+                if target_package != class.package.as_str() {
+                    match feature.kind {
+                        FKind::Containment | FKind::Container => {
+                            diags.push((
+                                class.file.clone(),
+                                Diagnostic::error(
+                                    format!(
+                                        "cross-package ownership is not supported: feature '{}.{}' {} '{}'",
+                                        class.name,
+                                        feature.name,
+                                        feature.kind.keyword(),
+                                        feature.type_text,
+                                    ),
+                                    feature.type_span,
+                                )
+                                .with_help(
+                                    "declare `contains` targets within the same package, or use `refers` for cross-package links",
+                                ),
+                            ));
+                        }
+                        _ if feature.opposite.is_some() => {
+                            diags.push((
+                                class.file.clone(),
+                                Diagnostic::error(
+                                    "cross-package opposites are not supported; declare the opposite within the same package",
+                                    feature.opposite_span,
+                                ),
+                            ));
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+            }
+            let (Some((_, target)), Some(opposite)) = (&feature.type_class, &feature.opposite)
+            else {
                 continue;
             };
             let Some(opposite_span) = feature.opposite_span else {
                 continue;
             };
-            let Some(other) = index.get(target.as_str()) else {
+            let Some(other) = index.get(&(class.package.as_str(), target.as_str())) else {
                 continue;
             };
             let Some(counterpart) = other
@@ -1692,12 +2441,15 @@ fn validate_opposites(classes: &[ClassRecord], diags: &mut Vec<Diagnostic>) {
                 .iter()
                 .find(|candidate| &candidate.name == opposite)
             else {
-                diags.push(Diagnostic::error(
-                    format!(
-                        "opposite mismatch: '{}.{}' declares opposite '{}.{}', but class '{}' has no feature '{}'",
-                        class.name, feature.name, target, opposite, target, opposite,
+                diags.push((
+                    class.file.clone(),
+                    Diagnostic::error(
+                        format!(
+                            "opposite mismatch: '{}.{}' declares opposite '{}.{}', but class '{}' has no feature '{}'",
+                            class.name, feature.name, target, opposite, target, opposite,
+                        ),
+                        Some(opposite_span),
                     ),
-                    Some(opposite_span),
                 ));
                 continue;
             };
@@ -1707,37 +2459,46 @@ fn validate_opposites(classes: &[ClassRecord], diags: &mut Vec<Diagnostic>) {
                 _ => FKind::Reference,
             };
             if counterpart.kind != expected {
-                diags.push(Diagnostic::error(
-                    format!(
-                        "opposite mismatch: '{}.{}' expects '{}.{}' to be {}, but found {}",
-                        class.name,
-                        feature.name,
-                        target,
-                        opposite,
-                        expected_description(feature.kind, &class.name),
-                        counterpart.kind.describe(),
+                diags.push((
+                    class.file.clone(),
+                    Diagnostic::error(
+                        format!(
+                            "opposite mismatch: '{}.{}' expects '{}.{}' to be {}, but found {}",
+                            class.name,
+                            feature.name,
+                            target,
+                            opposite,
+                            expected_description(feature.kind, &class.name),
+                            counterpart.kind.describe(),
+                        ),
+                        Some(opposite_span),
                     ),
-                    Some(opposite_span),
                 ));
                 continue;
             }
-            if counterpart.type_class.as_deref() != Some(class.name.as_str()) {
-                diags.push(Diagnostic::error(
-                    format!(
-                        "opposite mismatch: '{}.{}' expects '{}.{}' to have type '{}', but found '{}'",
-                        class.name, feature.name, target, opposite, class.name, counterpart.type_text,
+            if counterpart.type_class != Some((class.package.clone(), class.name.clone())) {
+                diags.push((
+                    class.file.clone(),
+                    Diagnostic::error(
+                        format!(
+                            "opposite mismatch: '{}.{}' expects '{}.{}' to have type '{}', but found '{}'",
+                            class.name, feature.name, target, opposite, class.name, counterpart.type_text,
+                        ),
+                        Some(opposite_span),
                     ),
-                    Some(opposite_span),
                 ));
                 continue;
             }
             if counterpart.opposite.as_deref() != Some(feature.name.as_str()) {
-                diags.push(Diagnostic::error(
-                    format!(
-                        "opposite mismatch: '{}.{}' does not declare opposite '{}.{}'",
-                        target, opposite, class.name, feature.name,
+                diags.push((
+                    class.file.clone(),
+                    Diagnostic::error(
+                        format!(
+                            "opposite mismatch: '{}.{}' does not declare opposite '{}.{}'",
+                            target, opposite, class.name, feature.name,
+                        ),
+                        Some(opposite_span),
                     ),
-                    Some(opposite_span),
                 ));
             }
         }

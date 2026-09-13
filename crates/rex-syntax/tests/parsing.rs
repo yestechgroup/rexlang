@@ -1031,3 +1031,217 @@ fn derived_bare_body_still_parses_as_a_raw_body() {
     let bare = body.expect("bare span");
     assert_eq!(&source[bare.start..bare.end], "{ 42 }");
 }
+
+// ---------------------------------------------------------------------------
+// Doc comments (descriptions)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn doc_comments_attach_to_declarations_features_and_literals() {
+    let source = "\
+/// A book in the library.
+class Book {
+    /// The title.
+    String title
+    /// The category.
+    BookCategory category
+}
+
+/// How books are shelved.
+enum BookCategory {
+    /// Whodunits.
+    Mystery = 0
+    ScienceFiction = 1
+}
+
+/// An external reference.
+interface Named {}
+
+/// A calendar day.
+type Date wraps opaque {}
+
+/// ISO currencies.
+vocabulary Currency from \"iso:4217\" { key alpha3 }
+";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let model = result.ast.expect("ast");
+
+    let Decl::Class(class) = &model.declarations[0] else {
+        panic!("expected class")
+    };
+    assert_eq!(class.doc.as_deref(), Some("A book in the library."));
+    assert_eq!(class.features[0].doc(), Some("The title."), "attribute doc");
+    let FeatureDecl::Attribute { constraints, .. } = &class.features[0] else {
+        panic!("expected attribute")
+    };
+    assert!(constraints.is_empty());
+    let Decl::Enum(decl) = &model.declarations[1] else {
+        panic!("expected enum")
+    };
+    assert_eq!(decl.doc.as_deref(), Some("How books are shelved."));
+    assert_eq!(decl.literals[0].doc.as_deref(), Some("Whodunits."));
+    assert_eq!(decl.literals[1].doc, None, "no doc on second literal");
+    let Decl::Interface(interface) = &model.declarations[2] else {
+        panic!("expected interface")
+    };
+    assert_eq!(interface.doc.as_deref(), Some("An external reference."));
+    let Decl::Datatype(datatype) = &model.declarations[3] else {
+        panic!("expected datatype")
+    };
+    assert_eq!(datatype.doc.as_deref(), Some("A calendar day."));
+    let Decl::Vocabulary(vocabulary) = &model.declarations[4] else {
+        panic!("expected vocabulary")
+    };
+    assert_eq!(vocabulary.doc.as_deref(), Some("ISO currencies."));
+}
+
+#[test]
+fn contiguous_doc_line_comments_join_into_one_description() {
+    let source = "\
+/// First line.
+/// Second line.
+class Book {}
+";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let Decl::Class(class) = &result.ast.expect("ast").declarations[0] else {
+        panic!("expected class")
+    };
+    assert_eq!(
+        class.doc.as_deref(),
+        Some("First line.\nSecond line."),
+        "contiguous doc lines join with a newline"
+    );
+}
+
+#[test]
+fn block_doc_comments_normalize_their_delimiters() {
+    let source = "/** A calendar day. */\ntype Date wraps opaque\n";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let Decl::Datatype(datatype) = &result.ast.expect("ast").declarations[0] else {
+        panic!("expected datatype")
+    };
+    assert_eq!(datatype.doc.as_deref(), Some("A calendar day."));
+}
+
+#[test]
+fn ordinary_comments_and_detached_docs_do_not_attach() {
+    let source = "\
+// An ordinary comment.
+class Book {}
+
+/// Separated by a blank line.
+
+class Shelf {}
+";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let model = result.ast.expect("ast");
+    let Decl::Class(class) = &model.declarations[0] else {
+        panic!("expected class")
+    };
+    assert_eq!(class.doc, None, "plain `//` is not a doc comment");
+    let Decl::Class(shelf) = &model.declarations[1] else {
+        panic!("expected class")
+    };
+    assert_eq!(shelf.doc, None, "a blank line detaches the doc run");
+}
+
+#[test]
+fn trailing_doc_comment_attaches_to_nothing() {
+    // A `///` after code on the same line is a trailing comment, not a doc
+    // for the next declaration.
+    let source = "class Book {} /// trailing\nclass Shelf {}\n";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let Decl::Class(shelf) = &result.ast.expect("ast").declarations[1] else {
+        panic!("expected class")
+    };
+    assert_eq!(shelf.doc, None);
+}
+
+// ---------------------------------------------------------------------------
+// Attribute constraint blocks
+// ---------------------------------------------------------------------------
+
+#[test]
+fn attributes_accept_a_constraint_block() {
+    let source = "class Product { String sku { pattern \"[A-Z]{3}\" minLength 3 maxLength 12 } }";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let Decl::Class(class) = &result.ast.expect("ast").declarations[0] else {
+        panic!("expected class")
+    };
+    let FeatureDecl::Attribute {
+        constraints,
+        default,
+        ..
+    } = &class.features[0]
+    else {
+        panic!("expected attribute")
+    };
+    assert!(default.is_none());
+    assert_eq!(constraints.len(), 3);
+    assert_eq!(constraints[0].name.text, "pattern");
+    match &constraints[0].value {
+        ConstraintValue::Str { value, .. } => assert_eq!(value, "[A-Z]{3}"),
+        other => panic!("expected string value, got {other:?}"),
+    }
+    assert_eq!(constraints[1].name.text, "minLength");
+    assert!(matches!(
+        constraints[1].value,
+        ConstraintValue::Int { value: 3, .. }
+    ));
+    assert_eq!(constraints[2].name.text, "maxLength");
+}
+
+#[test]
+fn constraints_combine_with_defaults_and_multiplicities() {
+    let source = "class Product { int[0..*] ratings = 5 { minimum 0 maximum 10 } }";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let Decl::Class(class) = &result.ast.expect("ast").declarations[0] else {
+        panic!("expected class")
+    };
+    let FeatureDecl::Attribute {
+        constraints,
+        default,
+        ..
+    } = &class.features[0]
+    else {
+        panic!("expected attribute")
+    };
+    assert!(matches!(default, Some(DefaultValue::Int { value: 5, .. })));
+    assert_eq!(constraints.len(), 2);
+}
+
+#[test]
+fn unknown_constraint_keywords_do_not_enter_the_block() {
+    // `bogus` is not a constraint keyword: the block parse fails and the
+    // whole feature falls into junk recovery (one error, feature lost).
+    let source = "class Product { String sku { bogus 1 } }";
+    let result = parse(source);
+    assert!(!result.errors.is_empty(), "unknown constraints must error");
+}
+
+#[test]
+fn duplicate_constraints_are_a_syntax_error() {
+    let source = "class Product { String sku { minLength 3 minLength 5 } }";
+    let result = parse(source);
+    assert!(
+        !result.errors.is_empty(),
+        "duplicate constraints must error"
+    );
+}
+
+#[test]
+fn constraint_values_must_be_literals() {
+    let source = "class Product { String sku { pattern title } }";
+    let result = parse(source);
+    assert!(
+        !result.errors.is_empty(),
+        "a constraint value must be a string or int literal"
+    );
+}

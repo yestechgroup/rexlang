@@ -797,3 +797,61 @@ fn conformance_models_match_golden_formatting() {
 fn model_source(relative: &str) -> String {
     std::fs::read_to_string(workspace_root().join(relative)).expect("read conformance model")
 }
+
+// ---------------------------------------------------------------------------
+// Constraint blocks
+// ---------------------------------------------------------------------------
+
+#[test]
+fn constraint_blocks_render_single_spaced_on_the_feature_line() {
+    let formatted =
+        format("class Product { String sku { pattern \"[A-Z]{3}\"   minLength 3  maxLength 12 } }")
+            .unwrap();
+    assert_eq!(
+        formatted,
+        "class Product {\n    String sku { pattern \"[A-Z]{3}\" minLength 3 maxLength 12 }\n}\n"
+    );
+    // Fixpoint: formatting the output changes nothing.
+    assert_eq!(format(&formatted).unwrap(), formatted);
+}
+
+#[test]
+fn numeric_constraint_blocks_normalize_and_empty_blocks_collapse() {
+    let formatted = format("class P { int stock { minimum 0  maximum 10 } int tag { } }").unwrap();
+    assert_eq!(
+        formatted,
+        "class P {\n    int stock { minimum 0 maximum 10 }\n    int tag {}\n}\n"
+    );
+    assert_eq!(format(&formatted).unwrap(), formatted);
+}
+
+#[test]
+fn constraint_blocks_survive_as_written_inside_the_block() {
+    // Comments inside the block are preserved; the block's pairs re-join
+    // canonically. The shape must still be a fixpoint.
+    let source = "class P {\n    String sku {\n        // note\n        pattern \"x\"\n    }\n}\n";
+    let once = format(source).unwrap();
+    let twice = format(&once).unwrap();
+    assert_eq!(
+        once, twice,
+        "constraint-block formatting must be a fixpoint"
+    );
+    assert!(once.contains("// note"), "interior comments are preserved");
+}
+
+// ---------------------------------------------------------------------------
+// Doc comments
+// ---------------------------------------------------------------------------
+
+#[test]
+fn doc_comments_are_preserved_above_declarations_and_features() {
+    let source = "\
+/// A book.
+class Book {
+    /// The title.
+    String title
+}
+";
+    let formatted = format(source).unwrap();
+    assert_eq!(formatted, source, "doc comments survive formatting");
+}

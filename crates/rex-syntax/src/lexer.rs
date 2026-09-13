@@ -267,6 +267,63 @@ pub struct Comment<'src> {
     pub span: Span,
 }
 
+impl Comment<'_> {
+    /// The normalized description text when this is a *doc* comment
+    /// (`/// ...` or `/** ... */`), or `None` for an ordinary comment.
+    ///
+    /// Normalization strips the doc delimiters, one optional leading space
+    /// per line, and the `*` continuation markers of block comments; the
+    /// lines are joined with `\n`.
+    pub fn doc_content(&self) -> Option<String> {
+        match self.kind {
+            CommentKind::Line => {
+                let content = self.text.strip_prefix("///")?;
+                Some(strip_one_space(content).trim_end().to_string())
+            }
+            CommentKind::Block => {
+                let interior = self
+                    .text
+                    .strip_prefix("/**")?
+                    .strip_suffix("*/")?
+                    .trim_end();
+                if interior.is_empty() {
+                    return Some(String::new());
+                }
+                let mut lines: Vec<String> = Vec::new();
+                for line in interior.split('\n').skip(1) {
+                    // Continuation lines drop their leading whitespace and
+                    // the conventional `*` marker.
+                    let mut line = line.trim_start();
+                    line = line.strip_prefix('*').unwrap_or(line);
+                    lines.push(strip_one_space(line).trim_end().to_string());
+                }
+                // The first interior line sits on the `/**` line itself.
+                let first = strip_one_space(interior.split('\n').next().unwrap_or_default())
+                    .trim_start()
+                    .trim_end()
+                    .to_string();
+                let mut all = Vec::with_capacity(lines.len() + 1);
+                if !first.is_empty() {
+                    all.push(first);
+                }
+                all.extend(lines);
+                while all.first().is_some_and(String::is_empty) {
+                    all.remove(0);
+                }
+                while all.last().is_some_and(String::is_empty) {
+                    all.pop();
+                }
+                Some(all.join("\n"))
+            }
+        }
+    }
+}
+
+/// Strips a single leading space, if present.
+fn strip_one_space(text: &str) -> &str {
+    text.strip_prefix(' ').unwrap_or(text)
+}
+
 /// Tokens paired with their spans.
 pub type TokenStream<'src> = Vec<(Token<'src>, Span)>;
 

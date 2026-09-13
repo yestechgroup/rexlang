@@ -301,10 +301,12 @@ pub fn parse_snapshot(bytes: &[u8]) -> Result<ParsedSnapshot, VocabularyError> {
 /// entries.
 ///
 /// Checks, in order: the snapshot is for the declared source; it has at
-/// least one entry; every entry carries a unique string key under
-/// `decl.key`; every declared facet is present with a value matching its
-/// primitive type (integer types → JSON integer, `String`/`char` → JSON
-/// string, `boolean` → JSON bool, `float`/`double` → JSON number).
+/// least one entry; every entry carries a unique key under `decl.key` (a
+/// JSON string, or a number kept as its exact JSON text when the key names
+/// a declared numeric facet — IR keys are always strings); every declared
+/// facet is present with a value matching its primitive type (integer
+/// types → JSON integer, `String`/`char` → JSON string, `boolean` → JSON
+/// bool, `float`/`double` → JSON number).
 ///
 /// Facet values become [`DefaultValue`]s. Fractional `float`/`double`
 /// values (which [`DefaultValue`] cannot represent losslessly) are stored as
@@ -329,18 +331,23 @@ pub fn validate_entries(
     for (index, raw) in parsed.entries.iter().enumerate() {
         let key = match raw.get(&decl.key) {
             Some(serde_json::Value::String(key)) => key.clone(),
+            Some(serde_json::Value::Number(number))
+                if declared_key_type(decl).is_some_and(PrimitiveType::is_numeric) =>
+            {
+                number.to_string()
+            }
             Some(other) => {
                 return Err(VocabularyError::KeyNotAString {
                     index,
                     field: decl.key.clone(),
                     found: json_kind(other).to_string(),
-                });
+                })
             }
             None => {
                 return Err(VocabularyError::MissingKey {
                     index,
                     field: decl.key.clone(),
-                });
+                })
             }
         };
         if !seen.insert(key.clone()) {
@@ -362,6 +369,15 @@ pub fn validate_entries(
         entries.push(rex_ir::VocabularyEntry { key, facets });
     }
     Ok(entries)
+}
+
+/// The declared primitive type of the facet named by the declaration's key,
+/// when the key names a declared facet at all.
+fn declared_key_type(decl: &VocabularyDeclaration) -> Option<PrimitiveType> {
+    decl.facets
+        .iter()
+        .find(|facet| facet.name == decl.key)
+        .map(|facet| facet.type_)
 }
 
 /// Converts one facet value, checking the JSON kind against the declared
@@ -557,5 +573,51 @@ mod tests {
         let stamp = rfc3339_now();
         assert!(stamp.ends_with('Z'), "stamp was: {stamp}");
         assert_eq!(stamp.len(), 20, "stamp was: {stamp}");
+    }
+
+    fn declaration(key: &str, facets: &[(&str, PrimitiveType)]) -> VocabularyDeclaration {
+        VocabularyDeclaration {
+            source: "demo:set".to_string(),
+            version: Some("2024-01-01".to_string()),
+            key: key.to_string(),
+            facets: facets
+                .iter()
+                .map(|(name, type_)| VocabularyFacet {
+                    name: name.to_string(),
+                    type_: *type_,
+                })
+                .collect(),
+        }
+    }
+
+    fn entries_of(snapshot: &str, decl: &VocabularyDeclaration) -> Vec<rex_ir::VocabularyEntry> {
+        validate_entries(&parse_snapshot(snapshot.as_bytes()).unwrap(), decl).unwrap()
+    }
+
+    #[test]
+    fn numeric_key_facets_stringify_entry_keys() {
+        let decl = declaration("code", &[("code", PrimitiveType::Int)]);
+        let entries = entries_of(
+            r#"{"vocabulary":"demo:set","version":"2024-01-01",
+                "entries":[{"code":1},{"code":44}]}"#,
+            &decl,
+        );
+        assert_eq!(entries[0].key, "1");
+        assert_eq!(entries[1].key, "44");
+        assert_eq!(entries[0].facets["code"], DefaultValue::Int(1));
+    }
+
+    #[test]
+    fn numeric_key_fields_without_a_declared_facet_stay_rejected() {
+        let decl = declaration("code", &[]);
+        let error = validate_entries(
+            &parse_snapshot(
+                br#"{"vocabulary":"demo:set","version":"2024-01-01","entries":[{"code":1}]}"#,
+            )
+            .unwrap(),
+            &decl,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("must be a string"), "{error}");
     }
 }

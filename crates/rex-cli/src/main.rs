@@ -2,11 +2,13 @@
 //!
 //! Subcommands:
 //!
-//! * `rexlang check <file>` — compile and render diagnostics; exits `1` on
-//!   errors. Accepts `.mox` models and `.actor` policy files (the latter
-//!   compile against the domain models they import).
-//! * `rexlang ir <file> [-o <out>]` — compile and emit the Core IR JSON to
-//!   stdout or to a file; exits `1` on errors. On `.actor` files the
+//! * `rexlang check <file>...` — compile and render diagnostics; exits `1`
+//!   on errors. Accepts `.mox` models and `.actor` policy files (the latter
+//!   compile against the domain models they import). Each input is a file or
+//!   a directory (scanned recursively for `*.mox`); several `.mox` inputs
+//!   compile as one multi-package model.
+//! * `rexlang ir <file>... [-o <out>]` — compile and emit the Core IR JSON
+//!   to stdout or to a file; exits `1` on errors. On `.actor` files the
 //!   standalone ActorModel artifact is emitted.
 //! * `rexlang vocab fetch <file> [--provider file:<DIR>|http]` — fetch and
 //!   vendor vocabulary snapshots, updating `model.lock`.
@@ -16,7 +18,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use rex_driver::{compile_actors_str, compile_str, render, ActorCompilation, Compilation};
+use rex_driver::{
+    compile_actors_str, compile_files, compile_str, render, ActorCompilation, MultiCompilation,
+};
 use rex_vocab::{FileProvider, HttpProvider, LockEntry, Lockfile, VocabularyProvider};
 /// rexlang compiler command-line interface.
 #[derive(Debug, Parser)]
@@ -28,22 +32,25 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Parse, resolve, and validate a `.mox` or `.actor` file, rendering
-    /// diagnostics.
+    /// Parse, resolve, and validate `.mox` or `.actor` files, rendering
+    /// diagnostics grouped per file.
     Check {
-        /// Path to the `.mox` or `.actor` source file.
-        file: PathBuf,
+        /// Paths to compile: `.mox`/`.actor` files, or directories scanned
+        /// recursively for `*.mox`.
+        files: Vec<PathBuf>,
     },
-    /// Compile a `.mox` or `.actor` file to the Core IR and emit it as JSON
-    /// (`.actor` files emit the standalone ActorModel artifact).
+    /// Compile `.mox` or `.actor` files to the Core IR and emit it as JSON
+    /// (`.actor` files emit the standalone ActorModel artifact; several
+    /// `.mox` files emit one multi-package model).
     Ir {
-        /// Path to the `.mox` or `.actor` source file.
-        file: PathBuf,
+        /// Paths to compile: `.mox`/`.actor` files, or directories scanned
+        /// recursively for `*.mox`.
+        files: Vec<PathBuf>,
         /// Write the JSON to this path instead of stdout.
         #[arg(short, long, value_name = "FILE")]
         out: Option<PathBuf>,
     },
-    /// Code generation from a compiled `.mox` file.
+    /// Code generation from compiled `.mox` files.
     Gen {
         #[command(subcommand)]
         target: GenTarget,
@@ -89,16 +96,18 @@ enum VocabAction {
 enum GenTarget {
     /// Generate arena-based Rust model code (`models.rs`).
     Rust {
-        /// Path to the `.mox` source file.
-        file: PathBuf,
+        /// Paths to compile: `.mox` files, or directories scanned
+        /// recursively for `*.mox`.
+        files: Vec<PathBuf>,
         /// Directory to write generated files into.
         #[arg(short, long, value_name = "DIR")]
         out: PathBuf,
     },
     /// Generate JSON Schema (draft 2020-12) for the model (`schema.json`).
     JsonSchema {
-        /// Path to the `.mox` source file.
-        file: PathBuf,
+        /// Paths to compile: `.mox` files, or directories scanned
+        /// recursively for `*.mox`.
+        files: Vec<PathBuf>,
         /// Which schema flavor to emit.
         #[arg(long, value_enum, default_value_t = SchemaProfile::Wire)]
         profile: SchemaProfile,
@@ -106,12 +115,13 @@ enum GenTarget {
         #[arg(short, long, value_name = "DIR")]
         out: PathBuf,
     },
-    /// Generate Cedar policies + schema for the `actors` blocks of a
-    /// `.mox` file, or of a `.actor` file plus its imported domain models
+    /// Generate Cedar policies + schema for the `actors` blocks of `.mox`
+    /// files, or of a `.actor` file plus its imported domain models
     /// (`<Block>.cedar` + `<Block>.cedarschema.json`).
     Cedar {
-        /// Path to the `.mox` or `.actor` source file.
-        file: PathBuf,
+        /// Paths to compile: `.mox`/`.actor` files, or directories scanned
+        /// recursively for `*.mox`.
+        files: Vec<PathBuf>,
         /// Directory to write generated files into.
         #[arg(short, long, value_name = "DIR")]
         out: PathBuf,
@@ -139,9 +149,10 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     match cli.command {
-        Command::Check { file } => {
-            if is_actor_file(&file) {
-                let pair = read_actor_pair(&file)?;
+        Command::Check { files } => {
+            let files = expand_inputs(&files)?;
+            if files.len() == 1 && is_actor_file(&files[0]) {
+                let pair = read_actor_pair(&files[0])?;
                 let compilation = compile_actors_str(&pair.path, &pair.source, &pair.domains);
                 report_actor_diagnostics(&pair, &compilation);
                 if compilation.model.is_some() {
@@ -151,20 +162,23 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                     Ok(ExitCode::FAILURE)
                 }
             } else {
-                let (path, source) = read_source(&file)?;
-                let compilation = compile_str(&path, &source);
-                report_diagnostics(&path, &source, &compilation);
+                let sources = read_sources(&files)?;
+                let compilation = compile_sources(&sources);
+                report_multi_diagnostics(&sources, &compilation.diagnostics);
                 if compilation.model.is_some() {
-                    println!("OK {path}");
+                    for (path, _) in &sources {
+                        println!("OK {path}");
+                    }
                     Ok(ExitCode::SUCCESS)
                 } else {
                     Ok(ExitCode::FAILURE)
                 }
             }
         }
-        Command::Ir { file, out } => {
-            if is_actor_file(&file) {
-                let pair = read_actor_pair(&file)?;
+        Command::Ir { files, out } => {
+            let files = expand_inputs(&files)?;
+            if files.len() == 1 && is_actor_file(&files[0]) {
+                let pair = read_actor_pair(&files[0])?;
                 let compilation = compile_actors_str(&pair.path, &pair.source, &pair.domains);
                 report_actor_diagnostics(&pair, &compilation);
                 let Some(actor_model) = compilation.model else {
@@ -177,9 +191,9 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 }
                 Ok(ExitCode::SUCCESS)
             } else {
-                let (path, source) = read_source(&file)?;
-                let compilation = compile_str(&path, &source);
-                report_diagnostics(&path, &source, &compilation);
+                let sources = read_sources(&files)?;
+                let compilation = compile_sources(&sources);
+                report_multi_diagnostics(&sources, &compilation.diagnostics);
                 let Some(model) = compilation.model else {
                     return Ok(ExitCode::FAILURE);
                 };
@@ -192,11 +206,12 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             }
         }
         Command::Gen {
-            target: GenTarget::Rust { file, out },
+            target: GenTarget::Rust { files, out },
         } => {
-            let (path, source) = read_source(&file)?;
-            let compilation = compile_str(&path, &source);
-            report_diagnostics(&path, &source, &compilation);
+            let files = expand_inputs(&files)?;
+            let sources = read_sources(&files)?;
+            let compilation = compile_sources(&sources);
+            report_multi_diagnostics(&sources, &compilation.diagnostics);
             let Some(model) = compilation.model else {
                 return Ok(ExitCode::FAILURE);
             };
@@ -205,11 +220,17 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Gen {
-            target: GenTarget::JsonSchema { file, profile, out },
+            target:
+                GenTarget::JsonSchema {
+                    files,
+                    profile,
+                    out,
+                },
         } => {
-            let (path, source) = read_source(&file)?;
-            let compilation = compile_str(&path, &source);
-            report_diagnostics(&path, &source, &compilation);
+            let files = expand_inputs(&files)?;
+            let sources = read_sources(&files)?;
+            let compilation = compile_sources(&sources);
+            report_multi_diagnostics(&sources, &compilation.diagnostics);
             let Some(model) = compilation.model else {
                 return Ok(ExitCode::FAILURE);
             };
@@ -222,10 +243,11 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Gen {
-            target: GenTarget::Cedar { file, out },
+            target: GenTarget::Cedar { files, out },
         } => {
-            if is_actor_file(&file) {
-                let pair = read_actor_pair(&file)?;
+            let files = expand_inputs(&files)?;
+            if files.len() == 1 && is_actor_file(&files[0]) {
+                let pair = read_actor_pair(&files[0])?;
                 let compilation = compile_actors_str(&pair.path, &pair.source, &pair.domains);
                 report_actor_diagnostics(&pair, &compilation);
                 let Some(actor_model) = compilation.model else {
@@ -236,9 +258,9 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 println!("generated Cedar policies and schema into {}", out.display());
                 Ok(ExitCode::SUCCESS)
             } else {
-                let (path, source) = read_source(&file)?;
-                let compilation = compile_str(&path, &source);
-                report_diagnostics(&path, &source, &compilation);
+                let sources = read_sources(&files)?;
+                let compilation = compile_sources(&sources);
+                report_multi_diagnostics(&sources, &compilation.diagnostics);
                 let Some(model) = compilation.model else {
                     return Ok(ExitCode::FAILURE);
                 };
@@ -503,10 +525,109 @@ fn vocab_fetch(
     Ok(())
 }
 
-fn read_source(file: &PathBuf) -> anyhow::Result<(String, String)> {
+fn read_source(file: &Path) -> anyhow::Result<(String, String)> {
     let source = std::fs::read_to_string(file)
         .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
     Ok((file.display().to_string(), source))
+}
+
+/// Reads every input as `(driver path, source)` pairs.
+fn read_sources(files: &[PathBuf]) -> anyhow::Result<Vec<(String, String)>> {
+    files.iter().map(|file| read_source(file)).collect()
+}
+
+/// Expands command-line inputs: each entry may be a file or a directory;
+/// directories are scanned recursively for `*.mox` files (`.actor` files are
+/// ignored). Results are sorted lexicographically by path — this ordering
+/// determines the IR package order — and must be non-empty.
+fn expand_inputs(files: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
+    let mut expanded = Vec::new();
+    for entry in files {
+        if entry.is_dir() {
+            collect_mox_files(entry, &mut expanded)?;
+        } else {
+            expanded.push(entry.clone());
+        }
+    }
+    if expanded.is_empty() {
+        if files.is_empty() {
+            anyhow::bail!("no input files");
+        }
+        let named = files
+            .iter()
+            .map(|file| file.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        anyhow::bail!("no .mox files found in {named}");
+    }
+    expanded.sort();
+    Ok(expanded)
+}
+
+/// Recursively collects `*.mox` files under `dir` (subdirectories first come
+/// out in name order; the caller sorts the final list anyway).
+fn collect_mox_files(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
+    let read = |error: std::io::Error| anyhow::anyhow!("cannot read {}: {error}", dir.display());
+    let mut entries: Vec<std::fs::DirEntry> = std::fs::read_dir(dir)
+        .map_err(read)?
+        .collect::<Result<_, _>>()
+        .map_err(read)?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_mox_files(&path, out)?;
+        } else if path.extension().and_then(|extension| extension.to_str()) == Some("mox") {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+/// Compiles in-memory sources into one model: a single source keeps the
+/// single-file pipeline (identical diagnostics and IR); several sources
+/// compile as one multi-package model.
+fn compile_sources(sources: &[(String, String)]) -> MultiCompilation {
+    if let [(path, source)] = sources {
+        let compilation = compile_str(path, source);
+        MultiCompilation {
+            model: compilation.model,
+            diagnostics: compilation
+                .diagnostics
+                .into_iter()
+                .map(|diagnostic| (path.clone(), diagnostic))
+                .collect(),
+        }
+    } else {
+        compile_files(sources)
+    }
+}
+
+/// Renders a compilation's diagnostics grouped per file: each file's
+/// diagnostics are ariadne-rendered against that file's own source, the way
+/// `check` renders single-model diagnostics.
+fn report_multi_diagnostics(
+    sources: &[(String, String)],
+    diagnostics: &[(String, rex_driver::Diagnostic)],
+) {
+    if diagnostics.is_empty() {
+        return;
+    }
+    let mut groups: Vec<(&str, Vec<rex_driver::Diagnostic>)> = Vec::new();
+    for (path, diagnostic) in diagnostics {
+        match groups.last_mut() {
+            Some((group_path, group)) if *group_path == path.as_str() => {
+                group.push(diagnostic.clone())
+            }
+            _ => groups.push((path.as_str(), vec![diagnostic.clone()])),
+        }
+    }
+    for (path, group) in groups {
+        let Some((_, source)) = sources.iter().find(|(name, _)| name == path) else {
+            continue;
+        };
+        eprint!("{}", render(path, source, &group));
+    }
 }
 
 /// `true` for `.actor` paths: the standalone actor-policy surface, compiled
@@ -601,12 +722,6 @@ fn merged_domain_model(domains: &[(String, String)]) -> rex_ir::Model {
         }
     }
     merged
-}
-
-fn report_diagnostics(path: &str, source: &str, compilation: &Compilation) {
-    if !compilation.diagnostics.is_empty() {
-        eprint!("{}", render(path, source, &compilation.diagnostics));
-    }
 }
 
 /// Renders an actor compilation's diagnostics grouped per file: each file's

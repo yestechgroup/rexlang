@@ -208,6 +208,82 @@ pub fn compile_actors(
     ActorCompilation { model, diagnostics }
 }
 
+/// The result of compiling several `.mox` files (one package per file) into
+/// one multi-package model.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MultiCompilation {
+    /// The lowered Core IR with one package per input file (input order), or
+    /// `None` when any error-severity diagnostic was produced in any file.
+    /// Warnings do not block lowering.
+    pub model: Option<rex_ir::Model>,
+    /// Diagnostics from every file, each tagged with its file's path, in
+    /// compilation order.
+    pub diagnostics: Vec<(String, Diagnostic)>,
+}
+
+/// Compiles several `.mox` files — one package per file — to a single
+/// [`rex_ir::Model`] (memoized by salsa): every file lowers against the
+/// union namespace of all packages, so declarations may reference types
+/// across packages. `first` is the compilation's anchor file; `rest` holds
+/// the remaining files in input order.
+#[salsa::tracked]
+pub(crate) fn compile_multi(
+    db: &dyn Db,
+    first: SourceFile,
+    rest: Vec<SourceFile>,
+) -> MultiCompilation {
+    let mut files: Vec<SourceFile> = vec![first];
+    files.extend(rest);
+    let mut paths: Vec<String> = Vec::new();
+    let mut sources: Vec<String> = Vec::new();
+    let mut parse_outputs: Vec<ParseOutput> = Vec::new();
+    for file in &files {
+        paths.push(file.path(db));
+        sources.push(file.text(db));
+        parse_outputs.push(parse_query(db, *file));
+    }
+    let units: Vec<lower::MultiFile<'_>> = files
+        .iter()
+        .enumerate()
+        .map(|(index, _)| lower::MultiFile {
+            path: &paths[index],
+            source: &sources[index],
+            ast: parse_outputs[index].ast.as_ref(),
+            parse_diagnostics: &parse_outputs[index].diagnostics,
+        })
+        .collect();
+    let (model, diagnostics) = lower::compile_multi(&units);
+    MultiCompilation { model, diagnostics }
+}
+
+/// Compiles multiple in-memory sources — one package per file — in one call.
+///
+/// ```
+/// let files = [
+///     "package a\n\nclass Book { String title }".to_string(),
+///     "package b\n\nclass Shelf { refers a.Book[] links }".to_string(),
+/// ];
+/// let paths: Vec<(String, String)> = files
+///     .into_iter()
+///     .enumerate()
+///     .map(|(index, source)| (format!("{index}.mox"), source))
+///     .collect();
+/// let compilation = rex_driver::compile_files(&paths);
+/// assert!(compilation.diagnostics.is_empty());
+/// assert_eq!(compilation.model.unwrap().packages.len(), 2);
+/// ```
+pub fn compile_files(files: &[(String, String)]) -> MultiCompilation {
+    let db = Database::new();
+    let sources: Vec<SourceFile> = files
+        .iter()
+        .map(|(path, source)| SourceFile::new(&db, path.clone(), source.clone()))
+        .collect();
+    let Some(first) = sources.first().copied() else {
+        return MultiCompilation::default();
+    };
+    compile_multi(&db, first, sources[1..].to_vec())
+}
+
 /// The salsa database for the rexlang driver.
 #[salsa::db]
 #[derive(Clone)]

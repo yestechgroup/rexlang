@@ -137,6 +137,40 @@ pub struct Param {
     pub span: Span,
 }
 
+/// A single constraint entry of an attribute's constraint block, e.g.
+/// `pattern "[A-Z]{3}-[0-9]{4}"`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Constraint {
+    /// The constraint keyword, e.g. `pattern`. Only the five constraint
+    /// keywords are accepted (`pattern`, `minLength`, `maxLength`,
+    /// `minimum`, `maximum`); other identifiers do not enter the block.
+    pub name: Name,
+    /// The constraint value.
+    pub value: ConstraintValue,
+    /// Span covering the whole entry.
+    pub span: Span,
+}
+
+/// The value of a [`Constraint`] entry: a string (`pattern`) or an integer
+/// (length and numeric bounds).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConstraintValue {
+    /// A string literal (unescaped).
+    Str {
+        /// The unescaped string value.
+        value: String,
+        /// Span of the literal.
+        span: Span,
+    },
+    /// An integer literal.
+    Int {
+        /// The integer value.
+        value: i64,
+        /// Span of the literal.
+        span: Span,
+    },
+}
+
 /// The root node of a parsed `.mox` source.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Model {
@@ -199,6 +233,8 @@ impl Decl {
 pub struct ClassDecl {
     /// The class name.
     pub name: Name,
+    /// Description from the doc comment directly above the declaration.
+    pub doc: Option<String>,
     /// Direct superclasses from the `extends` clause, in source order.
     pub extends: Vec<TypeRef>,
     /// Features (attributes, containments, references, ops, ...) in source order.
@@ -212,6 +248,8 @@ pub struct ClassDecl {
 pub struct InterfaceDecl {
     /// The interface name.
     pub name: Name,
+    /// Description from the doc comment directly above the declaration.
+    pub doc: Option<String>,
     /// Target binding entries.
     pub bindings: Vec<BindingEntry>,
     /// Span of the whole declaration.
@@ -223,6 +261,8 @@ pub struct InterfaceDecl {
 pub struct EnumDecl {
     /// The enum name.
     pub name: Name,
+    /// Description from the doc comment directly above the declaration.
+    pub doc: Option<String>,
     /// The enum literals (at least one in valid sources).
     pub literals: Vec<EnumLiteral>,
     /// Span of the whole declaration.
@@ -234,6 +274,8 @@ pub struct EnumDecl {
 pub struct EnumLiteral {
     /// The literal name.
     pub name: Name,
+    /// Description from the doc comment directly above the literal.
+    pub doc: Option<String>,
     /// Display label from the `as` clause.
     pub label: Option<String>,
     /// Numeric value from the `=` clause.
@@ -247,6 +289,8 @@ pub struct EnumLiteral {
 pub struct DatatypeDecl {
     /// The datatype name.
     pub name: Name,
+    /// Description from the doc comment directly above the declaration.
+    pub doc: Option<String>,
     /// The `wraps` target, if any.
     pub wraps: Option<Wraps>,
     /// Target binding entries.
@@ -277,6 +321,8 @@ pub struct AnnotationDecl {
 pub struct VocabularyDecl {
     /// The vocabulary name (usable as a type name in the package).
     pub name: Name,
+    /// Description from the doc comment directly above the declaration.
+    pub doc: Option<String>,
     /// The external source identifier, e.g. `"iso:4217"` (unescaped).
     pub source: String,
     /// Pinned snapshot version from the `version` clause, if present.
@@ -484,10 +530,12 @@ impl Modifiers {
 /// A feature declared inside a class body.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FeatureDecl {
-    /// `(modifier)* type_ref multiplicity? name ("=" default)?`
+    /// `(modifier)* type_ref multiplicity? name ("=" default)? constraint_block?`
     Attribute {
         /// Declared `id`/`readonly` modifiers.
         modifiers: Modifiers,
+        /// Description from the doc comment directly above the feature.
+        doc: Option<String>,
         /// Declared type.
         type_ref: TypeRef,
         /// Multiplicity annotation, if any.
@@ -496,6 +544,9 @@ pub enum FeatureDecl {
         name: Name,
         /// Default value, if any.
         default: Option<DefaultValue>,
+        /// Constraint block entries, in source order. Only attributes carry
+        /// a constraint block; ops and derived features have bodies instead.
+        constraints: Vec<Constraint>,
         /// Span of the whole feature, modifiers included.
         span: Span,
     },
@@ -503,6 +554,8 @@ pub enum FeatureDecl {
     Containment {
         /// Declared `id`/`readonly` modifiers.
         modifiers: Modifiers,
+        /// Description from the doc comment directly above the feature.
+        doc: Option<String>,
         /// Element type.
         type_ref: TypeRef,
         /// Multiplicity annotation, if any.
@@ -518,6 +571,8 @@ pub enum FeatureDecl {
     Reference {
         /// Declared `id`/`readonly` modifiers.
         modifiers: Modifiers,
+        /// Description from the doc comment directly above the feature.
+        doc: Option<String>,
         /// Referenced type.
         type_ref: TypeRef,
         /// Multiplicity annotation, if any.
@@ -533,6 +588,8 @@ pub enum FeatureDecl {
     Container {
         /// Declared `id`/`readonly` modifiers.
         modifiers: Modifiers,
+        /// Description from the doc comment directly above the feature.
+        doc: Option<String>,
         /// Container type.
         type_ref: TypeRef,
         /// Feature name.
@@ -546,6 +603,8 @@ pub enum FeatureDecl {
     Op {
         /// Declared `id`/`readonly` modifiers.
         modifiers: Modifiers,
+        /// Description from the doc comment directly above the feature.
+        doc: Option<String>,
         /// Declared return type.
         return_type: TypeRef,
         /// Operation name.
@@ -566,6 +625,8 @@ pub enum FeatureDecl {
     Derived {
         /// Declared `id`/`readonly` modifiers.
         modifiers: Modifiers,
+        /// Description from the doc comment directly above the feature.
+        doc: Option<String>,
         /// Declared type.
         type_ref: TypeRef,
         /// Multiplicity annotation, if any.
@@ -646,6 +707,31 @@ impl FeatureDecl {
             | FeatureDecl::Derived {
                 modifiers: slot, ..
             } => *slot = modifiers,
+        }
+    }
+
+    /// The feature's description from its doc comment, if any.
+    pub fn doc(&self) -> Option<&str> {
+        match self {
+            FeatureDecl::Attribute { doc, .. }
+            | FeatureDecl::Containment { doc, .. }
+            | FeatureDecl::Reference { doc, .. }
+            | FeatureDecl::Container { doc, .. }
+            | FeatureDecl::Op { doc, .. }
+            | FeatureDecl::Derived { doc, .. } => doc.as_deref(),
+        }
+    }
+
+    /// Overwrites the feature's description. The parser uses this to attach
+    /// the doc comment parsed directly above the feature.
+    pub fn set_doc(&mut self, doc: Option<String>) {
+        match self {
+            FeatureDecl::Attribute { doc: slot, .. }
+            | FeatureDecl::Containment { doc: slot, .. }
+            | FeatureDecl::Reference { doc: slot, .. }
+            | FeatureDecl::Container { doc: slot, .. }
+            | FeatureDecl::Op { doc: slot, .. }
+            | FeatureDecl::Derived { doc: slot, .. } => *slot = doc,
         }
     }
 

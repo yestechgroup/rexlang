@@ -110,6 +110,8 @@ pub enum SymbolKind {
 pub struct Definition {
     /// The declared name.
     pub name: String,
+    /// The declaration's description from its doc comment, if any.
+    pub doc: Option<String>,
     /// What kind of symbol this is.
     pub kind: SymbolKind,
     /// Span of the identifier itself (excluding keywords and types).
@@ -254,6 +256,14 @@ impl NavigationIndex {
             debug_assert_eq!(Some(decl_id), decl_ids.get(declaration_index).copied());
             declaration_index += 1;
             index.definitions[decl_id].extends_text = extends_text;
+            index.definitions[decl_id].doc = match decl {
+                mox::Decl::Class(decl) => decl.doc.clone(),
+                mox::Decl::Interface(decl) => decl.doc.clone(),
+                mox::Decl::Enum(decl) => decl.doc.clone(),
+                mox::Decl::Datatype(decl) => decl.doc.clone(),
+                mox::Decl::Vocabulary(decl) => decl.doc.clone(),
+                _ => None,
+            };
             match decl {
                 mox::Decl::Class(decl) => {
                     for type_ref in &decl.extends {
@@ -268,6 +278,7 @@ impl NavigationIndex {
                             feature.span(),
                         );
                         index.definitions[feature_id].modifiers = *feature.modifiers();
+                        index.definitions[feature_id].doc = feature.doc().map(str::to_string);
                         match feature {
                             mox::FeatureDecl::Attribute {
                                 type_ref,
@@ -378,6 +389,7 @@ impl NavigationIndex {
                             Some(decl_id),
                             literal.span,
                         );
+                        index.definitions[literal_id].doc = literal.doc.clone();
                         if let Some(value) = literal.value {
                             index.definitions[literal_id].value_text = Some(value.to_string());
                         }
@@ -618,6 +630,7 @@ impl NavigationIndex {
         let id = self.definitions.len();
         self.definitions.push(Definition {
             name,
+            doc: None,
             kind,
             name_span,
             owner,

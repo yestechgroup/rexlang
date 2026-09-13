@@ -11,6 +11,12 @@ reference; crate docs cover implementation.
 
 - **Comments**: `//` to end of line, `/* ... */` block comments. Preserved
   verbatim by `rexlang fmt`.
+- **Doc comments**: `///` line comments and `/** ... */` block comments on
+  their own lines directly above a declaration, feature, or enum literal
+  become that element's **description**. Contiguous `///` lines join into one
+  description; a blank line or an intervening non-doc comment detaches the
+  run. Descriptions are carried in the IR and surface as `description`
+  keywords in generated JSON Schema and as doc comments in generated code.
 - **Strings**: double-quoted with `\"` and `\\` escapes.
 - **Integers**: decimal, optional leading `-`.
 - **Identifiers**: `[A-Za-z_][A-Za-z0-9_]*`. Any keyword can be escaped with a
@@ -30,6 +36,23 @@ model        := package_decl (annotation_decl | class_decl | interface_decl
 package_decl := "package" qualified_name
 ```
 
+A model may span multiple `.mox` files — one package per file, named by its
+`package` declaration. Compiling several files produces **one** Core IR
+artifact whose `packages` follow the input order (for `rexlang`, the sorted
+path order of the expanded inputs). Declarations may reference types from
+any package of the compilation:
+
+- A bare single-segment name must be unique across **all** packages; if
+  several declare it, the reference is an error (`ambiguous type \`X\`;
+  qualify as \`p.X\``) whose help lists the matching packages.
+- A qualified `<package>.<Name>` must match exactly one package.
+
+Cross-package `refers`, `extends`, and attribute types (enums, datatypes,
+vocabularies) are allowed; constraint family and enum-literal checks see
+through the package boundary. `contains`/`container` targets and `opposite`
+pairings must live in the declaring class's package: cross-package ownership
+and cross-package opposites are errors.
+
 ### Classes and features
 
 ```
@@ -37,7 +60,7 @@ class_decl  := "class" name ("extends" type_ref ("," type_ref)*)? "{" feature* "
 feature     := modifier* ( attribute | containment | reference | container
                          | op_decl | derived_decl )
 modifier    := "id" | "readonly"
-attribute   := type_ref multiplicity? name ("=" default)?
+attribute   := type_ref multiplicity? name ("=" default)? constraint_block?
 containment := "contains" type_ref multiplicity? name ("opposite" name)?
 reference   := "refers" type_ref multiplicity? name ("opposite" name)?
 container   := "container" type_ref name ("opposite" name)?
@@ -46,6 +69,8 @@ derived_decl:= "derived" type_ref multiplicity? name op_body?
 op_body     := "{" target_body+ "}" | "{" raw "}"
 target_body := name "{" raw "}"
 multiplicity:= "[" (int (".." (int | "*"))?)? "]"
+constraint_block := "{" (constraint_keyword (string | int))* "}"
+constraint_keyword := "pattern" | "minLength" | "maxLength" | "minimum" | "maximum"
 ```
 
 - **`contains`** — by-value ownership (Ecore containment). The child's
@@ -70,6 +95,27 @@ multiplicity:= "[" (int (".." (int | "*"))?)? "]"
   getter; a bare `{ ... }` body is rejected.
 - **Defaults**: string/int/boolean literals or an enum literal name (for
   enum-typed attributes only).
+- **Constraints** (attributes only) declare value bounds, e.g.
+  `String sku { pattern "[A-Z]{3}-[0-9]{4}" minLength 3 maxLength 12 }` or
+  `int stock { minimum 0 maximum 1000 }`. Each keyword may appear at most
+  once. A constraint family is admitted by the most explicit type knowledge
+  available: the string family (`pattern`/`minLength`/`maxLength`) requires
+  a `string` primitive; the numeric family (`minimum`/`maximum`) requires a
+  numeric primitive. A datatype-typed attribute defaults to the string
+  family — its platform type is opaque — and rejects numeric bounds. A
+  vocabulary-typed attribute follows its `key` facet's declared primitive
+  type (`String` admits the string family, a numeric key the numeric
+  family); constraints are rejected outright when the key facet cannot be
+  resolved. An enum-typed attribute carries a dual value space: all five
+  keywords apply — the string family bounds literal names, the numeric
+  family bounds literal values — and both may coexist; a numeric or length
+  bound that admits zero literals is a compile error, while `pattern` is
+  allowed but never statically validated (descriptive only). Class and
+  interface types take no constraints. Length bounds must be non-negative
+  and `min` ≤ `max` in both families. On a many-valued attribute the
+  constraints apply to the elements. They surface as the JSON Schema
+  keywords of the same names (`pattern`, `minLength`, `maxLength`,
+  `minimum`, `maximum`).
 
 Multiplicity shorthand: `[]` = `[0..*]`; absent: attributes are `1..1`,
 `contains`/`refers` are `0..*`, `container` and `derived` are `0..1`.
@@ -156,11 +202,11 @@ property, not an aspiration.
 
 | Command | Purpose |
 |---|---|
-| `rexlang check <file>` | validate; ariadne-rendered diagnostics (`.mox` and `.actor`) |
-| `rexlang ir <file> -o <out>` | emit the Core IR artifact (`.actor`: the ActorModel artifact) |
-| `rexlang gen rust <file> -o <dir>` | arena-based Rust models |
-| `rexlang gen json-schema <file> --profile wire\|api -o <dir>` | JSON Schema |
-| `rexlang gen cedar <file> -o <dir>` | Cedar policies + schema (`.mox`: inline blocks; `.actor`: file + imported domains) |
+| `rexlang check <file>...` | validate; ariadne-rendered diagnostics grouped per file (`.mox` and `.actor`; each input may be a directory, scanned recursively for `*.mox`) |
+| `rexlang ir <file>... -o <out>` | emit the Core IR artifact (`.actor`: the ActorModel artifact; several `.mox`: one multi-package model) |
+| `rexlang gen rust <file>... -o <dir>` | arena-based Rust models |
+| `rexlang gen json-schema <file>... --profile wire\|api -o <dir>` | JSON Schema |
+| `rexlang gen cedar <file>... -o <dir>` | Cedar policies + schema (`.mox`: inline blocks; `.actor`: file + imported domains) |
 | `rexlang vocab fetch <file>` | vendor + pin vocabulary snapshots |
 | `rexlang fmt [--check] <files>\|-` | canonical formatting (comments kept) |
 | `rexlang lsp` | language server (stdio) |

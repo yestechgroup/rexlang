@@ -26,8 +26,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use rex_ir::{
-    ClassDef, DatatypeDef, EnumDef, Feature, FeatureKind, Model, Multiplicity, PrimitiveType,
-    TypeRef, Upper, VocabularyDef,
+    ClassDef, DatatypeDef, EnumDef, Feature, FeatureConstraints, FeatureKind, Model, Multiplicity,
+    PrimitiveType, TypeRef, Upper, VocabularyDef,
 };
 
 /// Which flavor of schema to generate.
@@ -348,6 +348,9 @@ fn ref_def(context: &Context<'_>, class_name: &str) -> serde_json::Value {
 fn wire_class_def(context: &Context<'_>, class: &ClassDef) -> anyhow::Result<serde_json::Value> {
     let mut def = serde_json::Map::new();
     def.insert("type".to_string(), serde_json::json!("object"));
+    if let Some(description) = &class.description {
+        def.insert("description".to_string(), serde_json::json!(description));
+    }
     if let Some(comment) = class_comment(class, true) {
         def.insert("$comment".to_string(), serde_json::json!(comment));
     }
@@ -434,6 +437,9 @@ fn api_schema(context: &Context<'_>) -> anyhow::Result<serde_json::Value> {
 fn api_class_def(context: &Context<'_>, class: &ClassDef) -> anyhow::Result<serde_json::Value> {
     let mut def = serde_json::Map::new();
     def.insert("type".to_string(), serde_json::json!("object"));
+    if let Some(description) = &class.description {
+        def.insert("description".to_string(), serde_json::json!(description));
+    }
     if let Some(comment) = class_comment(class, false) {
         def.insert("$comment".to_string(), serde_json::json!(comment));
     }
@@ -542,6 +548,10 @@ fn class_required(class: &ClassDef, include_envelope_keys: bool) -> Vec<String> 
 
 /// The value schema for one feature: its element schema, wrapped in an array
 /// schema when the multiplicity is many.
+///
+/// The feature's doc-comment `description` (when present) annotates the
+/// property schema; declared constraints merge into the *element* schema, so
+/// for a many-valued attribute they constrain the items, not the collection.
 fn feature_schema(
     context: &Context<'_>,
     feature: &Feature,
@@ -575,11 +585,59 @@ fn feature_schema(
             feature.name
         ),
     };
-    Ok(if feature.multiplicity.is_many() {
+    let element = match feature.kind {
+        FeatureKind::Attribute if !feature.constraints.is_empty() => {
+            merge_constraints(element, &feature.constraints)
+        }
+        _ => element,
+    };
+    let mut schema = if feature.multiplicity.is_many() {
         array_schema(element, &feature.multiplicity)
     } else {
         element
-    })
+    };
+    if let Some(description) = &feature.description {
+        schema
+            .as_object_mut()
+            .expect("feature schema is an object")
+            .insert("description".to_string(), serde_json::json!(description));
+    }
+    Ok(schema)
+}
+
+/// Merges the declared constraint keywords into an attribute's element
+/// schema. `canonical_key_order` sorts the merged object, and constraints
+/// are only present when declared, so constraint-less output is unchanged.
+fn merge_constraints(
+    mut element: serde_json::Value,
+    constraints: &FeatureConstraints,
+) -> serde_json::Value {
+    let object = element
+        .as_object_mut()
+        .expect("element schema is an object");
+    let FeatureConstraints {
+        pattern,
+        min_length,
+        max_length,
+        minimum,
+        maximum,
+    } = constraints;
+    if let Some(pattern) = pattern {
+        object.insert("pattern".to_string(), serde_json::json!(pattern));
+    }
+    if let Some(min_length) = min_length {
+        object.insert("minLength".to_string(), serde_json::json!(min_length));
+    }
+    if let Some(max_length) = max_length {
+        object.insert("maxLength".to_string(), serde_json::json!(max_length));
+    }
+    if let Some(minimum) = minimum {
+        object.insert("minimum".to_string(), serde_json::json!(minimum));
+    }
+    if let Some(maximum) = maximum {
+        object.insert("maximum".to_string(), serde_json::json!(maximum));
+    }
+    element
 }
 
 /// Wraps an element schema in an array schema, bounding it by the feature's

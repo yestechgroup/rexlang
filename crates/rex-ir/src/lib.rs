@@ -78,6 +78,15 @@
 //!     `{"formatVersion":1}`. The blocks themselves are plain [`ActorsDef`]s,
 //!     identical in shape to inline [`Package::actors`] (rule 9); the domain
 //!     model never embeds an [`ActorModel`].
+//! 11. **Descriptions and constraints (additive).** Doc comments (`///`,
+//!     `/** ... */`) lower into `description: Option<String>` on
+//!     [`ClassDef`], [`InterfaceDef`], [`EnumDef`], [`EnumLiteral`],
+//!     [`DatatypeDef`], [`VocabularyDef`], [`Feature`], and [`Operation`];
+//!     attribute constraints (`pattern`, `minLength`, `maxLength`,
+//!     `minimum`, `maximum`) lower into [`Feature::constraints`]. Both follow
+//!     the same additive rules: `#[serde(default)]` and omitted when absent,
+//!     so artifacts for models without them are byte-identical to earlier
+//!     output.
 //!
 //! [rexlang]: https://github.com/anton-makes/rexlang
 
@@ -251,6 +260,9 @@ pub struct Annotation {
 pub struct EnumDef {
     /// Enum name, unique within its package.
     pub name: String,
+    /// Human-readable description from the declaration's doc comment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Literals in declaration order.
     #[serde(default)]
     pub literals: Vec<EnumLiteral>,
@@ -261,6 +273,7 @@ impl EnumDef {
     pub fn new(name: impl Into<String>, literals: Vec<EnumLiteral>) -> Self {
         Self {
             name: name.into(),
+            description: None,
             literals,
         }
     }
@@ -278,6 +291,9 @@ pub struct EnumLiteral {
     /// Explicit integer value (`= 0`). Serialized explicitly so wire
     /// consumers never have to infer it from position.
     pub value: i64,
+    /// Human-readable description from the literal's doc comment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 impl EnumLiteral {
@@ -287,7 +303,14 @@ impl EnumLiteral {
             name: name.into(),
             label,
             value,
+            description: None,
         }
+    }
+
+    /// Chainable setter for the literal's description (doc comment).
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
     }
 }
 
@@ -301,6 +324,9 @@ impl EnumLiteral {
 pub struct DatatypeDef {
     /// Datatype name, unique within its package.
     pub name: String,
+    /// Human-readable description from the declaration's doc comment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// The platform type this datatype wraps (Xcore `wraps X`). `None` for an
     /// opaque datatype.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -324,6 +350,7 @@ impl DatatypeDef {
     pub fn new(name: impl Into<String>, platform: Option<String>) -> Self {
         Self {
             name: name.into(),
+            description: None,
             platform,
             target_bindings: BTreeMap::new(),
             create: BTreeMap::new(),
@@ -376,6 +403,9 @@ pub struct OperationParam {
 pub struct Operation {
     /// Operation name, unique within its class.
     pub name: String,
+    /// Human-readable description from the operation's doc comment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// The resolved return type.
     pub return_type: TypeRef,
     /// Parameters in declaration order.
@@ -391,6 +421,7 @@ impl Operation {
     pub fn new(name: impl Into<String>, return_type: TypeRef, params: Vec<OperationParam>) -> Self {
         Self {
             name: name.into(),
+            description: None,
             return_type,
             params,
             bodies: BTreeMap::new(),
@@ -410,6 +441,9 @@ impl Operation {
 pub struct InterfaceDef {
     /// Interface name, unique within its package.
     pub name: String,
+    /// Human-readable description from the declaration's doc comment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Per-target bindings, e.g. `"rust" -> "traits::Lendable"`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub target_bindings: BTreeMap<String, String>,
@@ -420,6 +454,7 @@ impl InterfaceDef {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            description: None,
             target_bindings: BTreeMap::new(),
         }
     }
@@ -437,6 +472,9 @@ impl InterfaceDef {
 pub struct ClassDef {
     /// Class name, unique within its package.
     pub name: String,
+    /// Human-readable description from the declaration's doc comment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Resolved supertypes (classes and/or interfaces this class extends or
     /// realizes).
     #[serde(default)]
@@ -457,6 +495,7 @@ impl ClassDef {
     pub fn new(name: impl Into<String>, extends: Vec<TypeRef>, features: Vec<Feature>) -> Self {
         let mut class = Self {
             name: name.into(),
+            description: None,
             extends,
             features,
             operations: Vec::new(),
@@ -497,6 +536,9 @@ pub struct Feature {
     pub id: u32,
     /// Feature name, unique within its class.
     pub name: String,
+    /// Human-readable description from the feature's doc comment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// The structural kind of this feature.
     pub kind: FeatureKind,
     /// The resolved type of this feature's values.
@@ -528,6 +570,12 @@ pub struct Feature {
     /// empty.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub bodies: BTreeMap<String, String>,
+    /// Declared value constraints on an attribute (pattern, length and
+    /// numeric bounds). Only meaningful on [`FeatureKind::Attribute`]
+    /// features whose type is the `string` or a numeric primitive; the
+    /// driver rejects them everywhere else. Additive; omitted when empty.
+    #[serde(default, skip_serializing_if = "FeatureConstraints::is_empty")]
+    pub constraints: FeatureConstraints,
 }
 
 impl Feature {
@@ -543,6 +591,7 @@ impl Feature {
         Self {
             id: 0,
             name: name.into(),
+            description: None,
             kind,
             type_,
             multiplicity,
@@ -552,7 +601,14 @@ impl Feature {
             is_id: false,
             is_read_only: false,
             bodies: BTreeMap::new(),
+            constraints: FeatureConstraints::default(),
         }
+    }
+
+    /// Chainable setter for the feature's description (doc comment).
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
     }
 
     /// Chainable setter for the opposite end of a bidirectional relation.
@@ -596,6 +652,47 @@ impl Feature {
     pub fn read_only(mut self) -> Self {
         self.is_read_only = true;
         self
+    }
+}
+
+/// Declarative value constraints on an attribute feature.
+///
+/// A closed, schema-friendly set: `pattern` (regex the value must match),
+/// `minLength`/`maxLength` (string length bounds) and `minimum`/`maximum`
+/// (inclusive numeric bounds). The driver type-checks them against the
+/// attribute's declared type; for a many-valued attribute they constrain the
+/// elements, not the collection.
+///
+/// Serialization is sparse: absent constraints are omitted entirely, so
+/// features without constraints add no bytes to the wire format.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeatureConstraints {
+    /// Regex (ECMA-262 flavor) the string value must match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+    /// Inclusive minimum string length.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_length: Option<u64>,
+    /// Inclusive maximum string length.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_length: Option<u64>,
+    /// Inclusive minimum numeric value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum: Option<i64>,
+    /// Inclusive maximum numeric value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum: Option<i64>,
+}
+
+impl FeatureConstraints {
+    /// `true` when no constraint is set (the field is omitted on serialize).
+    pub fn is_empty(&self) -> bool {
+        self.pattern.is_none()
+            && self.min_length.is_none()
+            && self.max_length.is_none()
+            && self.minimum.is_none()
+            && self.maximum.is_none()
     }
 }
 
@@ -797,6 +894,9 @@ impl TypeRef {
 pub struct VocabularyDef {
     /// Vocabulary name, unique within its package (usable as a type name).
     pub name: String,
+    /// Human-readable description from the declaration's doc comment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// External source identifier, e.g. `"iso:4217"`.
     pub source: String,
     /// The snapshot version inlined into this artifact, when known.
@@ -1521,6 +1621,103 @@ mod tests {
               ],
               "bodies": {
                 "rust": "res.books.iter().find_map(|b| { (b.title == title).then_some(*b) })"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}"#;
+
+        assert_eq!(model.to_json_pretty().expect("serialize"), expected);
+        let parsed = Model::from_json(expected).expect("deserialize golden");
+        assert_eq!(model, parsed);
+    }
+
+    #[test]
+    fn golden_json_with_descriptions_and_constraints_pins_the_wire_format() {
+        // Additive (wire-contract rule 11): models without doc comments or
+        // constraints stay byte-identical (see
+        // `golden_json_matches_expected_wire_format`); this golden pins the
+        // NEW fields — `description` and `constraints` — which are omitted
+        // when absent.
+        let mut package = Package::new("nz.example.demo");
+        let mut enum_def = EnumDef::new(
+            "BookCategory",
+            vec![EnumLiteral::new("Mystery", None, 0).with_description("whodunits".to_string())],
+        );
+        enum_def.description = Some("How the book is shelved.".to_string());
+        package.enums.push(enum_def);
+        let mut feature = Feature::new(
+            "sku",
+            FeatureKind::Attribute,
+            TypeRef::Primitive(PrimitiveType::String),
+            Multiplicity::REQUIRED,
+        )
+        .with_description("Stock-keeping unit.".to_string());
+        feature.constraints = FeatureConstraints {
+            pattern: Some("[A-Z]{3}-[0-9]{4}".to_string()),
+            min_length: Some(8),
+            max_length: Some(8),
+            ..FeatureConstraints::default()
+        };
+        let mut class = ClassDef::new("Product", vec![], vec![feature]);
+        class.description = Some("A sellable product.".to_string());
+        package.classes.push(class);
+        let mut model = Model::new();
+        model.packages.push(package);
+
+        let expected = r#"{
+  "formatVersion": 1,
+  "rexVersion": "0.1.0",
+  "packages": [
+    {
+      "name": "nz.example.demo",
+      "annotations": [],
+      "enums": [
+        {
+          "name": "BookCategory",
+          "description": "How the book is shelved.",
+          "literals": [
+            {
+              "name": "Mystery",
+              "value": 0,
+              "description": "whodunits"
+            }
+          ]
+        }
+      ],
+      "datatypes": [],
+      "interfaces": [],
+      "classes": [
+        {
+          "name": "Product",
+          "description": "A sellable product.",
+          "extends": [],
+          "features": [
+            {
+              "id": 0,
+              "name": "sku",
+              "description": "Stock-keeping unit.",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false,
+              "constraints": {
+                "pattern": "[A-Z]{3}-[0-9]{4}",
+                "minLength": 8,
+                "maxLength": 8
               }
             }
           ]

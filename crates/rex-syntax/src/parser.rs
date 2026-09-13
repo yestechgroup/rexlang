@@ -17,7 +17,7 @@ use chumsky::input::{ExactSizeInput, ValueInput};
 use chumsky::prelude::*;
 
 use crate::ast::*;
-use crate::lexer::{lex, Token};
+use crate::lexer::{lex, lex_with_comments, Token};
 
 /// Parser input: a token slice paired with a custom [`chumsky::Input`]
 /// implementation that reports **byte-offset** spans (chumsky's built-in slice
@@ -390,19 +390,80 @@ fn params<'src>() -> impl Parser<'src, Tokens<'src>, Vec<Param>, MoxExtra<'src>>
         .map(|list| list.unwrap_or_default())
 }
 
+/// The closed set of constraint keywords allowed inside an attribute's
+/// constraint block. They are contextual: ordinary identifiers everywhere
+/// else, matching the `create`/`convert` precedent.
+const CONSTRAINT_KEYWORDS: [&str; 5] = ["pattern", "minLength", "maxLength", "minimum", "maximum"];
+
+/// One `keyword value` entry inside an attribute's constraint block.
+fn constraint_entry<'src>() -> impl Parser<'src, Tokens<'src>, Constraint, MoxExtra<'src>> + Clone {
+    select! {
+        Token::Ident(text) = e if CONSTRAINT_KEYWORDS.contains(&text) => (text, e.span()),
+    }
+    .then(
+        string_lit()
+            .map_with(|value, e| ConstraintValue::Str {
+                value,
+                span: e.span(),
+            })
+            .or(int_lit().map_with(|value, e| ConstraintValue::Int {
+                value,
+                span: e.span(),
+            })),
+    )
+    .map_with(|((text, name_span), value), e| Constraint {
+        name: Name {
+            text: text.to_string(),
+            span: name_span,
+            escaped: false,
+        },
+        value,
+        span: e.span(),
+    })
+}
+
+/// An attribute's optional `{ pattern "..." minLength 3 }` constraint block:
+/// a closed keyword set with literal values, each at most once (a repeat is
+/// a syntax error, mirroring the datatype `create`/`convert` duplicate rule).
+fn constraint_block<'src>(
+) -> impl Parser<'src, Tokens<'src>, Vec<Constraint>, MoxExtra<'src>> + Clone {
+    kw(Token::LBrace)
+        .ignore_then(constraint_entry().repeated().collect::<Vec<_>>())
+        .then_ignore(kw(Token::RBrace))
+        .validate(|entries, _e, emitter| {
+            for (index, entry) in entries.iter().enumerate() {
+                if entries[..index]
+                    .iter()
+                    .any(|prior| prior.name.text == entry.name.text)
+                {
+                    emitter.emit(Rich::custom(
+                        entry.name.span,
+                        format!("duplicate constraint `{}`", entry.name.text),
+                    ));
+                }
+            }
+            entries
+        })
+}
+
 fn attribute<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<'src>> + Clone {
     tref()
         .then(multiplicity().or_not())
         .then(name())
         .then(kw(Token::Eq).ignore_then(default_value()).or_not())
+        .then(constraint_block().or_not())
         .map_with(
-            |(((type_ref, multiplicity), name), default), e| FeatureDecl::Attribute {
-                modifiers: Modifiers::default(),
-                type_ref,
-                multiplicity,
-                name,
-                default,
-                span: e.span(),
+            |((((type_ref, multiplicity), name), default), constraints), e| {
+                FeatureDecl::Attribute {
+                    modifiers: Modifiers::default(),
+                    doc: None,
+                    type_ref,
+                    multiplicity,
+                    name,
+                    default,
+                    constraints: constraints.unwrap_or_default(),
+                    span: e.span(),
+                }
             },
         )
 }
@@ -416,6 +477,7 @@ fn containment<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<
         .map_with(
             |(((type_ref, multiplicity), name), opposite), e| FeatureDecl::Containment {
                 modifiers: Modifiers::default(),
+                doc: None,
                 type_ref,
                 multiplicity,
                 name,
@@ -434,6 +496,7 @@ fn reference<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<'s
         .map_with(
             |(((type_ref, multiplicity), name), opposite), e| FeatureDecl::Reference {
                 modifiers: Modifiers::default(),
+                doc: None,
                 type_ref,
                 multiplicity,
                 name,
@@ -450,6 +513,7 @@ fn container<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<'s
         .then(opposite().or_not())
         .map_with(|((type_ref, name), opposite), e| FeatureDecl::Container {
             modifiers: Modifiers::default(),
+            doc: None,
             type_ref,
             name,
             opposite,
@@ -466,6 +530,7 @@ fn op_decl<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<'src
         .map_with(
             |(((return_type, name), params), (body, bodies)), e| FeatureDecl::Op {
                 modifiers: Modifiers::default(),
+                doc: None,
                 return_type,
                 name,
                 params,
@@ -488,6 +553,7 @@ fn derived_decl<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra
         .map_with(
             |(((type_ref, multiplicity), name), (body, bodies)), e| FeatureDecl::Derived {
                 modifiers: Modifiers::default(),
+                doc: None,
                 type_ref,
                 multiplicity,
                 name,
@@ -555,6 +621,7 @@ fn class_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>> +
         .map_with(|((name, extends), features), e| {
             Decl::Class(ClassDecl {
                 name,
+                doc: None,
                 extends: extends.unwrap_or_default(),
                 features: features.into_iter().flatten().collect(),
                 span: e.span(),
@@ -670,6 +737,7 @@ fn interface_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src
         .map_with(|(name, bindings), e| {
             Decl::Interface(InterfaceDecl {
                 name,
+                doc: None,
                 bindings,
                 span: e.span(),
             })
@@ -682,6 +750,7 @@ fn enum_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>> + 
         .then(kw(Token::Eq).ignore_then(int_lit()).or_not())
         .map_with(|((name, label), value), e| EnumLiteral {
             name,
+            doc: None,
             label,
             value,
             span: e.span(),
@@ -694,6 +763,7 @@ fn enum_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>> + 
         .map_with(|(name, literals), e| {
             Decl::Enum(EnumDecl {
                 name,
+                doc: None,
                 literals,
                 span: e.span(),
             })
@@ -713,6 +783,7 @@ fn datatype_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>
             let (bindings, create, convert) = block.unwrap_or_default();
             Decl::Datatype(DatatypeDecl {
                 name,
+                doc: None,
                 wraps,
                 bindings,
                 create,
@@ -766,6 +837,7 @@ fn vocabulary_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'sr
             }
             Decl::Vocabulary(VocabularyDecl {
                 name,
+                doc: None,
                 source,
                 version,
                 key,
@@ -985,10 +1057,12 @@ fn model<'src>() -> impl Parser<'src, Tokens<'src>, Model, MoxExtra<'src>> + Clo
 /// Lex and parse a `.mox` source text.
 ///
 /// This function never panics and always recovers as much of the AST as
-/// possible; check [`ParseResult::errors`] for syntax problems.
+/// possible; check [`ParseResult::errors`] for syntax problems. Doc comments
+/// (`///`, `/** ... */`) on their own lines directly above a declaration,
+/// feature, or enum literal are attached to it as its `doc` description.
 pub fn parse(source: &str) -> ParseResult {
-    let tokens = match lex(source) {
-        Ok(tokens) => tokens,
+    let (tokens, comments) = match lex_with_comments(source) {
+        Ok(result) => result,
         Err(error) => {
             return ParseResult {
                 ast: None,
@@ -999,7 +1073,10 @@ pub fn parse(source: &str) -> ParseResult {
             }
         }
     };
-    let (ast, errors) = model().parse(Tokens::new(&tokens)).into_output_errors();
+    let (mut ast, errors) = model().parse(Tokens::new(&tokens)).into_output_errors();
+    if let Some(model) = ast.as_mut() {
+        attach_docs(model, &comments, source);
+    }
     ParseResult {
         ast,
         errors: errors
@@ -1009,6 +1086,110 @@ pub fn parse(source: &str) -> ParseResult {
                 span: *error.span(),
             })
             .collect(),
+    }
+}
+
+/// One precomputed comment fact used by doc attachment.
+struct DocComment {
+    content: Option<String>,
+    start_line: usize,
+    end_line: usize,
+    /// Whether only whitespace precedes the comment on its first line.
+    begins_line: bool,
+}
+
+/// Attaches doc comments to the model's declarations, features, and enum
+/// literals. A doc run is a maximal sequence of doc comments, each on its
+/// own line, each starting on the line directly after the previous one ends,
+/// whose last comment ends on the line directly above the declaration's
+/// first line.
+fn attach_docs(model: &mut Model, comments: &[crate::lexer::Comment<'_>], source: &str) {
+    let line_starts: Vec<usize> = {
+        let mut starts = vec![0];
+        for (index, byte) in source.bytes().enumerate() {
+            if byte == b'\n' {
+                starts.push(index + 1);
+            }
+        }
+        starts
+    };
+    let line_of = |byte: usize| -> usize {
+        line_starts
+            .partition_point(|&start| start <= byte)
+            .saturating_sub(1)
+    };
+    let docs: Vec<DocComment> = comments
+        .iter()
+        .map(|comment| DocComment {
+            content: comment.doc_content().filter(|content| !content.is_empty()),
+            start_line: line_of(comment.span.start),
+            end_line: line_of(comment.span.end.saturating_sub(1)),
+            begins_line: source[line_starts[line_of(comment.span.start)]..comment.span.start]
+                .bytes()
+                .all(|byte| byte.is_ascii_whitespace()),
+        })
+        .collect();
+
+    /// The joined description of the doc run ending directly above
+    /// `start_line`, or `None`.
+    fn run_above(docs: &[DocComment], start_line: usize) -> Option<String> {
+        let (last_index, _) =
+            docs.iter().enumerate().rev().find(|(_, comment)| {
+                comment.end_line + 1 == start_line && comment.content.is_some()
+            })?;
+        if !docs[last_index].begins_line {
+            return None;
+        }
+        // Walk back through the contiguous doc run above the last comment.
+        let mut first = last_index;
+        while first > 0 {
+            let previous = &docs[first - 1];
+            let current = &docs[first];
+            let contiguous = previous.end_line + 1 == current.start_line;
+            if !(contiguous && previous.content.is_some() && previous.begins_line) {
+                break;
+            }
+            first -= 1;
+        }
+        let joined = docs[first..=last_index]
+            .iter()
+            .map(|comment| {
+                comment
+                    .content
+                    .as_deref()
+                    .expect("run members are doc comments")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        (!joined.is_empty()).then_some(joined)
+    }
+
+    for decl in &mut model.declarations {
+        let start_line = line_of(decl.span().start);
+        match decl {
+            Decl::Class(decl) => {
+                decl.doc = run_above(&docs, start_line);
+                for feature in &mut decl.features {
+                    let feature_line = line_of(feature.span().start);
+                    if feature.doc().is_none() {
+                        feature.set_doc(run_above(&docs, feature_line));
+                    }
+                }
+            }
+            Decl::Interface(decl) => decl.doc = run_above(&docs, start_line),
+            Decl::Enum(decl) => {
+                decl.doc = run_above(&docs, start_line);
+                for literal in &mut decl.literals {
+                    let literal_line = line_of(literal.span.start);
+                    if literal.doc.is_none() {
+                        literal.doc = run_above(&docs, literal_line);
+                    }
+                }
+            }
+            Decl::Datatype(decl) => decl.doc = run_above(&docs, start_line),
+            Decl::Vocabulary(decl) => decl.doc = run_above(&docs, start_line),
+            Decl::Annotation(_) | Decl::Actors(_) => {}
+        }
     }
 }
 

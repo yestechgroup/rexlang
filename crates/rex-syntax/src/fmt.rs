@@ -21,7 +21,9 @@
 //!   bodies.
 //! * `id`/`readonly` modifiers normalize to that order, single-spaced,
 //!   before the feature's type. Enum literals keep `as`/`=` only when
-//!   present in the source.
+//!   present in the source. An attribute's constraint block renders
+//!   single-spaced on the feature's line (`{ pattern "..." minLength 3 }`);
+//!   an empty block collapses to `{}`.
 //! * Comments are preserved verbatim. An own-line comment attaches to the
 //!   following line at its indentation (before a closing `}` it keeps the
 //!   body indent); consecutive own-line comments form a block. A comment that
@@ -510,6 +512,49 @@ impl<'src> Formatter<'src> {
         }
     }
 
+    /// Consumes and emits an attribute's `{ pattern "..." minLength 3 }`
+    /// constraint block. The empty block stays inline (`{}`); a non-empty
+    /// block renders its `keyword value` pairs single-spaced on the
+    /// feature's line, with an interior comment (unusual) forcing the
+    /// following pairs onto a continuation line — both shapes are fixpoints.
+    fn scan_constraint_block(&mut self) {
+        if !matches!(self.peek_tok(), Some(Token::LBrace)) {
+            return;
+        }
+        if matches!(
+            self.nodes.get(self.pos + 1),
+            Some(Node::Token(Token::RBrace, _))
+        ) {
+            // Empty `{}` stays inline; both brackets are consumed silently.
+            self.bump_token();
+            self.bump_token();
+            self.push_text("{}", false);
+            return;
+        }
+        self.advance(); // the `{` joins the feature's line
+        self.indent += 1;
+        loop {
+            self.flush_pending(self.indent);
+            match self.peek_tok() {
+                Some(Token::RBrace) | None => break,
+                Some(Token::Ident(text)) if is_constraint_keyword(text) => {
+                    self.advance();
+                    if let Some(Token::Str(_) | Token::Int(_)) = self.peek_tok() {
+                        self.advance();
+                    }
+                }
+                _ => {
+                    // Ungrammatical tail: one junk line before the close.
+                    self.scan_junk_until(|token| matches!(token, Token::RBrace));
+                    self.flush_line();
+                }
+            }
+        }
+        self.indent -= 1;
+        self.take_if(|token| matches!(token, Token::RBrace));
+        self.flush_line();
+    }
+
     /// Consumes and emits the balanced `{ ... }` raw body of a `derived`
     /// feature (or a bare op body) on a single line.
     fn scan_raw_body(&mut self) {
@@ -866,6 +911,7 @@ impl<'src> Formatter<'src> {
                 self.scan_multiplicity();
                 self.take_name();
                 self.scan_default();
+                self.scan_constraint_block();
             }
             _ => {
                 // Ungrammatical tokens: emit them on one line, stopping where
@@ -1185,6 +1231,15 @@ fn is_top_keyword(token: &Token<'_>) -> bool {
             | Token::Type
             | Token::Vocabulary
             | Token::Actors
+    )
+}
+
+/// The closed set of constraint keywords allowed inside an attribute's
+/// constraint block (mirrors the parser's set).
+fn is_constraint_keyword(text: &str) -> bool {
+    matches!(
+        text,
+        "pattern" | "minLength" | "maxLength" | "minimum" | "maximum"
     )
 }
 
