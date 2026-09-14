@@ -304,6 +304,65 @@ fn cedar_entry_formats_like_target_bodies() {
     assert_eq!(fmt(&formatted), formatted, "not a fixpoint");
 }
 
+#[test]
+fn purpose_items_format_one_per_line() {
+    assert_eq!(
+        fmt(concat!(
+            "actors  A  { actor H purpose  P1 capability C on T grant H { permit C } ",
+            "purpose P2 never_both { C , C2 } }"
+        )),
+        concat!(
+            "actors A {\n",
+            "    actor H\n",
+            "    purpose P1\n",
+            "    capability C on T\n",
+            "    grant H {\n",
+            "        permit C\n",
+            "    }\n",
+            "    purpose P2\n",
+            "    never_both { C, C2 }\n",
+            "}\n"
+        )
+    );
+    let once = fmt("actors A { purpose P }");
+    assert_eq!(once, "actors A {\n    purpose P\n}\n");
+    assert_eq!(fmt(&once), once, "not a fixpoint");
+}
+
+#[test]
+fn delegation_purpose_line_formats_after_to() {
+    let messy = "actors A { delegation Triage { from SupportUser to TriageAgent purpose customer_support\n\npermit RaiseTicket obligation audit } }";
+    let canonical = concat!(
+        "actors A {\n",
+        "    delegation Triage {\n",
+        "        from SupportUser\n",
+        "        to TriageAgent\n",
+        "        purpose customer_support\n",
+        "\n",
+        "        permit RaiseTicket obligation audit\n",
+        "    }\n",
+        "}\n",
+    );
+    assert_eq!(fmt(messy), canonical);
+    assert_eq!(fmt(canonical), canonical, "not a fixpoint");
+}
+
+#[test]
+fn delegation_without_purpose_stays_byte_identical() {
+    assert_eq!(
+        fmt("actors A { delegation Triage { from SupportUser to TriageAgent permit RaiseTicket obligation audit } }"),
+        concat!(
+            "actors A {\n",
+            "    delegation Triage {\n",
+            "        from SupportUser\n",
+            "        to TriageAgent\n",
+            "        permit RaiseTicket obligation audit\n",
+            "    }\n",
+            "}\n",
+        )
+    );
+}
+
 // --- blank lines -------------------------------------------------------------
 
 #[test]
@@ -730,6 +789,7 @@ fn stable_on_inline_models() {
     assert_still_parses("interface I { rust \"x\" }");
     assert_still_parses("annotation \"dep\" as Old");
     assert_still_parses("class A extends B, C { op int get(String k) }");
+    assert_still_parses("actors S { agent B delegation D { from A to B permit C obligation o } }");
 }
 
 // --- golden fixtures ---------------------------------------------------------
@@ -796,4 +856,62 @@ fn conformance_models_match_golden_formatting() {
 /// Reads a workspace-relative fixture path at runtime.
 fn model_source(relative: &str) -> String {
     std::fs::read_to_string(workspace_root().join(relative)).expect("read conformance model")
+}
+
+// ---------------------------------------------------------------------------
+// Constraint blocks
+// ---------------------------------------------------------------------------
+
+#[test]
+fn constraint_blocks_render_single_spaced_on_the_feature_line() {
+    let formatted =
+        format("class Product { String sku { pattern \"[A-Z]{3}\"   minLength 3  maxLength 12 } }")
+            .unwrap();
+    assert_eq!(
+        formatted,
+        "class Product {\n    String sku { pattern \"[A-Z]{3}\" minLength 3 maxLength 12 }\n}\n"
+    );
+    // Fixpoint: formatting the output changes nothing.
+    assert_eq!(format(&formatted).unwrap(), formatted);
+}
+
+#[test]
+fn numeric_constraint_blocks_normalize_and_empty_blocks_collapse() {
+    let formatted = format("class P { int stock { minimum 0  maximum 10 } int tag { } }").unwrap();
+    assert_eq!(
+        formatted,
+        "class P {\n    int stock { minimum 0 maximum 10 }\n    int tag {}\n}\n"
+    );
+    assert_eq!(format(&formatted).unwrap(), formatted);
+}
+
+#[test]
+fn constraint_blocks_survive_as_written_inside_the_block() {
+    // Comments inside the block are preserved; the block's pairs re-join
+    // canonically. The shape must still be a fixpoint.
+    let source = "class P {\n    String sku {\n        // note\n        pattern \"x\"\n    }\n}\n";
+    let once = format(source).unwrap();
+    let twice = format(&once).unwrap();
+    assert_eq!(
+        once, twice,
+        "constraint-block formatting must be a fixpoint"
+    );
+    assert!(once.contains("// note"), "interior comments are preserved");
+}
+
+// ---------------------------------------------------------------------------
+// Doc comments
+// ---------------------------------------------------------------------------
+
+#[test]
+fn doc_comments_are_preserved_above_declarations_and_features() {
+    let source = "\
+/// A book.
+class Book {
+    /// The title.
+    String title
+}
+";
+    let formatted = format(source).unwrap();
+    assert_eq!(formatted, source, "doc comments survive formatting");
 }

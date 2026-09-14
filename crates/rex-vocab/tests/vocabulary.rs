@@ -377,6 +377,7 @@ fn http_provider_fetch_error_mentions_the_url() {
 fn vocabulary_declaration_converts_from_ir_def_minus_entries() {
     let def = rex_ir::VocabularyDef {
         name: "Currency".to_string(),
+        description: None,
         source: "iso:4217".to_string(),
         version: Some("2024-01-01".to_string()),
         key: "alpha3".to_string(),

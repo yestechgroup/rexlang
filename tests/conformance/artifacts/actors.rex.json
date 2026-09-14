@@ -158,7 +158,8 @@
             },
             {
               "name": "Agent",
-              "extends": "Customer"
+              "extends": "Customer",
+              "kind": "agent"
             },
             {
               "name": "Manager",
@@ -210,6 +211,9 @@
               }
             }
           ],
+          "purposes": [
+            "RefundTriage"
+          ],
           "grants": [
             {
               "actor": "Customer",
@@ -257,6 +261,24 @@
                 {
                   "effect": "permit",
                   "capability": "ApproveRefund"
+                }
+              ]
+            }
+          ],
+          "delegations": [
+            {
+              "name": "RefundIntake",
+              "from": "Customer",
+              "to": "Agent",
+              "purpose": "RefundTriage",
+              "entries": [
+                {
+                  "effect": "permit",
+                  "capability": "ReadTicket",
+                  "when": "!internal",
+                  "obligations": [
+                    "ack"
+                  ]
                 }
               ]
             }

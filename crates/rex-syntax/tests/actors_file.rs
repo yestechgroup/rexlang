@@ -220,6 +220,65 @@ fn escaped_import_remains_usable_as_an_identifier() {
 }
 
 #[test]
+fn agent_and_delegation_in_actor_file_parse() {
+    let source = concat!(
+        "import \"support.mox\"\n",
+        "actors Support {\n",
+        "    actor Human\n",
+        "    agent Helper extends Human\n",
+        "    capability Raise on Ticket\n",
+        "    delegation Triage {\n",
+        "        from Human\n",
+        "        to Helper\n",
+        "        permit Raise when (ticket.open) obligation audit\n",
+        "    }\n",
+        "}\n",
+    );
+    let result = parse_actors(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let support = expect_block(&file, "Support");
+    assert_eq!(support.actors.len(), 2);
+    assert_eq!(support.actors[0].kind, ActorKind::Human);
+    assert_eq!(support.actors[1].kind, ActorKind::Agent);
+    assert_eq!(
+        support.actors[1]
+            .extends
+            .as_ref()
+            .map(|name| name.text.as_str()),
+        Some("Human")
+    );
+    assert_eq!(support.delegations.len(), 1);
+    let delegation = &support.delegations[0];
+    assert_eq!(delegation.name.text, "Triage");
+    assert_eq!(delegation.from.text, "Human");
+    assert_eq!(delegation.to.text, "Helper");
+    assert_eq!(delegation.entries.len(), 1);
+    let GrantEffectDecl {
+        effect,
+        capability,
+        when,
+        obligations,
+        ..
+    } = &delegation.entries[0];
+    assert_eq!(*effect, Effect::Permit);
+    assert_eq!(capability.text, "Raise");
+    let when = when.expect("`when` span");
+    assert_eq!(span_text(source, when), "(ticket.open)");
+    assert_eq!(
+        obligations
+            .iter()
+            .map(|name| name.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["audit"]
+    );
+}
+
+#[test]
 fn adversarial_inputs_do_not_panic() {
     let nasty = [
         "",
@@ -239,6 +298,11 @@ fn adversarial_inputs_do_not_panic() {
         "^import \"x.mox\" actors A { actor A }",
         "actors A { actor X } import",
         "actors A { actor X } import \"late",
+        "actors A { delegation D { from X to Y permit C }",
+        "actors A { delegation D { cedar { x } } }",
+        "actors A { agent ^agent delegation ^delegation { from ^from to ^to } }",
+        "actors A { purpose",
+        "actors A { delegation D { from X to Y purpose",
     ];
     for input in nasty {
         let result = parse_actors(input);
@@ -346,5 +410,144 @@ fn parse_errors_still_format() {
     assert_eq!(
         fmt_actors("@@@ import \"a.mox\""),
         "@ @ @\nimport \"a.mox\"\n"
+    );
+}
+
+#[test]
+fn agent_and_delegation_format_canonically() {
+    let messy = concat!(
+        "import   \"a.mox\"\n",
+        "\n",
+        "actors A {\n",
+        "  actor Human\n",
+        "  agent Helper  extends Human\n",
+        "  capability Raise on Ticket\n",
+        "  delegation Triage {\n",
+        "     from Human\n",
+        "     to Helper\n",
+        "\n",
+        "     permit Raise obligation audit\n",
+        "  }\n",
+        "}",
+    );
+    let canonical = concat!(
+        "import \"a.mox\"\n",
+        "\n",
+        "actors A {\n",
+        "    actor Human\n",
+        "    agent Helper extends Human\n",
+        "    capability Raise on Ticket\n",
+        "    delegation Triage {\n",
+        "        from Human\n",
+        "        to Helper\n",
+        "\n",
+        "        permit Raise obligation audit\n",
+        "    }\n",
+        "}\n",
+    );
+    assert_eq!(fmt_actors(messy), canonical);
+    // Idempotence: the canonical output is a fixpoint.
+    assert_eq!(fmt_actors(canonical), canonical);
+}
+
+#[test]
+fn delegation_interior_blank_line_groups_survive_once() {
+    assert_eq!(
+        fmt_actors("actors A { delegation D { from X to Y\n\n\n permit C } }"),
+        concat!(
+            "actors A {\n",
+            "    delegation D {\n",
+            "        from X\n",
+            "        to Y\n",
+            "\n",
+            "        permit C\n",
+            "    }\n",
+            "}\n",
+        )
+    );
+}
+
+#[test]
+fn delegation_items_round_trip_and_stay_idempotent() {
+    let messy = "actors A { delegation D { from   X to Y permit C when ( ticket.open ) obligation audit forbid F } }";
+    let once = fmt_actors(messy);
+    assert_eq!(
+        once,
+        concat!(
+            "actors A {\n",
+            "    delegation D {\n",
+            "        from X\n",
+            "        to Y\n",
+            "        permit C when (ticket.open) obligation audit\n",
+            "        forbid F\n",
+            "    }\n",
+            "}\n",
+        )
+    );
+    assert_eq!(fmt_actors(&once), once);
+}
+
+#[test]
+fn purpose_in_actor_file_parses_and_formats() {
+    let messy = concat!(
+        "import \"support.mox\"\n",
+        "\n",
+        "actors Support {\n",
+        "  actor Human\n",
+        "  agent Helper extends Human\n",
+        "  purpose  customer_support\n",
+        "  capability Raise on Ticket\n",
+        "  delegation Triage {\n",
+        "     from Human\n",
+        "     to Helper\n",
+        "     purpose customer_support\n",
+        "\n",
+        "     permit Raise when (ticket.open) obligation audit\n",
+        "  }\n",
+        "}",
+    );
+    let result = parse_actors(messy);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let support = expect_block(&file, "Support");
+    assert_eq!(support.purposes.len(), 1);
+    assert_eq!(support.purposes[0].name.text, "customer_support");
+    assert_eq!(
+        support.delegations[0]
+            .purpose
+            .as_ref()
+            .map(|name| name.text.as_str()),
+        Some("customer_support")
+    );
+
+    let canonical = concat!(
+        "import \"support.mox\"\n",
+        "\n",
+        "actors Support {\n",
+        "    actor Human\n",
+        "    agent Helper extends Human\n",
+        "    purpose customer_support\n",
+        "    capability Raise on Ticket\n",
+        "    delegation Triage {\n",
+        "        from Human\n",
+        "        to Helper\n",
+        "        purpose customer_support\n",
+        "\n",
+        "        permit Raise when (ticket.open) obligation audit\n",
+        "    }\n",
+        "}\n",
+    );
+    assert_eq!(fmt_actors(messy), canonical);
+    // Round-trip and idempotence: the canonical output is a fixpoint.
+    assert_eq!(fmt_actors(canonical), canonical);
+    let reparsed = parse_actors(canonical);
+    assert!(
+        reparsed.errors.is_empty(),
+        "formatted output must parse cleanly, got {:?}",
+        reparsed.errors
     );
 }

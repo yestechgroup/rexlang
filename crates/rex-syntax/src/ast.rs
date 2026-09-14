@@ -137,6 +137,40 @@ pub struct Param {
     pub span: Span,
 }
 
+/// A single constraint entry of an attribute's constraint block, e.g.
+/// `pattern "[A-Z]{3}-[0-9]{4}"`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Constraint {
+    /// The constraint keyword, e.g. `pattern`. Only the five constraint
+    /// keywords are accepted (`pattern`, `minLength`, `maxLength`,
+    /// `minimum`, `maximum`); other identifiers do not enter the block.
+    pub name: Name,
+    /// The constraint value.
+    pub value: ConstraintValue,
+    /// Span covering the whole entry.
+    pub span: Span,
+}
+
+/// The value of a [`Constraint`] entry: a string (`pattern`) or an integer
+/// (length and numeric bounds).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConstraintValue {
+    /// A string literal (unescaped).
+    Str {
+        /// The unescaped string value.
+        value: String,
+        /// Span of the literal.
+        span: Span,
+    },
+    /// An integer literal.
+    Int {
+        /// The integer value.
+        value: i64,
+        /// Span of the literal.
+        span: Span,
+    },
+}
+
 /// The root node of a parsed `.mox` source.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Model {
@@ -199,6 +233,8 @@ impl Decl {
 pub struct ClassDecl {
     /// The class name.
     pub name: Name,
+    /// Description from the doc comment directly above the declaration.
+    pub doc: Option<String>,
     /// Direct superclasses from the `extends` clause, in source order.
     pub extends: Vec<TypeRef>,
     /// Features (attributes, containments, references, ops, ...) in source order.
@@ -212,6 +248,8 @@ pub struct ClassDecl {
 pub struct InterfaceDecl {
     /// The interface name.
     pub name: Name,
+    /// Description from the doc comment directly above the declaration.
+    pub doc: Option<String>,
     /// Target binding entries.
     pub bindings: Vec<BindingEntry>,
     /// Span of the whole declaration.
@@ -223,6 +261,8 @@ pub struct InterfaceDecl {
 pub struct EnumDecl {
     /// The enum name.
     pub name: Name,
+    /// Description from the doc comment directly above the declaration.
+    pub doc: Option<String>,
     /// The enum literals (at least one in valid sources).
     pub literals: Vec<EnumLiteral>,
     /// Span of the whole declaration.
@@ -234,6 +274,8 @@ pub struct EnumDecl {
 pub struct EnumLiteral {
     /// The literal name.
     pub name: Name,
+    /// Description from the doc comment directly above the literal.
+    pub doc: Option<String>,
     /// Display label from the `as` clause.
     pub label: Option<String>,
     /// Numeric value from the `=` clause.
@@ -247,6 +289,8 @@ pub struct EnumLiteral {
 pub struct DatatypeDecl {
     /// The datatype name.
     pub name: Name,
+    /// Description from the doc comment directly above the declaration.
+    pub doc: Option<String>,
     /// The `wraps` target, if any.
     pub wraps: Option<Wraps>,
     /// Target binding entries.
@@ -277,6 +321,8 @@ pub struct AnnotationDecl {
 pub struct VocabularyDecl {
     /// The vocabulary name (usable as a type name in the package).
     pub name: Name,
+    /// Description from the doc comment directly above the declaration.
+    pub doc: Option<String>,
     /// The external source identifier, e.g. `"iso:4217"` (unescaped).
     pub source: String,
     /// Pinned snapshot version from the `version` clause, if present.
@@ -303,8 +349,9 @@ pub struct VocabularyFacetDecl {
 }
 
 /// An `actors { ... }` declaration: an actor/authorization model in the
-/// Cedar spirit. Actors, capabilities, grants and `never_both` exclusivity
-/// constraints are collected in source order into separate lists.
+/// Cedar spirit. Actors, capabilities, purposes, grants, delegations and
+/// `never_both` exclusivity constraints are collected in source order into
+/// separate lists.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ActorsDecl {
     /// The actors-block name.
@@ -313,19 +360,37 @@ pub struct ActorsDecl {
     pub actors: Vec<ActorDecl>,
     /// Declared capabilities, in source order.
     pub capabilities: Vec<CapabilityDecl>,
+    /// Declared purposes, in source order.
+    pub purposes: Vec<PurposeDecl>,
     /// Declared grants, in source order.
     pub grants: Vec<GrantDecl>,
+    /// Declared delegations, in source order.
+    pub delegations: Vec<DelegationDecl>,
     /// Declared `never_both` exclusivity constraints, in source order.
     pub never_both: Vec<NeverBothDecl>,
     /// Span of the whole declaration.
     pub span: Span,
 }
 
-/// A single `actor <name> ("extends" <name>)?` member of an [`ActorsDecl`].
+/// Whether an [`ActorDecl`] was introduced by `actor` (a human principal) or
+/// `agent` (an autonomous LLM agent).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ActorKind {
+    /// `actor <name>` — a human actor.
+    #[default]
+    Human,
+    /// `agent <name>` — an LLM agent.
+    Agent,
+}
+
+/// A single `actor <name> ("extends" <name>)?` or `agent <name>
+/// ("extends" <name>)?` member of an [`ActorsDecl`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct ActorDecl {
     /// The actor name.
     pub name: Name,
+    /// Whether this is a human `actor` or an `agent`.
+    pub kind: ActorKind,
     /// The direct parent actor from the `extends` clause, if any.
     pub extends: Option<Name>,
     /// Span of the whole actor declaration.
@@ -340,6 +405,16 @@ pub struct CapabilityDecl {
     /// The type the capability is granted on.
     pub class: TypeRef,
     /// Span of the whole capability declaration.
+    pub span: Span,
+}
+
+/// A `purpose <name>` member of an [`ActorsDecl`]: a named purpose of the
+/// authorization model, usable as a grouping/authorization dimension.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PurposeDecl {
+    /// The purpose name.
+    pub name: Name,
+    /// Span of the whole purpose declaration.
     pub span: Span,
 }
 
@@ -388,6 +463,27 @@ pub struct GrantEffectDecl {
     /// Obligation names attached to the effect, in source order.
     pub obligations: Vec<Name>,
     /// Span of the whole effect entry.
+    pub span: Span,
+}
+
+/// A `delegation <name> { from <actor> to <actor> ... }` member of an
+/// [`ActorsDecl`]: effect entries delegated from one actor to another. The
+/// entries reuse [`GrantEffectDecl`], but `cedar { ... }` entries are a
+/// syntax error inside a delegation and never appear here.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DelegationDecl {
+    /// The delegation name.
+    pub name: Name,
+    /// The delegating actor (the required `from` line).
+    pub from: Name,
+    /// The receiving actor (the required `to` line).
+    pub to: Name,
+    /// The optional `purpose` line (the required order is `from` → `to` →
+    /// `purpose` → entries).
+    pub purpose: Option<Name>,
+    /// Delegated effect entries in source order. Zero entries is legal.
+    pub entries: Vec<GrantEffectDecl>,
+    /// Span of the whole delegation declaration.
     pub span: Span,
 }
 
@@ -484,10 +580,12 @@ impl Modifiers {
 /// A feature declared inside a class body.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FeatureDecl {
-    /// `(modifier)* type_ref multiplicity? name ("=" default)?`
+    /// `(modifier)* type_ref multiplicity? name ("=" default)? constraint_block?`
     Attribute {
         /// Declared `id`/`readonly` modifiers.
         modifiers: Modifiers,
+        /// Description from the doc comment directly above the feature.
+        doc: Option<String>,
         /// Declared type.
         type_ref: TypeRef,
         /// Multiplicity annotation, if any.
@@ -496,6 +594,9 @@ pub enum FeatureDecl {
         name: Name,
         /// Default value, if any.
         default: Option<DefaultValue>,
+        /// Constraint block entries, in source order. Only attributes carry
+        /// a constraint block; ops and derived features have bodies instead.
+        constraints: Vec<Constraint>,
         /// Span of the whole feature, modifiers included.
         span: Span,
     },
@@ -503,6 +604,8 @@ pub enum FeatureDecl {
     Containment {
         /// Declared `id`/`readonly` modifiers.
         modifiers: Modifiers,
+        /// Description from the doc comment directly above the feature.
+        doc: Option<String>,
         /// Element type.
         type_ref: TypeRef,
         /// Multiplicity annotation, if any.
@@ -518,6 +621,8 @@ pub enum FeatureDecl {
     Reference {
         /// Declared `id`/`readonly` modifiers.
         modifiers: Modifiers,
+        /// Description from the doc comment directly above the feature.
+        doc: Option<String>,
         /// Referenced type.
         type_ref: TypeRef,
         /// Multiplicity annotation, if any.
@@ -533,6 +638,8 @@ pub enum FeatureDecl {
     Container {
         /// Declared `id`/`readonly` modifiers.
         modifiers: Modifiers,
+        /// Description from the doc comment directly above the feature.
+        doc: Option<String>,
         /// Container type.
         type_ref: TypeRef,
         /// Feature name.
@@ -546,6 +653,8 @@ pub enum FeatureDecl {
     Op {
         /// Declared `id`/`readonly` modifiers.
         modifiers: Modifiers,
+        /// Description from the doc comment directly above the feature.
+        doc: Option<String>,
         /// Declared return type.
         return_type: TypeRef,
         /// Operation name.
@@ -566,6 +675,8 @@ pub enum FeatureDecl {
     Derived {
         /// Declared `id`/`readonly` modifiers.
         modifiers: Modifiers,
+        /// Description from the doc comment directly above the feature.
+        doc: Option<String>,
         /// Declared type.
         type_ref: TypeRef,
         /// Multiplicity annotation, if any.
@@ -646,6 +757,31 @@ impl FeatureDecl {
             | FeatureDecl::Derived {
                 modifiers: slot, ..
             } => *slot = modifiers,
+        }
+    }
+
+    /// The feature's description from its doc comment, if any.
+    pub fn doc(&self) -> Option<&str> {
+        match self {
+            FeatureDecl::Attribute { doc, .. }
+            | FeatureDecl::Containment { doc, .. }
+            | FeatureDecl::Reference { doc, .. }
+            | FeatureDecl::Container { doc, .. }
+            | FeatureDecl::Op { doc, .. }
+            | FeatureDecl::Derived { doc, .. } => doc.as_deref(),
+        }
+    }
+
+    /// Overwrites the feature's description. The parser uses this to attach
+    /// the doc comment parsed directly above the feature.
+    pub fn set_doc(&mut self, doc: Option<String>) {
+        match self {
+            FeatureDecl::Attribute { doc: slot, .. }
+            | FeatureDecl::Containment { doc: slot, .. }
+            | FeatureDecl::Reference { doc: slot, .. }
+            | FeatureDecl::Container { doc: slot, .. }
+            | FeatureDecl::Op { doc: slot, .. }
+            | FeatureDecl::Derived { doc: slot, .. } => *slot = doc,
         }
     }
 

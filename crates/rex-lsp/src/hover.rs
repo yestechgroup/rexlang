@@ -18,8 +18,22 @@ use rex_driver::navigation::{DefId, FeatureSymbolKind, NavigationIndex, SymbolKi
 ///   with target-tagged bodies render the full signature plus the target
 ///   list, e.g. `**getBook**(title: String) -> Book\n[rust] operation`
 /// * enum literals: `**Mystery** = 0 (BookCategory)`
+/// * a declaration carrying a doc comment appends its description as a
+///   final paragraph: `\n\n<description>`
 pub fn hover_markdown(index: &NavigationIndex, def_id: DefId) -> String {
     let definition = index.definition(def_id);
+    let base = hover_base_markdown(index, definition);
+    match &definition.doc {
+        Some(doc) => format!("{base}\n\n{doc}"),
+        None => base,
+    }
+}
+
+/// The signature/kind rendering, without the doc-comment paragraph.
+fn hover_base_markdown(
+    index: &NavigationIndex,
+    definition: &rex_driver::navigation::Definition,
+) -> String {
     match definition.kind {
         SymbolKind::Class => match &definition.extends_text {
             Some(extends) => format!("**class {}**\nextends {extends}", definition.name),
@@ -303,6 +317,24 @@ mod tests {
             hover_of(source, "Date"),
             "**datatype Date**\ncreate [rust], convert [rust]"
         );
+    }
+
+    #[test]
+    fn doc_comments_append_a_description_paragraph() {
+        assert_eq!(
+            hover_of("package demo\n\n/// A book.\nclass Book {}", "Book"),
+            "**class Book**\n\nA book."
+        );
+        assert_eq!(
+            hover_of(
+                "package demo\n\nclass Book {\n    /// The title.\n    id readonly String title\n}",
+                "title"
+            ),
+            "**title**: String\n[id] [readonly] attribute\n\nThe title."
+        );
+        // Descriptions are absent when no doc comment exists — the existing
+        // shapes above stay byte-identical.
+        assert!(!hover_of("package demo\n\nclass Book {}", "Book").contains('\n'));
     }
 
     #[test]

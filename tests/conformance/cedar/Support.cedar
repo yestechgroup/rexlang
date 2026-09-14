@@ -15,3 +15,5 @@ permit(principal is Support::Manager, action == Support::Action::"ResolveTicket"
 permit(principal is Support::Finance, action == Support::Action::"ApproveRefund", resource is Support::Ticket);
 
 // never_both: RaiseRefund, ApproveRefund
+
+// delegation RefundIntake: Customer -> Agent (1 capabilities) purpose: RefundTriage

@@ -970,3 +970,418 @@ fn salsa_incrementality_smoke() {
     let third = compile(&db, file);
     assert_eq!(third, first);
 }
+
+// ---------------------------------------------------------------------------
+// Doc comments lower into IR descriptions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn doc_comments_lower_into_descriptions() {
+    let source = "\
+package demo
+
+/// A book in the library.
+class Book {
+    /// The title.
+    id readonly String title
+
+    /// A short summary.
+    derived String summary {
+        expr { title }
+    }
+
+    /// Finds a book.
+    op Book find(String title) {
+        rust { self.clone() }
+    }
+}
+
+/// How books are shelved.
+enum Category {
+    /// Whodunits.
+    Mystery = 0
+}
+
+/// A calendar day.
+type Date wraps opaque {
+    rust \"chrono::NaiveDate\"
+}
+";
+    let compilation = compile_str("docs.mox", source);
+    let model = compilation.model.expect("a model on success");
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "{:?}",
+        compilation.diagnostics
+    );
+    let package = &model.packages[0];
+
+    let class = &package.classes[0];
+    assert_eq!(class.description.as_deref(), Some("A book in the library."));
+    let title = feature(class, "title");
+    assert_eq!(title.description.as_deref(), Some("The title."));
+    let summary = feature(class, "summary");
+    assert_eq!(summary.description.as_deref(), Some("A short summary."));
+    assert_eq!(
+        class.operations[0].description.as_deref(),
+        Some("Finds a book.")
+    );
+
+    let category = &package.enums[0];
+    assert_eq!(
+        category.description.as_deref(),
+        Some("How books are shelved.")
+    );
+    assert_eq!(
+        category.literals[0].description.as_deref(),
+        Some("Whodunits.")
+    );
+
+    assert_eq!(
+        package.datatypes[0].description.as_deref(),
+        Some("A calendar day.")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Constraints lower into IR constraints
+// ---------------------------------------------------------------------------
+
+#[test]
+fn constraints_lower_into_the_ir() {
+    let source = "\
+package demo
+
+class Product {
+    String sku { pattern \"[A-Z]{3}-[0-9]{4}\" minLength 8 maxLength 8 }
+    int stock { minimum 0 maximum 1000 }
+}
+";
+    let compilation = compile_str("constraints.mox", source);
+    let model = compilation.model.expect("a model on success");
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "{:?}",
+        compilation.diagnostics
+    );
+    let class = &model.packages[0].classes[0];
+
+    let sku = feature(class, "sku");
+    assert_eq!(
+        sku.constraints.pattern.as_deref(),
+        Some("[A-Z]{3}-[0-9]{4}")
+    );
+    assert_eq!(sku.constraints.min_length, Some(8));
+    assert_eq!(sku.constraints.max_length, Some(8));
+    assert_eq!(sku.constraints.minimum, None);
+
+    let stock = feature(class, "stock");
+    assert_eq!(stock.constraints.minimum, Some(0));
+    assert_eq!(stock.constraints.maximum, Some(1000));
+    assert_eq!(stock.constraints.pattern, None);
+}
+
+#[test]
+fn constraints_on_a_model_without_them_stay_absent() {
+    let compilation = compile_str("library.mox", LIBRARY);
+    let model = compilation.model.expect("a model on success");
+    for class in &model.packages[0].classes {
+        for feature in &class.features {
+            assert!(
+                feature.constraints.is_empty(),
+                "unexpected constraints on {}",
+                feature.name
+            );
+            assert!(feature.description.is_none());
+        }
+    }
+}
+
+#[test]
+fn pattern_constraints_require_a_string_attribute() {
+    let source = "package demo\n\nclass P { int count { pattern \"x\" } }\n";
+    let compilation = compile_str("bad.mox", source);
+    assert!(compilation.model.is_none(), "errors must block the model");
+    assert!(compilation
+        .diagnostics
+        .iter()
+        .any(|d| d.is_error() && d.message.contains("'pattern' requires a string attribute")));
+}
+
+#[test]
+fn length_constraints_require_a_string_attribute() {
+    let source = "package demo\n\nclass P { int count { minLength 2 } }\n";
+    let compilation = compile_str("bad.mox", source);
+    assert!(compilation.diagnostics.iter().any(|d| d.is_error()
+        && d.message
+            .contains("'minLength' requires a string attribute")));
+}
+
+#[test]
+fn numeric_constraints_require_a_numeric_attribute() {
+    let source = "package demo\n\nclass P { boolean flag { minimum 0 } }\n";
+    let compilation = compile_str("bad.mox", source);
+    assert!(compilation
+        .diagnostics
+        .iter()
+        .any(|d| d.is_error() && d.message.contains("'minimum' requires a numeric attribute")));
+}
+
+const CURRENCY_SNAPSHOT: &str = r#"{
+  "vocabulary": "iso:4217",
+  "version": "2024-01-01",
+  "entries": [
+    { "alpha3": "USD" },
+    { "alpha3": "EUR" }
+  ]
+}"#;
+
+const DIAL_SNAPSHOT: &str = r#"{
+  "vocabulary": "e164:dial",
+  "version": "2024-01-01",
+  "entries": [
+    { "code": 1 },
+    { "code": 44 }
+  ]
+}"#;
+
+/// Vendors the shared vocabulary snapshots into a fresh scratch directory
+/// and writes `source` as its model. Returns the model path and the scratch
+/// directory (the caller removes it when done).
+fn constraints_fixture(tag: &str, source: &str) -> (String, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!("rex-constraints-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let vocab_dir = dir.join("vocab");
+    std::fs::create_dir_all(&vocab_dir).unwrap();
+    std::fs::write(
+        vocab_dir.join("iso-4217@2024-01-01.json"),
+        CURRENCY_SNAPSHOT,
+    )
+    .unwrap();
+    std::fs::write(vocab_dir.join("e164-dial@2024-01-01.json"), DIAL_SNAPSHOT).unwrap();
+    let model_path = dir.join("constraints.mox");
+    std::fs::write(&model_path, source).unwrap();
+    (
+        model_path.to_str().expect("utf-8 model path").to_string(),
+        dir,
+    )
+}
+
+fn constraint_errors(compilation: &rex_driver::Compilation) -> Vec<String> {
+    compilation
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| d.message.clone())
+        .collect()
+}
+
+/// Constraints follow the attribute's type knowledge: datatypes default to
+/// the string family, vocabularies follow their key facet's family, and
+/// enums admit both families on one attribute.
+#[test]
+fn constraints_are_admitted_on_datatype_vocabulary_and_enum_attributes() {
+    let source = "\
+package demo
+
+enum Status { Draft = 0 Published = 1 Archived = 2 }
+
+type Date wraps opaque
+
+vocabulary Currency from \"iso:4217\" {
+    version \"2024-01-01\"
+    key alpha3
+    facet String alpha3
+}
+
+vocabulary DialCode from \"e164:dial\" {
+    version \"2024-01-01\"
+    key code
+    facet int code
+}
+
+class P {
+    Date day { pattern \"[0-9]{4}-[0-9]{2}\" minLength 10 }
+    Currency currency { minLength 3 maxLength 3 }
+    DialCode region { minimum 1 maximum 999 }
+    Status status { pattern \"[A-Za-z]+\" minimum 0 }
+}
+";
+    let (path, dir) = constraints_fixture("ok", source);
+    let compilation = compile_str(&path, source);
+    let errors = constraint_errors(&compilation);
+    assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    let model = compilation.model.expect("a model on success");
+    let class = &model.packages[0].classes[0];
+
+    // Datatype: opaque platform name, string family by default.
+    let day = feature(class, "day");
+    assert_eq!(
+        day.constraints.pattern.as_deref(),
+        Some("[0-9]{4}-[0-9]{2}")
+    );
+    assert_eq!(day.constraints.min_length, Some(10));
+    assert_eq!(day.constraints.minimum, None);
+
+    // Vocabulary with a String key facet: string family.
+    let currency = feature(class, "currency");
+    assert_eq!(currency.constraints.min_length, Some(3));
+    assert_eq!(currency.constraints.max_length, Some(3));
+    assert_eq!(currency.constraints.minimum, None);
+
+    // Vocabulary with an int key facet: numeric family.
+    let region = feature(class, "region");
+    assert_eq!(region.constraints.minimum, Some(1));
+    assert_eq!(region.constraints.maximum, Some(999));
+    assert_eq!(region.constraints.pattern, None);
+
+    // Enum: both families coexist over names and values.
+    let status = feature(class, "status");
+    assert_eq!(status.constraints.pattern.as_deref(), Some("[A-Za-z]+"));
+    assert_eq!(status.constraints.minimum, Some(0));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn numeric_constraints_are_rejected_on_datatype_attributes() {
+    let source = "package demo\n\ntype Date wraps opaque\n\nclass P { Date day { minimum 0 } }\n";
+    let compilation = compile_str("bad.mox", source);
+    assert!(compilation.model.is_none(), "errors must block the model");
+    let errors = constraint_errors(&compilation);
+    assert!(
+        errors
+            .iter()
+            .any(|m| m.contains("'minimum' requires a numeric attribute")
+                && m.contains("datatype 'Date'")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn constraints_must_match_the_vocabulary_key_facet_family() {
+    let source = "\
+package demo
+
+vocabulary Currency from \"iso:4217\" {
+    version \"2024-01-01\"
+    key alpha3
+    facet String alpha3
+}
+
+vocabulary DialCode from \"e164:dial\" {
+    version \"2024-01-01\"
+    key code
+    facet int code
+}
+
+class P {
+    Currency currency { minimum 0 }
+    DialCode region { pattern \"[0-9]+\" }
+}
+";
+    let (path, dir) = constraints_fixture("family", source);
+    let compilation = compile_str(&path, source);
+    assert!(compilation.model.is_none(), "errors must block the model");
+    let errors = constraint_errors(&compilation);
+    assert!(
+        errors
+            .iter()
+            .any(|m| m.contains("'minimum' requires a numeric attribute")
+                && m.contains("key facet of vocabulary 'Currency' is string")),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|m| m.contains("'pattern' requires a string attribute")
+                && m.contains("key facet of vocabulary 'DialCode' is int")),
+        "{errors:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A numeric or length constraint on an enum that admits zero literals is a
+/// compile error naming the attribute and the enum.
+#[test]
+fn enum_constraints_admitting_no_literals_are_rejected() {
+    let source = "\
+package demo
+
+enum Status { Draft = 0 Published = 1 Archived = 2 }
+
+class P {
+    Status a { minimum 100 }
+    Status b { maxLength 2 }
+}
+";
+    let compilation = compile_str("bad.mox", source);
+    assert!(compilation.model.is_none(), "errors must block the model");
+    let errors = constraint_errors(&compilation);
+    assert!(
+        errors.iter().any(|m| m.contains("attribute 'a'")
+            && m.contains("enum 'Status'")
+            && m.contains("'minimum'")),
+        "{errors:?}"
+    );
+    assert!(
+        errors.iter().any(|m| m.contains("attribute 'b'")
+            && m.contains("enum 'Status'")
+            && m.contains("'maxLength'")),
+        "{errors:?}"
+    );
+}
+
+/// An inverted numeric range on an enum reports the ordering error once —
+/// the empty-range closure check must not double-report.
+#[test]
+fn inverted_enum_bounds_report_one_error() {
+    let source = "\
+package demo
+
+enum Status { Draft = 0 Published = 1 }
+
+class P { Status level { minimum 5 maximum 0 } }
+";
+    let compilation = compile_str("bad.mox", source);
+    let errors = constraint_errors(&compilation);
+    assert_eq!(
+        errors.len(),
+        1,
+        "one clear error, not a cascade: {errors:?}"
+    );
+    assert!(errors[0].contains("must not exceed maximum"), "{errors:?}");
+}
+
+#[test]
+fn unordered_constraints_are_rejected() {
+    let source = "package demo\n\nclass P { String s { minLength 5 maxLength 2 } int n { minimum 10 maximum 0 } }\n";
+    let compilation = compile_str("bad.mox", source);
+    let errors: Vec<String> = compilation
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| d.message.clone())
+        .collect();
+    assert!(
+        errors
+            .iter()
+            .any(|m| m.contains("minLength (5) must not exceed maxLength (2)")),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|m| m.contains("minimum (10) must not exceed maximum (0)")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn negative_length_constraints_are_rejected() {
+    let source = "package demo\n\nclass P { String s { minLength -1 } }\n";
+    let compilation = compile_str("bad.mox", source);
+    assert!(compilation
+        .diagnostics
+        .iter()
+        .any(|d| d.is_error() && d.message.contains("must be non-negative")));
+}

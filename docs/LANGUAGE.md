@@ -11,6 +11,12 @@ reference; crate docs cover implementation.
 
 - **Comments**: `//` to end of line, `/* ... */` block comments. Preserved
   verbatim by `rexlang fmt`.
+- **Doc comments**: `///` line comments and `/** ... */` block comments on
+  their own lines directly above a declaration, feature, or enum literal
+  become that element's **description**. Contiguous `///` lines join into one
+  description; a blank line or an intervening non-doc comment detaches the
+  run. Descriptions are carried in the IR and surface as `description`
+  keywords in generated JSON Schema and as doc comments in generated code.
 - **Strings**: double-quoted with `\"` and `\\` escapes.
 - **Integers**: decimal, optional leading `-`.
 - **Identifiers**: `[A-Za-z_][A-Za-z0-9_]*`. Any keyword can be escaped with a
@@ -30,6 +36,23 @@ model        := package_decl (annotation_decl | class_decl | interface_decl
 package_decl := "package" qualified_name
 ```
 
+A model may span multiple `.mox` files — one package per file, named by its
+`package` declaration. Compiling several files produces **one** Core IR
+artifact whose `packages` follow the input order (for `rexlang`, the sorted
+path order of the expanded inputs). Declarations may reference types from
+any package of the compilation:
+
+- A bare single-segment name must be unique across **all** packages; if
+  several declare it, the reference is an error (`ambiguous type \`X\`;
+  qualify as \`p.X\``) whose help lists the matching packages.
+- A qualified `<package>.<Name>` must match exactly one package.
+
+Cross-package `refers`, `extends`, and attribute types (enums, datatypes,
+vocabularies) are allowed; constraint family and enum-literal checks see
+through the package boundary. `contains`/`container` targets and `opposite`
+pairings must live in the declaring class's package: cross-package ownership
+and cross-package opposites are errors.
+
 ### Classes and features
 
 ```
@@ -37,7 +60,7 @@ class_decl  := "class" name ("extends" type_ref ("," type_ref)*)? "{" feature* "
 feature     := modifier* ( attribute | containment | reference | container
                          | op_decl | derived_decl )
 modifier    := "id" | "readonly"
-attribute   := type_ref multiplicity? name ("=" default)?
+attribute   := type_ref multiplicity? name ("=" default)? constraint_block?
 containment := "contains" type_ref multiplicity? name ("opposite" name)?
 reference   := "refers" type_ref multiplicity? name ("opposite" name)?
 container   := "container" type_ref name ("opposite" name)?
@@ -46,6 +69,8 @@ derived_decl:= "derived" type_ref multiplicity? name op_body?
 op_body     := "{" target_body+ "}" | "{" raw "}"
 target_body := name "{" raw "}"
 multiplicity:= "[" (int (".." (int | "*"))?)? "]"
+constraint_block := "{" (constraint_keyword (string | int))* "}"
+constraint_keyword := "pattern" | "minLength" | "maxLength" | "minimum" | "maximum"
 ```
 
 - **`contains`** — by-value ownership (Ecore containment). The child's
@@ -70,6 +95,27 @@ multiplicity:= "[" (int (".." (int | "*"))?)? "]"
   getter; a bare `{ ... }` body is rejected.
 - **Defaults**: string/int/boolean literals or an enum literal name (for
   enum-typed attributes only).
+- **Constraints** (attributes only) declare value bounds, e.g.
+  `String sku { pattern "[A-Z]{3}-[0-9]{4}" minLength 3 maxLength 12 }` or
+  `int stock { minimum 0 maximum 1000 }`. Each keyword may appear at most
+  once. A constraint family is admitted by the most explicit type knowledge
+  available: the string family (`pattern`/`minLength`/`maxLength`) requires
+  a `string` primitive; the numeric family (`minimum`/`maximum`) requires a
+  numeric primitive. A datatype-typed attribute defaults to the string
+  family — its platform type is opaque — and rejects numeric bounds. A
+  vocabulary-typed attribute follows its `key` facet's declared primitive
+  type (`String` admits the string family, a numeric key the numeric
+  family); constraints are rejected outright when the key facet cannot be
+  resolved. An enum-typed attribute carries a dual value space: all five
+  keywords apply — the string family bounds literal names, the numeric
+  family bounds literal values — and both may coexist; a numeric or length
+  bound that admits zero literals is a compile error, while `pattern` is
+  allowed but never statically validated (descriptive only). Class and
+  interface types take no constraints. Length bounds must be non-negative
+  and `min` ≤ `max` in both families. On a many-valued attribute the
+  constraints apply to the elements. They surface as the JSON Schema
+  keywords of the same names (`pattern`, `minLength`, `maxLength`,
+  `minimum`, `maximum`).
 
 Multiplicity shorthand: `[]` = `[0..*]`; absent: attributes are `1..1`,
 `contains`/`refers` are `0..*`, `container` and `derived` are `0..1`.
@@ -107,7 +153,14 @@ the Cedar backend:
 ```
 actor_file  := import_decl* actors_block+
 import_decl := "import" string
-actors_block:= "actors" name "{" actor* capability* grant* never_both* "}"
+actors_block:= "actors" name "{" (actor_decl | agent_decl)* capability*
+                purpose_decl* grant* delegation* never_both* "}"
+actor_decl  := "actor" name ("extends" name)?
+agent_decl  := "agent" name ("extends" name)?
+purpose_decl := "purpose" name
+delegation  := "delegation" name "{" "from" name "to" name
+                purpose_decl? delegation_entry* "}"
+delegation_entry := ("permit" | "forbid") name ("when" expr)? obligation*
 ```
 
 The `actors` block grammar is identical to the inline `actors` block of a
@@ -118,6 +171,34 @@ actor file's blocks followed by every imported domain's inline blocks
 (in that order), so capabilities typecheck against the imported domain's
 classes (`permit EscalateTicket when (amount > 0)` resolves `amount` on
 `Ticket`), and the separation-of-duty checks span files.
+
+`agent` declares an autonomous LLM agent; the plain `actor` remains the
+human principal. Both take the same optional `extends` clause, and a
+declared kind is inherited: an actor that declares no kind takes the
+nearest ancestor's declared kind, defaulting to human.
+
+A `delegation` is a named transfer of authority from one actor to another:
+`from` and `to` are required, in that order, and the body holds only effect
+entries (`cedar { ... }` is rejected inside a delegation; an empty body is
+legal). Blocks declare purposes with `purpose <name>` lines: several per
+block are allowed, duplicates within a block are errors, and the same name
+in different blocks is legal. A delegation may carry one optional `purpose`
+line — after `to`, before the entries — naming a purpose declared in the
+union of the file's blocks and every imported domain's inline blocks; an
+undeclared name is a compile error naming the delegation and the purpose.
+The driver enforces a containment invariant: every capability a
+delegation permits must already be an effective permit of the target agent
+— through its own grants, inherited ones included — so a delegation cannot
+confer authority the target does not already hold, and `to` must name an
+agent. `never_both` exclusivity is checked over grant and delegation
+permits combined. In Cedar output delegations surface only as evidence
+comments (`// delegation Name: from -> to (N capabilities)`, suffixed
+` purpose: <P>` when a purpose is declared); like `never_both`, the driver
+enforces them at compile time, and runtime enforcement — of permits and
+purpose alike — belongs to the authorization gateway. `rexlang gen tools`
+projects this authorization model into each agent's tool manifest — the
+agent's effective grant permits plus the delegation bindings scoped to it;
+human actors are omitted.
 
 `rexlang fmt` formats `.actor` files with the same canonical layout rules
 (imports first, one per line; then blocks).
@@ -156,11 +237,12 @@ property, not an aspiration.
 
 | Command | Purpose |
 |---|---|
-| `rexlang check <file>` | validate; ariadne-rendered diagnostics (`.mox` and `.actor`) |
-| `rexlang ir <file> -o <out>` | emit the Core IR artifact (`.actor`: the ActorModel artifact) |
-| `rexlang gen rust <file> -o <dir>` | arena-based Rust models |
-| `rexlang gen json-schema <file> --profile wire\|api -o <dir>` | JSON Schema |
-| `rexlang gen cedar <file> -o <dir>` | Cedar policies + schema (`.mox`: inline blocks; `.actor`: file + imported domains) |
+| `rexlang check <file>...` | validate; ariadne-rendered diagnostics grouped per file (`.mox` and `.actor`; each input may be a directory, scanned recursively for `*.mox`) |
+| `rexlang ir <file>... -o <out>` | emit the Core IR artifact (`.actor`: the ActorModel artifact; several `.mox`: one multi-package model) |
+| `rexlang gen rust <file>... -o <dir>` | arena-based Rust models |
+| `rexlang gen json-schema <file>... --profile wire\|api -o <dir>` | JSON Schema |
+| `rexlang gen cedar <file>... -o <dir>` | Cedar policies + schema (`.mox`: inline blocks; `.actor`: file + imported domains) |
+| `rexlang gen tools <file>...` | per-agent tool manifest JSON on stdout (`.mox`: inline blocks; `.actor`: file + imported domains) |
 | `rexlang vocab fetch <file>` | vendor + pin vocabulary snapshots |
 | `rexlang fmt [--check] <files>\|-` | canonical formatting (comments kept) |
 | `rexlang lsp` | language server (stdio) |

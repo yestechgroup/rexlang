@@ -21,7 +21,9 @@
 //!   bodies.
 //! * `id`/`readonly` modifiers normalize to that order, single-spaced,
 //!   before the feature's type. Enum literals keep `as`/`=` only when
-//!   present in the source.
+//!   present in the source. An attribute's constraint block renders
+//!   single-spaced on the feature's line (`{ pattern "..." minLength 3 }`);
+//!   an empty block collapses to `{}`.
 //! * Comments are preserved verbatim. An own-line comment attaches to the
 //!   following line at its indentation (before a closing `}` it keeps the
 //!   body indent); consecutive own-line comments form a block. A comment that
@@ -41,10 +43,10 @@
 //!   the feature's line (the driver rejects it semantically). The same
 //!   rendering applies to a datatype's `create { ... }`/`convert { ... }`
 //!   blocks and to a grant's raw `cedar { ... }` entry.
-//! * Inside `actors { ... }` and `grant { ... }` bodies, items keep their
-//!   grouping: at most one separating blank line between items is preserved
-//!   (all other bodies drop interior blank lines). A `never_both { A, B }`
-//!   constraint renders on one line. A `when (...)` condition's inner bytes
+//! * Inside `actors { ... }`, `grant { ... }` and `delegation { ... }`
+//!   bodies, items keep their grouping: at most one separating blank line
+//!   between items is preserved (all other bodies drop interior blank
+//!   lines). A `never_both { A, B }` constraint renders on one line. A `when (...)` condition's inner bytes
 //!   are raw too: they are emitted verbatim (ends trimmed), so conditions
 //!   are a fixpoint just like target bodies.
 //! * An `.actor` source (see [`format_actors`]) formats its imports first in
@@ -123,19 +125,25 @@ enum BodyKind {
     Bindings,
     /// `version`/`key`/`facet` items.
     Vocabulary,
-    /// `actor`/`capability`/`grant`/`never_both` items.
+    /// `actor`/`capability`/`purpose`/`grant`/`never_both` items.
     Actors,
     /// `permit`/`forbid`/`cedar` entries of a `grant` block.
     Grant,
+    /// `from`/`to`/`purpose` lines and `permit`/`forbid` entries of a
+    /// `delegation`.
+    Delegation,
 }
 
 impl BodyKind {
     /// Whether separating blank lines between items are preserved (collapsed
-    /// to at most one). Only the new `actors`/`grant` bodies keep them —
-    /// their items form visual groups — while every other body kind drops
-    /// interior blank lines.
+    /// to at most one). Only the new `actors`/`grant`/`delegation` bodies
+    /// keep them — their items form visual groups — while every other body
+    /// kind drops interior blank lines.
     fn keeps_blank_lines(self) -> bool {
-        matches!(self, BodyKind::Actors | BodyKind::Grant)
+        matches!(
+            self,
+            BodyKind::Actors | BodyKind::Grant | BodyKind::Delegation
+        )
     }
 }
 
@@ -510,6 +518,49 @@ impl<'src> Formatter<'src> {
         }
     }
 
+    /// Consumes and emits an attribute's `{ pattern "..." minLength 3 }`
+    /// constraint block. The empty block stays inline (`{}`); a non-empty
+    /// block renders its `keyword value` pairs single-spaced on the
+    /// feature's line, with an interior comment (unusual) forcing the
+    /// following pairs onto a continuation line — both shapes are fixpoints.
+    fn scan_constraint_block(&mut self) {
+        if !matches!(self.peek_tok(), Some(Token::LBrace)) {
+            return;
+        }
+        if matches!(
+            self.nodes.get(self.pos + 1),
+            Some(Node::Token(Token::RBrace, _))
+        ) {
+            // Empty `{}` stays inline; both brackets are consumed silently.
+            self.bump_token();
+            self.bump_token();
+            self.push_text("{}", false);
+            return;
+        }
+        self.advance(); // the `{` joins the feature's line
+        self.indent += 1;
+        loop {
+            self.flush_pending(self.indent);
+            match self.peek_tok() {
+                Some(Token::RBrace) | None => break,
+                Some(Token::Ident(text)) if is_constraint_keyword(text) => {
+                    self.advance();
+                    if let Some(Token::Str(_) | Token::Int(_)) = self.peek_tok() {
+                        self.advance();
+                    }
+                }
+                _ => {
+                    // Ungrammatical tail: one junk line before the close.
+                    self.scan_junk_until(|token| matches!(token, Token::RBrace));
+                    self.flush_line();
+                }
+            }
+        }
+        self.indent -= 1;
+        self.take_if(|token| matches!(token, Token::RBrace));
+        self.flush_line();
+    }
+
     /// Consumes and emits the balanced `{ ... }` raw body of a `derived`
     /// feature (or a bare op body) on a single line.
     fn scan_raw_body(&mut self) {
@@ -751,6 +802,7 @@ impl<'src> Formatter<'src> {
                 BodyKind::Vocabulary => self.scan_vocabulary_item(),
                 BodyKind::Actors => self.scan_actors_item(),
                 BodyKind::Grant => self.scan_grant_entry(),
+                BodyKind::Delegation => self.scan_delegation_item(),
             }
             self.flush_line();
         }
@@ -866,6 +918,7 @@ impl<'src> Formatter<'src> {
                 self.scan_multiplicity();
                 self.take_name();
                 self.scan_default();
+                self.scan_constraint_block();
             }
             _ => {
                 // Ungrammatical tokens: emit them on one line, stopping where
@@ -971,7 +1024,7 @@ impl<'src> Formatter<'src> {
 
     fn scan_actors_item(&mut self) {
         match self.peek_tok() {
-            Some(Token::Actor) => {
+            Some(Token::Actor | Token::Agent) => {
                 self.advance();
                 self.take_name();
                 if self.take_if(|token| matches!(token, Token::Extends)) {
@@ -985,10 +1038,19 @@ impl<'src> Formatter<'src> {
                     self.scan_qname();
                 }
             }
+            Some(Token::Purpose) => {
+                self.advance();
+                self.take_name();
+            }
             Some(Token::Grant) => {
                 self.advance();
                 self.take_name();
                 self.scan_body(BodyKind::Grant);
+            }
+            Some(Token::Delegation) => {
+                self.advance();
+                self.take_name();
+                self.scan_body(BodyKind::Delegation);
             }
             Some(Token::NeverBoth) => self.scan_never_both(),
             _ => self.scan_junk_until(|token| {
@@ -996,9 +1058,46 @@ impl<'src> Formatter<'src> {
                     token,
                     Token::RBrace
                         | Token::Actor
+                        | Token::Agent
                         | Token::Capability
+                        | Token::Purpose
                         | Token::Grant
+                        | Token::Delegation
                         | Token::NeverBoth
+                )
+            }),
+        }
+    }
+
+    /// One item of a `delegation` body: the required `from`/`to` lines (the
+    /// `to` marker is a contextual identifier), the optional `purpose` line
+    /// and grant-shaped effect entries. A `cedar { ... }` entry is a parse
+    /// error, but the formatter never rejects: it renders exactly like a
+    /// grant's cedar entry.
+    fn scan_delegation_item(&mut self) {
+        match self.peek_tok() {
+            Some(Token::From) => {
+                self.advance();
+                self.take_name();
+            }
+            Some(Token::Ident("to")) => {
+                self.advance();
+                self.take_name();
+            }
+            Some(Token::Purpose) => {
+                self.advance();
+                self.take_name();
+            }
+            Some(Token::Permit | Token::Forbid | Token::Cedar) => self.scan_grant_entry(),
+            _ => self.scan_junk_until(|token| {
+                matches!(
+                    token,
+                    Token::RBrace
+                        | Token::From
+                        | Token::Purpose
+                        | Token::Permit
+                        | Token::Forbid
+                        | Token::Cedar
                 )
             }),
         }
@@ -1185,6 +1284,15 @@ fn is_top_keyword(token: &Token<'_>) -> bool {
             | Token::Type
             | Token::Vocabulary
             | Token::Actors
+    )
+}
+
+/// The closed set of constraint keywords allowed inside an attribute's
+/// constraint block (mirrors the parser's set).
+fn is_constraint_keyword(text: &str) -> bool {
+    matches!(
+        text,
+        "pattern" | "minLength" | "maxLength" | "minimum" | "maximum"
     )
 }
 

@@ -779,3 +779,218 @@ fn actor_file_syntax_errors_are_tagged_and_block() {
         assert!(diagnostic.is_error());
     }
 }
+
+#[test]
+fn cross_file_delegation_targets_a_domain_agent_through_the_union() {
+    // The agent, its kind, and its backing grant all live in the imported
+    // domain's inline block; the delegation lives in the actor file.
+    let domain = r#"
+package rex.support.domain
+
+class Ticket { String title }
+
+actors Inbox {
+    agent Helper
+    capability AutoReply on Ticket
+
+    grant Helper {
+        permit AutoReply
+    }
+}
+"#;
+    let source = r#"
+import "domain.mox"
+
+actors Support {
+    actor Clerk
+    capability AutoReply on Ticket
+
+    delegation AutoReplyHelp {
+        from Clerk
+        to Helper
+        permit AutoReply
+    }
+}
+"#;
+    let compilation = compile(source, &[("domain.mox", domain)]);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "the union namespace must resolve the delegation: {:?}",
+        compilation.diagnostics
+    );
+    let support = &compilation.model.expect("actor model lowered").blocks[0];
+    assert_eq!(support.delegations.len(), 1);
+    let delegation = &support.delegations[0];
+    assert_eq!(delegation.name, "AutoReplyHelp");
+    assert_eq!(delegation.from, "Clerk");
+    assert_eq!(delegation.to, "Helper");
+    assert_eq!(delegation.entries[0].capability, "AutoReply");
+    assert_eq!(delegation.entries[0].effect, GrantEffect::Permit);
+}
+
+#[test]
+fn cross_file_delegation_to_a_human_is_an_error() {
+    let domain = r#"
+package rex.support.domain
+
+class Ticket { String title }
+
+actors Inbox {
+    actor Helper
+    capability AutoReply on Ticket
+
+    grant Helper {
+        permit AutoReply
+    }
+}
+"#;
+    let source = r#"
+import "domain.mox"
+
+actors Support {
+    actor Clerk
+    capability AutoReply on Ticket
+
+    delegation AutoReplyHelp {
+        from Clerk
+        to Helper
+        permit AutoReply
+    }
+}
+"#;
+    let compilation = compile(source, &[("domain.mox", domain)]);
+    assert!(compilation.model.is_none(), "errors block lowering");
+    let (path, diagnostic) = single(
+        &compilation,
+        "delegation `AutoReplyHelp` targets actor `Helper`, which is not an agent",
+    );
+    assert_eq!(
+        path, "support.actor",
+        "the delegation lives in the actor file"
+    );
+    assert!(diagnostic.is_error());
+    assert_eq!(diagnostic.span, Some(span_of(source, "Helper", 0)));
+}
+
+#[test]
+fn cross_file_delegation_purpose_resolves_from_an_imported_domain() {
+    // The purpose is declared in the domain's inline block; the delegation
+    // lives in the actor file — the union namespace must connect them.
+    let domain = r#"
+package rex.support.domain
+
+class Ticket { String title }
+
+actors Inbox {
+    agent Helper
+    purpose Triage
+    capability AutoReply on Ticket
+
+    grant Helper {
+        permit AutoReply
+    }
+}
+"#;
+    let source = r#"
+import "domain.mox"
+
+actors Support {
+    actor Clerk
+    capability AutoReply on Ticket
+
+    delegation AutoReplyHelp {
+        from Clerk
+        to Helper
+        purpose Triage
+        permit AutoReply
+    }
+}
+"#;
+    let compilation = compile(source, &[("domain.mox", domain)]);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "the union namespace must resolve the purpose: {:?}",
+        compilation.diagnostics
+    );
+    let support = &compilation.model.expect("actor model lowered").blocks[0];
+    assert!(support.purposes.is_empty(), "no purposes declared here");
+    assert_eq!(support.delegations[0].purpose.as_deref(), Some("Triage"));
+}
+
+#[test]
+fn delegation_with_unknown_purpose_in_an_actor_file_is_an_error() {
+    let domain = r#"
+package rex.support.domain
+
+class Ticket { String title }
+
+actors Inbox {
+    agent Helper
+    capability AutoReply on Ticket
+
+    grant Helper {
+        permit AutoReply
+    }
+}
+"#;
+    let source = r#"
+import "domain.mox"
+
+actors Support {
+    actor Clerk
+    capability AutoReply on Ticket
+
+    delegation AutoReplyHelp {
+        from Clerk
+        to Helper
+        purpose Ghost
+        permit AutoReply
+    }
+}
+"#;
+    let compilation = compile(source, &[("domain.mox", domain)]);
+    assert!(compilation.model.is_none(), "errors block lowering");
+    let (path, diagnostic) = single(
+        &compilation,
+        "delegation `AutoReplyHelp` names unknown purpose `Ghost`",
+    );
+    assert_eq!(
+        path, "support.actor",
+        "the delegation lives in the actor file"
+    );
+    assert!(diagnostic.is_error());
+    assert_eq!(diagnostic.span, Some(span_of(source, "Ghost", 0)));
+}
+
+#[test]
+fn duplicate_purposes_across_actor_file_and_domain_are_legal() {
+    // Declarations union by name across files; only same-block duplicates
+    // error.
+    let domain = r#"
+package rex.support.domain
+
+class Ticket { String title }
+
+actors Inbox {
+    purpose Triage
+    actor Agent
+}
+"#;
+    let source = r#"
+import "domain.mox"
+
+actors Support {
+    purpose Triage
+    actor Clerk
+}
+"#;
+    let compilation = compile(source, &[("domain.mox", domain)]);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "cross-file duplicates union by name: {:?}",
+        compilation.diagnostics
+    );
+    let model = compilation.model.expect("actor model lowered");
+    assert_eq!(model.blocks[0].purposes, ["Triage"]);
+    assert_eq!(model.blocks[1].purposes, ["Triage"]);
+}

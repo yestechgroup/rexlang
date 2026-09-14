@@ -4,8 +4,8 @@
 //! [`Model`](rex_ir::Model).
 
 use rex_ir::{
-    ActorDef, ActorModel, ActorsDef, CapabilityDef, GrantDef, GrantEffect, GrantEntry, IrError,
-    NeverBothDef, TypeRef, ACTOR_MODEL_FORMAT_VERSION,
+    ActorDef, ActorKind, ActorModel, ActorsDef, CapabilityDef, DelegationDef, GrantDef,
+    GrantEffect, GrantEntry, IrError, NeverBothDef, TypeRef, ACTOR_MODEL_FORMAT_VERSION,
 };
 
 const PKG: &str = "nz.example.actors";
@@ -244,4 +244,279 @@ fn actor_model_format_version_is_pinned() {
     let parsed = ActorModel::from_json(&json).expect("deserialize own format version");
     assert_eq!(parsed.format_version, ACTOR_MODEL_FORMAT_VERSION);
     assert!(parsed.blocks.is_empty());
+}
+
+/// Pins the agent wire shape: `"kind"` after `"extends"` on an actor,
+/// `"delegations"` after `"grants"` on a block, and reuse of the plain
+/// [`GrantEntry`] shape inside a delegation.
+#[test]
+fn agent_actor_and_delegation_wire_format_is_pinned_by_json() {
+    let artifact = ActorModel::new().block(
+        ActorsDef::new("Support")
+            .actor(ActorDef::new("Customer"))
+            .actor(
+                ActorDef::new("Agent")
+                    .extends("Customer")
+                    .kind(ActorKind::Agent),
+            )
+            .capability(CapabilityDef::new("ResolveTicket", class_ref("Ticket")))
+            .grant(GrantDef::new("Customer").entry(GrantEntry::permit("ReadTicket")))
+            .delegation(
+                DelegationDef::new("DelegateSupport", "Customer", "Agent").entry(
+                    GrantEntry::permit("ResolveTicket")
+                        .when("session.actingAs == principal")
+                        .obligation("logDelegation"),
+                ),
+            ),
+    );
+
+    let expected = r#"{"formatVersion":1,"blocks":[{"name":"Support","actors":[{"name":"Customer"},{"name":"Agent","extends":"Customer","kind":"agent"}],"capabilities":[{"name":"ResolveTicket","class":{"type":"class","value":{"package":"nz.example.actors","name":"Ticket"}}}],"grants":[{"actor":"Customer","entries":[{"effect":"permit","capability":"ReadTicket"}]}],"delegations":[{"name":"DelegateSupport","from":"Customer","to":"Agent","entries":[{"effect":"permit","capability":"ResolveTicket","when":"session.actingAs == principal","obligations":["logDelegation"]}]}]}]}"#;
+
+    assert_eq!(artifact.to_json().expect("serialize"), expected);
+    let parsed = ActorModel::from_json(expected).expect("deserialize");
+    assert_eq!(artifact, parsed);
+}
+
+/// `kind` is additive: absent means no `kind` key at all; present it is a
+/// bare lowercase tag (`"human"` / `"agent"`), like `GrantEffect`.
+#[test]
+fn actor_kind_is_additive_and_serializes_as_bare_tag() {
+    let plain = serde_json::to_string(&ActorDef::new("Customer")).expect("serialize");
+    assert_eq!(plain, r#"{"name":"Customer"}"#);
+
+    let human = serde_json::to_string(&ActorDef::new("Customer").kind(ActorKind::Human))
+        .expect("serialize");
+    assert_eq!(human, r#"{"name":"Customer","kind":"human"}"#);
+
+    let agent =
+        serde_json::to_string(&ActorDef::new("Agent").kind(ActorKind::Agent)).expect("serialize");
+    assert_eq!(agent, r#"{"name":"Agent","kind":"agent"}"#);
+}
+
+/// A delegation with no entries omits the `entries` key, like grants.
+#[test]
+fn delegation_without_entries_omits_entries_key() {
+    let delegation = DelegationDef::new("DelegateSupport", "Customer", "Agent");
+    let json = serde_json::to_string(&delegation).expect("serialize");
+    assert_eq!(
+        json,
+        r#"{"name":"DelegateSupport","from":"Customer","to":"Agent"}"#
+    );
+}
+
+/// Kinds and delegations survive a JSON round trip faithfully, including a
+/// delegation built through the `permit`/`forbid` shortcuts and an
+/// entry-less delegation.
+#[test]
+fn agent_kind_and_delegations_round_trip_through_json() {
+    let model = ActorModel::new().block(
+        ActorsDef::new("Support")
+            .actor(ActorDef::new("Customer").kind(ActorKind::Human))
+            .actor(ActorDef::new("Agent").kind(ActorKind::Agent))
+            .capability(CapabilityDef::new("ReadTicket", class_ref("Ticket")))
+            .delegation(
+                DelegationDef::new("DelegateSupport", "Customer", "Agent")
+                    .permit("ReadTicket")
+                    .forbid("ResolveTicket"),
+            )
+            .delegation(DelegationDef::new("Empty", "Customer", "Agent")),
+    );
+
+    let json = model.to_json().expect("serialize");
+    let parsed = ActorModel::from_json(&json).expect("deserialize");
+    assert_eq!(model, parsed);
+
+    let block = &parsed.blocks[0];
+    assert_eq!(block.actors[0].kind, Some(ActorKind::Human));
+    assert_eq!(block.actors[1].kind, Some(ActorKind::Agent));
+    assert_eq!(block.delegations.len(), 2);
+    let delegation = &block.delegations[0];
+    assert_eq!(delegation.name, "DelegateSupport");
+    assert_eq!(delegation.from, "Customer");
+    assert_eq!(delegation.to, "Agent");
+    assert_eq!(delegation.entries[0].effect, GrantEffect::Permit);
+    assert_eq!(delegation.entries[0].capability, "ReadTicket");
+    assert_eq!(delegation.entries[1].effect, GrantEffect::Forbid);
+    assert_eq!(delegation.entries[1].capability, "ResolveTicket");
+    assert!(block.delegations[1].entries.is_empty());
+}
+
+/// Artifacts written before kinds and delegations existed — no `kind`, no
+/// `delegations` — deserialize unchanged, defaulting to the empty cases.
+#[test]
+fn legacy_artifact_without_kind_or_delegations_deserializes() {
+    let json = format!(
+        r#"{{
+          "formatVersion": 1,
+          "blocks": [
+            {{
+              "name": "Support",
+              "actors": [
+                {{ "name": "Customer" }},
+                {{ "name": "Agent", "extends": "Customer" }}
+              ],
+              "capabilities": [
+                {{
+                  "name": "ReadTicket",
+                  "class": {{
+                    "type": "class",
+                    "value": {{ "package": "{PKG}", "name": "Ticket" }}
+                  }}
+                }}
+              ],
+              "grants": [
+                {{
+                  "actor": "Customer",
+                  "entries": [{{ "effect": "permit", "capability": "ReadTicket" }}]
+                }}
+              ]
+            }}
+          ]
+        }}"#
+    );
+    let artifact = ActorModel::from_json(&json).expect("deserialize legacy artifact");
+    let block = &artifact.blocks[0];
+    assert!(block.delegations.is_empty());
+    assert_eq!(block.actors[0].kind, None);
+    assert_eq!(block.actors[1].kind, None);
+    assert_eq!(block.actors[1].extends.as_deref(), Some("Customer"));
+
+    // Re-serializing drops the absent keys again, so the round trip is
+    // faithful.
+    let reserialized = artifact.to_json().expect("serialize");
+    assert!(!reserialized.contains("kind"));
+    assert!(!reserialized.contains("delegations"));
+    let reparsed = ActorModel::from_json(&reserialized).expect("deserialize");
+    assert_eq!(artifact, reparsed);
+}
+
+/// Pins the purpose wire shape: `"purposes"` (bare name strings) sits
+/// between `"capabilities"` and `"grants"` on a block, and `"purpose"` sits
+/// between `"to"` and `"entries"` on a delegation.
+#[test]
+fn purposes_and_delegation_purpose_wire_format_is_pinned_by_json() {
+    let artifact = ActorModel::new().block(
+        ActorsDef::new("Support")
+            .actor(ActorDef::new("Customer"))
+            .actor(ActorDef::new("Agent").kind(ActorKind::Agent))
+            .capability(CapabilityDef::new("ResolveTicket", class_ref("Ticket")))
+            .purpose("SessionScopedAssistance")
+            .grant(GrantDef::new("Customer").entry(GrantEntry::permit("ReadTicket")))
+            .delegation(
+                DelegationDef::new("DelegateSupport", "Customer", "Agent")
+                    .purpose("Acting on behalf of the customer")
+                    .entry(GrantEntry::permit("ResolveTicket")),
+            ),
+    );
+
+    let expected = r#"{"formatVersion":1,"blocks":[{"name":"Support","actors":[{"name":"Customer"},{"name":"Agent","kind":"agent"}],"capabilities":[{"name":"ResolveTicket","class":{"type":"class","value":{"package":"nz.example.actors","name":"Ticket"}}}],"purposes":["SessionScopedAssistance"],"grants":[{"actor":"Customer","entries":[{"effect":"permit","capability":"ReadTicket"}]}],"delegations":[{"name":"DelegateSupport","from":"Customer","to":"Agent","purpose":"Acting on behalf of the customer","entries":[{"effect":"permit","capability":"ResolveTicket"}]}]}]}"#;
+
+    assert_eq!(artifact.to_json().expect("serialize"), expected);
+    let parsed = ActorModel::from_json(expected).expect("deserialize");
+    assert_eq!(artifact, parsed);
+}
+
+/// Purposes are additive (wire contract rule 9): a block without purposes
+/// has no `purposes` key and a delegation without a purpose has no
+/// `purpose` key — empty/old artifacts stay byte-identical.
+#[test]
+fn purposes_are_additive_and_omitted_when_absent() {
+    let block = serde_json::to_string(&ActorsDef::new("Support")).expect("serialize");
+    assert_eq!(block, r#"{"name":"Support"}"#);
+
+    let delegation =
+        serde_json::to_string(&DelegationDef::new("DelegateSupport", "Customer", "Agent"))
+            .expect("serialize");
+    assert_eq!(
+        delegation,
+        r#"{"name":"DelegateSupport","from":"Customer","to":"Agent"}"#
+    );
+
+    let artifact = ActorModel::new().block(ActorsDef::new("Support").actor(ActorDef::new("Agent")));
+    let json = artifact.to_json().expect("serialize");
+    assert!(!json.contains("purposes"));
+    assert!(!json.contains("purpose"));
+}
+
+/// Block purposes and delegation purposes survive a JSON round trip.
+#[test]
+fn purposes_round_trip_through_json() {
+    let model = ActorModel::new().block(
+        ActorsDef::new("Support")
+            .actor(ActorDef::new("Customer"))
+            .actor(ActorDef::new("Agent"))
+            .purpose("Billing")
+            .purpose("Support")
+            .delegation(
+                DelegationDef::new("DelegateSupport", "Customer", "Agent")
+                    .purpose("Assisting the customer")
+                    .permit("ReadTicket"),
+            )
+            .delegation(DelegationDef::new("Empty", "Customer", "Agent")),
+    );
+
+    let json = model.to_json().expect("serialize");
+    let parsed = ActorModel::from_json(&json).expect("deserialize");
+    assert_eq!(model, parsed);
+
+    let block = &parsed.blocks[0];
+    assert_eq!(block.purposes, ["Billing", "Support"]);
+    assert_eq!(
+        block.delegations[0].purpose.as_deref(),
+        Some("Assisting the customer")
+    );
+    assert_eq!(block.delegations[1].purpose, None);
+}
+
+/// Artifacts written before purposes existed — no `purposes` on blocks, no
+/// `purpose` on delegations — deserialize unchanged, defaulting to the
+/// empty cases.
+#[test]
+fn legacy_artifact_without_purposes_deserializes() {
+    let json = format!(
+        r#"{{
+          "formatVersion": 1,
+          "blocks": [
+            {{
+              "name": "Support",
+              "actors": [{{ "name": "Customer" }}, {{ "name": "Agent" }}],
+              "capabilities": [
+                {{
+                  "name": "ReadTicket",
+                  "class": {{
+                    "type": "class",
+                    "value": {{ "package": "{PKG}", "name": "Ticket" }}
+                  }}
+                }}
+              ],
+              "grants": [
+                {{
+                  "actor": "Customer",
+                  "entries": [{{ "effect": "permit", "capability": "ReadTicket" }}]
+                }}
+              ],
+              "delegations": [
+                {{
+                  "name": "DelegateSupport",
+                  "from": "Customer",
+                  "to": "Agent",
+                  "entries": [{{ "effect": "permit", "capability": "ReadTicket" }}]
+                }}
+              ]
+            }}
+          ]
+        }}"#
+    );
+    let artifact = ActorModel::from_json(&json).expect("deserialize legacy artifact");
+    let block = &artifact.blocks[0];
+    assert!(block.purposes.is_empty());
+    assert_eq!(block.delegations[0].purpose, None);
+
+    // Re-serializing drops the absent keys again, so the round trip is
+    // faithful.
+    let reserialized = artifact.to_json().expect("serialize");
+    assert!(!reserialized.contains("purposes"));
+    assert!(!reserialized.contains(r#""purpose""#));
+    let reparsed = ActorModel::from_json(&reserialized).expect("deserialize");
+    assert_eq!(artifact, reparsed);
 }

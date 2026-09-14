@@ -15,7 +15,7 @@ class Ticket {
 
 actors Support {
     actor Customer
-    actor Agent extends Customer
+    agent Agent extends Customer
     actor Manager extends Agent
     actor Finance
 
@@ -23,6 +23,8 @@ actors Support {
     capability ResolveTicket on Ticket
     capability RaiseRefund on Ticket
     capability ApproveRefund on Ticket
+
+    purpose RefundTriage
 
     grant Customer {
         permit ReadTicket
@@ -40,6 +42,13 @@ actors Support {
 
     grant Finance {
         permit ApproveRefund
+    }
+
+    delegation RefundIntake {
+        from Customer
+        to Agent
+        purpose RefundTriage
+        permit ReadTicket when (!internal) obligation ack
     }
 
     never_both { RaiseRefund, ApproveRefund }

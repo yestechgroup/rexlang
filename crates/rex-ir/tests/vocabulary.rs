@@ -14,6 +14,7 @@ const PKG: &str = "nz.example.library";
 fn currency_def() -> VocabularyDef {
     VocabularyDef {
         name: "Currency".to_string(),
+        description: None,
         source: "iso:4217".to_string(),
         version: Some("2024-01-01".to_string()),
         key: "alpha3".to_string(),

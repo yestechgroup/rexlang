@@ -17,7 +17,7 @@ use chumsky::input::{ExactSizeInput, ValueInput};
 use chumsky::prelude::*;
 
 use crate::ast::*;
-use crate::lexer::{lex, Token};
+use crate::lexer::{lex, lex_with_comments, Token};
 
 /// Parser input: a token slice paired with a custom [`chumsky::Input`]
 /// implementation that reports **byte-offset** spans (chumsky's built-in slice
@@ -390,19 +390,80 @@ fn params<'src>() -> impl Parser<'src, Tokens<'src>, Vec<Param>, MoxExtra<'src>>
         .map(|list| list.unwrap_or_default())
 }
 
+/// The closed set of constraint keywords allowed inside an attribute's
+/// constraint block. They are contextual: ordinary identifiers everywhere
+/// else, matching the `create`/`convert` precedent.
+const CONSTRAINT_KEYWORDS: [&str; 5] = ["pattern", "minLength", "maxLength", "minimum", "maximum"];
+
+/// One `keyword value` entry inside an attribute's constraint block.
+fn constraint_entry<'src>() -> impl Parser<'src, Tokens<'src>, Constraint, MoxExtra<'src>> + Clone {
+    select! {
+        Token::Ident(text) = e if CONSTRAINT_KEYWORDS.contains(&text) => (text, e.span()),
+    }
+    .then(
+        string_lit()
+            .map_with(|value, e| ConstraintValue::Str {
+                value,
+                span: e.span(),
+            })
+            .or(int_lit().map_with(|value, e| ConstraintValue::Int {
+                value,
+                span: e.span(),
+            })),
+    )
+    .map_with(|((text, name_span), value), e| Constraint {
+        name: Name {
+            text: text.to_string(),
+            span: name_span,
+            escaped: false,
+        },
+        value,
+        span: e.span(),
+    })
+}
+
+/// An attribute's optional `{ pattern "..." minLength 3 }` constraint block:
+/// a closed keyword set with literal values, each at most once (a repeat is
+/// a syntax error, mirroring the datatype `create`/`convert` duplicate rule).
+fn constraint_block<'src>(
+) -> impl Parser<'src, Tokens<'src>, Vec<Constraint>, MoxExtra<'src>> + Clone {
+    kw(Token::LBrace)
+        .ignore_then(constraint_entry().repeated().collect::<Vec<_>>())
+        .then_ignore(kw(Token::RBrace))
+        .validate(|entries, _e, emitter| {
+            for (index, entry) in entries.iter().enumerate() {
+                if entries[..index]
+                    .iter()
+                    .any(|prior| prior.name.text == entry.name.text)
+                {
+                    emitter.emit(Rich::custom(
+                        entry.name.span,
+                        format!("duplicate constraint `{}`", entry.name.text),
+                    ));
+                }
+            }
+            entries
+        })
+}
+
 fn attribute<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<'src>> + Clone {
     tref()
         .then(multiplicity().or_not())
         .then(name())
         .then(kw(Token::Eq).ignore_then(default_value()).or_not())
+        .then(constraint_block().or_not())
         .map_with(
-            |(((type_ref, multiplicity), name), default), e| FeatureDecl::Attribute {
-                modifiers: Modifiers::default(),
-                type_ref,
-                multiplicity,
-                name,
-                default,
-                span: e.span(),
+            |((((type_ref, multiplicity), name), default), constraints), e| {
+                FeatureDecl::Attribute {
+                    modifiers: Modifiers::default(),
+                    doc: None,
+                    type_ref,
+                    multiplicity,
+                    name,
+                    default,
+                    constraints: constraints.unwrap_or_default(),
+                    span: e.span(),
+                }
             },
         )
 }
@@ -416,6 +477,7 @@ fn containment<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<
         .map_with(
             |(((type_ref, multiplicity), name), opposite), e| FeatureDecl::Containment {
                 modifiers: Modifiers::default(),
+                doc: None,
                 type_ref,
                 multiplicity,
                 name,
@@ -434,6 +496,7 @@ fn reference<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<'s
         .map_with(
             |(((type_ref, multiplicity), name), opposite), e| FeatureDecl::Reference {
                 modifiers: Modifiers::default(),
+                doc: None,
                 type_ref,
                 multiplicity,
                 name,
@@ -450,6 +513,7 @@ fn container<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<'s
         .then(opposite().or_not())
         .map_with(|((type_ref, name), opposite), e| FeatureDecl::Container {
             modifiers: Modifiers::default(),
+            doc: None,
             type_ref,
             name,
             opposite,
@@ -466,6 +530,7 @@ fn op_decl<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<'src
         .map_with(
             |(((return_type, name), params), (body, bodies)), e| FeatureDecl::Op {
                 modifiers: Modifiers::default(),
+                doc: None,
                 return_type,
                 name,
                 params,
@@ -488,6 +553,7 @@ fn derived_decl<'src>() -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra
         .map_with(
             |(((type_ref, multiplicity), name), (body, bodies)), e| FeatureDecl::Derived {
                 modifiers: Modifiers::default(),
+                doc: None,
                 type_ref,
                 multiplicity,
                 name,
@@ -555,6 +621,7 @@ fn class_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>> +
         .map_with(|((name, extends), features), e| {
             Decl::Class(ClassDecl {
                 name,
+                doc: None,
                 extends: extends.unwrap_or_default(),
                 features: features.into_iter().flatten().collect(),
                 span: e.span(),
@@ -670,6 +737,7 @@ fn interface_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src
         .map_with(|(name, bindings), e| {
             Decl::Interface(InterfaceDecl {
                 name,
+                doc: None,
                 bindings,
                 span: e.span(),
             })
@@ -682,6 +750,7 @@ fn enum_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>> + 
         .then(kw(Token::Eq).ignore_then(int_lit()).or_not())
         .map_with(|((name, label), value), e| EnumLiteral {
             name,
+            doc: None,
             label,
             value,
             span: e.span(),
@@ -694,6 +763,7 @@ fn enum_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>> + 
         .map_with(|(name, literals), e| {
             Decl::Enum(EnumDecl {
                 name,
+                doc: None,
                 literals,
                 span: e.span(),
             })
@@ -713,6 +783,7 @@ fn datatype_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>
             let (bindings, create, convert) = block.unwrap_or_default();
             Decl::Datatype(DatatypeDecl {
                 name,
+                doc: None,
                 wraps,
                 bindings,
                 create,
@@ -766,6 +837,7 @@ fn vocabulary_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'sr
             }
             Decl::Vocabulary(VocabularyDecl {
                 name,
+                doc: None,
                 source,
                 version,
                 key,
@@ -779,8 +851,18 @@ fn vocabulary_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'sr
 enum ActorsItem {
     Actor(ActorDecl),
     Capability(CapabilityDecl),
+    Purpose(PurposeDecl),
     Grant(GrantDecl),
+    Delegation(DelegationDecl),
     NeverBoth(NeverBothDecl),
+}
+
+/// One body item of a `delegation` declaration.
+enum DelegationItem {
+    From(Name),
+    To(Name),
+    Purpose(Name),
+    Entry(GrantEntryDecl),
 }
 
 /// The `actors <name> { ... }` block grammar, shared verbatim by the inline
@@ -790,6 +872,16 @@ fn actors_block<'src>() -> impl Parser<'src, Tokens<'src>, ActorsDecl, MoxExtra<
         .ignore_then(name())
         .then(kw(Token::Extends).ignore_then(name()).or_not())
         .map_with(|(name, extends), e| ActorDecl {
+            kind: ActorKind::Human,
+            name,
+            extends,
+            span: e.span(),
+        });
+    let agent_decl = kw(Token::Agent)
+        .ignore_then(name())
+        .then(kw(Token::Extends).ignore_then(name()).or_not())
+        .map_with(|(name, extends), e| ActorDecl {
+            kind: ActorKind::Agent,
             name,
             extends,
             span: e.span(),
@@ -801,6 +893,12 @@ fn actors_block<'src>() -> impl Parser<'src, Tokens<'src>, ActorsDecl, MoxExtra<
         .map_with(|(name, class), e| CapabilityDecl {
             name,
             class,
+            span: e.span(),
+        });
+    let purpose_decl = kw(Token::Purpose)
+        .ignore_then(name())
+        .map_with(|name, e| PurposeDecl {
+            name,
             span: e.span(),
         });
     let never_both_decl = kw(Token::NeverBoth)
@@ -862,17 +960,51 @@ fn actors_block<'src>() -> impl Parser<'src, Tokens<'src>, ActorsDecl, MoxExtra<
     let grant_decl = kw(Token::Grant)
         .ignore_then(name())
         .then_ignore(kw(Token::LBrace))
-        .then(entry.repeated().collect::<Vec<_>>())
+        .then(entry.clone().repeated().collect::<Vec<_>>())
         .then_ignore(kw(Token::RBrace))
         .map_with(|(actor, entries), e| GrantDecl {
             actor,
             entries,
             span: e.span(),
         });
+    let from_item = kw(Token::From)
+        .ignore_then(name())
+        .map(DelegationItem::From);
+    let to_item = select! { Token::Ident(text) if text == "to" => () }
+        .ignore_then(name())
+        .map(DelegationItem::To);
+    let purpose_item = kw(Token::Purpose)
+        .ignore_then(name())
+        .map(DelegationItem::Purpose);
+    let delegation_item = choice((
+        from_item,
+        to_item,
+        purpose_item,
+        entry.map(DelegationItem::Entry),
+    ));
+    let delegation_decl = kw(Token::Delegation)
+        .ignore_then(name())
+        .then_ignore(kw(Token::LBrace))
+        .then(delegation_item.repeated().collect::<Vec<_>>())
+        .then_ignore(kw(Token::RBrace))
+        .map_with(|(name, items), e| {
+            let (mut decl, problems) = fold_delegation(name, items);
+            decl.span = e.span();
+            (decl, problems)
+        })
+        .validate(|(decl, problems), _, emitter| {
+            for (span, message) in problems {
+                emitter.emit(Rich::custom(span, message));
+            }
+            decl
+        });
     let item = choice((
         actor_decl.map(ActorsItem::Actor),
+        agent_decl.map(ActorsItem::Actor),
         capability_decl.map(ActorsItem::Capability),
+        purpose_decl.map(ActorsItem::Purpose),
         grant_decl.map(ActorsItem::Grant),
+        delegation_decl.map(ActorsItem::Delegation),
         never_both_decl.map(ActorsItem::NeverBoth),
     ));
     kw(Token::Actors)
@@ -883,13 +1015,17 @@ fn actors_block<'src>() -> impl Parser<'src, Tokens<'src>, ActorsDecl, MoxExtra<
         .map_with(|(name, items), e| {
             let mut actors = Vec::new();
             let mut capabilities = Vec::new();
+            let mut purposes = Vec::new();
             let mut grants = Vec::new();
+            let mut delegations = Vec::new();
             let mut never_both = Vec::new();
             for item in items {
                 match item {
                     ActorsItem::Actor(decl) => actors.push(decl),
                     ActorsItem::Capability(decl) => capabilities.push(decl),
+                    ActorsItem::Purpose(decl) => purposes.push(decl),
                     ActorsItem::Grant(decl) => grants.push(decl),
+                    ActorsItem::Delegation(decl) => delegations.push(decl),
                     ActorsItem::NeverBoth(decl) => never_both.push(decl),
                 }
             }
@@ -897,7 +1033,9 @@ fn actors_block<'src>() -> impl Parser<'src, Tokens<'src>, ActorsDecl, MoxExtra<
                 name,
                 actors,
                 capabilities,
+                purposes,
                 grants,
+                delegations,
                 never_both,
                 span: e.span(),
             }
@@ -908,6 +1046,88 @@ fn actors_block<'src>() -> impl Parser<'src, Tokens<'src>, ActorsDecl, MoxExtra<
 /// [`actors_block`] grammar wrapped as a top-level declaration.
 fn actors_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>> + Clone {
     actors_block().map(Decl::Actors)
+}
+
+/// Folds the body items of a delegation into a [`DelegationDecl`], enforcing
+/// the required `from` → `to` → `purpose` ordering and rejecting `cedar`
+/// entries. The returned problems are (span, message) pairs the caller emits
+/// as errors; the AST recovers as much as possible regardless.
+fn fold_delegation(
+    name: Name,
+    items: Vec<DelegationItem>,
+) -> (DelegationDecl, Vec<(Span, String)>) {
+    let mut from: Option<Name> = None;
+    let mut to: Option<Name> = None;
+    let mut purpose: Option<Name> = None;
+    let mut entries = Vec::new();
+    let mut problems = Vec::new();
+    // 0 = expecting `from`, 1 = expecting `to`, 2 = collecting entries,
+    // 3 = collecting entries after the (optional) `purpose` line.
+    let mut stage = 0;
+    for item in items {
+        match item {
+            DelegationItem::From(actor) => {
+                if stage == 0 {
+                    from = Some(actor);
+                    stage = 1;
+                } else {
+                    problems.push((actor.span, "duplicate `from` in delegation".to_string()));
+                }
+            }
+            DelegationItem::To(actor) => match stage {
+                1 => {
+                    to = Some(actor);
+                    stage = 2;
+                }
+                0 => problems.push((actor.span, "delegation requires `from`".to_string())),
+                _ => problems.push((actor.span, "duplicate `to` in delegation".to_string())),
+            },
+            DelegationItem::Purpose(name) => match stage {
+                2 => {
+                    purpose = Some(name);
+                    stage = 3;
+                }
+                0 => problems.push((name.span, "delegation requires `from`".to_string())),
+                1 => problems.push((name.span, "delegation requires `to`".to_string())),
+                _ => problems.push((name.span, "duplicate `purpose` in delegation".to_string())),
+            },
+            DelegationItem::Entry(GrantEntryDecl::Cedar(body)) => {
+                problems.push((
+                    body.target.span,
+                    "`cedar` entries are not allowed inside a delegation".to_string(),
+                ));
+            }
+            DelegationItem::Entry(GrantEntryDecl::Effect(effect)) => {
+                match stage {
+                    0 => problems.push((effect.span, "delegation requires `from`".to_string())),
+                    1 => problems.push((effect.span, "delegation requires `to`".to_string())),
+                    _ => {}
+                }
+                entries.push(effect);
+            }
+        }
+    }
+    match stage {
+        0 => problems.push((name.span, "delegation requires `from`".to_string())),
+        1 => problems.push((name.span, "delegation requires `to`".to_string())),
+        _ => {}
+    }
+    let missing = Name {
+        text: String::new(),
+        span: name.span,
+        escaped: false,
+    };
+    (
+        DelegationDecl {
+            name,
+            from: from.unwrap_or_else(|| missing.clone()),
+            to: to.unwrap_or_else(|| missing.clone()),
+            purpose,
+            entries,
+            span: (0..0).into(),
+        },
+        problems,
+    )
 }
 
 /// An `import "path"` declaration of an `.actor` file. The path is a string
@@ -985,10 +1205,12 @@ fn model<'src>() -> impl Parser<'src, Tokens<'src>, Model, MoxExtra<'src>> + Clo
 /// Lex and parse a `.mox` source text.
 ///
 /// This function never panics and always recovers as much of the AST as
-/// possible; check [`ParseResult::errors`] for syntax problems.
+/// possible; check [`ParseResult::errors`] for syntax problems. Doc comments
+/// (`///`, `/** ... */`) on their own lines directly above a declaration,
+/// feature, or enum literal are attached to it as its `doc` description.
 pub fn parse(source: &str) -> ParseResult {
-    let tokens = match lex(source) {
-        Ok(tokens) => tokens,
+    let (tokens, comments) = match lex_with_comments(source) {
+        Ok(result) => result,
         Err(error) => {
             return ParseResult {
                 ast: None,
@@ -999,7 +1221,10 @@ pub fn parse(source: &str) -> ParseResult {
             }
         }
     };
-    let (ast, errors) = model().parse(Tokens::new(&tokens)).into_output_errors();
+    let (mut ast, errors) = model().parse(Tokens::new(&tokens)).into_output_errors();
+    if let Some(model) = ast.as_mut() {
+        attach_docs(model, &comments, source);
+    }
     ParseResult {
         ast,
         errors: errors
@@ -1009,6 +1234,110 @@ pub fn parse(source: &str) -> ParseResult {
                 span: *error.span(),
             })
             .collect(),
+    }
+}
+
+/// One precomputed comment fact used by doc attachment.
+struct DocComment {
+    content: Option<String>,
+    start_line: usize,
+    end_line: usize,
+    /// Whether only whitespace precedes the comment on its first line.
+    begins_line: bool,
+}
+
+/// Attaches doc comments to the model's declarations, features, and enum
+/// literals. A doc run is a maximal sequence of doc comments, each on its
+/// own line, each starting on the line directly after the previous one ends,
+/// whose last comment ends on the line directly above the declaration's
+/// first line.
+fn attach_docs(model: &mut Model, comments: &[crate::lexer::Comment<'_>], source: &str) {
+    let line_starts: Vec<usize> = {
+        let mut starts = vec![0];
+        for (index, byte) in source.bytes().enumerate() {
+            if byte == b'\n' {
+                starts.push(index + 1);
+            }
+        }
+        starts
+    };
+    let line_of = |byte: usize| -> usize {
+        line_starts
+            .partition_point(|&start| start <= byte)
+            .saturating_sub(1)
+    };
+    let docs: Vec<DocComment> = comments
+        .iter()
+        .map(|comment| DocComment {
+            content: comment.doc_content().filter(|content| !content.is_empty()),
+            start_line: line_of(comment.span.start),
+            end_line: line_of(comment.span.end.saturating_sub(1)),
+            begins_line: source[line_starts[line_of(comment.span.start)]..comment.span.start]
+                .bytes()
+                .all(|byte| byte.is_ascii_whitespace()),
+        })
+        .collect();
+
+    /// The joined description of the doc run ending directly above
+    /// `start_line`, or `None`.
+    fn run_above(docs: &[DocComment], start_line: usize) -> Option<String> {
+        let (last_index, _) =
+            docs.iter().enumerate().rev().find(|(_, comment)| {
+                comment.end_line + 1 == start_line && comment.content.is_some()
+            })?;
+        if !docs[last_index].begins_line {
+            return None;
+        }
+        // Walk back through the contiguous doc run above the last comment.
+        let mut first = last_index;
+        while first > 0 {
+            let previous = &docs[first - 1];
+            let current = &docs[first];
+            let contiguous = previous.end_line + 1 == current.start_line;
+            if !(contiguous && previous.content.is_some() && previous.begins_line) {
+                break;
+            }
+            first -= 1;
+        }
+        let joined = docs[first..=last_index]
+            .iter()
+            .map(|comment| {
+                comment
+                    .content
+                    .as_deref()
+                    .expect("run members are doc comments")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        (!joined.is_empty()).then_some(joined)
+    }
+
+    for decl in &mut model.declarations {
+        let start_line = line_of(decl.span().start);
+        match decl {
+            Decl::Class(decl) => {
+                decl.doc = run_above(&docs, start_line);
+                for feature in &mut decl.features {
+                    let feature_line = line_of(feature.span().start);
+                    if feature.doc().is_none() {
+                        feature.set_doc(run_above(&docs, feature_line));
+                    }
+                }
+            }
+            Decl::Interface(decl) => decl.doc = run_above(&docs, start_line),
+            Decl::Enum(decl) => {
+                decl.doc = run_above(&docs, start_line);
+                for literal in &mut decl.literals {
+                    let literal_line = line_of(literal.span.start);
+                    if literal.doc.is_none() {
+                        literal.doc = run_above(&docs, literal_line);
+                    }
+                }
+            }
+            Decl::Datatype(decl) => decl.doc = run_above(&docs, start_line),
+            Decl::Vocabulary(decl) => decl.doc = run_above(&docs, start_line),
+            Decl::Annotation(_) | Decl::Actors(_) => {}
+        }
     }
 }
 

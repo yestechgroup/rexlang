@@ -66,6 +66,8 @@ pub enum Token<'src> {
     Actors,
     #[token("actor")]
     Actor,
+    #[token("agent")]
+    Agent,
     #[token("capability")]
     Capability,
     #[token("grant")]
@@ -82,6 +84,10 @@ pub enum Token<'src> {
     On,
     #[token("never_both")]
     NeverBoth,
+    #[token("delegation")]
+    Delegation,
+    #[token("purpose")]
+    Purpose,
     #[token("cedar")]
     Cedar,
     #[token("import")]
@@ -185,6 +191,7 @@ impl Token<'_> {
             Token::Facet => "facet",
             Token::Actors => "actors",
             Token::Actor => "actor",
+            Token::Agent => "agent",
             Token::Capability => "capability",
             Token::Grant => "grant",
             Token::Permit => "permit",
@@ -193,6 +200,8 @@ impl Token<'_> {
             Token::Obligation => "obligation",
             Token::On => "on",
             Token::NeverBoth => "never_both",
+            Token::Delegation => "delegation",
+            Token::Purpose => "purpose",
             Token::Cedar => "cedar",
             Token::Import => "import",
             _ => return None,
@@ -265,6 +274,63 @@ pub struct Comment<'src> {
     pub text: &'src str,
     /// Span of the comment in the source.
     pub span: Span,
+}
+
+impl Comment<'_> {
+    /// The normalized description text when this is a *doc* comment
+    /// (`/// ...` or `/** ... */`), or `None` for an ordinary comment.
+    ///
+    /// Normalization strips the doc delimiters, one optional leading space
+    /// per line, and the `*` continuation markers of block comments; the
+    /// lines are joined with `\n`.
+    pub fn doc_content(&self) -> Option<String> {
+        match self.kind {
+            CommentKind::Line => {
+                let content = self.text.strip_prefix("///")?;
+                Some(strip_one_space(content).trim_end().to_string())
+            }
+            CommentKind::Block => {
+                let interior = self
+                    .text
+                    .strip_prefix("/**")?
+                    .strip_suffix("*/")?
+                    .trim_end();
+                if interior.is_empty() {
+                    return Some(String::new());
+                }
+                let mut lines: Vec<String> = Vec::new();
+                for line in interior.split('\n').skip(1) {
+                    // Continuation lines drop their leading whitespace and
+                    // the conventional `*` marker.
+                    let mut line = line.trim_start();
+                    line = line.strip_prefix('*').unwrap_or(line);
+                    lines.push(strip_one_space(line).trim_end().to_string());
+                }
+                // The first interior line sits on the `/**` line itself.
+                let first = strip_one_space(interior.split('\n').next().unwrap_or_default())
+                    .trim_start()
+                    .trim_end()
+                    .to_string();
+                let mut all = Vec::with_capacity(lines.len() + 1);
+                if !first.is_empty() {
+                    all.push(first);
+                }
+                all.extend(lines);
+                while all.first().is_some_and(String::is_empty) {
+                    all.remove(0);
+                }
+                while all.last().is_some_and(String::is_empty) {
+                    all.pop();
+                }
+                Some(all.join("\n"))
+            }
+        }
+    }
+}
+
+/// Strips a single leading space, if present.
+fn strip_one_space(text: &str) -> &str {
+    text.strip_prefix(' ').unwrap_or(text)
 }
 
 /// Tokens paired with their spans.
@@ -390,6 +456,37 @@ mod tests {
         // Spans still cover the raw text including the caret.
         assert_eq!(tokens[0].1, (0..7).into());
         assert_eq!(tokens[4].1, (25..36).into());
+    }
+
+    #[test]
+    fn agent_delegation_keywords_lex_as_keywords() {
+        assert_eq!(
+            kinds("agent delegation"),
+            vec![Token::Agent, Token::Delegation]
+        );
+    }
+
+    #[test]
+    fn agent_delegation_keywords_escape_like_any_keyword() {
+        let tokens = lex("^agent ^delegation").unwrap();
+        assert_eq!(tokens[0].0, Token::IdentEscaped("agent"));
+        assert_eq!(tokens[1].0, Token::IdentEscaped("delegation"));
+        // Spans still cover the raw text including the caret.
+        assert_eq!(tokens[0].1, (0..6).into());
+        assert_eq!(tokens[1].1, (7..18).into());
+    }
+
+    #[test]
+    fn purpose_keyword_lexes_as_keyword() {
+        assert_eq!(kinds("purpose"), vec![Token::Purpose]);
+    }
+
+    #[test]
+    fn purpose_keyword_escapes_like_any_keyword() {
+        let tokens = lex("^purpose").unwrap();
+        assert_eq!(tokens[0].0, Token::IdentEscaped("purpose"));
+        // Span still covers the raw text including the caret.
+        assert_eq!(tokens[0].1, (0..8).into());
     }
 
     #[test]

@@ -1643,6 +1643,7 @@ mod tests {
         let mut package = Package::new(PKG);
         package.vocabularies.push(VocabularyDef {
             name: "Currency".to_string(),
+            description: None,
             source: "iso:4217".to_string(),
             version: Some("2024-01-01".to_string()),
             key: "alpha3".to_string(),
@@ -1898,6 +1899,7 @@ mod tests {
         let mut second = Package::new("nz.example.other");
         second.vocabularies.push(VocabularyDef {
             name: "Currency".to_string(),
+            description: None,
             source: "other:source".to_string(),
             version: None,
             key: "code".to_string(),
