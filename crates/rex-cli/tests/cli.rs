@@ -10,9 +10,15 @@ fn rexlang() -> Command {
     Command::new(env!("CARGO_BIN_EXE_rexlang"))
 }
 
-/// A unique scratch directory per test process.
+/// A unique scratch directory per test, so concurrently running tests never
+/// share files even when they use the same source file name.
 fn scratch_dir() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("rex-cli-tests-{}", std::process::id()));
+    let thread = std::thread::current();
+    let test = thread
+        .name()
+        .unwrap_or("test")
+        .replace(['/', ' ', ':'], "_");
+    let dir = std::env::temp_dir().join(format!("rex-cli-tests-{}-{}", std::process::id(), test));
     std::fs::create_dir_all(&dir).expect("create scratch dir");
     dir
 }
