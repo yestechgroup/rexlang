@@ -390,15 +390,19 @@ fn params<'src>() -> impl Parser<'src, Tokens<'src>, Vec<Param>, MoxExtra<'src>>
         .map(|list| list.unwrap_or_default())
 }
 
-/// The closed set of constraint keywords allowed inside an attribute's
-/// constraint block. They are contextual: ordinary identifiers everywhere
+/// The closed set of value-taking constraint keywords allowed inside an
+/// attribute's constraint block, plus the value-less `unique` (handled by
+/// the flag arm below). They are contextual: ordinary identifiers everywhere
 /// else, matching the `create`/`convert` precedent.
-const CONSTRAINT_KEYWORDS: [&str; 5] = ["pattern", "minLength", "maxLength", "minimum", "maximum"];
+const VALUED_CONSTRAINT_KEYWORDS: [&str; 5] =
+    ["pattern", "minLength", "maxLength", "minimum", "maximum"];
 
 /// One `keyword value` entry inside an attribute's constraint block.
+/// Value-less `unique` takes no value: a literal after it is a syntax error
+/// (with recovery that keeps the block parseable).
 fn constraint_entry<'src>() -> impl Parser<'src, Tokens<'src>, Constraint, MoxExtra<'src>> + Clone {
-    select! {
-        Token::Ident(text) = e if CONSTRAINT_KEYWORDS.contains(&text) => (text, e.span()),
+    let valued = select! {
+        Token::Ident(text) = e if VALUED_CONSTRAINT_KEYWORDS.contains(&text) => (text, e.span()),
     }
     .then(
         string_lit()
@@ -419,7 +423,30 @@ fn constraint_entry<'src>() -> impl Parser<'src, Tokens<'src>, Constraint, MoxEx
         },
         value,
         span: e.span(),
-    })
+    });
+    let flag = select! { Token::Ident("unique") = e => e.span() }
+        .then(
+            string_lit()
+                .map_with(|_, e| e.span())
+                .or(int_lit().map_with(|_, e| e.span()))
+                .or_not(),
+        )
+        .validate(|(name_span, value), _e, emitter| {
+            if let Some(span) = value {
+                emitter.emit(Rich::custom(span, "constraint `unique` takes no value"));
+            }
+            name_span
+        })
+        .map_with(|name_span, e| Constraint {
+            name: Name {
+                text: "unique".to_string(),
+                span: name_span,
+                escaped: false,
+            },
+            value: ConstraintValue::Flag { span: e.span() },
+            span: e.span(),
+        });
+    valued.or(flag)
 }
 
 /// An attribute's optional `{ pattern "..." minLength 3 }` constraint block:
@@ -584,8 +611,14 @@ fn feature<'src>() -> impl Parser<'src, Tokens<'src>, Option<FeatureDecl>, MoxEx
     any_feature.or(junk_feature().to(None))
 }
 
-fn package_decl<'src>() -> impl Parser<'src, Tokens<'src>, QualifiedName, MoxExtra<'src>> + Clone {
-    kw(Token::Package).ignore_then(qname())
+fn package_decl<'src>() -> impl Parser<'src, Tokens<'src>, PackageDecl, MoxExtra<'src>> + Clone {
+    kw(Token::Package)
+        .ignore_then(qname())
+        .map_with(|name, e| PackageDecl {
+            name,
+            doc: None,
+            span: e.span(),
+        })
 }
 
 fn annotation_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>> + Clone {
@@ -657,25 +690,41 @@ fn named_target_block<'src>(
         .then_ignore(kw(Token::RBrace))
 }
 
+/// The reserved `format "…"` entry of a datatype's `{ ... }` block: the
+/// unescaped key `format` followed by a string literal. It never creates a
+/// target binding.
+fn format_entry<'src>() -> impl Parser<'src, Tokens<'src>, String, MoxExtra<'src>> + Clone {
+    select! { Token::Ident(text) if text == "format" => () }.ignore_then(string_lit())
+}
+
 /// One entry of a datatype's `{ ... }` block.
 enum DatatypeEntry {
     Binding(BindingEntry),
+    Format(String),
     Create(Vec<TargetBody>),
     Convert(Vec<TargetBody>),
 }
 
-/// The `{ ... }` block of a datatype: target-binding entries and (at most one
-/// each) `create`/`convert` body blocks, in any order. A second `create` (or
-/// `convert`) block is a syntax error.
+/// The `{ ... }` block of a datatype: target-binding entries, the (at most
+/// one) reserved `format "…"` entry, and (at most one each) `create`/`convert`
+/// body blocks, in any order. A second `create` (or `convert`, or `format`)
+/// is a syntax error, as is a binding target literally named `format` (only
+/// writable escaped as `^format` — the unescaped key declares the format).
 fn datatype_block<'src>() -> impl Parser<
     'src,
     Tokens<'src>,
-    (Vec<BindingEntry>, Vec<TargetBody>, Vec<TargetBody>),
+    (
+        Vec<BindingEntry>,
+        Option<String>,
+        Vec<TargetBody>,
+        Vec<TargetBody>,
+    ),
     MoxExtra<'src>,
 > + Clone {
     let entry = choice((
         named_target_block("create").map(DatatypeEntry::Create),
         named_target_block("convert").map(DatatypeEntry::Convert),
+        format_entry().map(DatatypeEntry::Format),
         binding_entry().map(DatatypeEntry::Binding),
     ));
     kw(Token::LBrace)
@@ -685,13 +734,21 @@ fn datatype_block<'src>() -> impl Parser<
                 .collect::<Vec<_>>()
                 .map(|entries| {
                     let mut bindings = Vec::new();
+                    let mut format: Option<String> = None;
                     let mut create: Option<Vec<TargetBody>> = None;
                     let mut convert: Option<Vec<TargetBody>> = None;
-                    // `Some(keyword)` when a second block of that kind appears.
+                    // `Some(keyword)` when a second block/entry of that kind appears.
                     let mut duplicate: Option<&'static str> = None;
                     for entry in entries {
                         match entry {
                             DatatypeEntry::Binding(binding) => bindings.push(binding),
+                            DatatypeEntry::Format(value) if format.is_none() => {
+                                format = Some(value)
+                            }
+                            DatatypeEntry::Format(_) if duplicate.is_none() => {
+                                duplicate = Some("format")
+                            }
+                            DatatypeEntry::Format(_) => {}
                             DatatypeEntry::Create(bodies) if create.is_none() => {
                                 create = Some(bodies)
                             }
@@ -711,6 +768,7 @@ fn datatype_block<'src>() -> impl Parser<
                     (
                         (
                             bindings,
+                            format,
                             create.unwrap_or_default(),
                             convert.unwrap_or_default(),
                         ),
@@ -719,10 +777,19 @@ fn datatype_block<'src>() -> impl Parser<
                 })
                 .validate(|(block, duplicate), e, emitter| {
                     if let Some(keyword) = duplicate {
+                        let noun = if keyword == "format" { "entry" } else { "block" };
                         emitter.emit(Rich::custom(
                             e.span(),
-                            format!("duplicate `{keyword}` block in datatype declaration"),
+                            format!("duplicate `{keyword}` {noun} in datatype declaration"),
                         ));
+                    }
+                    for binding in &block.0 {
+                        if binding.key.text == "format" {
+                            emitter.emit(Rich::custom(
+                                binding.key.span,
+                                "`format` is a reserved key in datatype declarations: the unescaped key declares the datatype's format (`format \"…\"`)".to_string(),
+                            ));
+                        }
                     }
                     block
                 }),
@@ -780,12 +847,13 @@ fn datatype_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>
         .then(wraps_target.or_not())
         .then(datatype_block().or_not())
         .map_with(|((name, wraps), block), e| {
-            let (bindings, create, convert) = block.unwrap_or_default();
+            let (bindings, format, create, convert) = block.unwrap_or_default();
             Decl::Datatype(DatatypeDecl {
                 name,
                 doc: None,
                 wraps,
                 bindings,
+                format,
                 create,
                 convert,
                 span: e.span(),
@@ -1143,7 +1211,7 @@ fn import_decl<'src>() -> impl Parser<'src, Tokens<'src>, ImportDecl, MoxExtra<'
 
 #[derive(Clone)]
 enum Item {
-    Package(QualifiedName),
+    Package(PackageDecl),
     Decl(Decl),
     Junk,
 }
@@ -1172,7 +1240,7 @@ fn fold_model(items: Vec<Item>) -> Model {
     let mut declarations = Vec::new();
     for item in items {
         match item {
-            Item::Package(qualified) if package.is_none() => package = Some(qualified),
+            Item::Package(decl) if package.is_none() => package = Some(decl),
             Item::Package(_) | Item::Junk => {}
             Item::Decl(decl) => declarations.push(decl),
         }
@@ -1206,8 +1274,9 @@ fn model<'src>() -> impl Parser<'src, Tokens<'src>, Model, MoxExtra<'src>> + Clo
 ///
 /// This function never panics and always recovers as much of the AST as
 /// possible; check [`ParseResult::errors`] for syntax problems. Doc comments
-/// (`///`, `/** ... */`) on their own lines directly above a declaration,
-/// feature, or enum literal are attached to it as its `doc` description.
+/// (`///`, `/** ... */`) on their own lines directly above the package
+/// declaration, a declaration, feature, or enum literal are attached to it as
+/// its `doc` description.
 pub fn parse(source: &str) -> ParseResult {
     let (tokens, comments) = match lex_with_comments(source) {
         Ok(result) => result,
@@ -1246,11 +1315,11 @@ struct DocComment {
     begins_line: bool,
 }
 
-/// Attaches doc comments to the model's declarations, features, and enum
-/// literals. A doc run is a maximal sequence of doc comments, each on its
-/// own line, each starting on the line directly after the previous one ends,
-/// whose last comment ends on the line directly above the declaration's
-/// first line.
+/// Attaches doc comments to the model's package declaration, declarations,
+/// features, and enum literals. A doc run is a maximal sequence of doc
+/// comments, each on its own line, each starting on the line directly after
+/// the previous one ends, whose last comment ends on the line directly above
+/// the declaration's first line.
 fn attach_docs(model: &mut Model, comments: &[crate::lexer::Comment<'_>], source: &str) {
     let line_starts: Vec<usize> = {
         let mut starts = vec![0];
@@ -1310,6 +1379,11 @@ fn attach_docs(model: &mut Model, comments: &[crate::lexer::Comment<'_>], source
             .collect::<Vec<_>>()
             .join("\n");
         (!joined.is_empty()).then_some(joined)
+    }
+
+    if let Some(package) = &mut model.package {
+        let start_line = line_of(package.span.start);
+        package.doc = run_above(&docs, start_line);
     }
 
     for decl in &mut model.declarations {

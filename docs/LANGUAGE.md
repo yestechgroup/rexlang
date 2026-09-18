@@ -12,11 +12,13 @@ reference; crate docs cover implementation.
 - **Comments**: `//` to end of line, `/* ... */` block comments. Preserved
   verbatim by `rexlang fmt`.
 - **Doc comments**: `///` line comments and `/** ... */` block comments on
-  their own lines directly above a declaration, feature, or enum literal
-  become that element's **description**. Contiguous `///` lines join into one
-  description; a blank line or an intervening non-doc comment detaches the
-  run. Descriptions are carried in the IR and surface as `description`
-  keywords in generated JSON Schema and as doc comments in generated code.
+  their own lines directly above the `package` declaration, a declaration,
+  feature, or enum literal become that element's **description**. Contiguous
+  `///` lines join into one description; a blank line or an intervening
+  non-doc comment detaches the run. Descriptions are carried in the IR and
+  surface as `description` keywords in generated JSON Schema and as doc
+  comments in generated code (the package description is carried in the IR
+  only).
 - **Strings**: double-quoted with `\"` and `\\` escapes.
 - **Integers**: decimal, optional leading `-`.
 - **Identifiers**: `[A-Za-z_][A-Za-z0-9_]*`. Any keyword can be escaped with a
@@ -33,8 +35,11 @@ A file holds one package and any number of declarations:
 ```
 model        := package_decl (annotation_decl | class_decl | interface_decl
               | enum_decl | type_decl | vocabulary_decl)*
-package_decl := "package" qualified_name
+package_decl := doc? "package" qualified_name
 ```
+
+`doc` marks the optional doc-comment run described under Lexical rules; it
+becomes the package's `description` in the Core IR.
 
 A model may span multiple `.mox` files — one package per file, named by its
 `package` declaration. Compiling several files produces **one** Core IR
@@ -69,8 +74,9 @@ derived_decl:= "derived" type_ref multiplicity? name op_body?
 op_body     := "{" target_body+ "}" | "{" raw "}"
 target_body := name "{" raw "}"
 multiplicity:= "[" (int (".." (int | "*"))?)? "]"
-constraint_block := "{" (constraint_keyword (string | int))* "}"
-constraint_keyword := "pattern" | "minLength" | "maxLength" | "minimum" | "maximum"
+constraint_block := "{" (constraint_keyword (string | int)?)* "}"
+constraint_keyword := "pattern" | "minLength" | "maxLength" | "minimum"
+                    | "maximum" | "unique"
 ```
 
 - **`contains`** — by-value ownership (Ecore containment). The child's
@@ -101,7 +107,11 @@ constraint_keyword := "pattern" | "minLength" | "maxLength" | "minimum" | "maxim
   once. A constraint family is admitted by the most explicit type knowledge
   available: the string family (`pattern`/`minLength`/`maxLength`) requires
   a `string` primitive; the numeric family (`minimum`/`maximum`) requires a
-  numeric primitive. A datatype-typed attribute defaults to the string
+  numeric primitive — the integer primitives and the IEEE `float`/`double`
+  alike (bounds are declared as integers and hold for the floating values
+  they bound; IEEE semantics apply, so the expression language's
+  checked-overflow rule R1 is not a concern here). A datatype-typed
+  attribute defaults to the string
   family — its platform type is opaque — and rejects numeric bounds. A
   vocabulary-typed attribute follows its `key` facet's declared primitive
   type (`String` admits the string family, a numeric key the numeric
@@ -113,9 +123,15 @@ constraint_keyword := "pattern" | "minLength" | "maxLength" | "minimum" | "maxim
   allowed but never statically validated (descriptive only). Class and
   interface types take no constraints. Length bounds must be non-negative
   and `min` ≤ `max` in both families. On a many-valued attribute the
-  constraints apply to the elements. They surface as the JSON Schema
+  value bounds apply to the elements. The sixth keyword, **`unique`**, takes
+  no value (`String[] tags { unique }`) and is the one collection-level
+  constraint: it is admitted only on many-valued attributes — of any element
+  type — and rejected on single-valued ones. It is schema-only: it surfaces
+  as `uniqueItems: true` on the attribute's array schema, with element
+  equality following JSON value equality, and implies no runtime
+  validation. They surface as the JSON Schema
   keywords of the same names (`pattern`, `minLength`, `maxLength`,
-  `minimum`, `maximum`).
+  `minimum`, `maximum`, `uniqueItems`).
 
 Multiplicity shorthand: `[]` = `[0..*]`; absent: attributes are `1..1`,
 `contains`/`refers` are `0..*`, `container` and `derived` are `0..1`.
@@ -125,18 +141,26 @@ Multiplicity shorthand: `[]` = `[0..*]`; absent: attributes are `1..1`,
 ```
 enum_decl    := "enum" name "{" literal+ "}"
 literal      := name ("as" string)? ("=" int)?
-type_decl    := "type" name "wraps" ("opaque" | qualified_name)? binding_block?
+type_decl    := "type" name "wraps" ("opaque" | qualified_name)? datatype_block?
+datatype_block := "{" ( name string | "format" string )* "}"
 binding_block:= "{" (name string)* "}"
 interface_decl := "interface" name "{" (name string)* "}"
 vocabulary_decl := "vocabulary" name "from" string "{" ( version "string"
-                  | key name | facet type_ref name )* "}"
+                 | key name | facet type_ref name )* "}"
 ```
 
 - **Enums** carry integer values (required) and optional labels: `Mystery as
   "M" = 0`. Backends emit real enums; canonical JSON uses the literal name.
 - **Datatypes** wrap platform types opaquely: `type Date wraps opaque { rust
   "chrono::NaiveDate" ... }`. Bindings are per-target hints, never generated
-  dependencies.
+  dependencies. A datatype may also declare one **`format`** hint:
+  `type Email wraps String { format "email" }`. `format` is a reserved key
+  inside the datatype block: the unescaped key declares the format (never a
+  target binding), at most once, and a binding target literally named
+  `format` (only writable escaped, `^format "…"`) is an error. The hint
+  surfaces as the JSON Schema `format` keyword on that datatype's schema in
+  both profiles; it is a wire-level contract only — no runtime validation is
+  implied.
 - **Vocabularies** reference well-known external code sets. The declaration
   names the source, version, key facet, and typed facets. Snapshots are
   vendored to `vocab/<source>@<version>.json` and pinned by sha256 in

@@ -1,0 +1,8 @@
+/// A tiny model whose package declaration carries a doc comment.
+package nz.example.packagedoc
+
+/// A spoken or written greeting.
+class Greeting {
+    /// The greeting text.
+    id String text
+}

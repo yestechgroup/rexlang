@@ -83,13 +83,22 @@
 //!     model never embeds an [`ActorModel`].
 //! 11. **Descriptions and constraints (additive).** Doc comments (`///`,
 //!     `/** ... */`) lower into `description: Option<String>` on
-//!     [`ClassDef`], [`InterfaceDef`], [`EnumDef`], [`EnumLiteral`],
-//!     [`DatatypeDef`], [`VocabularyDef`], [`Feature`], and [`Operation`];
-//!     attribute constraints (`pattern`, `minLength`, `maxLength`,
-//!     `minimum`, `maximum`) lower into [`Feature::constraints`]. Both follow
+//!     [`Package`], [`ClassDef`], [`InterfaceDef`], [`EnumDef`],
+//!     [`EnumLiteral`], [`DatatypeDef`], [`VocabularyDef`], [`Feature`], and
+//!     [`Operation`]; attribute constraints (`pattern`, `minLength`,
+//!     `maxLength`, `minimum`, `maximum`, and the value-less `unique`)
+//!     lower into
+//!     [`Feature::constraints`]. Both follow
 //!     the same additive rules: `#[serde(default)]` and omitted when absent,
 //!     so artifacts for models without them are byte-identical to earlier
 //!     output.
+//! 12. **Datatype format (additive).** [`DatatypeDef::format`] carries the
+//!     reserved `format "…"` entry of a datatype declaration (e.g.
+//!     `type Email wraps String { format "email" }`) under the same additive
+//!     rules: `#[serde(default)]` and omitted when absent, so artifacts for
+//!     format-less datatypes are byte-identical to earlier output. It is a
+//!     wire-level contract (the JSON Schema `format` keyword); no runtime
+//!     validation is implied.
 //!
 //! [rexlang]: https://github.com/anton-makes/rexlang
 
@@ -204,6 +213,11 @@ impl Default for Model {
 pub struct Package {
     /// Dotted package name, e.g. `"nz.example.library"`.
     pub name: String,
+    /// Human-readable description from the package declaration's doc
+    /// comment. Additive (wire contract rule 11); omitted when absent so
+    /// artifacts for models without package docs stay byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Free-form annotations attached to the package.
     #[serde(default)]
     pub annotations: Vec<Annotation>,
@@ -235,6 +249,7 @@ impl Package {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            description: None,
             annotations: Vec::new(),
             enums: Vec::new(),
             datatypes: Vec::new(),
@@ -345,6 +360,12 @@ pub struct DatatypeDef {
     /// datatype to its wrapped value. Additive; omitted when empty.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub convert: BTreeMap<String, String>,
+    /// The declared `format` hint (e.g. `"email"` from `format "email"`),
+    /// surfaced by schema backends as the JSON Schema `format` keyword on
+    /// this datatype's schema. A wire-level contract only: no runtime
+    /// validation is implied. Additive; omitted when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
 }
 
 impl DatatypeDef {
@@ -358,7 +379,16 @@ impl DatatypeDef {
             target_bindings: BTreeMap::new(),
             create: BTreeMap::new(),
             convert: BTreeMap::new(),
+            format: None,
         }
+    }
+
+    /// Chainable setter for the datatype's declared `format` hint (e.g.
+    /// `"email"`), surfaced by schema backends as the JSON Schema `format`
+    /// keyword.
+    pub fn with_format(mut self, format: impl Into<String>) -> Self {
+        self.format = Some(format.into());
+        self
     }
 
     /// Chainable setter adding a per-target binding (e.g. `"rust"` ->
@@ -661,10 +691,11 @@ impl Feature {
 /// Declarative value constraints on an attribute feature.
 ///
 /// A closed, schema-friendly set: `pattern` (regex the value must match),
-/// `minLength`/`maxLength` (string length bounds) and `minimum`/`maximum`
-/// (inclusive numeric bounds). The driver type-checks them against the
-/// attribute's declared type; for a many-valued attribute they constrain the
-/// elements, not the collection.
+/// `minLength`/`maxLength` (string length bounds), `minimum`/`maximum`
+/// (inclusive numeric bounds) and `unique` (elements of a many-valued
+/// attribute must be pairwise distinct). The driver type-checks them against
+/// the attribute's declared type; for a many-valued attribute the value
+/// bounds constrain the elements, while `unique` constrains the collection.
 ///
 /// Serialization is sparse: absent constraints are omitted entirely, so
 /// features without constraints add no bytes to the wire format.
@@ -686,6 +717,20 @@ pub struct FeatureConstraints {
     /// Inclusive maximum numeric value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub maximum: Option<i64>,
+    /// `true` for the value-less `unique` constraint: the elements of a
+    /// many-valued attribute must be pairwise distinct (JSON value equality
+    /// at the schema layer, emitted as `uniqueItems: true`). Only meaningful
+    /// on many-valued attributes — the driver rejects it elsewhere — and
+    /// schema-only: no runtime validation is implied. Additive; omitted when
+    /// `false`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub unique: bool,
+}
+
+/// `skip_serializing_if` helper for additive `bool` fields: `false` adds no
+/// bytes to the wire format.
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl FeatureConstraints {
@@ -696,6 +741,7 @@ impl FeatureConstraints {
             && self.max_length.is_none()
             && self.minimum.is_none()
             && self.maximum.is_none()
+            && !self.unique
     }
 }
 
@@ -1825,6 +1871,119 @@ mod tests {
                 "pattern": "[A-Z]{3}-[0-9]{4}",
                 "minLength": 8,
                 "maxLength": 8
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}"#;
+
+        assert_eq!(model.to_json_pretty().expect("serialize"), expected);
+        let parsed = Model::from_json(expected).expect("deserialize golden");
+        assert_eq!(model, parsed);
+    }
+
+    #[test]
+    fn golden_json_with_datatype_format_pins_the_wire_format() {
+        // Additive: `format` is omitted when absent (see the byte-identity
+        // goldens above); this golden pins the NEW field — a datatype's
+        // declared `format` hint — which is omitted when `None`.
+        let mut package = Package::new("nz.example.demo");
+        package
+            .datatypes
+            .push(DatatypeDef::new("Email", Some("String".to_string())).with_format("email"));
+        package
+            .datatypes
+            .push(DatatypeDef::new("Plain", Some("String".to_string())));
+        let mut model = Model::new();
+        model.packages.push(package);
+
+        let expected = r#"{
+  "formatVersion": 1,
+  "rexVersion": "0.1.0",
+  "packages": [
+    {
+      "name": "nz.example.demo",
+      "annotations": [],
+      "enums": [],
+      "datatypes": [
+        {
+          "name": "Email",
+          "platform": "String",
+          "format": "email"
+        },
+        {
+          "name": "Plain",
+          "platform": "String"
+        }
+      ],
+      "interfaces": [],
+      "classes": []
+    }
+  ]
+}"#;
+
+        assert_eq!(model.to_json_pretty().expect("serialize"), expected);
+        let parsed = Model::from_json(expected).expect("deserialize golden");
+        assert_eq!(model, parsed);
+    }
+
+    #[test]
+    fn golden_json_with_unique_constraint_pins_the_wire_format() {
+        // Additive (wire-contract rule 11): the `unique` flag is omitted
+        // when `false` (the rule-11 golden above stays byte-identical);
+        // this golden pins its serialization when declared.
+        let mut package = Package::new("nz.example.demo");
+        let mut feature = Feature::new(
+            "tags",
+            FeatureKind::Attribute,
+            TypeRef::Primitive(PrimitiveType::String),
+            Multiplicity::MANY,
+        );
+        feature.constraints = FeatureConstraints {
+            unique: true,
+            ..FeatureConstraints::default()
+        };
+        package
+            .classes
+            .push(ClassDef::new("Article", vec![], vec![feature]));
+        let mut model = Model::new();
+        model.packages.push(package);
+
+        let expected = r#"{
+  "formatVersion": 1,
+  "rexVersion": "0.1.0",
+  "packages": [
+    {
+      "name": "nz.example.demo",
+      "annotations": [],
+      "enums": [],
+      "datatypes": [],
+      "interfaces": [],
+      "classes": [
+        {
+          "name": "Article",
+          "extends": [],
+          "features": [
+            {
+              "id": 0,
+              "name": "tags",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 0,
+                "upper": "unbounded"
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false,
+              "constraints": {
+                "unique": true
               }
             }
           ]

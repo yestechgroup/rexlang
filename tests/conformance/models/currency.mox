@@ -10,4 +10,5 @@ vocabulary Currency from "iso:4217" {
 class Account {
     String owner
     Currency currency
+    String[] tags { unique }
 }

@@ -63,8 +63,8 @@ fn library_example_parses_without_errors() {
     let model = result.ast.expect("expected an AST");
 
     let package = model.package.expect("expected a package declaration");
-    assert_eq!(package.full_name(), "nz.example.library");
-    assert_eq!(package.segments.len(), 3);
+    assert_eq!(package.name.full_name(), "nz.example.library");
+    assert_eq!(package.name.segments.len(), 3);
 
     assert_eq!(model.declarations.len(), 5);
 
@@ -1162,6 +1162,77 @@ fn trailing_doc_comment_attaches_to_nothing() {
     assert_eq!(shelf.doc, None);
 }
 
+#[test]
+fn doc_comment_attaches_to_package() {
+    let source = "\
+/// A library model.
+package nz.example.library
+";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let package = result.ast.expect("ast").package.expect("package");
+    assert_eq!(package.name.full_name(), "nz.example.library");
+    assert_eq!(package.doc.as_deref(), Some("A library model."));
+}
+
+#[test]
+fn package_without_doc_comment_has_none() {
+    let source = "package demo\n";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let package = result.ast.expect("ast").package.expect("package");
+    assert_eq!(package.doc, None);
+}
+
+#[test]
+fn contiguous_package_doc_lines_join_and_block_form_attaches() {
+    let multi = "\
+/// First line.
+/// Second line.
+package demo
+";
+    let result = parse(multi);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let package = result.ast.expect("ast").package.expect("package");
+    assert_eq!(
+        package.doc.as_deref(),
+        Some("First line.\nSecond line."),
+        "contiguous doc lines join with a newline"
+    );
+
+    let block = "/** A calendar day. */\npackage demo\n";
+    let result = parse(block);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let package = result.ast.expect("ast").package.expect("package");
+    assert_eq!(package.doc.as_deref(), Some("A calendar day."));
+}
+
+#[test]
+fn detached_package_doc_runs_do_not_attach() {
+    let blank = "\
+/// Separated by a blank line.
+
+package demo
+";
+    let result = parse(blank);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let package = result.ast.expect("ast").package.expect("package");
+    assert_eq!(package.doc, None, "a blank line detaches the doc run");
+
+    let commented = "\
+/// Detached by an ordinary comment.
+// not a doc comment
+package demo
+";
+    let result = parse(commented);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let package = result.ast.expect("ast").package.expect("package");
+    assert_eq!(
+        package.doc, None,
+        "an intervening non-doc comment detaches the doc run"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Attribute constraint blocks
 // ---------------------------------------------------------------------------
@@ -1243,5 +1314,109 @@ fn constraint_values_must_be_literals() {
     assert!(
         !result.errors.is_empty(),
         "a constraint value must be a string or int literal"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Datatype format declarations
+// ---------------------------------------------------------------------------
+
+#[test]
+fn datatype_accepts_a_format_entry() {
+    let source = "type Email wraps String { format \"email\" }";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let Decl::Datatype(datatype) = &result.ast.expect("ast").declarations[0] else {
+        panic!("expected datatype")
+    };
+    assert!(
+        datatype.bindings.is_empty(),
+        "`format` must not become a target binding"
+    );
+    assert_eq!(datatype.format.as_deref(), Some("email"));
+}
+
+#[test]
+fn format_entry_coexists_with_bindings() {
+    let source = "type Date wraps opaque { format \"date\" rust \"chrono::NaiveDate\" }";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let Decl::Datatype(datatype) = &result.ast.expect("ast").declarations[0] else {
+        panic!("expected datatype")
+    };
+    assert_eq!(datatype.format.as_deref(), Some("date"));
+    assert_eq!(datatype.bindings.len(), 1);
+    assert_eq!(datatype.bindings[0].key.text, "rust");
+}
+
+#[test]
+fn duplicate_format_entries_are_a_syntax_error() {
+    let source = "type Email wraps String { format \"a\" format \"b\" }";
+    let result = parse(source);
+    assert!(
+        !result.errors.is_empty(),
+        "a second `format` entry must error, like a second create/convert block"
+    );
+}
+
+#[test]
+fn format_is_a_reserved_binding_target() {
+    // The escaped `^format` tries to declare a binding target literally
+    // named `format`; the word is reserved inside datatype blocks.
+    let source = "type Email wraps String { ^format \"a::B\" }";
+    let result = parse(source);
+    assert!(
+        !result.errors.is_empty(),
+        "a binding target named `format` must be a compile error naming the reserved word"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The `unique` constraint (value-less)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn unique_constraint_parses_without_a_value() {
+    let source = "class P { String[] tags { unique } }";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let Decl::Class(class) = &result.ast.expect("ast").declarations[0] else {
+        panic!("expected class")
+    };
+    let FeatureDecl::Attribute { constraints, .. } = &class.features[0] else {
+        panic!("expected attribute")
+    };
+    assert_eq!(constraints.len(), 1);
+    assert_eq!(constraints[0].name.text, "unique");
+    assert!(
+        matches!(constraints[0].value, ConstraintValue::Flag { .. }),
+        "`unique` takes no value, got {:?}",
+        constraints[0].value
+    );
+}
+
+#[test]
+fn unique_combines_with_valued_constraints() {
+    let source = "class P { String[] tags { unique minLength 1 } }";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let Decl::Class(class) = &result.ast.expect("ast").declarations[0] else {
+        panic!("expected class")
+    };
+    let FeatureDecl::Attribute { constraints, .. } = &class.features[0] else {
+        panic!("expected attribute")
+    };
+    assert_eq!(constraints.len(), 2);
+    assert_eq!(constraints[0].name.text, "unique");
+    assert_eq!(constraints[1].name.text, "minLength");
+}
+
+#[test]
+fn unique_takes_no_value() {
+    let source = "class P { String[] tags { unique 3 } }";
+    let result = parse(source);
+    assert!(
+        !result.errors.is_empty(),
+        "`unique` must not accept a value"
     );
 }

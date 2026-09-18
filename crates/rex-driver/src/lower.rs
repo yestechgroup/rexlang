@@ -644,10 +644,13 @@ pub(crate) fn compile_multi(
             );
             continue;
         };
-        let name = package_decl.full_name();
+        let name = package_decl.name.full_name();
         if packages.iter().any(|package| package.name == name) {
             buckets[index].push(
-                Diagnostic::error(format!("duplicate package '{name}'"), Some(package_decl.span))
+                Diagnostic::error(
+                    format!("duplicate package '{name}'"),
+                    Some(package_decl.name.span),
+                )
                     .with_help(
                         "each file must declare a distinct package; rename one package or merge the files",
                     ),
@@ -780,6 +783,7 @@ pub(crate) fn compile_multi(
             continue;
         };
         let mut out = ir::Package::new(packages[package_index].name.clone());
+        out.description = ast.package.as_ref().and_then(|decl| decl.doc.clone());
         for decl in &ast.declarations {
             match decl {
                 mox::Decl::Vocabulary(_) => {}
@@ -898,7 +902,7 @@ pub(crate) fn compile(
         );
         return (None, diags);
     };
-    let package = package_decl.full_name();
+    let package = package_decl.name.full_name();
     let base_dir = Path::new(path)
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -986,6 +990,7 @@ pub(crate) fn compile(
 
     // Lower declarations in source order.
     let mut out = ir::Package::new(package.clone());
+    out.description = package_decl.doc.clone();
     let scope = Scope::Single {
         package: &package,
         kinds: &kinds,
@@ -1204,7 +1209,7 @@ fn family_mismatch(
 
 /// Lowers an attribute's declared constraints into the IR, type-checking
 /// them against the attribute's resolved type. For a many-valued attribute
-/// the constraints apply to the elements.
+/// the value bounds apply to the elements.
 ///
 /// A constraint family is admitted by the most explicit type knowledge
 /// available (violations are errors, never silently dropped):
@@ -1217,16 +1222,20 @@ fn family_mismatch(
 ///   primitive type (`String` admits the string family, a numeric key the
 ///   numeric family); constraints are rejected outright when the key facet
 ///   cannot be resolved;
-/// - an enum-typed attribute carries a dual value space: all five keywords
-///   apply, the string family bounding literal names and the numeric family
-///   literal values, and both may coexist. A numeric or length bound that
-///   admits zero literals is a compile error; `pattern` is never statically
-///   validated;
+/// - an enum-typed attribute carries a dual value space: all five valued
+///   keywords apply, the string family bounding literal names and the
+///   numeric family literal values, and both may coexist. A numeric or
+///   length bound that admits zero literals is a compile error; `pattern`
+///   is never statically validated;
+/// - the value-less `unique` is family-agnostic: it is admitted on any
+///   many-valued attribute regardless of element type and rejected on a
+///   single-valued one (a set of one value is trivially unique);
 /// - class and interface types take no constraints;
 /// - length bounds must be non-negative and ordered; numeric bounds must be
 ///   ordered.
 fn lower_constraints(
     constraints: &[mox::Constraint],
+    many: bool,
     resolution: Option<&Resolution>,
     prep: &PrepMaps<'_>,
     feature_name: &str,
@@ -1341,6 +1350,31 @@ fn lower_constraints(
                     lowered.maximum = Some(*value);
                     maximum_span = span;
                 }
+            }
+            ("unique", mox::ConstraintValue::Flag { .. }) => {
+                // Family-agnostic: any many-valued attribute admits it.
+                if many {
+                    lowered.unique = true;
+                } else {
+                    diags.push(Diagnostic::error(
+                        format!(
+                            "constraint 'unique' requires a many-valued attribute, which {subject} is not"
+                        ),
+                        span,
+                    ));
+                }
+            }
+            ("unique", _) => {
+                diags.push(Diagnostic::error(
+                    "constraint 'unique' takes no value".to_string(),
+                    span,
+                ));
+            }
+            (keyword, mox::ConstraintValue::Flag { .. }) => {
+                diags.push(Diagnostic::error(
+                    format!("constraint '{keyword}' takes no value"),
+                    span,
+                ));
             }
             (keyword, mox::ConstraintValue::Str { .. } | mox::ConstraintValue::Int { .. }) => {
                 diags.push(Diagnostic::error(
@@ -1506,6 +1540,7 @@ fn lower_datatype(
     };
     let mut datatype = ir::DatatypeDef::new(&decl.name.text, platform);
     datatype.description = decl.doc.clone();
+    datatype.format = decl.format.clone();
     for binding in &decl.bindings {
         datatype = datatype.bind(&binding.key.text, &binding.value);
     }
@@ -1881,8 +1916,14 @@ fn lower_class(
                 );
                 let mut ir_feature = apply_modifiers(ir_feature, feature.modifiers());
                 ir_feature.description = doc.clone();
-                ir_feature.constraints =
-                    lower_constraints(constraints, resolution.as_ref(), prep, &name.text, diags);
+                ir_feature.constraints = lower_constraints(
+                    constraints,
+                    multiplicity.is_many(),
+                    resolution.as_ref(),
+                    prep,
+                    &name.text,
+                    diags,
+                );
                 features.push(ir_feature);
                 records.push(FeatureRecord {
                     name: name.text.clone(),

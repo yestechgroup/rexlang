@@ -51,6 +51,25 @@
               "isDerived": false,
               "isId": false,
               "isReadOnly": false
+            },
+            {
+              "id": 2,
+              "name": "tags",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 0,
+                "upper": "unbounded"
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false,
+              "constraints": {
+                "unique": true
+              }
             }
           ]
         }

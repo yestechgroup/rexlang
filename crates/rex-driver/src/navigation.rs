@@ -196,7 +196,7 @@ impl NavigationIndex {
         let package = model
             .package
             .as_ref()
-            .map(|package| package.full_name())
+            .map(|package| package.name.full_name())
             .unwrap_or_default();
 
         // Pass 1: assign ids in source order (a declaration, then its

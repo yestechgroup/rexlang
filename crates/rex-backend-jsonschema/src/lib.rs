@@ -592,7 +592,16 @@ fn feature_schema(
         _ => element,
     };
     let mut schema = if feature.multiplicity.is_many() {
-        array_schema(element, &feature.multiplicity)
+        let mut wrapper = array_schema(element, &feature.multiplicity);
+        // The `unique` constraint binds the collection, not the elements:
+        // schema-only, emitted in both profiles.
+        if feature.constraints.unique {
+            wrapper
+                .as_object_mut()
+                .expect("array schema is an object")
+                .insert("uniqueItems".to_string(), serde_json::json!(true));
+        }
+        wrapper
     } else {
         element
     };
@@ -608,6 +617,8 @@ fn feature_schema(
 /// Merges the declared constraint keywords into an attribute's element
 /// schema. `canonical_key_order` sorts the merged object, and constraints
 /// are only present when declared, so constraint-less output is unchanged.
+/// The value-less `unique` is emitted at the collection level (see
+/// `feature_schema`), not here.
 fn merge_constraints(
     mut element: serde_json::Value,
     constraints: &FeatureConstraints,
@@ -621,6 +632,7 @@ fn merge_constraints(
         max_length,
         minimum,
         maximum,
+        unique: _,
     } = constraints;
     if let Some(pattern) = pattern {
         object.insert("pattern".to_string(), serde_json::json!(pattern));
@@ -673,10 +685,19 @@ fn value_schema(
         }
         TypeRef::Datatype { name, .. } => {
             let datatype = context.datatype_def(name)?;
-            Ok(serde_json::json!({
-                "type": "string",
-                "$comment": datatype_comment(datatype),
-            }))
+            let mut schema = serde_json::Map::new();
+            schema.insert("type".to_string(), serde_json::json!("string"));
+            // The datatype's declared `format` hint (e.g. `"email"`); a
+            // wire-level contract, emitted in both profiles. Absent when the
+            // datatype declares none.
+            if let Some(format) = &datatype.format {
+                schema.insert("format".to_string(), serde_json::json!(format));
+            }
+            schema.insert(
+                "$comment".to_string(),
+                serde_json::json!(datatype_comment(datatype)),
+            );
+            Ok(serde_json::Value::Object(schema))
         }
         TypeRef::Vocabulary { name, .. } => {
             let vocabulary = context.vocabulary_def(name)?;

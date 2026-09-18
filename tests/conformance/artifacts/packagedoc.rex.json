@@ -1,0 +1,42 @@
+{
+  "formatVersion": 1,
+  "rexVersion": "0.1.0",
+  "packages": [
+    {
+      "name": "nz.example.packagedoc",
+      "description": "A tiny model whose package declaration carries a doc comment.",
+      "annotations": [],
+      "enums": [],
+      "datatypes": [],
+      "interfaces": [],
+      "classes": [
+        {
+          "name": "Greeting",
+          "description": "A spoken or written greeting.",
+          "extends": [],
+          "features": [
+            {
+              "id": 0,
+              "name": "text",
+              "description": "The greeting text.",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": true,
+              "isReadOnly": false
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

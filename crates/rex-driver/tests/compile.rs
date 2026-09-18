@@ -1043,6 +1043,72 @@ type Date wraps opaque {
     );
 }
 
+#[test]
+fn package_doc_lowers_into_package_description() {
+    let source = "\
+/// A library of books.
+/// Loans are tracked per copy.
+package nz.example.library
+
+class Book {
+    id String title
+}
+";
+    let compilation = compile_str("package_doc.mox", source);
+    let model = compilation.model.expect("a model on success");
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "{:?}",
+        compilation.diagnostics
+    );
+    let package = &model.packages[0];
+    assert_eq!(package.name, "nz.example.library");
+    assert_eq!(
+        package.description.as_deref(),
+        Some("A library of books.\nLoans are tracked per copy."),
+        "contiguous doc lines join with a newline"
+    );
+}
+
+#[test]
+fn package_without_doc_has_no_description() {
+    let source = "\
+package demo
+
+class Book {}
+";
+    let compilation = compile_str("plain.mox", source);
+    let model = compilation.model.expect("a model on success");
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "{:?}",
+        compilation.diagnostics
+    );
+    assert_eq!(model.packages[0].description, None);
+}
+
+#[test]
+fn detached_package_doc_does_not_lower() {
+    let blank = "\
+/// Separated by a blank line.
+
+package demo
+
+class Book {}
+";
+    let compilation = compile_str("detached.mox", blank);
+    let model = compilation.model.expect("a model on success");
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "{:?}",
+        compilation.diagnostics
+    );
+    assert_eq!(
+        model.packages[0].description, None,
+        "a blank line detaches the doc run"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Constraints lower into IR constraints
 // ---------------------------------------------------------------------------
@@ -1098,6 +1164,31 @@ fn constraints_on_a_model_without_them_stay_absent() {
 }
 
 #[test]
+fn datatype_format_lowers_into_the_ir() {
+    let source = "\
+package demo
+
+type Email wraps String {
+    format \"email\"
+}
+
+type Plain wraps String
+";
+    let compilation = compile_str("datatype_format.mox", source);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "{:?}",
+        compilation.diagnostics
+    );
+    let model = compilation.model.expect("a model on success");
+    let datatypes = &model.packages[0].datatypes;
+    assert_eq!(datatypes[0].name, "Email");
+    assert_eq!(datatypes[0].format.as_deref(), Some("email"));
+    assert_eq!(datatypes[1].name, "Plain");
+    assert_eq!(datatypes[1].format, None, "absent format stays None");
+}
+
+#[test]
 fn pattern_constraints_require_a_string_attribute() {
     let source = "package demo\n\nclass P { int count { pattern \"x\" } }\n";
     let compilation = compile_str("bad.mox", source);
@@ -1125,6 +1216,97 @@ fn numeric_constraints_require_a_numeric_attribute() {
         .diagnostics
         .iter()
         .any(|d| d.is_error() && d.message.contains("'minimum' requires a numeric attribute")));
+}
+
+/// Pins the numeric family's width: `minimum`/`maximum` are admitted on the
+/// IEEE primitives `float` and `double` exactly as on the integer
+/// primitives (bounds are declared as integers and lowered unchanged; no
+/// overflow/`R1` concern applies to schema bounds), while `string` stays a
+/// family mismatch.
+#[test]
+fn numeric_bounds_are_admitted_on_float_and_double_attributes() {
+    let source = "\
+package demo
+
+class Sensor {
+    double reading { minimum 0 maximum 100 }
+    float ratio { minimum -5 }
+}
+";
+    let compilation = compile_str("float_bounds.mox", source);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "float/double admit the numeric family: {:?}",
+        compilation.diagnostics
+    );
+    let model = compilation.model.expect("a model on success");
+    let class = &model.packages[0].classes[0];
+    let reading = feature(class, "reading");
+    assert_eq!(reading.constraints.minimum, Some(0));
+    assert_eq!(reading.constraints.maximum, Some(100));
+    let ratio = feature(class, "ratio");
+    assert_eq!(ratio.constraints.minimum, Some(-5));
+    assert_eq!(ratio.constraints.maximum, None);
+}
+
+#[test]
+fn numeric_bounds_stay_rejected_on_string_attributes() {
+    let source = "package demo\n\nclass P { String name { minimum 0 } }\n";
+    let compilation = compile_str("bad.mox", source);
+    assert!(compilation.model.is_none(), "errors must block the model");
+    assert!(compilation
+        .diagnostics
+        .iter()
+        .any(|d| d.is_error() && d.message.contains("'minimum' requires a numeric attribute")));
+}
+
+/// `unique` is admitted on any many-valued attribute regardless of element
+/// type (no family rules apply) and lowers into the IR flag.
+#[test]
+fn unique_is_admitted_on_many_valued_attributes() {
+    let source = "\
+package demo
+
+type Date wraps opaque
+
+enum Status { Draft = 0 }
+
+class P {
+    String[] tags { unique }
+    Date[] days { unique }
+    boolean[] flags { unique }
+    Status[] history { unique minLength 1 }
+    String solo
+}
+";
+    let compilation = compile_str("unique.mox", source);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "unique is type-agnostic on many-valued attributes: {:?}",
+        compilation.diagnostics
+    );
+    let model = compilation.model.expect("a model on success");
+    let class = &model.packages[0].classes[0];
+    for name in ["tags", "days", "flags", "history"] {
+        let feature = feature(class, name);
+        assert!(feature.constraints.unique, "`{name}` carries unique");
+    }
+    let history = feature(class, "history");
+    assert_eq!(history.constraints.min_length, Some(1));
+    assert!(
+        !feature(class, "solo").constraints.unique,
+        "unique is only set where declared"
+    );
+}
+
+#[test]
+fn unique_requires_a_many_valued_attribute() {
+    let source = "package demo\n\nclass P { String tag { unique } }\n";
+    let compilation = compile_str("bad.mox", source);
+    assert!(compilation.model.is_none(), "errors must block the model");
+    assert!(compilation.diagnostics.iter().any(|d| d.is_error()
+        && d.message
+            .contains("constraint 'unique' requires a many-valued attribute")));
 }
 
 const CURRENCY_SNAPSHOT: &str = r#"{
