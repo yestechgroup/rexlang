@@ -1043,6 +1043,72 @@ type Date wraps opaque {
     );
 }
 
+#[test]
+fn package_doc_lowers_into_package_description() {
+    let source = "\
+/// A library of books.
+/// Loans are tracked per copy.
+package nz.example.library
+
+class Book {
+    id String title
+}
+";
+    let compilation = compile_str("package_doc.mox", source);
+    let model = compilation.model.expect("a model on success");
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "{:?}",
+        compilation.diagnostics
+    );
+    let package = &model.packages[0];
+    assert_eq!(package.name, "nz.example.library");
+    assert_eq!(
+        package.description.as_deref(),
+        Some("A library of books.\nLoans are tracked per copy."),
+        "contiguous doc lines join with a newline"
+    );
+}
+
+#[test]
+fn package_without_doc_has_no_description() {
+    let source = "\
+package demo
+
+class Book {}
+";
+    let compilation = compile_str("plain.mox", source);
+    let model = compilation.model.expect("a model on success");
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "{:?}",
+        compilation.diagnostics
+    );
+    assert_eq!(model.packages[0].description, None);
+}
+
+#[test]
+fn detached_package_doc_does_not_lower() {
+    let blank = "\
+/// Separated by a blank line.
+
+package demo
+
+class Book {}
+";
+    let compilation = compile_str("detached.mox", blank);
+    let model = compilation.model.expect("a model on success");
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "{:?}",
+        compilation.diagnostics
+    );
+    assert_eq!(
+        model.packages[0].description, None,
+        "a blank line detaches the doc run"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Constraints lower into IR constraints
 // ---------------------------------------------------------------------------

@@ -63,8 +63,8 @@ fn library_example_parses_without_errors() {
     let model = result.ast.expect("expected an AST");
 
     let package = model.package.expect("expected a package declaration");
-    assert_eq!(package.full_name(), "nz.example.library");
-    assert_eq!(package.segments.len(), 3);
+    assert_eq!(package.name.full_name(), "nz.example.library");
+    assert_eq!(package.name.segments.len(), 3);
 
     assert_eq!(model.declarations.len(), 5);
 
@@ -1160,6 +1160,77 @@ fn trailing_doc_comment_attaches_to_nothing() {
         panic!("expected class")
     };
     assert_eq!(shelf.doc, None);
+}
+
+#[test]
+fn doc_comment_attaches_to_package() {
+    let source = "\
+/// A library model.
+package nz.example.library
+";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let package = result.ast.expect("ast").package.expect("package");
+    assert_eq!(package.name.full_name(), "nz.example.library");
+    assert_eq!(package.doc.as_deref(), Some("A library model."));
+}
+
+#[test]
+fn package_without_doc_comment_has_none() {
+    let source = "package demo\n";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let package = result.ast.expect("ast").package.expect("package");
+    assert_eq!(package.doc, None);
+}
+
+#[test]
+fn contiguous_package_doc_lines_join_and_block_form_attaches() {
+    let multi = "\
+/// First line.
+/// Second line.
+package demo
+";
+    let result = parse(multi);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let package = result.ast.expect("ast").package.expect("package");
+    assert_eq!(
+        package.doc.as_deref(),
+        Some("First line.\nSecond line."),
+        "contiguous doc lines join with a newline"
+    );
+
+    let block = "/** A calendar day. */\npackage demo\n";
+    let result = parse(block);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let package = result.ast.expect("ast").package.expect("package");
+    assert_eq!(package.doc.as_deref(), Some("A calendar day."));
+}
+
+#[test]
+fn detached_package_doc_runs_do_not_attach() {
+    let blank = "\
+/// Separated by a blank line.
+
+package demo
+";
+    let result = parse(blank);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let package = result.ast.expect("ast").package.expect("package");
+    assert_eq!(package.doc, None, "a blank line detaches the doc run");
+
+    let commented = "\
+/// Detached by an ordinary comment.
+// not a doc comment
+package demo
+";
+    let result = parse(commented);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let package = result.ast.expect("ast").package.expect("package");
+    assert_eq!(
+        package.doc, None,
+        "an intervening non-doc comment detaches the doc run"
+    );
 }
 
 // ---------------------------------------------------------------------------

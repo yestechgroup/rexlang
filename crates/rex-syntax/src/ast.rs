@@ -175,9 +175,20 @@ pub enum ConstraintValue {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Model {
     /// The `package` declaration, if present.
-    pub package: Option<QualifiedName>,
+    pub package: Option<PackageDecl>,
     /// All other top-level declarations in source order.
     pub declarations: Vec<Decl>,
+}
+
+/// A `package` declaration: the model's dotted namespace name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PackageDecl {
+    /// The declared qualified name.
+    pub name: QualifiedName,
+    /// Description from the doc comment directly above the declaration.
+    pub doc: Option<String>,
+    /// Span of the whole declaration, `package` keyword included.
+    pub span: Span,
 }
 
 /// A top-level declaration.

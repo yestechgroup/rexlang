@@ -644,10 +644,13 @@ pub(crate) fn compile_multi(
             );
             continue;
         };
-        let name = package_decl.full_name();
+        let name = package_decl.name.full_name();
         if packages.iter().any(|package| package.name == name) {
             buckets[index].push(
-                Diagnostic::error(format!("duplicate package '{name}'"), Some(package_decl.span))
+                Diagnostic::error(
+                    format!("duplicate package '{name}'"),
+                    Some(package_decl.name.span),
+                )
                     .with_help(
                         "each file must declare a distinct package; rename one package or merge the files",
                     ),
@@ -780,6 +783,7 @@ pub(crate) fn compile_multi(
             continue;
         };
         let mut out = ir::Package::new(packages[package_index].name.clone());
+        out.description = ast.package.as_ref().and_then(|decl| decl.doc.clone());
         for decl in &ast.declarations {
             match decl {
                 mox::Decl::Vocabulary(_) => {}
@@ -898,7 +902,7 @@ pub(crate) fn compile(
         );
         return (None, diags);
     };
-    let package = package_decl.full_name();
+    let package = package_decl.name.full_name();
     let base_dir = Path::new(path)
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -986,6 +990,7 @@ pub(crate) fn compile(
 
     // Lower declarations in source order.
     let mut out = ir::Package::new(package.clone());
+    out.description = package_decl.doc.clone();
     let scope = Scope::Single {
         package: &package,
         kinds: &kinds,

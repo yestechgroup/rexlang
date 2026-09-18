@@ -40,6 +40,10 @@ const MODELS: &[(&str, &str)] = &[
         "tests/conformance/models/actors.actor",
         "tests/conformance/artifacts/actors.actors.rex.json",
     ),
+    (
+        "tests/conformance/models/packagedoc.mox",
+        "tests/conformance/artifacts/packagedoc.rex.json",
+    ),
 ];
 
 fn compile_conformance_model(relative_path: &str) -> rex_ir::Model {

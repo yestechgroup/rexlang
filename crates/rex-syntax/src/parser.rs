@@ -584,8 +584,14 @@ fn feature<'src>() -> impl Parser<'src, Tokens<'src>, Option<FeatureDecl>, MoxEx
     any_feature.or(junk_feature().to(None))
 }
 
-fn package_decl<'src>() -> impl Parser<'src, Tokens<'src>, QualifiedName, MoxExtra<'src>> + Clone {
-    kw(Token::Package).ignore_then(qname())
+fn package_decl<'src>() -> impl Parser<'src, Tokens<'src>, PackageDecl, MoxExtra<'src>> + Clone {
+    kw(Token::Package)
+        .ignore_then(qname())
+        .map_with(|name, e| PackageDecl {
+            name,
+            doc: None,
+            span: e.span(),
+        })
 }
 
 fn annotation_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>> + Clone {
@@ -1143,7 +1149,7 @@ fn import_decl<'src>() -> impl Parser<'src, Tokens<'src>, ImportDecl, MoxExtra<'
 
 #[derive(Clone)]
 enum Item {
-    Package(QualifiedName),
+    Package(PackageDecl),
     Decl(Decl),
     Junk,
 }
@@ -1172,7 +1178,7 @@ fn fold_model(items: Vec<Item>) -> Model {
     let mut declarations = Vec::new();
     for item in items {
         match item {
-            Item::Package(qualified) if package.is_none() => package = Some(qualified),
+            Item::Package(decl) if package.is_none() => package = Some(decl),
             Item::Package(_) | Item::Junk => {}
             Item::Decl(decl) => declarations.push(decl),
         }
@@ -1206,8 +1212,9 @@ fn model<'src>() -> impl Parser<'src, Tokens<'src>, Model, MoxExtra<'src>> + Clo
 ///
 /// This function never panics and always recovers as much of the AST as
 /// possible; check [`ParseResult::errors`] for syntax problems. Doc comments
-/// (`///`, `/** ... */`) on their own lines directly above a declaration,
-/// feature, or enum literal are attached to it as its `doc` description.
+/// (`///`, `/** ... */`) on their own lines directly above the package
+/// declaration, a declaration, feature, or enum literal are attached to it as
+/// its `doc` description.
 pub fn parse(source: &str) -> ParseResult {
     let (tokens, comments) = match lex_with_comments(source) {
         Ok(result) => result,
@@ -1246,11 +1253,11 @@ struct DocComment {
     begins_line: bool,
 }
 
-/// Attaches doc comments to the model's declarations, features, and enum
-/// literals. A doc run is a maximal sequence of doc comments, each on its
-/// own line, each starting on the line directly after the previous one ends,
-/// whose last comment ends on the line directly above the declaration's
-/// first line.
+/// Attaches doc comments to the model's package declaration, declarations,
+/// features, and enum literals. A doc run is a maximal sequence of doc
+/// comments, each on its own line, each starting on the line directly after
+/// the previous one ends, whose last comment ends on the line directly above
+/// the declaration's first line.
 fn attach_docs(model: &mut Model, comments: &[crate::lexer::Comment<'_>], source: &str) {
     let line_starts: Vec<usize> = {
         let mut starts = vec![0];
@@ -1310,6 +1317,11 @@ fn attach_docs(model: &mut Model, comments: &[crate::lexer::Comment<'_>], source
             .collect::<Vec<_>>()
             .join("\n");
         (!joined.is_empty()).then_some(joined)
+    }
+
+    if let Some(package) = &mut model.package {
+        let start_line = line_of(package.span.start);
+        package.doc = run_above(&docs, start_line);
     }
 
     for decl in &mut model.declarations {

@@ -83,10 +83,11 @@
 //!     model never embeds an [`ActorModel`].
 //! 11. **Descriptions and constraints (additive).** Doc comments (`///`,
 //!     `/** ... */`) lower into `description: Option<String>` on
-//!     [`ClassDef`], [`InterfaceDef`], [`EnumDef`], [`EnumLiteral`],
-//!     [`DatatypeDef`], [`VocabularyDef`], [`Feature`], and [`Operation`];
-//!     attribute constraints (`pattern`, `minLength`, `maxLength`,
-//!     `minimum`, `maximum`) lower into [`Feature::constraints`]. Both follow
+//!     [`Package`], [`ClassDef`], [`InterfaceDef`], [`EnumDef`],
+//!     [`EnumLiteral`], [`DatatypeDef`], [`VocabularyDef`], [`Feature`], and
+//!     [`Operation`]; attribute constraints (`pattern`, `minLength`,
+//!     `maxLength`, `minimum`, `maximum`) lower into
+//!     [`Feature::constraints`]. Both follow
 //!     the same additive rules: `#[serde(default)]` and omitted when absent,
 //!     so artifacts for models without them are byte-identical to earlier
 //!     output.
@@ -204,6 +205,11 @@ impl Default for Model {
 pub struct Package {
     /// Dotted package name, e.g. `"nz.example.library"`.
     pub name: String,
+    /// Human-readable description from the package declaration's doc
+    /// comment. Additive (wire contract rule 11); omitted when absent so
+    /// artifacts for models without package docs stay byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Free-form annotations attached to the package.
     #[serde(default)]
     pub annotations: Vec<Annotation>,
@@ -235,6 +241,7 @@ impl Package {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            description: None,
             annotations: Vec::new(),
             enums: Vec::new(),
             datatypes: Vec::new(),

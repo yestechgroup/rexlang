@@ -12,11 +12,13 @@ reference; crate docs cover implementation.
 - **Comments**: `//` to end of line, `/* ... */` block comments. Preserved
   verbatim by `rexlang fmt`.
 - **Doc comments**: `///` line comments and `/** ... */` block comments on
-  their own lines directly above a declaration, feature, or enum literal
-  become that element's **description**. Contiguous `///` lines join into one
-  description; a blank line or an intervening non-doc comment detaches the
-  run. Descriptions are carried in the IR and surface as `description`
-  keywords in generated JSON Schema and as doc comments in generated code.
+  their own lines directly above the `package` declaration, a declaration,
+  feature, or enum literal become that element's **description**. Contiguous
+  `///` lines join into one description; a blank line or an intervening
+  non-doc comment detaches the run. Descriptions are carried in the IR and
+  surface as `description` keywords in generated JSON Schema and as doc
+  comments in generated code (the package description is carried in the IR
+  only).
 - **Strings**: double-quoted with `\"` and `\\` escapes.
 - **Integers**: decimal, optional leading `-`.
 - **Identifiers**: `[A-Za-z_][A-Za-z0-9_]*`. Any keyword can be escaped with a
@@ -33,8 +35,11 @@ A file holds one package and any number of declarations:
 ```
 model        := package_decl (annotation_decl | class_decl | interface_decl
               | enum_decl | type_decl | vocabulary_decl)*
-package_decl := "package" qualified_name
+package_decl := doc? "package" qualified_name
 ```
+
+`doc` marks the optional doc-comment run described under Lexical rules; it
+becomes the package's `description` in the Core IR.
 
 A model may span multiple `.mox` files — one package per file, named by its
 `package` declaration. Compiling several files produces **one** Core IR
