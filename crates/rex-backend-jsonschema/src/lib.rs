@@ -673,10 +673,19 @@ fn value_schema(
         }
         TypeRef::Datatype { name, .. } => {
             let datatype = context.datatype_def(name)?;
-            Ok(serde_json::json!({
-                "type": "string",
-                "$comment": datatype_comment(datatype),
-            }))
+            let mut schema = serde_json::Map::new();
+            schema.insert("type".to_string(), serde_json::json!("string"));
+            // The datatype's declared `format` hint (e.g. `"email"`); a
+            // wire-level contract, emitted in both profiles. Absent when the
+            // datatype declares none.
+            if let Some(format) = &datatype.format {
+                schema.insert("format".to_string(), serde_json::json!(format));
+            }
+            schema.insert(
+                "$comment".to_string(),
+                serde_json::json!(datatype_comment(datatype)),
+            );
+            Ok(serde_json::Value::Object(schema))
         }
         TypeRef::Vocabulary { name, .. } => {
             let vocabulary = context.vocabulary_def(name)?;

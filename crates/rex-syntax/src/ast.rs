@@ -306,6 +306,9 @@ pub struct DatatypeDecl {
     pub wraps: Option<Wraps>,
     /// Target binding entries.
     pub bindings: Vec<BindingEntry>,
+    /// The declared `format` hint from the reserved `format "…"` block key,
+    /// e.g. `format "email"`. Never a target binding.
+    pub format: Option<String>,
     /// `create { <target-body>+ }` blocks, in source order. More than one is
     /// a driver error ("at most one of each").
     pub create: Vec<TargetBody>,

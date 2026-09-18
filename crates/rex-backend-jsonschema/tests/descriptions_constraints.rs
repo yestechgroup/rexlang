@@ -185,3 +185,49 @@ fn constraints_merge_into_datatype_vocabulary_and_enum_element_schemas() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+const FORMAT_MODEL: &str = r#"package demo
+
+type Email wraps String { format "email" }
+
+type Plain wraps String
+
+class Contact {
+    Email address
+    Plain note
+}
+"#;
+
+/// A datatype's declared `format` hint surfaces as the JSON Schema `format`
+/// keyword on that datatype's schema, in both profiles. A datatype without a
+/// `format` emits none.
+#[test]
+fn datatype_format_surfaces_in_both_profiles() {
+    let compilation = compile_str("format.mox", FORMAT_MODEL);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "model must compile cleanly: {:?}",
+        compilation.diagnostics
+    );
+    let model = compilation.model.expect("model lowered");
+    for profile in [Profile::Wire, Profile::Api] {
+        let files = generate(&model, profile).expect("generate");
+        let json = files.get("schema.json").expect("schema.json");
+        let contact = &serde_json::from_str::<serde_json::Value>(json).expect("valid JSON")
+            ["$defs"]["Contact"];
+        assert_eq!(
+            contact["properties"]["address"]["format"],
+            serde_json::json!("email"),
+            "declared format surfaces ({profile:?})"
+        );
+        assert_eq!(
+            contact["properties"]["address"]["type"],
+            serde_json::json!("string"),
+            "datatype schema stays a string ({profile:?})"
+        );
+        assert!(
+            contact["properties"]["note"].get("format").is_none(),
+            "format-less datatype emits no format keyword ({profile:?})"
+        );
+    }
+}

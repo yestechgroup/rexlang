@@ -91,6 +91,13 @@
 //!     the same additive rules: `#[serde(default)]` and omitted when absent,
 //!     so artifacts for models without them are byte-identical to earlier
 //!     output.
+//! 12. **Datatype format (additive).** [`DatatypeDef::format`] carries the
+//!     reserved `format "…"` entry of a datatype declaration (e.g.
+//!     `type Email wraps String { format "email" }`) under the same additive
+//!     rules: `#[serde(default)]` and omitted when absent, so artifacts for
+//!     format-less datatypes are byte-identical to earlier output. It is a
+//!     wire-level contract (the JSON Schema `format` keyword); no runtime
+//!     validation is implied.
 //!
 //! [rexlang]: https://github.com/anton-makes/rexlang
 
@@ -352,6 +359,12 @@ pub struct DatatypeDef {
     /// datatype to its wrapped value. Additive; omitted when empty.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub convert: BTreeMap<String, String>,
+    /// The declared `format` hint (e.g. `"email"` from `format "email"`),
+    /// surfaced by schema backends as the JSON Schema `format` keyword on
+    /// this datatype's schema. A wire-level contract only: no runtime
+    /// validation is implied. Additive; omitted when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
 }
 
 impl DatatypeDef {
@@ -365,7 +378,16 @@ impl DatatypeDef {
             target_bindings: BTreeMap::new(),
             create: BTreeMap::new(),
             convert: BTreeMap::new(),
+            format: None,
         }
+    }
+
+    /// Chainable setter for the datatype's declared `format` hint (e.g.
+    /// `"email"`), surfaced by schema backends as the JSON Schema `format`
+    /// keyword.
+    pub fn with_format(mut self, format: impl Into<String>) -> Self {
+        self.format = Some(format.into());
+        self
     }
 
     /// Chainable setter adding a per-target binding (e.g. `"rust"` ->
@@ -1837,6 +1859,51 @@ mod tests {
           ]
         }
       ]
+    }
+  ]
+}"#;
+
+        assert_eq!(model.to_json_pretty().expect("serialize"), expected);
+        let parsed = Model::from_json(expected).expect("deserialize golden");
+        assert_eq!(model, parsed);
+    }
+
+    #[test]
+    fn golden_json_with_datatype_format_pins_the_wire_format() {
+        // Additive: `format` is omitted when absent (see the byte-identity
+        // goldens above); this golden pins the NEW field — a datatype's
+        // declared `format` hint — which is omitted when `None`.
+        let mut package = Package::new("nz.example.demo");
+        package
+            .datatypes
+            .push(DatatypeDef::new("Email", Some("String".to_string())).with_format("email"));
+        package
+            .datatypes
+            .push(DatatypeDef::new("Plain", Some("String".to_string())));
+        let mut model = Model::new();
+        model.packages.push(package);
+
+        let expected = r#"{
+  "formatVersion": 1,
+  "rexVersion": "0.1.0",
+  "packages": [
+    {
+      "name": "nz.example.demo",
+      "annotations": [],
+      "enums": [],
+      "datatypes": [
+        {
+          "name": "Email",
+          "platform": "String",
+          "format": "email"
+        },
+        {
+          "name": "Plain",
+          "platform": "String"
+        }
+      ],
+      "interfaces": [],
+      "classes": []
     }
   ]
 }"#;

@@ -1511,6 +1511,7 @@ fn lower_datatype(
     };
     let mut datatype = ir::DatatypeDef::new(&decl.name.text, platform);
     datatype.description = decl.doc.clone();
+    datatype.format = decl.format.clone();
     for binding in &decl.bindings {
         datatype = datatype.bind(&binding.key.text, &binding.value);
     }

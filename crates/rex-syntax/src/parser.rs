@@ -663,25 +663,41 @@ fn named_target_block<'src>(
         .then_ignore(kw(Token::RBrace))
 }
 
+/// The reserved `format "…"` entry of a datatype's `{ ... }` block: the
+/// unescaped key `format` followed by a string literal. It never creates a
+/// target binding.
+fn format_entry<'src>() -> impl Parser<'src, Tokens<'src>, String, MoxExtra<'src>> + Clone {
+    select! { Token::Ident(text) if text == "format" => () }.ignore_then(string_lit())
+}
+
 /// One entry of a datatype's `{ ... }` block.
 enum DatatypeEntry {
     Binding(BindingEntry),
+    Format(String),
     Create(Vec<TargetBody>),
     Convert(Vec<TargetBody>),
 }
 
-/// The `{ ... }` block of a datatype: target-binding entries and (at most one
-/// each) `create`/`convert` body blocks, in any order. A second `create` (or
-/// `convert`) block is a syntax error.
+/// The `{ ... }` block of a datatype: target-binding entries, the (at most
+/// one) reserved `format "…"` entry, and (at most one each) `create`/`convert`
+/// body blocks, in any order. A second `create` (or `convert`, or `format`)
+/// is a syntax error, as is a binding target literally named `format` (only
+/// writable escaped as `^format` — the unescaped key declares the format).
 fn datatype_block<'src>() -> impl Parser<
     'src,
     Tokens<'src>,
-    (Vec<BindingEntry>, Vec<TargetBody>, Vec<TargetBody>),
+    (
+        Vec<BindingEntry>,
+        Option<String>,
+        Vec<TargetBody>,
+        Vec<TargetBody>,
+    ),
     MoxExtra<'src>,
 > + Clone {
     let entry = choice((
         named_target_block("create").map(DatatypeEntry::Create),
         named_target_block("convert").map(DatatypeEntry::Convert),
+        format_entry().map(DatatypeEntry::Format),
         binding_entry().map(DatatypeEntry::Binding),
     ));
     kw(Token::LBrace)
@@ -691,13 +707,21 @@ fn datatype_block<'src>() -> impl Parser<
                 .collect::<Vec<_>>()
                 .map(|entries| {
                     let mut bindings = Vec::new();
+                    let mut format: Option<String> = None;
                     let mut create: Option<Vec<TargetBody>> = None;
                     let mut convert: Option<Vec<TargetBody>> = None;
-                    // `Some(keyword)` when a second block of that kind appears.
+                    // `Some(keyword)` when a second block/entry of that kind appears.
                     let mut duplicate: Option<&'static str> = None;
                     for entry in entries {
                         match entry {
                             DatatypeEntry::Binding(binding) => bindings.push(binding),
+                            DatatypeEntry::Format(value) if format.is_none() => {
+                                format = Some(value)
+                            }
+                            DatatypeEntry::Format(_) if duplicate.is_none() => {
+                                duplicate = Some("format")
+                            }
+                            DatatypeEntry::Format(_) => {}
                             DatatypeEntry::Create(bodies) if create.is_none() => {
                                 create = Some(bodies)
                             }
@@ -717,6 +741,7 @@ fn datatype_block<'src>() -> impl Parser<
                     (
                         (
                             bindings,
+                            format,
                             create.unwrap_or_default(),
                             convert.unwrap_or_default(),
                         ),
@@ -725,10 +750,19 @@ fn datatype_block<'src>() -> impl Parser<
                 })
                 .validate(|(block, duplicate), e, emitter| {
                     if let Some(keyword) = duplicate {
+                        let noun = if keyword == "format" { "entry" } else { "block" };
                         emitter.emit(Rich::custom(
                             e.span(),
-                            format!("duplicate `{keyword}` block in datatype declaration"),
+                            format!("duplicate `{keyword}` {noun} in datatype declaration"),
                         ));
+                    }
+                    for binding in &block.0 {
+                        if binding.key.text == "format" {
+                            emitter.emit(Rich::custom(
+                                binding.key.span,
+                                "`format` is a reserved key in datatype declarations: the unescaped key declares the datatype's format (`format \"…\"`)".to_string(),
+                            ));
+                        }
                     }
                     block
                 }),
@@ -786,12 +820,13 @@ fn datatype_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>
         .then(wraps_target.or_not())
         .then(datatype_block().or_not())
         .map_with(|((name, wraps), block), e| {
-            let (bindings, create, convert) = block.unwrap_or_default();
+            let (bindings, format, create, convert) = block.unwrap_or_default();
             Decl::Datatype(DatatypeDecl {
                 name,
                 doc: None,
                 wraps,
                 bindings,
+                format,
                 create,
                 convert,
                 span: e.span(),

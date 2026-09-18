@@ -130,18 +130,26 @@ Multiplicity shorthand: `[]` = `[0..*]`; absent: attributes are `1..1`,
 ```
 enum_decl    := "enum" name "{" literal+ "}"
 literal      := name ("as" string)? ("=" int)?
-type_decl    := "type" name "wraps" ("opaque" | qualified_name)? binding_block?
+type_decl    := "type" name "wraps" ("opaque" | qualified_name)? datatype_block?
+datatype_block := "{" ( name string | "format" string )* "}"
 binding_block:= "{" (name string)* "}"
 interface_decl := "interface" name "{" (name string)* "}"
 vocabulary_decl := "vocabulary" name "from" string "{" ( version "string"
-                  | key name | facet type_ref name )* "}"
+                 | key name | facet type_ref name )* "}"
 ```
 
 - **Enums** carry integer values (required) and optional labels: `Mystery as
   "M" = 0`. Backends emit real enums; canonical JSON uses the literal name.
 - **Datatypes** wrap platform types opaquely: `type Date wraps opaque { rust
   "chrono::NaiveDate" ... }`. Bindings are per-target hints, never generated
-  dependencies.
+  dependencies. A datatype may also declare one **`format`** hint:
+  `type Email wraps String { format "email" }`. `format` is a reserved key
+  inside the datatype block: the unescaped key declares the format (never a
+  target binding), at most once, and a binding target literally named
+  `format` (only writable escaped, `^format "…"`) is an error. The hint
+  surfaces as the JSON Schema `format` keyword on that datatype's schema in
+  both profiles; it is a wire-level contract only — no runtime validation is
+  implied.
 - **Vocabularies** reference well-known external code sets. The declaration
   names the source, version, key facet, and typed facets. Snapshots are
   vendored to `vocab/<source>@<version>.json` and pinned by sha256 in

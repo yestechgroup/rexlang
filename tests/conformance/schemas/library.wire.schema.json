@@ -24,6 +24,7 @@
         },
         "copyright": {
           "$comment": "datatype Date (opaque); target bindings: csharp → System.DateOnly; java → java.time.LocalDate; rust → chrono::NaiveDate",
+          "format": "date",
           "type": "string"
         },
         "pages": {

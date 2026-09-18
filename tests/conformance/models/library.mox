@@ -6,6 +6,7 @@ enum BookCategory {
 }
 
 type Date wraps opaque {
+    format "date"
     rust "chrono::NaiveDate"
     csharp "System.DateOnly"
     java "java.time.LocalDate"

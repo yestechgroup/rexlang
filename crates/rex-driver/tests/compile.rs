@@ -1164,6 +1164,31 @@ fn constraints_on_a_model_without_them_stay_absent() {
 }
 
 #[test]
+fn datatype_format_lowers_into_the_ir() {
+    let source = "\
+package demo
+
+type Email wraps String {
+    format \"email\"
+}
+
+type Plain wraps String
+";
+    let compilation = compile_str("datatype_format.mox", source);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "{:?}",
+        compilation.diagnostics
+    );
+    let model = compilation.model.expect("a model on success");
+    let datatypes = &model.packages[0].datatypes;
+    assert_eq!(datatypes[0].name, "Email");
+    assert_eq!(datatypes[0].format.as_deref(), Some("email"));
+    assert_eq!(datatypes[1].name, "Plain");
+    assert_eq!(datatypes[1].format, None, "absent format stays None");
+}
+
+#[test]
 fn pattern_constraints_require_a_string_attribute() {
     let source = "package demo\n\nclass P { int count { pattern \"x\" } }\n";
     let compilation = compile_str("bad.mox", source);

@@ -29,7 +29,8 @@
             "csharp": "System.DateOnly",
             "java": "java.time.LocalDate",
             "rust": "chrono::NaiveDate"
-          }
+          },
+          "format": "date"
         }
       ],
       "interfaces": [],

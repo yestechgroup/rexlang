@@ -1316,3 +1316,57 @@ fn constraint_values_must_be_literals() {
         "a constraint value must be a string or int literal"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Datatype format declarations
+// ---------------------------------------------------------------------------
+
+#[test]
+fn datatype_accepts_a_format_entry() {
+    let source = "type Email wraps String { format \"email\" }";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let Decl::Datatype(datatype) = &result.ast.expect("ast").declarations[0] else {
+        panic!("expected datatype")
+    };
+    assert!(
+        datatype.bindings.is_empty(),
+        "`format` must not become a target binding"
+    );
+    assert_eq!(datatype.format.as_deref(), Some("email"));
+}
+
+#[test]
+fn format_entry_coexists_with_bindings() {
+    let source = "type Date wraps opaque { format \"date\" rust \"chrono::NaiveDate\" }";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let Decl::Datatype(datatype) = &result.ast.expect("ast").declarations[0] else {
+        panic!("expected datatype")
+    };
+    assert_eq!(datatype.format.as_deref(), Some("date"));
+    assert_eq!(datatype.bindings.len(), 1);
+    assert_eq!(datatype.bindings[0].key.text, "rust");
+}
+
+#[test]
+fn duplicate_format_entries_are_a_syntax_error() {
+    let source = "type Email wraps String { format \"a\" format \"b\" }";
+    let result = parse(source);
+    assert!(
+        !result.errors.is_empty(),
+        "a second `format` entry must error, like a second create/convert block"
+    );
+}
+
+#[test]
+fn format_is_a_reserved_binding_target() {
+    // The escaped `^format` tries to declare a binding target literally
+    // named `format`; the word is reserved inside datatype blocks.
+    let source = "type Email wraps String { ^format \"a::B\" }";
+    let result = parse(source);
+    assert!(
+        !result.errors.is_empty(),
+        "a binding target named `format` must be a compile error naming the reserved word"
+    );
+}
