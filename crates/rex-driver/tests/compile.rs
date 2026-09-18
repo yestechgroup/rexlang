@@ -1218,6 +1218,48 @@ fn numeric_constraints_require_a_numeric_attribute() {
         .any(|d| d.is_error() && d.message.contains("'minimum' requires a numeric attribute")));
 }
 
+/// Pins the numeric family's width: `minimum`/`maximum` are admitted on the
+/// IEEE primitives `float` and `double` exactly as on the integer
+/// primitives (bounds are declared as integers and lowered unchanged; no
+/// overflow/`R1` concern applies to schema bounds), while `string` stays a
+/// family mismatch.
+#[test]
+fn numeric_bounds_are_admitted_on_float_and_double_attributes() {
+    let source = "\
+package demo
+
+class Sensor {
+    double reading { minimum 0 maximum 100 }
+    float ratio { minimum -5 }
+}
+";
+    let compilation = compile_str("float_bounds.mox", source);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "float/double admit the numeric family: {:?}",
+        compilation.diagnostics
+    );
+    let model = compilation.model.expect("a model on success");
+    let class = &model.packages[0].classes[0];
+    let reading = feature(class, "reading");
+    assert_eq!(reading.constraints.minimum, Some(0));
+    assert_eq!(reading.constraints.maximum, Some(100));
+    let ratio = feature(class, "ratio");
+    assert_eq!(ratio.constraints.minimum, Some(-5));
+    assert_eq!(ratio.constraints.maximum, None);
+}
+
+#[test]
+fn numeric_bounds_stay_rejected_on_string_attributes() {
+    let source = "package demo\n\nclass P { String name { minimum 0 } }\n";
+    let compilation = compile_str("bad.mox", source);
+    assert!(compilation.model.is_none(), "errors must block the model");
+    assert!(compilation
+        .diagnostics
+        .iter()
+        .any(|d| d.is_error() && d.message.contains("'minimum' requires a numeric attribute")));
+}
+
 const CURRENCY_SNAPSHOT: &str = r#"{
   "vocabulary": "iso:4217",
   "version": "2024-01-01",

@@ -106,7 +106,11 @@ constraint_keyword := "pattern" | "minLength" | "maxLength" | "minimum" | "maxim
   once. A constraint family is admitted by the most explicit type knowledge
   available: the string family (`pattern`/`minLength`/`maxLength`) requires
   a `string` primitive; the numeric family (`minimum`/`maximum`) requires a
-  numeric primitive. A datatype-typed attribute defaults to the string
+  numeric primitive — the integer primitives and the IEEE `float`/`double`
+  alike (bounds are declared as integers and hold for the floating values
+  they bound; IEEE semantics apply, so the expression language's
+  checked-overflow rule R1 is not a concern here). A datatype-typed
+  attribute defaults to the string
   family — its platform type is opaque — and rejects numeric bounds. A
   vocabulary-typed attribute follows its `key` facet's declared primitive
   type (`String` admits the string family, a numeric key the numeric

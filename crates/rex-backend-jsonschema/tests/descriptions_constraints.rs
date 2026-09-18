@@ -186,6 +186,50 @@ fn constraints_merge_into_datatype_vocabulary_and_enum_element_schemas() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Pins the numeric family's schema emission on the IEEE primitives:
+/// `minimum`/`maximum` declared on `float`/`double` attributes merge into
+/// the element schema exactly as on integer primitives (bounds are
+/// integers; IEEE semantics — no overflow concern). The API profile keeps
+/// its platform `format` keyword alongside the bounds.
+#[test]
+fn numeric_bounds_on_float_and_double_merge_into_the_element_schema() {
+    let compilation = compile_str(
+        "float_bounds.mox",
+        "package demo\n\nclass Sensor {\n    double reading { minimum 0 maximum 100 }\n    float ratio { minimum -5 }\n}\n",
+    );
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "float/double admit the numeric family: {:?}",
+        compilation.diagnostics
+    );
+    let model = compilation.model.expect("model lowered");
+    for profile in [Profile::Wire, Profile::Api] {
+        let files = generate(&model, profile).expect("generate");
+        let json = files.get("schema.json").expect("schema.json");
+        let sensor = &serde_json::from_str::<serde_json::Value>(json).expect("valid JSON")["$defs"]
+            ["Sensor"];
+        let reading = &sensor["properties"]["reading"];
+        assert_eq!(reading["type"], serde_json::json!("number"));
+        assert_eq!(reading["minimum"], serde_json::json!(0));
+        assert_eq!(reading["maximum"], serde_json::json!(100));
+        let ratio = &sensor["properties"]["ratio"];
+        assert_eq!(ratio["type"], serde_json::json!("number"));
+        assert_eq!(ratio["minimum"], serde_json::json!(-5));
+        match profile {
+            Profile::Api => {
+                assert_eq!(reading["format"], serde_json::json!("double"));
+                assert_eq!(ratio["format"], serde_json::json!("float"));
+            }
+            Profile::Wire => {
+                assert!(
+                    reading.get("format").is_none() && ratio.get("format").is_none(),
+                    "the wire profile carries no platform format keyword"
+                );
+            }
+        }
+    }
+}
+
 const FORMAT_MODEL: &str = r#"package demo
 
 type Email wraps String { format "email" }
