@@ -513,10 +513,13 @@ fn emit_class_fill(e: &mut String, unit: &Unit<'_>, class: &ClassCtx<'_>) -> any
                         class.slot_field,
                     ));
                 } else {
+                    // Optional scalars skip JSON nulls (absence is the
+                    // default) and always wrap the loaded value in `Some`;
+                    // `value` is a `&serde_json::Value`, never an `Option`.
                     let (assign, presence) = if feature.multiplicity.lower == 0 {
                         (
-                            format!("Some({})", load("v")),
-                            "                if let Some(v) = value {\n",
+                            format!("Some({})", load("value")),
+                            "                if !value.is_null() {\n",
                         )
                     } else {
                         (load("value"), "                if !value.is_null() {\n")

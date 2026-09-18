@@ -13,10 +13,13 @@
 //! code needs only this crate), defines the error type shared by runtime
 //! operations, and the [`Resource`] trait implemented by every generated
 //! root. Canonical instance JSON support extends these types in a
-//! backward-compatible way.
+//! backward-compatible way, and the [`validation`] types are what generated
+//! constraint-checking `validate` methods report.
 
 /// Re-export of [`slotmap`] so generated code depends only on this crate.
 pub use slotmap;
+
+pub mod validation;
 
 /// The `$type` key of the canonical instance JSON format (document type or
 /// class name).

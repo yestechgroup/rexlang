@@ -65,6 +65,22 @@
 //! body lowers the same way into a `pub fn <name>(&self, res: &Resource)`
 //! accessor on its class. Declaring both a `rust` and an `expr` body for the
 //! same operation is a generation error.
+//!
+//! # Constraint validation
+//!
+//! Classes with constrained attributes (`minLength`/`maxLength`/
+//! `minimum`/`maximum`) carry a `pub fn validate(&self) ->
+//! Vec<rex_runtime::validation::Violation>` method reporting one violation
+//! per offended bound — per element for many-valued attributes, with the
+//! element index prefixed to the detail. Checks follow the attribute's
+//! resolved type: length bounds on `string`, datatypes (the generated
+//! newtypes wrap `String`), and `String`-keyed vocabularies (via `key()`),
+//! numeric bounds on `int`/`long`, enum literal values (via `value()`), and
+//! numeric-keyed vocabularies (via the key facet accessor). Bounds the Rust
+//! backend checks descriptively in this milestone — `pattern`, enum literal
+//! *name* bounds (compile-time complete), and short/byte/float/double
+//! bounds — emit no code. Classes with no checkable constraint emit no
+//! `validate` at all, so unconstrained models stay byte-identical.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -1167,10 +1183,203 @@ fn emit_struct(e: &mut String, unit: &Unit<'_>, class: &ClassCtx<'_>) -> anyhow:
             ret = op_type(&operation.return_type)?,
         ));
     }
+    // Constraint validation: only classes with at least one checkable
+    // constraint carry a `validate` method, so unconstrained models keep
+    // byte-identical generated code.
+    emit_validate_method(&mut methods, unit, class)?;
     if !methods.is_empty() {
         e.push_str(&format!("impl {name} {{\n"));
         e.push_str(&methods);
         e.push_str("}\n");
+    }
+    Ok(())
+}
+
+/// The attributes of `class` carrying declared constraints: the candidates
+/// for a generated `validate` method. Derived features and non-attribute
+/// features never carry constraints.
+fn constrained_attributes(class: &ClassDef) -> impl Iterator<Item = &Feature> {
+    class.features.iter().filter(|feature| {
+        feature.kind == FeatureKind::Attribute
+            && !feature.is_derived
+            && !feature.constraints.is_empty()
+    })
+}
+
+/// The runtime-checkable quantity of one constrained attribute: the string
+/// family checks a length expression, the numeric family an `i64` value
+/// expression (the IR stores bounds as `i64`). The expression reads the
+/// element value bound to `value` by the multiplicity shape.
+enum Checked {
+    Length(String),
+    Number(String),
+}
+
+/// One `if … { violations.push(…) }` block for a single bound.
+fn bound_check(feature_name: &str, kind: &str, comparison: &str, detail: &str) -> String {
+    format!(
+        "            if {comparison} {{\n                \
+         violations.push(rex_runtime::validation::Violation {{\n                    \
+         feature: {feature_name:?}.to_string(),\n                    \
+         kind: rex_runtime::validation::ConstraintKind::{kind},\n                    \
+         detail: format!(\"{detail}\"),\n                \
+         }});\n            }}\n"
+    )
+}
+
+/// Emits the `validate` method for `class` into the accumulated `methods`
+/// buffer. Nothing is emitted when no constraint of the class is checkable
+/// by the Rust backend.
+fn emit_validate_method(
+    methods: &mut String,
+    unit: &Unit<'_>,
+    class: &ClassCtx<'_>,
+) -> anyhow::Result<()> {
+    let mut body = String::new();
+    for feature in constrained_attributes(class.class) {
+        emit_attribute_checks(unit, feature, &mut body)?;
+    }
+    if body.is_empty() {
+        return Ok(());
+    }
+    methods.push_str(
+        "    /// Reports one violation per offended attribute constraint.\n    \
+         pub fn validate(&self) -> Vec<rex_runtime::validation::Violation> {\n        \
+         let mut violations = Vec::new();\n",
+    );
+    methods.push_str(&body);
+    methods.push_str("        violations\n    }\n\n");
+    Ok(())
+}
+
+/// Emits the check statements for one constrained attribute: one
+/// `violations.push` per offended bound, per element for many-valued
+/// attributes (the element index is prefixed to the detail). Absent values
+/// (optional attributes) are not violations — multiplicity is not a
+/// constraint.
+fn emit_attribute_checks(
+    unit: &Unit<'_>,
+    feature: &Feature,
+    out: &mut String,
+) -> anyhow::Result<()> {
+    let field = rust_ident(&snake_case(&feature.name));
+    let constraints = &feature.constraints;
+    // How the checked quantity is computed from the element value. Bounds
+    // the backend checks descriptively in this milestone (enum literal
+    // *name* bounds, short/byte/float/double bounds) map to `None` and emit
+    // nothing. Class/interface attributes cannot carry constraints (the
+    // driver rejects them), so their presence means a corrupt IR.
+    let checked = match &feature.type_ {
+        TypeRef::Primitive(PrimitiveType::String) => {
+            Some(Checked::Length("value.chars().count()".to_string()))
+        }
+        TypeRef::Primitive(PrimitiveType::Int) => {
+            Some(Checked::Number("i64::from(*value)".to_string()))
+        }
+        TypeRef::Primitive(PrimitiveType::Long) => Some(Checked::Number("*value".to_string())),
+        TypeRef::Datatype { .. } => Some(Checked::Length("value.0.chars().count()".to_string())),
+        TypeRef::Enum { .. } => Some(Checked::Number("value.value()".to_string())),
+        TypeRef::Vocabulary { name, .. } => {
+            let vocabulary = unit
+                .vocabularies
+                .iter()
+                .find(|v| v.name == *name)
+                .ok_or_else(|| anyhow::anyhow!("vocabulary '{name}' not found in model"))?;
+            let key_facet = vocabulary
+                .facets
+                .iter()
+                .find(|facet| facet.name == vocabulary.key)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("vocabulary '{name}' has no key facet '{}'", vocabulary.key)
+                })?;
+            match key_facet.type_ {
+                PrimitiveType::String => {
+                    Some(Checked::Length("value.key().chars().count()".to_string()))
+                }
+                PrimitiveType::Int | PrimitiveType::Long => Some(Checked::Number(format!(
+                    "value.{}()",
+                    rust_ident(&snake_case(&key_facet.name))
+                ))),
+                _ => None,
+            }
+        }
+        TypeRef::Class { name, .. } | TypeRef::Interface { name, .. } => bail!(
+            "feature '{}' has constraints, but class and interface types take none ('{name}')",
+            feature.name
+        ),
+        _ => None,
+    };
+    let Some(checked) = checked else {
+        return Ok(());
+    };
+    let many = feature.multiplicity.is_many();
+    let indexed = |detail: String| {
+        if many {
+            format!("[{{index}}] {detail}")
+        } else {
+            detail
+        }
+    };
+    let mut checks = String::new();
+    match checked {
+        Checked::Length(length_expr) => {
+            if constraints.min_length.is_some() || constraints.max_length.is_some() {
+                checks.push_str(&format!("            let len = {length_expr};\n"));
+                if let Some(min) = constraints.min_length {
+                    checks.push_str(&bound_check(
+                        &feature.name,
+                        "MinLength",
+                        &format!("len < {min}"),
+                        &indexed(format!("length {{len}} is below minLength {min}")),
+                    ));
+                }
+                if let Some(max) = constraints.max_length {
+                    checks.push_str(&bound_check(
+                        &feature.name,
+                        "MaxLength",
+                        &format!("len > {max}"),
+                        &indexed(format!("length {{len}} exceeds maxLength {max}")),
+                    ));
+                }
+            }
+        }
+        Checked::Number(number_expr) => {
+            if constraints.minimum.is_some() || constraints.maximum.is_some() {
+                checks.push_str(&format!("            let number = {number_expr};\n"));
+                if let Some(min) = constraints.minimum {
+                    checks.push_str(&bound_check(
+                        &feature.name,
+                        "Minimum",
+                        &format!("number < {min}"),
+                        &indexed(format!("value {{number}} is below minimum {min}")),
+                    ));
+                }
+                if let Some(max) = constraints.maximum {
+                    checks.push_str(&bound_check(
+                        &feature.name,
+                        "Maximum",
+                        &format!("number > {max}"),
+                        &indexed(format!("value {{number}} exceeds maximum {max}")),
+                    ));
+                }
+            }
+        }
+    }
+    if checks.is_empty() {
+        return Ok(());
+    }
+    if many {
+        out.push_str(&format!(
+            "        for (index, value) in self.{field}.iter().enumerate() {{\n{checks}        }}\n"
+        ));
+    } else if feature.multiplicity.lower == 0 {
+        out.push_str(&format!(
+            "        if let Some(value) = &self.{field} {{\n{checks}        }}\n"
+        ));
+    } else {
+        out.push_str(&format!(
+            "        {{\n            let value = &self.{field};\n{checks}        }}\n"
+        ));
     }
     Ok(())
 }
@@ -1612,7 +1821,8 @@ fn emit_one_sided_containment(
 mod tests {
     use super::*;
     use rex_ir::{
-        Multiplicity, Operation, OperationParam, Package, VocabularyDef, VocabularyEntry,
+        EnumLiteral, Multiplicity, Operation, OperationParam, Package, VocabularyDef,
+        VocabularyEntry,
     };
 
     const PKG: &str = "nz.example.payments";
@@ -2321,6 +2531,303 @@ mod tests {
         assert!(
             error.to_string().contains("'citation'"),
             "error must name the feature: {error:#}"
+        );
+    }
+
+    // --- Constraint validation (runtime reports, never panics) --------------
+
+    fn constrained(feature: Feature, constraints: rex_ir::FeatureConstraints) -> Feature {
+        let mut feature = feature;
+        feature.constraints = constraints;
+        feature
+    }
+
+    fn string_bounds(min: u64, max: u64) -> rex_ir::FeatureConstraints {
+        rex_ir::FeatureConstraints {
+            min_length: Some(min),
+            max_length: Some(max),
+            ..Default::default()
+        }
+    }
+
+    fn numeric_bounds(min: i64, max: i64) -> rex_ir::FeatureConstraints {
+        rex_ir::FeatureConstraints {
+            minimum: Some(min),
+            maximum: Some(max),
+            ..Default::default()
+        }
+    }
+
+    /// The IR equivalent of the validation scenario: one class carrying every
+    /// v1-supported constraint shape (string, many-valued, optional, int,
+    /// enum value bounds, datatype length bounds, String-keyed and Int-keyed
+    /// vocabulary bounds) plus an unconstrained sibling.
+    fn validation_model() -> Model {
+        let mut model = Model::new();
+        let mut package = Package::new("nz.example.validation");
+        package.enums.push(EnumDef::new(
+            "Rank",
+            vec![
+                EnumLiteral::new("Low", None, 1),
+                EnumLiteral::new("High", None, 9),
+            ],
+        ));
+        package.datatypes.push(DatatypeDef::new("Meta", None));
+        package.vocabularies.push(VocabularyDef {
+            name: "Grade".to_string(),
+            description: None,
+            source: "test:grades".to_string(),
+            version: None,
+            key: "code".to_string(),
+            facets: vec![rex_ir::VocabularyFacet {
+                name: "code".to_string(),
+                type_: PrimitiveType::String,
+            }],
+            entries: vec![
+                VocabularyEntry {
+                    key: "US".to_string(),
+                    facets: BTreeMap::from([(
+                        "code".to_string(),
+                        DefaultValue::String("US".to_string()),
+                    )]),
+                },
+                VocabularyEntry {
+                    key: "EURO".to_string(),
+                    facets: BTreeMap::from([(
+                        "code".to_string(),
+                        DefaultValue::String("EURO".to_string()),
+                    )]),
+                },
+            ],
+        });
+        package.vocabularies.push(VocabularyDef {
+            name: "Level".to_string(),
+            description: None,
+            source: "test:levels".to_string(),
+            version: None,
+            key: "code".to_string(),
+            facets: vec![rex_ir::VocabularyFacet {
+                name: "code".to_string(),
+                type_: PrimitiveType::Int,
+            }],
+            entries: vec![
+                VocabularyEntry {
+                    key: "A".to_string(),
+                    facets: BTreeMap::from([("code".to_string(), DefaultValue::Int(2))]),
+                },
+                VocabularyEntry {
+                    key: "B".to_string(),
+                    facets: BTreeMap::from([("code".to_string(), DefaultValue::Int(7))]),
+                },
+            ],
+        });
+        let string = || TypeRef::Primitive(PrimitiveType::String);
+        package.classes.push(ClassDef::new(
+            "Profile",
+            vec![],
+            vec![
+                constrained(
+                    Feature::new(
+                        "name",
+                        FeatureKind::Attribute,
+                        string(),
+                        Multiplicity::REQUIRED,
+                    ),
+                    string_bounds(2, 8),
+                ),
+                constrained(
+                    Feature::new(
+                        "nicknames",
+                        FeatureKind::Attribute,
+                        string(),
+                        Multiplicity::MANY,
+                    ),
+                    string_bounds(2, 4),
+                ),
+                constrained(
+                    Feature::new(
+                        "score",
+                        FeatureKind::Attribute,
+                        TypeRef::Primitive(PrimitiveType::Int),
+                        Multiplicity::REQUIRED,
+                    ),
+                    numeric_bounds(0, 100),
+                ),
+                constrained(
+                    Feature::new(
+                        "rank",
+                        FeatureKind::Attribute,
+                        TypeRef::Enum {
+                            package: "nz.example.validation".to_string(),
+                            name: "Rank".to_string(),
+                        },
+                        Multiplicity::REQUIRED,
+                    ),
+                    numeric_bounds(2, 10),
+                ),
+                constrained(
+                    Feature::new(
+                        "meta",
+                        FeatureKind::Attribute,
+                        TypeRef::Datatype {
+                            package: "nz.example.validation".to_string(),
+                            name: "Meta".to_string(),
+                        },
+                        Multiplicity::REQUIRED,
+                    ),
+                    string_bounds(4, 64),
+                ),
+                constrained(
+                    Feature::new(
+                        "grade",
+                        FeatureKind::Attribute,
+                        TypeRef::Vocabulary {
+                            package: "nz.example.validation".to_string(),
+                            name: "Grade".to_string(),
+                        },
+                        Multiplicity::REQUIRED,
+                    ),
+                    rex_ir::FeatureConstraints {
+                        max_length: Some(3),
+                        ..Default::default()
+                    },
+                ),
+                constrained(
+                    Feature::new(
+                        "level",
+                        FeatureKind::Attribute,
+                        TypeRef::Vocabulary {
+                            package: "nz.example.validation".to_string(),
+                            name: "Level".to_string(),
+                        },
+                        Multiplicity::REQUIRED,
+                    ),
+                    rex_ir::FeatureConstraints {
+                        minimum: Some(5),
+                        ..Default::default()
+                    },
+                ),
+                constrained(
+                    Feature::new(
+                        "alt_name",
+                        FeatureKind::Attribute,
+                        string(),
+                        Multiplicity::OPTIONAL,
+                    ),
+                    string_bounds(2, 32),
+                ),
+                Feature::new(
+                    "note",
+                    FeatureKind::Attribute,
+                    string(),
+                    Multiplicity::REQUIRED,
+                ),
+            ],
+        ));
+        model.packages.push(package);
+        model
+    }
+
+    fn generate_validation() -> String {
+        generate(&validation_model())
+            .expect("generate")
+            .remove("models.rs")
+            .expect("models.rs")
+    }
+
+    #[test]
+    fn constrained_class_gets_validate_reporting_bound_kinds() {
+        let code = generate_validation();
+        assert!(
+            code.contains("pub fn validate(&self) -> Vec<rex_runtime::validation::Violation>"),
+            "constrained class must carry a validate method:\n{code}"
+        );
+        assert!(
+            code.contains("rex_runtime::validation::ConstraintKind::MinLength")
+                && code.contains("rex_runtime::validation::ConstraintKind::MaxLength")
+                && code.contains("rex_runtime::validation::ConstraintKind::Minimum")
+                && code.contains("rex_runtime::validation::ConstraintKind::Maximum"),
+            "all four bound kinds must be reported:\n{code}"
+        );
+        assert!(
+            code.contains("feature: \"sku\".to_string()")
+                || code.contains("feature: \"name\".to_string()"),
+            "violations must name the declared feature:\n{code}"
+        );
+        assert!(
+            code.contains("let len = value.chars().count();"),
+            "string bounds check the element length:\n{code}"
+        );
+        assert!(
+            code.contains("if len < 2 {") && code.contains("if len > 8 {"),
+            "string bounds compare inclusively:\n{code}"
+        );
+        assert!(
+            code.contains("detail: format!(\"length {len} is below minLength 2\")"),
+            "min-length detail:\n{code}"
+        );
+        assert!(
+            code.contains("detail: format!(\"length {len} exceeds maxLength 8\")"),
+            "max-length detail:\n{code}"
+        );
+        assert!(
+            code.contains("let number = i64::from(*value);"),
+            "int bounds widen to i64 (bound literals must not overflow the field type):\n{code}"
+        );
+        assert!(
+            code.contains("detail: format!(\"value {number} is below minimum 0\")")
+                && code.contains("detail: format!(\"value {number} exceeds maximum 100\")"),
+            "numeric details:\n{code}"
+        );
+        // The method lives inside the class's impl block.
+        let impl_start = code.find("impl Profile {").expect("Profile impl");
+        let validate_at = code.find("pub fn validate").expect("validate in output");
+        assert!(
+            validate_at > impl_start,
+            "validate must be in the impl block"
+        );
+    }
+
+    #[test]
+    fn unconstrained_model_emits_no_validate() {
+        let code = generate_currency();
+        assert!(
+            !code.contains("fn validate"),
+            "classes without constrained features must not carry validate:\n{code}"
+        );
+    }
+
+    #[test]
+    fn many_valued_and_optional_attributes_check_elements() {
+        let code = generate_validation();
+        assert!(
+            code.contains("for (index, value) in self.nicknames.iter().enumerate()"),
+            "many-valued constraints apply per element:\n{code}"
+        );
+        assert!(
+            code.contains("detail: format!(\"[{index}] length {len} is below minLength 2\")"),
+            "element index must appear in the detail:\n{code}"
+        );
+        assert!(
+            code.contains("if let Some(value) = &self.alt_name {"),
+            "optional attributes check when present:\n{code}"
+        );
+    }
+
+    #[test]
+    fn enum_and_vocabulary_bounds_follow_value_and_key_facets() {
+        let code = generate_validation();
+        assert!(
+            code.contains("let number = value.value();"),
+            "enum numeric bounds check the literal value:\n{code}"
+        );
+        assert!(
+            code.contains("let len = value.key().chars().count();"),
+            "String-keyed vocabulary length bounds check the entry key:\n{code}"
+        );
+        assert!(
+            code.contains("let number = value.code();"),
+            "Int-keyed vocabulary numeric bounds use the key facet accessor:\n{code}"
         );
     }
 }
