@@ -390,15 +390,19 @@ fn params<'src>() -> impl Parser<'src, Tokens<'src>, Vec<Param>, MoxExtra<'src>>
         .map(|list| list.unwrap_or_default())
 }
 
-/// The closed set of constraint keywords allowed inside an attribute's
-/// constraint block. They are contextual: ordinary identifiers everywhere
+/// The closed set of value-taking constraint keywords allowed inside an
+/// attribute's constraint block, plus the value-less `unique` (handled by
+/// the flag arm below). They are contextual: ordinary identifiers everywhere
 /// else, matching the `create`/`convert` precedent.
-const CONSTRAINT_KEYWORDS: [&str; 5] = ["pattern", "minLength", "maxLength", "minimum", "maximum"];
+const VALUED_CONSTRAINT_KEYWORDS: [&str; 5] =
+    ["pattern", "minLength", "maxLength", "minimum", "maximum"];
 
 /// One `keyword value` entry inside an attribute's constraint block.
+/// Value-less `unique` takes no value: a literal after it is a syntax error
+/// (with recovery that keeps the block parseable).
 fn constraint_entry<'src>() -> impl Parser<'src, Tokens<'src>, Constraint, MoxExtra<'src>> + Clone {
-    select! {
-        Token::Ident(text) = e if CONSTRAINT_KEYWORDS.contains(&text) => (text, e.span()),
+    let valued = select! {
+        Token::Ident(text) = e if VALUED_CONSTRAINT_KEYWORDS.contains(&text) => (text, e.span()),
     }
     .then(
         string_lit()
@@ -419,7 +423,30 @@ fn constraint_entry<'src>() -> impl Parser<'src, Tokens<'src>, Constraint, MoxEx
         },
         value,
         span: e.span(),
-    })
+    });
+    let flag = select! { Token::Ident("unique") = e => e.span() }
+        .then(
+            string_lit()
+                .map_with(|_, e| e.span())
+                .or(int_lit().map_with(|_, e| e.span()))
+                .or_not(),
+        )
+        .validate(|(name_span, value), _e, emitter| {
+            if let Some(span) = value {
+                emitter.emit(Rich::custom(span, "constraint `unique` takes no value"));
+            }
+            name_span
+        })
+        .map_with(|name_span, e| Constraint {
+            name: Name {
+                text: "unique".to_string(),
+                span: name_span,
+                escaped: false,
+            },
+            value: ConstraintValue::Flag { span: e.span() },
+            span: e.span(),
+        });
+    valued.or(flag)
 }
 
 /// An attribute's optional `{ pattern "..." minLength 3 }` constraint block:

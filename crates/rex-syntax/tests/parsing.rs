@@ -1370,3 +1370,53 @@ fn format_is_a_reserved_binding_target() {
         "a binding target named `format` must be a compile error naming the reserved word"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The `unique` constraint (value-less)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn unique_constraint_parses_without_a_value() {
+    let source = "class P { String[] tags { unique } }";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let Decl::Class(class) = &result.ast.expect("ast").declarations[0] else {
+        panic!("expected class")
+    };
+    let FeatureDecl::Attribute { constraints, .. } = &class.features[0] else {
+        panic!("expected attribute")
+    };
+    assert_eq!(constraints.len(), 1);
+    assert_eq!(constraints[0].name.text, "unique");
+    assert!(
+        matches!(constraints[0].value, ConstraintValue::Flag { .. }),
+        "`unique` takes no value, got {:?}",
+        constraints[0].value
+    );
+}
+
+#[test]
+fn unique_combines_with_valued_constraints() {
+    let source = "class P { String[] tags { unique minLength 1 } }";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let Decl::Class(class) = &result.ast.expect("ast").declarations[0] else {
+        panic!("expected class")
+    };
+    let FeatureDecl::Attribute { constraints, .. } = &class.features[0] else {
+        panic!("expected attribute")
+    };
+    assert_eq!(constraints.len(), 2);
+    assert_eq!(constraints[0].name.text, "unique");
+    assert_eq!(constraints[1].name.text, "minLength");
+}
+
+#[test]
+fn unique_takes_no_value() {
+    let source = "class P { String[] tags { unique 3 } }";
+    let result = parse(source);
+    assert!(
+        !result.errors.is_empty(),
+        "`unique` must not accept a value"
+    );
+}

@@ -1288,11 +1288,13 @@ fn is_top_keyword(token: &Token<'_>) -> bool {
 }
 
 /// The closed set of constraint keywords allowed inside an attribute's
-/// constraint block (mirrors the parser's set).
+/// constraint block (mirrors the parser's set). `unique` is the one
+/// value-less keyword; the scanner already consumes its literal value only
+/// when present.
 fn is_constraint_keyword(text: &str) -> bool {
     matches!(
         text,
-        "pattern" | "minLength" | "maxLength" | "minimum" | "maximum"
+        "pattern" | "minLength" | "maxLength" | "minimum" | "maximum" | "unique"
     )
 }
 

@@ -141,9 +141,10 @@ pub struct Param {
 /// `pattern "[A-Z]{3}-[0-9]{4}"`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Constraint {
-    /// The constraint keyword, e.g. `pattern`. Only the five constraint
-    /// keywords are accepted (`pattern`, `minLength`, `maxLength`,
-    /// `minimum`, `maximum`); other identifiers do not enter the block.
+    /// The constraint keyword, e.g. `pattern`. Only the constraint keywords
+    /// are accepted (`pattern`, `minLength`, `maxLength`, `minimum`,
+    /// `maximum`, and the value-less `unique`); other identifiers do not
+    /// enter the block.
     pub name: Name,
     /// The constraint value.
     pub value: ConstraintValue,
@@ -151,8 +152,8 @@ pub struct Constraint {
     pub span: Span,
 }
 
-/// The value of a [`Constraint`] entry: a string (`pattern`) or an integer
-/// (length and numeric bounds).
+/// The value of a [`Constraint`] entry: a string (`pattern`), an integer
+/// (length and numeric bounds), or the value-less `unique` marker.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConstraintValue {
     /// A string literal (unescaped).
@@ -167,6 +168,11 @@ pub enum ConstraintValue {
         /// The integer value.
         value: i64,
         /// Span of the literal.
+        span: Span,
+    },
+    /// No value: the `unique` constraint is a bare flag.
+    Flag {
+        /// Span of the whole entry.
         span: Span,
     },
 }

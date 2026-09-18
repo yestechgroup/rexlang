@@ -1260,6 +1260,55 @@ fn numeric_bounds_stay_rejected_on_string_attributes() {
         .any(|d| d.is_error() && d.message.contains("'minimum' requires a numeric attribute")));
 }
 
+/// `unique` is admitted on any many-valued attribute regardless of element
+/// type (no family rules apply) and lowers into the IR flag.
+#[test]
+fn unique_is_admitted_on_many_valued_attributes() {
+    let source = "\
+package demo
+
+type Date wraps opaque
+
+enum Status { Draft = 0 }
+
+class P {
+    String[] tags { unique }
+    Date[] days { unique }
+    boolean[] flags { unique }
+    Status[] history { unique minLength 1 }
+    String solo
+}
+";
+    let compilation = compile_str("unique.mox", source);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "unique is type-agnostic on many-valued attributes: {:?}",
+        compilation.diagnostics
+    );
+    let model = compilation.model.expect("a model on success");
+    let class = &model.packages[0].classes[0];
+    for name in ["tags", "days", "flags", "history"] {
+        let feature = feature(class, name);
+        assert!(feature.constraints.unique, "`{name}` carries unique");
+    }
+    let history = feature(class, "history");
+    assert_eq!(history.constraints.min_length, Some(1));
+    assert!(
+        !feature(class, "solo").constraints.unique,
+        "unique is only set where declared"
+    );
+}
+
+#[test]
+fn unique_requires_a_many_valued_attribute() {
+    let source = "package demo\n\nclass P { String tag { unique } }\n";
+    let compilation = compile_str("bad.mox", source);
+    assert!(compilation.model.is_none(), "errors must block the model");
+    assert!(compilation.diagnostics.iter().any(|d| d.is_error()
+        && d.message
+            .contains("constraint 'unique' requires a many-valued attribute")));
+}
+
 const CURRENCY_SNAPSHOT: &str = r#"{
   "vocabulary": "iso:4217",
   "version": "2024-01-01",

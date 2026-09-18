@@ -792,6 +792,14 @@ fn stable_on_inline_models() {
     assert_still_parses("actors S { agent B delegation D { from A to B permit C obligation o } }");
 }
 
+#[test]
+fn stable_on_constraint_blocks() {
+    assert_still_parses("class P { String sku { pattern \"[A-Z]{3}\" minLength 3 } }");
+    assert_still_parses("class P { int n { minimum 0 maximum 10 } }");
+    assert_still_parses("class P { String[] tags { unique } }");
+    assert_still_parses("class P { String[] tags { unique minLength 1 } }");
+}
+
 // --- golden fixtures ---------------------------------------------------------
 
 /// The formatter a golden entry uses: `.mox` sources go through `format`,

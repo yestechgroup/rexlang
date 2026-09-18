@@ -74,8 +74,9 @@ derived_decl:= "derived" type_ref multiplicity? name op_body?
 op_body     := "{" target_body+ "}" | "{" raw "}"
 target_body := name "{" raw "}"
 multiplicity:= "[" (int (".." (int | "*"))?)? "]"
-constraint_block := "{" (constraint_keyword (string | int))* "}"
-constraint_keyword := "pattern" | "minLength" | "maxLength" | "minimum" | "maximum"
+constraint_block := "{" (constraint_keyword (string | int)?)* "}"
+constraint_keyword := "pattern" | "minLength" | "maxLength" | "minimum"
+                    | "maximum" | "unique"
 ```
 
 - **`contains`** — by-value ownership (Ecore containment). The child's
@@ -122,9 +123,15 @@ constraint_keyword := "pattern" | "minLength" | "maxLength" | "minimum" | "maxim
   allowed but never statically validated (descriptive only). Class and
   interface types take no constraints. Length bounds must be non-negative
   and `min` ≤ `max` in both families. On a many-valued attribute the
-  constraints apply to the elements. They surface as the JSON Schema
+  value bounds apply to the elements. The sixth keyword, **`unique`**, takes
+  no value (`String[] tags { unique }`) and is the one collection-level
+  constraint: it is admitted only on many-valued attributes — of any element
+  type — and rejected on single-valued ones. It is schema-only: it surfaces
+  as `uniqueItems: true` on the attribute's array schema, with element
+  equality following JSON value equality, and implies no runtime
+  validation. They surface as the JSON Schema
   keywords of the same names (`pattern`, `minLength`, `maxLength`,
-  `minimum`, `maximum`).
+  `minimum`, `maximum`, `uniqueItems`).
 
 Multiplicity shorthand: `[]` = `[0..*]`; absent: attributes are `1..1`,
 `contains`/`refers` are `0..*`, `container` and `derived` are `0..1`.

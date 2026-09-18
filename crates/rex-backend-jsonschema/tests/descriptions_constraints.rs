@@ -230,6 +230,43 @@ fn numeric_bounds_on_float_and_double_merge_into_the_element_schema() {
     }
 }
 
+/// The value-less `unique` constraint surfaces as `uniqueItems: true` on
+/// the many-valued attribute's array schema (the collection level, not the
+/// element level) in both profiles. Schema-only: no runtime validation is
+/// implied.
+#[test]
+fn unique_constraint_emits_unique_items_in_both_profiles() {
+    let compilation = compile_str(
+        "unique.mox",
+        "package demo\n\nclass Article {\n    String[] tags { unique }\n    String name\n}\n",
+    );
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "model must compile cleanly: {:?}",
+        compilation.diagnostics
+    );
+    let model = compilation.model.expect("model lowered");
+    for profile in [Profile::Wire, Profile::Api] {
+        let files = generate(&model, profile).expect("generate");
+        let json = files.get("schema.json").expect("schema.json");
+        let article = &serde_json::from_str::<serde_json::Value>(json).expect("valid JSON")
+            ["$defs"]["Article"];
+        assert_eq!(
+            article["properties"]["tags"],
+            serde_json::json!({
+                "items": {"type": "string"},
+                "type": "array",
+                "uniqueItems": true,
+            }),
+            "uniqueItems rides the array wrapper ({profile:?})"
+        );
+        assert!(
+            article["properties"]["name"].get("uniqueItems").is_none(),
+            "single-valued attributes carry no uniqueItems ({profile:?})"
+        );
+    }
+}
+
 const FORMAT_MODEL: &str = r#"package demo
 
 type Email wraps String { format "email" }

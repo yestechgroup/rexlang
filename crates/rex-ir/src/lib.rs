@@ -86,7 +86,8 @@
 //!     [`Package`], [`ClassDef`], [`InterfaceDef`], [`EnumDef`],
 //!     [`EnumLiteral`], [`DatatypeDef`], [`VocabularyDef`], [`Feature`], and
 //!     [`Operation`]; attribute constraints (`pattern`, `minLength`,
-//!     `maxLength`, `minimum`, `maximum`) lower into
+//!     `maxLength`, `minimum`, `maximum`, and the value-less `unique`)
+//!     lower into
 //!     [`Feature::constraints`]. Both follow
 //!     the same additive rules: `#[serde(default)]` and omitted when absent,
 //!     so artifacts for models without them are byte-identical to earlier
@@ -690,10 +691,11 @@ impl Feature {
 /// Declarative value constraints on an attribute feature.
 ///
 /// A closed, schema-friendly set: `pattern` (regex the value must match),
-/// `minLength`/`maxLength` (string length bounds) and `minimum`/`maximum`
-/// (inclusive numeric bounds). The driver type-checks them against the
-/// attribute's declared type; for a many-valued attribute they constrain the
-/// elements, not the collection.
+/// `minLength`/`maxLength` (string length bounds), `minimum`/`maximum`
+/// (inclusive numeric bounds) and `unique` (elements of a many-valued
+/// attribute must be pairwise distinct). The driver type-checks them against
+/// the attribute's declared type; for a many-valued attribute the value
+/// bounds constrain the elements, while `unique` constrains the collection.
 ///
 /// Serialization is sparse: absent constraints are omitted entirely, so
 /// features without constraints add no bytes to the wire format.
@@ -715,6 +717,20 @@ pub struct FeatureConstraints {
     /// Inclusive maximum numeric value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub maximum: Option<i64>,
+    /// `true` for the value-less `unique` constraint: the elements of a
+    /// many-valued attribute must be pairwise distinct (JSON value equality
+    /// at the schema layer, emitted as `uniqueItems: true`). Only meaningful
+    /// on many-valued attributes — the driver rejects it elsewhere — and
+    /// schema-only: no runtime validation is implied. Additive; omitted when
+    /// `false`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub unique: bool,
+}
+
+/// `skip_serializing_if` helper for additive `bool` fields: `false` adds no
+/// bytes to the wire format.
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl FeatureConstraints {
@@ -725,6 +741,7 @@ impl FeatureConstraints {
             && self.max_length.is_none()
             && self.minimum.is_none()
             && self.maximum.is_none()
+            && !self.unique
     }
 }
 
@@ -1904,6 +1921,74 @@ mod tests {
       ],
       "interfaces": [],
       "classes": []
+    }
+  ]
+}"#;
+
+        assert_eq!(model.to_json_pretty().expect("serialize"), expected);
+        let parsed = Model::from_json(expected).expect("deserialize golden");
+        assert_eq!(model, parsed);
+    }
+
+    #[test]
+    fn golden_json_with_unique_constraint_pins_the_wire_format() {
+        // Additive (wire-contract rule 11): the `unique` flag is omitted
+        // when `false` (the rule-11 golden above stays byte-identical);
+        // this golden pins its serialization when declared.
+        let mut package = Package::new("nz.example.demo");
+        let mut feature = Feature::new(
+            "tags",
+            FeatureKind::Attribute,
+            TypeRef::Primitive(PrimitiveType::String),
+            Multiplicity::MANY,
+        );
+        feature.constraints = FeatureConstraints {
+            unique: true,
+            ..FeatureConstraints::default()
+        };
+        package
+            .classes
+            .push(ClassDef::new("Article", vec![], vec![feature]));
+        let mut model = Model::new();
+        model.packages.push(package);
+
+        let expected = r#"{
+  "formatVersion": 1,
+  "rexVersion": "0.1.0",
+  "packages": [
+    {
+      "name": "nz.example.demo",
+      "annotations": [],
+      "enums": [],
+      "datatypes": [],
+      "interfaces": [],
+      "classes": [
+        {
+          "name": "Article",
+          "extends": [],
+          "features": [
+            {
+              "id": 0,
+              "name": "tags",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 0,
+                "upper": "unbounded"
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false,
+              "constraints": {
+                "unique": true
+              }
+            }
+          ]
+        }
+      ]
     }
   ]
 }"#;
