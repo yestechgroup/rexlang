@@ -559,7 +559,8 @@ fn emit_class_fill(e: &mut String, unit: &Unit<'_>, class: &ClassCtx<'_>) -> any
                 let target_ctx = unit.class(target)?;
                 let target_single = &target_ctx.single;
                 let target_slot = &target_ctx.slot_field;
-                let container_field = container_field_of(target_ctx, class)?;
+                let container_field =
+                    container_field_of(target_ctx, class, feature.opposite.as_ref())?;
                 if feature.multiplicity.is_many() {
                     let mut block = format!(
                         "                {key:?} => {{\n\
@@ -669,15 +670,24 @@ fn emit_class_fill(e: &mut String, unit: &Unit<'_>, class: &ClassCtx<'_>) -> any
 }
 
 /// The container feature field on `target_class` that points back at
-/// `owner_class`, for reconstructing the opposite when loading.
+/// `owner_class` for a containment feature, for reconstructing the opposite
+/// when loading. The containment's `opposite` names the container feature
+/// exactly; matching by owner class alone would reconstruct every
+/// containment onto the first container feature when a child class carries
+/// several container ends back to the same owner (e.g. a many and a single
+/// containment of the same child class).
 fn container_field_of<'a>(
     target_class: &ClassCtx<'a>,
     owner_class: &ClassCtx<'_>,
+    opposite: Option<&rex_ir::OppositeRef>,
 ) -> anyhow::Result<String> {
+    let wanted = opposite.map(|opposite| opposite.feature.as_str());
     for feature in &target_class.class.features {
         if feature.kind == FeatureKind::Container {
             if let Some(opposite) = &feature.opposite {
-                if opposite.class == owner_class.class.name {
+                if opposite.class == owner_class.class.name
+                    && wanted.is_none_or(|name| name == feature.name)
+                {
                     return Ok(rust_ident(&crate::naming::snake_case(&feature.name)));
                 }
             }
