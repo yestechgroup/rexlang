@@ -11,9 +11,12 @@
 //!   id-ordinal order, reconstructing the source per-class insertion order
 //!   even when objects were created in an order the document could not
 //!   express positionally.
-//! - Containment features serialize contained objects INLINE; container
-//!   features are NEVER serialized (they are derived from the opposite and
-//!   reconstructed by the loader — serializing them would recurse forever).
+//! - Containment features serialize contained objects INLINE; a contained
+//!   object that was already emitted as a document object (its class is
+//!   declared before its owner's) serializes as a `{"$ref": ...}` link
+//!   instead, which the loader resolves during fill. Container features are
+//!   NEVER serialized (they are derived from the opposite and reconstructed
+//!   by the loader — serializing them would recurse forever).
 //! - Cross references serialize as `{"$ref": "<id>"}`.
 //! - Enums serialize the declared literal name; datatypes their inner String;
 //!   vocabulary-typed attributes the entry key string (loading resolves the
@@ -324,21 +327,33 @@ fn emit_class_save(e: &mut String, unit: &Unit<'_>, class: &ClassCtx<'_>) -> any
                          \x20           serde_json::Value::Array(\n\
                          \x20               obj.{field}\n\
                          \x20                   .iter()\n\
-                         \x20                   .map(|child| self.{}_to_json(*child, ids, visited))\n\
+                         \x20                   .map(|child| {{\n\
+                         \x20                       let child_id = &ids.{slot}[child];\n\
+                         \x20                       if visited.contains(child_id) {{\n\
+                         \x20                           ref_object(child_id)\n\
+                         \x20                       }} else {{\n\
+                         \x20                           self.{single}_to_json(*child, ids, visited)\n\
+                         \x20                       }}\n\
+                         \x20                   }})\n\
                          \x20                   .collect(),\n\
                          \x20           ),\n\
                          \x20       );\n",
-                        target_ctx.single
+                        slot = target_ctx.slot_field,
+                        single = target_ctx.single
                     ));
                 } else {
                     e.push_str(&format!(
                         "        if let Some(child) = obj.{field} {{\n\
-                         \x20           object.insert(\n\
-                         \x20               {key:?}.to_string(),\n\
-                         \x20               self.{}_to_json(child, ids, visited),\n\
-                         \x20           );\n\
+                         \x20           let child_id = &ids.{slot}[&child];\n\
+                         \x20           let value = if visited.contains(child_id) {{\n\
+                         \x20               ref_object(child_id)\n\
+                         \x20           }} else {{\n\
+                         \x20               self.{single}_to_json(child, ids, visited)\n\
+                         \x20           }};\n\
+                         \x20           object.insert({key:?}.to_string(), value);\n\
                          \x20       }}\n",
-                        target_ctx.single
+                        slot = target_ctx.slot_field,
+                        single = target_ctx.single
                     ));
                 }
             }
