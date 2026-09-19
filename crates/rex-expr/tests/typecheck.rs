@@ -4,7 +4,7 @@
 //! a second operation). Test names cite the rule numbers of
 //! `docs/EXPRESSIONS.md` (R1–R4, L1–L2, U1, A1–A6).
 
-use rex_expr::{parse, NamedKind, Ty, TypeChecker, TypeContext};
+use rex_expr::{parse, ExprKind, NamedKind, Ty, TypeChecker, TypeContext};
 use rex_ir::{
     ClassDef, DatatypeDef, EnumDef, EnumLiteral, Feature, FeatureKind, Model, Multiplicity,
     Operation, OperationParam, Package, PrimitiveType, TypeRef,
@@ -545,4 +545,214 @@ fn params_shadow_self_features_like_locals_do() {
         .type_of(parsed.ast.as_ref().expect("ast"))
         .unwrap_or_else(|errors| panic!("{errors:?}"));
     assert_eq!(ty, Ty::int(), "the explicit parameter shadows the feature");
+}
+
+// ---------------------------------------------------------------------------
+// Date primitive, R5–R8 (issue #9)
+// ---------------------------------------------------------------------------
+
+/// A checker over a model whose `Loan` class carries date attributes.
+fn date_checker() -> TypeChecker {
+    let mut model = Model::new();
+    let mut package = Package::new(PKG);
+    package.classes.push(ClassDef::new(
+        "Loan",
+        vec![],
+        vec![
+            Feature::new(
+                "effectiveDate",
+                FeatureKind::Attribute,
+                TypeRef::Primitive(PrimitiveType::Date),
+                Multiplicity::REQUIRED,
+            ),
+            Feature::new(
+                "dueDate",
+                FeatureKind::Attribute,
+                TypeRef::Primitive(PrimitiveType::Date),
+                Multiplicity::REQUIRED,
+            ),
+            Feature::new(
+                "maturityDate",
+                FeatureKind::Attribute,
+                TypeRef::Primitive(PrimitiveType::Date),
+                Multiplicity::OPTIONAL,
+            ),
+            Feature::new(
+                "renewals",
+                FeatureKind::Attribute,
+                TypeRef::Primitive(PrimitiveType::Date),
+                Multiplicity::MANY,
+            ),
+            Feature::new(
+                "tenureMonths",
+                FeatureKind::Attribute,
+                TypeRef::Primitive(PrimitiveType::Long),
+                Multiplicity::REQUIRED,
+            ),
+        ],
+    ));
+    model.packages.push(package);
+    TypeChecker::new(TypeContext::from_model(&model)).with_self(PKG, "Loan")
+}
+
+/// Type-checks `source` against the `Loan` self-scope, expecting success.
+fn assert_date_ty(source: &str, expected: Ty) {
+    let parsed = parse(source);
+    assert!(parsed.errors.is_empty(), "{source:?}: {:?}", parsed.errors);
+    let ty = date_checker()
+        .type_of(parsed.ast.as_ref().expect("ast"))
+        .unwrap_or_else(|errors| panic!("{source:?}: {errors:?}"));
+    assert_eq!(ty, expected, "{source:?}");
+}
+
+#[test]
+fn r6_valid_date_literals_type_as_date() {
+    assert_ty(r#"date("2026-09-17")"#, Ty::Primitive(PrimitiveType::Date));
+    assert_ty(r#"date("1970-01-01")"#, Ty::Primitive(PrimitiveType::Date));
+    // Leap-day of a leap year, and the shortest month.
+    assert_ty(r#"date("2024-02-29")"#, Ty::Primitive(PrimitiveType::Date));
+}
+
+#[test]
+fn r6_rejects_malformed_and_non_calendar_literals_with_the_literal_span() {
+    for source in [
+        r#"date("2026-9-17")"#,
+        r#"date("2026-13-01")"#,
+        r#"date("2026-02-30")"#,
+        r#"date("2023-02-29")"#,
+        r#"date("")"#,
+        r#"date("20260917")"#,
+    ] {
+        let parsed = parse(source);
+        assert!(parsed.errors.is_empty(), "{source:?}: {:?}", parsed.errors);
+        let errors = date_checker()
+            .type_of(parsed.ast.as_ref().expect("ast"))
+            .expect_err("expected the R6 error");
+        assert!(
+            errors.iter().any(|error| error.message.contains("R6")),
+            "{source:?}: {errors:?}"
+        );
+        // The span is the string literal, not the whole form.
+        let literal = &parsed.ast.expect("ast");
+        let ExprKind::Date { literal_span, .. } = &literal.kind else {
+            panic!("{source:?}")
+        };
+        let error = errors
+            .iter()
+            .find(|e| e.message.contains("R6"))
+            .expect("R6");
+        assert_eq!(&error.span, literal_span, "{source:?}");
+    }
+}
+
+#[test]
+fn r6_rejects_literals_outside_the_runtime_day_number_bounds() {
+    // Year 2147483647 is a calendar date, but its day number does not fit
+    // i32 (R5) — a checked literal must never fail to construct downstream.
+    let source = r#"date("2147483647-01-01")"#;
+    let parsed = parse(source);
+    let errors = date_checker()
+        .type_of(parsed.ast.as_ref().expect("ast"))
+        .expect_err("expected the R6 error");
+    assert!(errors[0].message.contains("R6"), "{errors:?}");
+}
+
+#[test]
+fn r7_date_ordering_types_as_boolean() {
+    assert_date_ty("effectiveDate < dueDate", Ty::boolean());
+    assert_date_ty("effectiveDate <= dueDate", Ty::boolean());
+    assert_date_ty("effectiveDate > date(\"2026-01-01\")", Ty::boolean());
+    assert_date_ty("effectiveDate >= date(\"2026-01-01\")", Ty::boolean());
+    // A date and a number are not comparable (L2: date vs non-date).
+    assert!(date_checker()
+        .type_of(&parse("effectiveDate < 1").ast.expect("parses"))
+        .is_err());
+}
+
+#[test]
+fn r7_date_equality_is_value_equality_and_null_safe() {
+    assert_date_ty("effectiveDate == dueDate", Ty::boolean());
+    assert_date_ty("effectiveDate != date(\"2026-01-01\")", Ty::boolean());
+    // An optional date participates like any optional (R2/R3).
+    assert_date_ty("maturityDate == null", Ty::boolean());
+    assert_date_ty(
+        r#"maturityDate ?: date("2030-01-01")"#,
+        Ty::Primitive(PrimitiveType::Date),
+    );
+    // Date vs non-date is a type error.
+    assert!(date_checker()
+        .type_of(
+            &parse(r#"effectiveDate == "2026-01-01""#)
+                .ast
+                .expect("parses")
+        )
+        .is_err());
+}
+
+#[test]
+fn calendar_algebra_types_follow_r5_r8() {
+    let date = Ty::Primitive(PrimitiveType::Date);
+    assert_date_ty(r#"effectiveDate.plus_months(6)"#, date.clone());
+    assert_date_ty(r#"effectiveDate.plus_days(30)"#, date.clone());
+    assert_date_ty(r#"effectiveDate.diff_days(date("2027-03-17"))"#, Ty::int());
+    // Chained: cure-period style.
+    assert_date_ty(
+        r#"effectiveDate.plus_months(6) < date("2027-03-17")"#,
+        Ty::boolean(),
+    );
+    // `?.` on an optional date propagates (R3).
+    assert_date_ty(r#"maturityDate?.plus_days(1)"#, date.optional());
+}
+
+#[test]
+fn calendar_algebra_argument_types_are_checked() {
+    // Non-integer, non-date arguments are type errors...
+    assert!(date_checker()
+        .type_of(
+            &parse(r#"effectiveDate.plus_days("30")"#)
+                .ast
+                .expect("parses")
+        )
+        .is_err());
+    assert!(date_checker()
+        .type_of(&parse(r#"effectiveDate.diff_days(30)"#).ast.expect("parses"))
+        .is_err());
+    // ...as are unknown date methods and wrong arities.
+    assert!(date_checker()
+        .type_of(&parse(r#"effectiveDate.plus_weeks(4)"#).ast.expect("parses"))
+        .is_err());
+    assert!(date_checker()
+        .type_of(&parse(r#"effectiveDate.plus_days()"#).ast.expect("parses"))
+        .is_err());
+    // A `long` argument is not an `int` (L1: no implicit conversion).
+    assert!(date_checker()
+        .type_of(
+            &parse("effectiveDate.plus_days(tenureMonths)")
+                .ast
+                .expect("parses")
+        )
+        .is_err());
+}
+
+#[test]
+fn collection_algebra_works_on_date_elements() {
+    // A1–A5 are generic over the element type.
+    assert_date_ty(
+        "renewals.first()",
+        Ty::Primitive(PrimitiveType::Date).optional(),
+    );
+    assert_date_ty("renewals.size()", Ty::int());
+    assert_date_ty(
+        r#"renewals.filter(d => d > date("2026-01-01"))"#,
+        Ty::Primitive(PrimitiveType::Date).list(),
+    );
+    assert_date_ty(r#"renewals.any(d => d == effectiveDate)"#, Ty::boolean());
+    assert_date_ty(
+        r#"renewals.map(d => d.diff_days(effectiveDate))"#,
+        Ty::int().list(),
+    );
+    // A6 `sum` stays numeric-only: summing dates is a type error.
+    assert!(date_checker()
+        .type_of(&parse("renewals.sum()").ast.expect("parses"))
+        .is_err());
 }

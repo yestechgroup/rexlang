@@ -27,6 +27,10 @@ fn plain(expr: &Expr) -> Expr {
         ExprKind::String(value) => ExprKind::String(value.clone()),
         ExprKind::Bool(value) => ExprKind::Bool(*value),
         ExprKind::Null => ExprKind::Null,
+        ExprKind::Date { text, .. } => ExprKind::Date {
+            text: text.clone(),
+            literal_span: zero,
+        },
         ExprKind::Name(text) => ExprKind::Name(text.clone()),
         ExprKind::FeatureAccess {
             receiver,
@@ -684,4 +688,86 @@ fn algebra_names_are_contextual_and_keywords_are_reserved() {
     assert!(result.ast.is_none() || !result.errors.is_empty());
     // Keywords cannot be identifiers: this must not parse as `if + 1`.
     assert!(!parse("if + 1").errors.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Date literals (issue #9, spec R6)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn date_literals_are_their_own_primary_form() {
+    let expr = ok(r#"date("2026-09-17")"#);
+    let ExprKind::Date { text, literal_span } = &expr.kind else {
+        panic!("expected a date literal, got {:?}", expr.kind)
+    };
+    assert_eq!(text, "2026-09-17");
+    assert_eq!(
+        *literal_span,
+        (5..17).into(),
+        "span points at the string literal"
+    );
+    assert_eq!(expr.span, (0..18).into(), "the node spans the whole form");
+}
+
+#[test]
+fn date_literals_compose_like_any_primary() {
+    // Comparison chains, arguments, and let bindings all accept them.
+    let comparison = ok(r#"date("2026-09-17") < date("2027-01-01")"#);
+    match kind(&comparison) {
+        ExprKind::Binary { op: BinOp::Lt, .. } => {}
+        other => panic!("expected a comparison, got {other:?}"),
+    }
+    match kind(&ok(r#"let d = date("2026-01-31"); d.plus_months(1)"#)) {
+        ExprKind::Let { init, body, .. } => {
+            assert!(matches!(&init.kind, ExprKind::Date { .. }));
+            match &body.kind {
+                ExprKind::Call { name, args, .. } => {
+                    assert_eq!(name.value, "plus_months");
+                    assert!(matches!(&args[0].kind, ExprKind::Int(1)));
+                }
+                other => panic!("expected a method call, got {other:?}"),
+            }
+        }
+        other => panic!("expected a let, got {other:?}"),
+    }
+}
+
+#[test]
+fn date_constructor_requires_a_string_literal() {
+    // A non-literal argument that parses gets the R6 shape diagnostic...
+    for source in ["date(20260917)", "date(day)"] {
+        let result = parse(source);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|error| error.message.contains("string literal")),
+            "{source:?}: expected the R6 string-literal diagnostic, got {:?}",
+            result.errors
+        );
+    }
+    // ...and one that does not parse at all is still rejected.
+    let result = parse(r#"date("a" ++ "b")"#);
+    assert!(
+        result.ast.is_none() || !result.errors.is_empty(),
+        "a non-literal argument must not silently produce a date"
+    );
+}
+
+#[test]
+fn date_stays_a_contextual_word() {
+    // A bare `date` is still an ordinary name...
+    assert_eq!(kind(&ok("date")), nm("date"));
+    // ...and member access on a feature named `date` keeps working.
+    let access = ok("book.date");
+    match kind(&access) {
+        ExprKind::FeatureAccess { name, .. } => assert_eq!(name.value, "date"),
+        other => panic!("expected feature access, got {other:?}"),
+    }
+    // `date` alone never becomes the constructor without a string argument.
+    let result = parse(r#"date ("2026-09-17")"#);
+    assert!(
+        matches!(&result.ast.expect("parses").kind, ExprKind::Date { .. }),
+        "whitespace before the parenthesis still forms the constructor"
+    );
 }

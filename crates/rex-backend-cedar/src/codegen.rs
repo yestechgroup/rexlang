@@ -388,6 +388,11 @@ fn emit_condition(expr: &Expr, capability: &str, class: &ClassDef) -> anyhow::Re
         ExprKind::String(text) => Ok(cedar_string_literal(text)),
         ExprKind::Bool(value) => Ok(value.to_string()),
         ExprKind::Null => Err(reject("`null`")),
+        // Dates have no Cedar representation: the type has no Cedar
+        // counterpart, so both the constructor and date-typed attributes
+        // (refused at the `Name` arm below) are generate-time errors naming
+        // the capability.
+        ExprKind::Date { .. } => Err(reject("a date literal")),
         ExprKind::Name(name) => {
             if is_primitive_attribute(class, name) {
                 Ok(format!("resource.{name}"))
@@ -905,6 +910,54 @@ mod tests {
             error.to_string(),
             "capability `RaiseRefund`: `when` condition references `assignee`, \
              which is not a primitive attribute of `Ticket`"
+        );
+    }
+
+    #[test]
+    fn date_conditions_are_refused_naming_the_capability() {
+        // Cedar has no date type: a condition over a date attribute is
+        // refused (the attribute is not a primitive attribute)...
+        let mut actors = ActorsDef::new("Support");
+        actors = actors.actor(ActorDef::new("Agent"));
+        actors = actors.capability(CapabilityDef::new(
+            "RaiseRefund",
+            class_ref("demo", "Ticket"),
+        ));
+        actors = actors.grant(grant(
+            "Agent",
+            vec![GrantEntry::permit("RaiseRefund").when("dueDate >= date(\"2026-01-01\")")],
+        ));
+        let mut model = Model::new();
+        let mut package = Package::new("demo");
+        let mut ticket = class("Ticket", vec![attribute("amount", PrimitiveType::Int)]);
+        ticket.features.push(Feature::new(
+            "dueDate",
+            FeatureKind::Attribute,
+            TypeRef::Primitive(PrimitiveType::Date),
+            Multiplicity::REQUIRED,
+        ));
+        package.classes = vec![ticket];
+        model.packages.push(package);
+        let error =
+            generate(&ActorModel::new().block(actors), &model).expect_err("must be refused");
+        assert!(
+            error.to_string().contains("capability `RaiseRefund`"),
+            "the refusal names the capability: {error}"
+        );
+
+        // ...and so is a bare date literal, which the emitter reaches when
+        // the rest of the condition maps.
+        let actors = fixture_actors(vec![grant(
+            "Agent",
+            vec![GrantEntry::permit("RaiseRefund")
+                .when("amount > 0 || date(\"2026-01-01\") < date(\"2027-01-01\")")],
+        )]);
+        let pair = fixture_pair(actors);
+        let error = generate(&pair.0, &pair.1).expect_err("must be refused");
+        assert_eq!(
+            error.to_string(),
+            "capability `RaiseRefund`: `when` condition uses a date literal, \
+             which has no Cedar mapping"
         );
     }
 

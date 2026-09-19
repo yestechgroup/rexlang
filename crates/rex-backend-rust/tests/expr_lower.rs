@@ -513,3 +513,130 @@ fn unknown_names_are_lower_errors() {
     let error = lower_expr(&expr, &Ty::string(), &ctx).expect_err("unknown name");
     assert!(error.to_string().contains("nope"), "{error}");
 }
+
+// ---------------------------------------------------------------------------
+// Date primitives and the calendar algebra (issue #9, spec R5–R8)
+// ---------------------------------------------------------------------------
+
+/// A `Loan` model with a required date, an optional date, a many-valued
+/// date, and a `long` attribute, for the date lowering tests.
+fn loan_model() -> Model {
+    let mut model = Model::new();
+    let mut package = Package::new(PKG);
+    package.classes.push(ClassDef::new(
+        "Loan",
+        vec![],
+        vec![
+            Feature::new(
+                "effectiveDate",
+                FeatureKind::Attribute,
+                TypeRef::Primitive(PrimitiveType::Date),
+                Multiplicity::REQUIRED,
+            ),
+            Feature::new(
+                "dueDate",
+                FeatureKind::Attribute,
+                TypeRef::Primitive(PrimitiveType::Date),
+                Multiplicity::REQUIRED,
+            ),
+            Feature::new(
+                "maturityDate",
+                FeatureKind::Attribute,
+                TypeRef::Primitive(PrimitiveType::Date),
+                Multiplicity::OPTIONAL,
+            ),
+            Feature::new(
+                "renewals",
+                FeatureKind::Attribute,
+                TypeRef::Primitive(PrimitiveType::Date),
+                Multiplicity::MANY,
+            ),
+            Feature::new(
+                "downloads",
+                FeatureKind::Attribute,
+                TypeRef::Primitive(PrimitiveType::Long),
+                Multiplicity::REQUIRED,
+            ),
+        ],
+    ));
+    model.packages.push(package);
+    model
+}
+
+/// Lowers `source` on `Loan` and asserts the exact Rust text.
+fn lower_on_loan(source: &str, expected: &str) {
+    let model = loan_model();
+    let ctx = LowerCtx::new(&model, PKG, "Loan", &[]);
+    let parsed = parse(source);
+    assert!(parsed.errors.is_empty(), "{source:?}: {:?}", parsed.errors);
+    let checker = TypeChecker::new(TypeContext::from_model(&model)).with_self(PKG, "Loan");
+    let ty = checker
+        .type_of(parsed.ast.as_ref().expect("well-formed ast"))
+        .unwrap_or_else(|errors| panic!("{source:?}: {errors:?}"));
+    let code = lower_expr(parsed.ast.as_ref().expect("ast"), &ty, &ctx)
+        .unwrap_or_else(|error| panic!("{source:?}: {error}"));
+    assert_eq!(code, expected, "lowering of {source:?}");
+}
+
+#[test]
+fn date_literal_lowers_to_a_checked_runtime_constructor() {
+    lower_on_loan(
+        r#"date("2026-09-17")"#,
+        r#"rex_runtime::Date::from_str("2026-09-17").expect("R6-checked date literal")"#,
+    );
+}
+
+#[test]
+fn date_comparison_lowers_to_the_total_order() {
+    // R7: ordering is plain `<` on the day-number newtype.
+    lower_on_loan(
+        r#"effectiveDate < date("2027-01-01")"#,
+        "(self.effective_date < rex_runtime::Date::from_str(\"2027-01-01\").expect(\"R6-checked date literal\"))",
+    );
+    // R2: equality is plain value equality.
+    lower_on_loan(
+        "effectiveDate == dueDate",
+        "(self.effective_date == self.due_date)",
+    );
+}
+
+#[test]
+fn calendar_algebra_lowers_to_runtime_methods() {
+    // R8: plus_months; R5: plus_days; both Copy reads off self.
+    lower_on_loan(
+        "effectiveDate.plus_months(6)",
+        "(self.effective_date.plus_months(6i32))",
+    );
+    lower_on_loan(
+        "effectiveDate.plus_days(30)",
+        "(self.effective_date.plus_days(30i32))",
+    );
+    lower_on_loan(
+        r#"effectiveDate.diff_days(date("2027-03-17"))"#,
+        "(self.effective_date.diff_days(rex_runtime::Date::from_str(\"2027-03-17\").expect(\"R6-checked date literal\")))",
+    );
+}
+
+#[test]
+fn optional_date_navigation_lowers_with_map() {
+    // R3: `?.` over an optional date propagates None through the algebra.
+    lower_on_loan(
+        "maturityDate?.plus_days(1)",
+        "(self.maturity_date.map(|__rex_date| __rex_date.plus_days(1i32)))",
+    );
+}
+
+#[test]
+fn date_collections_lower_with_the_generic_algebra() {
+    // A2 over dates: the Vec receiver clones, the predicate sees `&&T`, and
+    // Copy elements adapt with `.copied()`.
+    lower_on_loan(
+        r#"renewals.filter(d => d > date("2026-01-01"))"#,
+        "self.renewals.clone().iter().filter(|d| (**d > rex_runtime::Date::from_str(\"2026-01-01\").expect(\"R6-checked date literal\"))).copied().collect::<Vec<_>>()",
+    );
+    // A3 to int results (`map` lends `&T`; the deref parenthesizes).
+    lower_on_loan(
+        "renewals.map(d => d.diff_days(effectiveDate))",
+        "self.renewals.clone().iter().map(|d| ((*d).diff_days(self.effective_date))).collect::<Vec<_>>()",
+    );
+}
