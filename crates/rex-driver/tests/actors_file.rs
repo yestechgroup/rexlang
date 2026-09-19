@@ -994,3 +994,341 @@ actors Support {
     assert_eq!(model.blocks[0].purposes, ["Triage"]);
     assert_eq!(model.blocks[1].purposes, ["Triage"]);
 }
+
+/// Package `rex.pairs.a` declares `Book`, which refers `Sheet` in package
+/// `rex.pairs.b`; package `rex.pairs.b` declares `Sheet`, which refers back
+/// to `Book`. Neither package can lower standalone — this is the shape the
+/// single-package resolver rejected outright (issue #14).
+const PAIR_A: &str = r#"
+package rex.pairs.a
+
+class Book {
+    id String id
+    String title
+    refers rex.pairs.b.Sheet[0..1] sheet
+}
+"#;
+
+const PAIR_B: &str = r#"
+package rex.pairs.b
+
+class Sheet {
+    id String id
+    int pageNumber
+    refers rex.pairs.a.Book[0..1] book
+}
+"#;
+
+const PAIR_ACTOR: &str = r#"
+import "a.mox"
+import "b.mox"
+
+actors PairPolicies {
+    actor Librarian
+
+    capability ShelveBook on rex.pairs.a.Book
+    capability FlipSheet on Sheet
+
+    grant Librarian {
+        permit ShelveBook
+        permit FlipSheet when (pageNumber > 0)
+    }
+}
+"#;
+
+#[test]
+fn mutually_referencing_packages_lower_through_the_union() {
+    let compilation = compile(PAIR_ACTOR, &[("a.mox", PAIR_A), ("b.mox", PAIR_B)]);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        compilation.diagnostics
+    );
+    let model = compilation.model.expect("actor model lowered");
+
+    // Capabilities bind to classes from both mutually-referencing packages.
+    let block = &model.blocks[0];
+    assert_eq!(
+        block.capabilities[0].class,
+        TypeRef::Class {
+            package: "rex.pairs.a".to_string(),
+            name: "Book".to_string(),
+        }
+    );
+    assert_eq!(
+        block.capabilities[1].class,
+        TypeRef::Class {
+            package: "rex.pairs.b".to_string(),
+            name: "Sheet".to_string(),
+        }
+    );
+
+    // The union domain model is available for downstream class lookup.
+    let domains_model = compilation.domains_model.expect("domains lowered");
+    let package_names: Vec<_> = domains_model
+        .packages
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect();
+    assert_eq!(package_names, ["rex.pairs.a", "rex.pairs.b"]);
+}
+
+#[test]
+fn when_condition_navigates_a_cross_package_feature() {
+    let source = r#"
+import "a.mox"
+import "b.mox"
+
+actors PairPolicies {
+    actor Librarian
+
+    capability ShelveBook on rex.pairs.a.Book
+
+    grant Librarian {
+        permit ShelveBook when ((sheet?.pageNumber ?: 0) > 0)
+    }
+}
+"#;
+    let compilation = compile(source, &[("a.mox", PAIR_A), ("b.mox", PAIR_B)]);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        compilation.diagnostics
+    );
+    let grant = &compilation.model.expect("lowered").blocks[0].grants[0];
+    assert_eq!(
+        grant.entries[0].when.as_deref(),
+        Some("(sheet?.pageNumber ?: 0) > 0")
+    );
+}
+
+#[test]
+fn delegation_targets_an_agent_whose_package_references_another_package() {
+    // Package `b` references package `a` and declares the automation agent
+    // plus its own grant; the actor file delegates the capability to it.
+    const B_WITH_AGENT: &str = r#"
+package rex.pairs.b
+
+class Sheet {
+    id String id
+    int pageNumber
+    refers rex.pairs.a.Book[0..1] book
+}
+
+actors SheetAutomation {
+    agent AutoFlipper
+
+    capability FlipSheet on Sheet
+
+    grant AutoFlipper {
+        permit FlipSheet when (pageNumber > 0)
+    }
+}
+"#;
+    let source = r#"
+import "a.mox"
+import "b.mox"
+
+actors PairPolicies {
+    actor Trustee
+
+    capability ShelveBook on rex.pairs.a.Book
+    capability FlipSheet on Sheet
+
+    grant Trustee {
+        permit ShelveBook
+    }
+
+    delegation FlipAutomation {
+        from Trustee
+        to AutoFlipper
+        permit FlipSheet
+    }
+}
+"#;
+    let compilation = compile(source, &[("a.mox", PAIR_A), ("b.mox", B_WITH_AGENT)]);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        compilation.diagnostics
+    );
+    let model = compilation.model.expect("actor model lowered");
+    assert_eq!(model.blocks.len(), 2, "actor file plus the domain block");
+    assert_eq!(model.blocks[0].delegations.len(), 1);
+    assert_eq!(model.blocks[0].delegations[0].to, "AutoFlipper");
+}
+
+#[test]
+fn bare_name_ambiguous_across_imported_packages_names_the_candidates() {
+    const LEFT: &str = "package rex.dups.left\n\nclass Widget {\n    id String id\n}\n";
+    const RIGHT: &str = "package rex.dups.right\n\nclass Widget {\n    id String id\n}\n";
+    let source = r#"
+import "left.mox"
+import "right.mox"
+
+actors DupPolicies {
+    actor Maker
+
+    capability PaintWidget on Widget
+
+    grant Maker {
+        permit PaintWidget
+    }
+}
+"#;
+    let compilation = compile(source, &[("left.mox", LEFT), ("right.mox", RIGHT)]);
+    assert!(compilation.model.is_none(), "ambiguity blocks lowering");
+    let (path, diagnostic) = single(&compilation, "ambiguous type `Widget`");
+    assert_eq!(path, "support.actor");
+    let help = diagnostic
+        .help
+        .as_deref()
+        .expect("ambiguity lists candidates");
+    assert!(help.contains("rex.dups.left"), "help: {help}");
+    assert!(help.contains("rex.dups.right"), "help: {help}");
+}
+
+#[test]
+fn domain_bare_name_collision_is_tagged_with_the_domain_file() {
+    // Both packages export `Widget`; the third domain references it bare, so
+    // its own lowering hits the union ambiguity — tagged with the domain.
+    const LEFT: &str = "package rex.dups.left\n\nclass Widget {\n    id String id\n}\n";
+    const RIGHT: &str = "package rex.dups.right\n\nclass Widget {\n    id String id\n}\n";
+    const USER: &str = r#"
+package rex.dups.user
+
+class Holder {
+    id String id
+    refers Widget[0..1] widget
+}
+"#;
+    let source = r#"
+import "left.mox"
+import "right.mox"
+import "user.mox"
+
+actors DupPolicies {
+    actor Maker
+}
+"#;
+    let compilation = compile(
+        source,
+        &[("left.mox", LEFT), ("right.mox", RIGHT), ("user.mox", USER)],
+    );
+    assert!(compilation.model.is_none(), "ambiguity blocks lowering");
+    let (path, diagnostic) = single(&compilation, "ambiguous type `Widget`");
+    assert_eq!(path, "user.mox");
+    assert!(diagnostic.is_error());
+}
+
+#[test]
+fn duplicate_package_across_imports_errors_on_the_later_file() {
+    const FIRST: &str = "package rex.dup.once\n\nclass Widget {\n    id String id\n}\n";
+    const SECOND: &str = "package rex.dup.once\n\nclass Gadget {\n    id String id\n}\n";
+    let source = r#"
+import "first.mox"
+import "second.mox"
+
+actors DupPolicies {
+    actor Maker
+}
+"#;
+    let compilation = compile(source, &[("first.mox", FIRST), ("second.mox", SECOND)]);
+    assert!(
+        compilation.model.is_none(),
+        "duplicate package blocks lowering"
+    );
+    let (path, diagnostic) = single(&compilation, "duplicate package 'rex.dup.once'");
+    assert_eq!(path, "second.mox");
+    assert!(diagnostic.is_error());
+}
+
+#[test]
+fn broken_domain_does_not_stop_the_remaining_imports_from_resolving() {
+    // `left.mox` has a class error; the actor file's capability binds to
+    // `right.mox`'s class and must still resolve (no unknown-type noise),
+    // while the artifact stays blocked by the broken domain's diagnostic.
+    const BROKEN: &str = "package rex.mixed.broken\n\nclass Ghosted { Ghost g }\n";
+    const GOOD: &str = r#"
+package rex.mixed.good
+
+class Widget {
+    id String id
+    boolean painted
+}
+"#;
+    let source = r#"
+import "broken.mox"
+import "good.mox"
+
+actors MixedPolicies {
+    actor Maker
+
+    capability PaintWidget on Widget
+
+    grant Maker {
+        permit PaintWidget when (painted)
+    }
+}
+"#;
+    let compilation = compile(source, &[("broken.mox", BROKEN), ("good.mox", GOOD)]);
+    assert!(
+        compilation.model.is_none(),
+        "the broken domain blocks the artifact"
+    );
+    assert!(
+        !compilation
+            .diagnostics
+            .iter()
+            .any(|(path, diagnostic)| path != "broken.mox"
+                && diagnostic.message.contains("unknown type")),
+        "the good domain must still resolve, got: {:?}",
+        compilation.diagnostics
+    );
+    let (path, diagnostic) = single(&compilation, "unknown type 'Ghost'");
+    assert_eq!(path, "broken.mox");
+    assert!(diagnostic.is_error());
+}
+
+#[test]
+fn resolved_import_paths_match_lexically_for_cwd_independent_compilation() {
+    // The CLI passes resolved paths (actor dir joined with the import); the
+    // driver must match them lexically so vocabulary snapshots resolve next
+    // to the declaring file regardless of the process CWD.
+    const DOMAIN_WITH_CURRENCY: &str = r#"
+package rex.resolve.domain
+
+class Wallet {
+    id String id
+    int cents
+}
+"#;
+    let source = r#"
+import "nested/deep/domain.mox"
+
+actors ResolvePolicies {
+    actor Teller
+
+    capability TopUp on Wallet
+
+    grant Teller {
+        permit TopUp when (cents > 0)
+    }
+}
+"#;
+    let compilation = compile_actors_str(
+        "project/support.actor",
+        source,
+        &[(
+            "project/nested/deep/domain.mox".to_string(),
+            DOMAIN_WITH_CURRENCY.to_string(),
+        )],
+    );
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        compilation.diagnostics
+    );
+    assert!(compilation.model.is_some());
+    assert!(compilation.domains_model.is_some());
+}

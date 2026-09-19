@@ -881,6 +881,343 @@ pub(crate) fn compile_multi(
     (model, diags)
 }
 
+/// The per-file outcome of [`compile_union_per_file`].
+pub(crate) struct PerFileCompilation {
+    /// The file's own package in a single-package model, or `None` when any
+    /// error-severity diagnostic was produced for this file.
+    pub model: Option<ir::Model>,
+    /// All diagnostics for this file, untagged (the caller knows the file).
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Compiles several `.mox` domain files against one shared union namespace,
+/// keeping the results per file: every file lowers against the union of all
+/// packages (so declarations may reference types across files), but a file
+/// with errors yields `(None, its diagnostics)` while the remaining files
+/// still compile successfully. This is the shape the `.actor` import path
+/// needs — an imported domain that fails to compile must not stop the other
+/// imports from resolving for capability bindings and `when` conditions
+/// (see [`compile_actor_file`], which re-lowers every error-free file's
+/// inline actors blocks against the same union and re-checks conditions
+/// against the combined context; identical diagnostics are deduplicated
+/// there).
+///
+/// Unlike [`compile_multi`] there is deliberately no all-or-nothing model:
+/// callers assemble what they need from the per-file results.
+pub(crate) fn compile_union_per_file(files: &[MultiFile<'_>]) -> Vec<PerFileCompilation> {
+    // Per-file diagnostic buckets keep each file's diagnostics in its own
+    // result; cross-file passes route their (already tagged) diagnostics to
+    // the declaring file's bucket.
+    let mut buckets: Vec<Vec<Diagnostic>> = files.iter().map(|_| Vec::new()).collect();
+    for (index, file) in files.iter().enumerate() {
+        buckets[index].extend(file.parse_diagnostics.iter().cloned());
+    }
+
+    // Package declarations and per-file namespaces. Every file joins the
+    // union namespace — including files with a duplicate package name (the
+    // duplicate errors on the later file, but its unique declarations still
+    // resolve for the remaining diagnostics).
+    let mut packages: Vec<DomainPackage> = Vec::new();
+    let mut file_package: Vec<Option<usize>> = vec![None; files.len()];
+    let mut winning_enums: Vec<(usize, &mox::EnumDecl)> = Vec::new();
+    for (index, file) in files.iter().enumerate() {
+        let Some(ast) = file.ast else {
+            continue; // parse diagnostics already reported; nothing to lower
+        };
+        let Some(package_decl) = &ast.package else {
+            buckets[index].push(
+                Diagnostic::error("missing `package` declaration", None).with_help(
+                    "add a package clause at the top of the file, e.g. `package com.example.model`",
+                ),
+            );
+            continue;
+        };
+        let name = package_decl.name.full_name();
+        if packages.iter().any(|package| package.name == name) {
+            buckets[index].push(
+                Diagnostic::error(
+                    format!("duplicate package '{name}'"),
+                    Some(package_decl.name.span),
+                )
+                    .with_help(
+                        "each file must declare a distinct package; rename one package or merge the files",
+                    ),
+            );
+        }
+        let mut kinds: HashMap<String, TopKind> = HashMap::new();
+        for decl in &ast.declarations {
+            let (kind, decl_name) = match decl {
+                mox::Decl::Class(decl) => (TopKind::Class, &decl.name),
+                mox::Decl::Interface(decl) => (TopKind::Interface, &decl.name),
+                mox::Decl::Enum(decl) => (TopKind::Enum, &decl.name),
+                mox::Decl::Datatype(decl) => (TopKind::Datatype, &decl.name),
+                mox::Decl::Vocabulary(decl) => (TopKind::Vocabulary, &decl.name),
+                mox::Decl::Actors(decl) => (TopKind::Actors, &decl.name),
+                mox::Decl::Annotation(_) => continue,
+            };
+            if kinds.contains_key(&decl_name.text) {
+                buckets[index].push(
+                    Diagnostic::error(
+                        format!("duplicate declaration of '{}'", decl_name.text),
+                        Some(decl_name.span),
+                    )
+                    .with_help(format!(
+                        "'{0}' is already declared in this package",
+                        decl_name.text
+                    )),
+                );
+            } else {
+                kinds.insert(decl_name.text.clone(), kind);
+                if let mox::Decl::Enum(enum_decl) = decl {
+                    winning_enums.push((index, enum_decl));
+                }
+            }
+        }
+        file_package[index] = Some(packages.len());
+        packages.push(DomainPackage { name, kinds });
+    }
+
+    // Qualified constraint prep maps across all files, so enum closure
+    // checks and vocabulary key-facet family checks work for cross-package
+    // attribute types.
+    let mut enum_decls: HashMap<(&str, &str), &mox::EnumDecl> = HashMap::new();
+    for (index, enum_decl) in &winning_enums {
+        let package = packages[file_package[*index].expect("enum files declare a package")]
+            .name
+            .as_str();
+        enum_decls.insert((package, enum_decl.name.text.as_str()), enum_decl);
+    }
+    let mut vocab_key_facet_types: HashMap<(&str, &str), ir::PrimitiveType> = HashMap::new();
+    for (index, file) in files.iter().enumerate() {
+        let Some(package_index) = file_package[index] else {
+            continue;
+        };
+        let Some(ast) = file.ast else {
+            continue;
+        };
+        let package = packages[package_index].name.as_str();
+        for decl in &ast.declarations {
+            if let mox::Decl::Vocabulary(decl) = decl {
+                if let Some(key) = &decl.key {
+                    if let Some(facet) =
+                        decl.facets.iter().find(|facet| facet.name.text == key.text)
+                    {
+                        if let Some(primitive) = primitive_facet_type(&facet.type_ref) {
+                            vocab_key_facet_types
+                                .insert((package, decl.name.text.as_str()), primitive);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Vocabularies lower per file (snapshots resolve against the file's own
+    // directory) and must be known before any class lowers.
+    let mut vocab_defs: Vec<Vec<ir::VocabularyDef>> = files.iter().map(|_| Vec::new()).collect();
+    for (index, file) in files.iter().enumerate() {
+        if file_package[index].is_none() {
+            continue;
+        }
+        let base_dir = Path::new(file.path)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let Some(ast) = file.ast else {
+            continue;
+        };
+        for decl in &ast.declarations {
+            if let mox::Decl::Vocabulary(decl) = decl {
+                if let Some(def) = lower_vocabulary(decl, &base_dir, &mut buckets[index]) {
+                    vocab_defs[index].push(def);
+                }
+            }
+        }
+    }
+    let mut vocab_keys: HashMap<(&str, &str), HashSet<&str>> = HashMap::new();
+    for (index, defs) in vocab_defs.iter().enumerate() {
+        let Some(package_index) = file_package[index] else {
+            continue;
+        };
+        let package = packages[package_index].name.as_str();
+        for def in defs {
+            vocab_keys.insert(
+                (package, def.name.as_str()),
+                def.entries.iter().map(|entry| entry.key.as_str()).collect(),
+            );
+        }
+    }
+    let prep = PrepMaps {
+        enum_decls,
+        vocab_keys,
+        vocab_key_facet_types,
+    };
+
+    // Lower every file against the union namespace, keeping the lowered
+    // classes, actors and pending conditions per file.
+    let scope = Scope::Domains {
+        packages: &packages,
+    };
+    let mut out_packages: Vec<ir::Package> = Vec::new();
+    let mut classes: Vec<ClassRecord> = Vec::new();
+    let mut actors: Vec<ActorsRecord> = Vec::new();
+    let mut pending: Vec<(usize, PendingCondition)> = Vec::new();
+    for (index, file) in files.iter().enumerate() {
+        let Some(package_index) = file_package[index] else {
+            continue;
+        };
+        let Some(ast) = file.ast else {
+            continue;
+        };
+        let mut out = ir::Package::new(packages[package_index].name.clone());
+        out.description = ast.package.as_ref().and_then(|decl| decl.doc.clone());
+        for decl in &ast.declarations {
+            match decl {
+                mox::Decl::Vocabulary(_) => {}
+                mox::Decl::Actors(decl) => {
+                    let (record, conditions) =
+                        lower_actors(decl, file.source, file.path, &scope, &mut buckets[index]);
+                    actors.push(record);
+                    pending.extend(conditions.into_iter().map(|condition| (index, condition)));
+                }
+                mox::Decl::Annotation(annotation) => out.annotations.push(ir::Annotation {
+                    source: annotation.value.clone(),
+                    details: Default::default(),
+                }),
+                mox::Decl::Enum(decl) => out.enums.push(lower_enum(decl, &mut buckets[index])),
+                mox::Decl::Datatype(decl) => {
+                    out.datatypes
+                        .push(lower_datatype(decl, file.source, &mut buckets[index]))
+                }
+                mox::Decl::Interface(decl) => out.interfaces.push(lower_interface(decl)),
+                mox::Decl::Class(decl) => {
+                    classes.push(lower_class(
+                        decl,
+                        file.source,
+                        file.path,
+                        &packages[package_index].name,
+                        &scope,
+                        &prep,
+                        &mut buckets[index],
+                    ));
+                }
+            }
+        }
+        out_packages.push(out);
+    }
+
+    // Cross-file class-graph passes over the assembled class universe. The
+    // passes tag diagnostics with the declaring file, so each lands in that
+    // file's bucket: a cycle or invalid opposite blocks only its own file's
+    // model, and the error-free files keep resolving for the actor path.
+    let mut tagged: Vec<(String, Diagnostic)> = Vec::new();
+    detect_inheritance_cycles(&classes, &mut tagged);
+    validate_opposites(&classes, &mut tagged);
+
+    // Inline actors blocks from every file join one union policy set: cycle
+    // detection runs per block first; separation of duty, self-narrowing,
+    // and delegations span the union (same-named actors pool their permits
+    // across files). `compile_actor_file` re-derives these for error-free
+    // files and deduplicates identical diagnostics, so files whose classes
+    // failed still get their actor-block diagnostics here.
+    let cyclic = detect_actor_cycles(&actors, &mut tagged);
+    if !cyclic {
+        validate_actor_never_both_union(&actors, &mut tagged);
+        validate_actor_self_narrowing_union(&actors, &mut tagged);
+        validate_actor_delegations_union(&actors, &mut tagged);
+    }
+    let mut file_by_path: HashMap<&str, usize> = HashMap::new();
+    for (index, file) in files.iter().enumerate() {
+        file_by_path.insert(file.path, index);
+    }
+    for (file, diagnostic) in tagged {
+        let index = file_by_path.get(file.as_str()).copied().unwrap_or(0);
+        buckets[index].push(diagnostic);
+    }
+
+    // Classes join their package after the cross-file passes; operations
+    // move into the def first, as in the single-file path.
+    for class in classes {
+        let mut class = class;
+        class.def.operations = std::mem::take(&mut class.operations);
+        let class_file = file_by_path.get(class.file.as_str()).copied();
+        let package_index = file_package[class_file.expect("class records carry a known file")]
+            .expect("class files declare a package");
+        model_package(&mut out_packages, packages[package_index].name.as_str())
+            .classes
+            .push(class.def);
+    }
+
+    // Vocabularies join their package now that class lowering — the last
+    // prep-map consumer borrowing the definitions — is done.
+    for (index, defs) in vocab_defs.into_iter().enumerate() {
+        if let Some(package_index) = file_package[index] {
+            let package_name = packages[package_index].name.as_str();
+            model_package(&mut out_packages, package_name).vocabularies = defs;
+        }
+    }
+
+    // Feature ids are assigned by `ClassDef::new` in declaration order;
+    // keep them in sync with the final feature lists.
+    for package in &mut out_packages {
+        for class in &mut package.classes {
+            class.assign_feature_ids();
+        }
+    }
+
+    // Every `when` condition is now fully type-checked against its
+    // capability's class in the complete multi-package class universe.
+    let mut context_model = ir::Model::new();
+    context_model.packages = out_packages.clone();
+    let context = TypeContext::from_model(&context_model);
+    let pending: Vec<PendingCondition> = pending
+        .into_iter()
+        .map(|(_, condition)| condition)
+        .collect();
+    let conditions = check_pending_conditions(&pending, &context);
+    for (file, diagnostic) in conditions {
+        let index = file_by_path.get(file.as_str()).copied().unwrap_or(0);
+        buckets[index].push(diagnostic);
+    }
+
+    // Assemble one single-package model per file, dropped when that file
+    // produced any error.
+    files
+        .iter()
+        .enumerate()
+        .map(|(index, _file)| {
+            let blocked = buckets[index].iter().any(Diagnostic::is_error);
+            let model = (!blocked).then(|| {
+                let package_index = file_package[index].expect("lowered files declare a package");
+                let package_name = packages[package_index].name.clone();
+                let package = out_packages
+                    .iter()
+                    .find(|package| package.name == package_name)
+                    .expect("every indexed package was lowered")
+                    .clone();
+                let mut model = ir::Model::new();
+                model.packages.push(package);
+                model
+            });
+            PerFileCompilation {
+                model,
+                diagnostics: std::mem::take(&mut buckets[index]),
+            }
+        })
+        .collect()
+}
+
+/// Finds a lowered package by name in `packages` (the union may hold
+/// duplicate-named packages when a duplicate-package error fired; the first
+/// match wins, mirroring [`compile_multi`]).
+fn model_package<'a>(packages: &'a mut [ir::Package], name: &str) -> &'a mut ir::Package {
+    packages
+        .iter_mut()
+        .find(|package| package.name == name)
+        .expect("every indexed package was lowered")
+}
+
 /// Resolves and validates a parsed model and lowers it into the Core IR.
 ///
 /// Returns the IR (with `Model::rex_version` and `formatVersion` set) or
