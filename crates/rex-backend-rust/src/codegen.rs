@@ -235,6 +235,10 @@ fn value_type(type_: &TypeRef) -> anyhow::Result<String> {
             PrimitiveType::Boolean => "bool".to_string(),
             PrimitiveType::Byte => "i8".to_string(),
             PrimitiveType::Char => "char".to_string(),
+            // The calendar date primitive maps to the runtime support type:
+            // a newtype over days since the epoch with ISO-8601
+            // serialization (issue #9).
+            PrimitiveType::Date => "rex_runtime::Date".to_string(),
         },
         TypeRef::Class { name, .. }
         | TypeRef::Enum { name, .. }
@@ -361,6 +365,10 @@ fn default_expr(unit: &Unit<'_>, feature: &Feature) -> anyhow::Result<String> {
             PrimitiveType::Float | PrimitiveType::Double => "0.0".to_string(),
             PrimitiveType::Boolean => "false".to_string(),
             PrimitiveType::Char => "'\\0'".to_string(),
+            // Dates take no declared defaults (the .mox surface rejects
+            // them); the implicit default of a required date attribute is
+            // the epoch 1970-01-01.
+            PrimitiveType::Date => "rex_runtime::Date::EPOCH".to_string(),
         },
         TypeRef::Enum { name, .. } => {
             let first = unit.first_enum_literal(name)?;
@@ -644,6 +652,10 @@ fn facet_rust_type(type_: PrimitiveType) -> &'static str {
         PrimitiveType::Float | PrimitiveType::Double => "f64",
         PrimitiveType::Boolean => "bool",
         PrimitiveType::Char => "char",
+        // Date facets cannot reach the backend through the driver (the
+        // driver rejects them); the mapping exists for hand-built IRs, and
+        // `facet_literal` refuses the stray `DefaultValue` shapes.
+        PrimitiveType::Date => "rex_runtime::Date",
     }
 }
 
@@ -1920,6 +1932,112 @@ mod tests {
             .expect("generate")
             .remove("models.rs")
             .expect("models.rs")
+    }
+
+    /// A model with a required, an optional, and a many-valued date
+    /// attribute (issue #9): the shape of the `date` primitive's lowering.
+    fn date_model() -> Model {
+        let mut model = Model::new();
+        let mut package = Package::new(PKG);
+        package.classes.push(ClassDef::new(
+            "Loan",
+            vec![],
+            vec![
+                Feature::new(
+                    "effectiveDate",
+                    FeatureKind::Attribute,
+                    TypeRef::Primitive(PrimitiveType::Date),
+                    Multiplicity::REQUIRED,
+                ),
+                Feature::new(
+                    "maturityDate",
+                    FeatureKind::Attribute,
+                    TypeRef::Primitive(PrimitiveType::Date),
+                    Multiplicity::OPTIONAL,
+                ),
+                Feature::new(
+                    "renewals",
+                    FeatureKind::Attribute,
+                    TypeRef::Primitive(PrimitiveType::Date),
+                    Multiplicity::MANY,
+                ),
+            ],
+        ));
+        model.packages.push(package);
+        model
+    }
+
+    fn generate_dates() -> String {
+        generate(&date_model())
+            .expect("generate")
+            .remove("models.rs")
+            .expect("models.rs")
+    }
+
+    #[test]
+    fn date_attributes_map_to_the_runtime_date_type() {
+        let code = generate_dates();
+        // Required date attribute: a `rex_runtime::Date` field defaulting to
+        // the epoch (dates take no declared defaults in this milestone).
+        assert!(
+            code.contains("pub effective_date: rex_runtime::Date,"),
+            "{code}"
+        );
+        assert!(
+            code.contains("effective_date: rex_runtime::Date::EPOCH,"),
+            "{code}"
+        );
+        // Optional and many-valued follow the usual shapes.
+        assert!(
+            code.contains("pub maturity_date: Option<rex_runtime::Date>,"),
+            "{code}"
+        );
+        assert!(
+            code.contains("pub renewals: Vec<rex_runtime::Date>,"),
+            "{code}"
+        );
+    }
+
+    #[test]
+    fn date_attributes_serialize_iso_strings_and_load_strictly() {
+        let code = generate_dates();
+        // Save: ISO-8601 strings (required, optional, and many shapes).
+        assert!(
+            code.contains("serde_json::Value::String(obj.effective_date.to_string())"),
+            "required date save:\n{code}"
+        );
+        assert!(
+            code.contains("serde_json::Value::String((*v).to_string())"),
+            "optional/many date save:\n{code}"
+        );
+        // Load: the strict ISO parse; a non-ISO string is InvalidInstance.
+        assert!(
+            code.contains("expect_date(value, \"Loan.effectiveDate\")?"),
+            "required date load:\n{code}"
+        );
+        assert!(
+            code.contains("expect_date(element, \"Loan.renewals\")?"),
+            "{code}"
+        );
+        assert!(
+            code.contains("must be an ISO-8601 date (YYYY-MM-DD)"),
+            "strict loader helper:\n{code}"
+        );
+    }
+
+    #[test]
+    fn date_setters_take_runtime_dates() {
+        let code = generate_dates();
+        assert!(
+            code.contains(
+                "pub fn set_effective_date(&mut self, effective_date: rex_runtime::Date)"
+            ),
+            "{code}"
+        );
+        assert!(
+            code.contains("pub fn set_maturity_date(&mut self, maturity_date: rex_runtime::Date)"),
+            "{code}"
+        );
     }
 
     #[test]

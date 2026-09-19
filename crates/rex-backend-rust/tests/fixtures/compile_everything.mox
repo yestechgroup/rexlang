@@ -1,11 +1,11 @@
 /// Compile-everything fixture (issue #16): one model reaching every v1
 /// emitter path of the Rust backend — every primitive × required/optional/
-/// many, every constraint keyword on applicable types (enum numeric bounds,
-/// vocabulary key-facet bounds), enum/datatype/vocabulary attributes with
-/// defaults, containment + cross references + containers with mutual
-/// opposites (single and many, plus a one-sided containment), expr/rust/
-/// body-less operations, derived features, and the `id readonly` /
-/// `readonly` modifiers.
+/// many (including the `date` primitive, issue #9), every constraint keyword
+/// on applicable types (enum numeric bounds, vocabulary key-facet bounds),
+/// enum/datatype/vocabulary attributes with defaults, containment + cross
+/// references + containers with mutual opposites (single and many, plus a
+/// one-sided containment), expr/rust/body-less operations with calendar
+/// algebra, derived features, and the `id readonly` / `readonly` modifiers.
 package rex.test.everything
 
 /// Datatype with a `format` hint (wire-level contract only).
@@ -93,6 +93,11 @@ class Everything {
     char reqChar
     char[0..1] optChar
     char[] manyChar
+    // The date primitive (issue #9): required, optional, and many. Dates
+    // take no declared defaults and admit no constraint keywords.
+    date reqDate
+    date[0..1] optDate
+    date[] manyDates
     // Constraint keywords: string family.
     String patternedCode { pattern "[a-z]+-[0-9]+" minLength 5 maxLength 12 }
     String minOnlyName { minLength 2 }
@@ -141,6 +146,11 @@ class Everything {
         rust { self.core.is_some() }
     }
     op String abstractHook()
+    // Calendar algebra (issue #9): a cure-period style op computing a
+    // month-end-clamped deadline against a date parameter.
+    op boolean curePeriodExpired(date asOf) {
+        expr { reqDate.plus_months(6) < asOf }
+    }
     // Derived features, lowered into accessors: the default 0..1 shape
     // (Option result) and an explicitly required one.
     derived int partCount {

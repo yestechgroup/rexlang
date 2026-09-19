@@ -1567,3 +1567,121 @@ fn negative_length_constraints_are_rejected() {
         .iter()
         .any(|d| d.is_error() && d.message.contains("must be non-negative")));
 }
+
+// ---------------------------------------------------------------------------
+// The `date` primitive (issue #9)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn date_primitive_lowers_into_the_ir() {
+    let source = r#"
+package demo
+
+class Loan {
+    date effectiveDate
+    date[0..1] maturityDate
+    date[] renewals
+    op boolean cureExpired(date asOf) {
+        expr { effectiveDate.plus_months(6) < asOf }
+    }
+}
+"#;
+    let compilation = compile_str("loan.mox", source);
+    let model = compilation.model.unwrap_or_else(|| {
+        panic!(
+            "expected a model:\n{}",
+            render("loan.mox", source, &compilation.diagnostics)
+        )
+    });
+    let class = &model.packages[0].classes[0];
+    for name in ["effectiveDate", "maturityDate", "renewals"] {
+        assert_eq!(
+            feature(class, name).type_,
+            TypeRef::Primitive(rex_ir::PrimitiveType::Date),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn declared_types_shadow_like_named_primitives() {
+    // A `type Date wraps opaque` datatype predating the `date` primitive
+    // keeps resolving to the datatype: declarations shadow built-ins.
+    let source = r#"
+package demo
+
+type Date wraps opaque {
+    rust "chrono::NaiveDate"
+}
+
+class Book {
+    Date copyright
+}
+"#;
+    let compilation = compile_str("book.mox", source);
+    let model = compilation.model.unwrap_or_else(|| {
+        panic!(
+            "expected a model:\n{}",
+            render("book.mox", source, &compilation.diagnostics)
+        )
+    });
+    let class = &model.packages[0].classes[0];
+    assert_eq!(
+        feature(class, "copyright").type_,
+        TypeRef::Datatype {
+            package: "demo".to_string(),
+            name: "Date".to_string(),
+        }
+    );
+}
+
+#[test]
+fn date_attributes_take_no_defaults() {
+    let source = r#"
+package demo
+
+class Loan {
+    date effectiveDate = "2026-09-17"
+}
+"#;
+    let compilation = compile_str("loan.mox", source);
+    assert!(compilation.model.is_none());
+    let messages: Vec<&str> = compilation
+        .diagnostics
+        .iter()
+        .map(|d| d.message.as_str())
+        .collect();
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("date attributes take no default")),
+        "{messages:?}"
+    );
+}
+
+#[test]
+fn date_vocabulary_facets_are_rejected() {
+    let source = r#"
+package demo
+
+vocabulary Colors from "test:colors" {
+    version "2026-01-01"
+    key name
+    facet String name
+    facet date adopted
+}
+"#;
+    let compilation = compile_str("colors.mox", source);
+    assert!(compilation.model.is_none());
+    let messages: Vec<&str> = compilation
+        .diagnostics
+        .iter()
+        .map(|d| d.message.as_str())
+        .collect();
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("date facets are not supported")),
+        "{messages:?}"
+    );
+}

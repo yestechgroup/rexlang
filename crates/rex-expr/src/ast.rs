@@ -48,6 +48,17 @@ pub enum ExprKind {
     Bool(bool),
     /// The `null` literal, typed [`crate::Ty::Null`] (spec R2/R3).
     Null,
+    /// The `date("YYYY-MM-DD")` constructor: a calendar-date constant
+    /// (issue #9). The argument must be a string literal — the parser
+    /// enforces that shape; the checker validates the calendar date and
+    /// rejects malformed text with the literal's span (spec R6). There is no
+    /// runtime constructor in the language: the value is a constant.
+    Date {
+        /// The unescaped literal text, e.g. `"2026-09-17"`.
+        text: String,
+        /// Span of the string literal itself (R6's error span).
+        literal_span: Span,
+    },
     /// A variable reference: a `let` binding or lambda parameter.
     Name(String),
     /// Feature access `receiver.name` or safe navigation `receiver?.name`.

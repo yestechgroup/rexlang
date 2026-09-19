@@ -109,6 +109,13 @@
 //!     format-less datatypes are byte-identical to earlier output. It is a
 //!     wire-level contract (the JSON Schema `format` keyword); no runtime
 //!     validation is implied.
+//! 13. **Date primitive (additive, v1).** [`PrimitiveType::Date`] adds the
+//!     calendar `date` primitive, serialized as the lowercase tag `"date"`.
+//!     Like every enum-tag addition it is purely additive: artifacts for
+//!     models that use no date-typed feature never contain the tag and stay
+//!     byte-identical to earlier output; the converse (an artifact carrying
+//!     `"date"`) requires a reader that knows the tag. Values surface on the
+//!     wire (instance JSON) as ISO-8601 `YYYY-MM-DD` strings.
 //!
 //! [rexlang]: https://github.com/anton-makes/rexlang
 
@@ -1411,10 +1418,12 @@ impl Default for ActorModel {
     }
 }
 
-/// The built-in primitives (Xcore's Java-style primitives).
+/// The built-in primitives (Xcore's Java-style primitives, plus the
+/// calendar `date`).
 ///
 /// Serializes as a bare lowercase string: `"string"`, `"int"`, `"long"`,
-/// `"short"`, `"float"`, `"double"`, `"boolean"`, `"byte"`, `"char"`.
+/// `"short"`, `"float"`, `"double"`, `"boolean"`, `"byte"`, `"char"`,
+/// `"date"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PrimitiveType {
@@ -1436,6 +1445,10 @@ pub enum PrimitiveType {
     Byte,
     /// A single character (`char`).
     Char,
+    /// A calendar date without time or timezone (`date`), serialized as an
+    /// ISO-8601 `YYYY-MM-DD` string on the wire. Additive (wire contract
+    /// rule 13).
+    Date,
 }
 
 impl PrimitiveType {
@@ -1460,6 +1473,7 @@ impl fmt::Display for PrimitiveType {
             Self::Boolean => "boolean",
             Self::Byte => "byte",
             Self::Char => "char",
+            Self::Date => "date",
         };
         f.write_str(name)
     }
@@ -2109,5 +2123,43 @@ mod tests {
             serde_json::to_value(PrimitiveType::Boolean).unwrap(),
             serde_json::json!("boolean")
         );
+    }
+
+    #[test]
+    fn date_primitive_serializes_and_displays() {
+        // Wire format (rule 13): camelCase lowercase tag `"date"`, additive to
+        // v1 — artifacts for models that use no date attributes stay
+        // byte-identical because the tag never appears in them.
+        assert_eq!(PrimitiveType::Date.to_string(), "date");
+        assert_eq!(
+            serde_json::to_value(PrimitiveType::Date).unwrap(),
+            serde_json::json!("date")
+        );
+        assert!(!PrimitiveType::Date.is_numeric());
+
+        // A date-typed feature round-trips through the wire format.
+        let mut package = Package::new("nz.example.demo");
+        package.classes.push(ClassDef::new(
+            "Loan",
+            vec![],
+            vec![Feature::new(
+                "effectiveDate",
+                FeatureKind::Attribute,
+                TypeRef::Primitive(PrimitiveType::Date),
+                Multiplicity::REQUIRED,
+            )],
+        ));
+        let model = Model::new();
+        let mut model = model;
+        model.packages.push(package);
+        let parsed = Model::from_json(&model.to_json().expect("serialize")).expect("deserialize");
+        assert_eq!(
+            parsed.packages[0].classes[0].features[0].type_,
+            TypeRef::Primitive(PrimitiveType::Date)
+        );
+        assert!(model
+            .to_json()
+            .expect("serialize")
+            .contains("\"value\":\"date\""));
     }
 }

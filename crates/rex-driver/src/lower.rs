@@ -158,6 +158,23 @@ fn resolve_single(
     };
 
     if segments.len() == 1 {
+        // A declaration shadows the like-named built-in: a model's own
+        // `type Date wraps opaque` keeps resolving to the datatype after the
+        // `date` primitive exists (issue #9).
+        if kinds.contains_key(local.as_str()) {
+            let resolved = classify(
+                &full_name,
+                local,
+                type_ref.span,
+                kinds.get(local.as_str()),
+                diags,
+            )?;
+            return Some(Resolution {
+                kind: resolved,
+                package: package.to_string(),
+                name: local.clone(),
+            });
+        }
         if let Some(primitive) = primitive_type(local) {
             return Some(Resolution {
                 kind: Resolved::Primitive(primitive),
@@ -222,19 +239,21 @@ fn resolve_domains(
     }
 
     let local = &segments[0].text;
-    if let Some(primitive) = primitive_type(local) {
-        return Some(Resolution {
-            kind: Resolved::Primitive(primitive),
-            package: String::new(),
-            name: local.clone(),
-        });
-    }
+    // Declared types shadow like-named primitives (issue #9); ambiguity
+    // between several declaring packages stands.
     let matches: Vec<&DomainPackage> = packages
         .iter()
         .filter(|package| package.kinds.contains_key(local.as_str()))
         .collect();
     match matches.len() {
         0 => {
+            if let Some(primitive) = primitive_type(local) {
+                return Some(Resolution {
+                    kind: Resolved::Primitive(primitive),
+                    package: String::new(),
+                    name: local.clone(),
+                });
+            }
             diags.push(Diagnostic::error(
                 format!("unknown type '{full_name}'"),
                 Some(type_ref.span),
@@ -1686,6 +1705,7 @@ fn primitive_type(name: &str) -> Option<ir::PrimitiveType> {
         "boolean" => Some(ir::PrimitiveType::Boolean),
         "byte" => Some(ir::PrimitiveType::Byte),
         "char" => Some(ir::PrimitiveType::Char),
+        "date" => Some(ir::PrimitiveType::Date),
         _ => None,
     }
 }
@@ -2200,6 +2220,20 @@ fn lower_vocabulary(
     let mut facets_ok = true;
     for facet in &decl.facets {
         match primitive_facet_type(&facet.type_ref) {
+            // Date facets are out of scope in this milestone (issue #9):
+            // snapshot validation and facet codegen are keyed to the
+            // numeric/string value spaces.
+            Some(ir::PrimitiveType::Date) => {
+                facets_ok = false;
+                diags.push(Diagnostic::error(
+                    format!(
+                        "facet '{}' of vocabulary '{name}' declares 'date'; \
+                         date facets are not supported in this milestone",
+                        facet.name.text
+                    ),
+                    Some(facet.type_ref.span),
+                ));
+            }
             Some(type_) => facets.push(ir::VocabularyFacet {
                 name: facet.name.text.clone(),
                 type_,
@@ -2933,6 +2967,22 @@ fn apply_default(
     let Some(default) = default else {
         return feature;
     };
+    // Date attributes take no declared defaults in this milestone (issue
+    // #9): the surface has no date literal yet, and generated code anchors
+    // required date fields at the runtime epoch.
+    if matches!(
+        resolution,
+        Some(Resolution {
+            kind: Resolved::Primitive(ir::PrimitiveType::Date),
+            ..
+        })
+    ) {
+        diags.push(Diagnostic::error(
+            "date attributes take no default value in this milestone",
+            Some(default_span(default)),
+        ));
+        return feature;
+    }
     match default {
         mox::DefaultValue::Str { value, span } => {
             if let Some(resolution) = resolution {
@@ -3041,6 +3091,16 @@ fn apply_default(
             // reported, so the default adds no information.
             None => feature,
         },
+    }
+}
+
+/// The source span of a default value, for diagnostics about it.
+fn default_span(default: &mox::DefaultValue) -> Span {
+    match default {
+        mox::DefaultValue::Str { span, .. }
+        | mox::DefaultValue::Int { span, .. }
+        | mox::DefaultValue::Bool { span, .. } => *span,
+        mox::DefaultValue::Name(name) => name.span,
     }
 }
 
