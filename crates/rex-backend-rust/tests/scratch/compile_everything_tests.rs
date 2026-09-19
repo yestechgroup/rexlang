@@ -57,6 +57,14 @@ mod coverage_scratch_tests {
             ev.set_req_char('x');
             ev.set_opt_char('Ω');
             ev.set_many_char(vec!['a', 'Ω']);
+            // Dates (issue #9): Jan 31 so the R8 month-end clamp is visible
+            // through the cure-period op.
+            ev.set_req_date(rex_runtime::Date::from_ymd(2026, 1, 31).expect("valid date"));
+            ev.set_opt_date(rex_runtime::Date::from_ymd(2026, 9, 17).expect("valid date"));
+            ev.set_many_dates(vec![
+                rex_runtime::Date::from_ymd(2026, 1, 1).expect("valid date"),
+                rex_runtime::Date::from_ymd(2027, 2, 28).expect("valid date"),
+            ]);
             ev.set_patterned_code("abc-12".to_string());
             ev.set_min_only_name("ok".to_string());
             ev.set_max_only_name("three".to_string());
@@ -145,6 +153,12 @@ mod coverage_scratch_tests {
         assert_eq!(e.core, None);
         assert!(e.parts.is_empty());
         assert_eq!(Part::default().label, "unlabeled");
+        // Dates take no declared defaults; a required date field anchors at
+        // the runtime epoch (issue #9).
+        assert_eq!(e.req_date, rex_runtime::Date::EPOCH);
+        assert_eq!(e.req_date.to_string(), "1970-01-01");
+        assert_eq!(e.opt_date, None);
+        assert!(e.many_dates.is_empty());
     }
 
     #[test]
@@ -252,6 +266,16 @@ mod coverage_scratch_tests {
             assert_eq!(e.best_peer(res).expect("best").label, "peer");
         }
         {
+            // Calendar algebra through a lowered expr body (issue #9): the
+            // cure deadline is reqDate (2026-01-31) + 6 months, clamped by
+            // R8 to 2026-07-31.
+            let d = |y, m, dd| rex_runtime::Date::from_ymd(y, m, dd).expect("valid date");
+            let e = res.everything(built.e).expect("e");
+            assert!(!e.cure_period_expired(res, d(2026, 7, 31)), "on the deadline day");
+            assert!(!e.cure_period_expired(res, d(2026, 7, 30)), "before it");
+            assert!(e.cure_period_expired(res, d(2026, 8, 1)), "past it");
+        }
+        {
             let peer = res.peer(built.peer).expect("peer");
             assert_eq!(peer.inspections(res).len(), 2);
             assert_eq!(peer.best_of(res).map(|owner| owner.fixed_label.clone()),
@@ -292,6 +316,11 @@ mod coverage_scratch_tests {
         assert!(json.contains("\"sku\": \"FIX-1234\""));
         assert!(json.contains("\"favorite\": \"Green\""));
         assert!(json.contains("\"optChar\": \"Ω\""));
+        // Dates serialize as ISO-8601 strings (issue #9).
+        assert!(json.contains("\"reqDate\": \"2026-01-31\""), "{json}");
+        assert!(json.contains("\"optDate\": \"2026-09-17\""), "{json}");
+        assert!(json.contains("\"manyDates\": ["), "{json}");
+        assert!(json.contains("\"2027-02-28\""), "{json}");
         assert!(json.contains("\"$id\": \"everything/0\""));
         assert!(json.contains("\"$id\": \"part/2\""));
         assert!(json.contains("\"$type\": \"Gizmo\""));
@@ -308,7 +337,7 @@ mod coverage_scratch_tests {
         for optional in [
             "optString", "optInt", "optLong", "optShort", "optFloat", "optDouble",
             "optBoolean", "optByte", "optChar", "optTagged", "secretToken",
-            "spareColor", "core", "bestPeer",
+            "spareColor", "optDate", "core", "bestPeer",
         ] {
             assert!(
                 !json.contains(&format!("\"{optional}\"")),
@@ -349,6 +378,37 @@ mod coverage_scratch_tests {
         assert_eq!(
             loaded.everything(built.e).expect("e").fixed_label,
             "pinned-by-hand"
+        );
+        // The date fields round-trip through their ISO strings (issue #9).
+        assert_eq!(
+            loaded.everything(built.e).expect("e").req_date,
+            rex_runtime::Date::from_ymd(2026, 1, 31).expect("valid date")
+        );
+        assert_eq!(
+            loaded.everything(built.e).expect("e").opt_date,
+            Some(rex_runtime::Date::from_ymd(2026, 9, 17).expect("valid date"))
+        );
+        assert_eq!(
+            loaded.everything(built.e).expect("e").many_dates.len(),
+            2
+        );
+    }
+
+    #[test]
+    fn load_rejects_non_iso_date_strings() {
+        // Loading is strict: a date field must be a real ISO-8601 calendar
+        // date (issue #9).
+        let built = full_resource();
+        let json = built.res.to_instance_json();
+        let non_calendar = json.replace("\"reqDate\": \"2026-01-31\"", "\"reqDate\": \"2026-02-31\"");
+        assert!(
+            Resource::from_instance_json(&non_calendar).is_err(),
+            "a non-calendar date must be rejected"
+        );
+        let malformed = json.replace("\"reqDate\": \"2026-01-31\"", "\"reqDate\": \"not-a-date\"");
+        assert!(
+            Resource::from_instance_json(&malformed).is_err(),
+            "a malformed date must be rejected"
         );
     }
 

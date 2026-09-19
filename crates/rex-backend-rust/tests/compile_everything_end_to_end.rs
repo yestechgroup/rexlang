@@ -78,6 +78,17 @@ fn assert_canaries(generated: &std::collections::BTreeMap<String, String>) {
             "missing vocabulary accessor {symbol:?}"
         );
     }
+    // The date primitive (issue #9) maps to the runtime type, anchors
+    // required fields at the epoch, and loads through the strict ISO parse.
+    for symbol in [
+        "pub req_date: rex_runtime::Date,",
+        "pub opt_date: Option<rex_runtime::Date>,",
+        "pub many_dates: Vec<rex_runtime::Date>,",
+        "req_date: rex_runtime::Date::EPOCH,",
+        "expect_date(value, \"Everything.reqDate\")?",
+    ] {
+        assert!(code.contains(symbol), "missing date lowering {symbol:?}");
+    }
 
     // Exactly one class carries runtime-checkable constraints.
     assert_eq!(
@@ -126,6 +137,7 @@ fn assert_canaries(generated: &std::collections::BTreeMap<String, String>) {
         "pub fn total_part_weight",
         "pub fn find_part",
         "pub fn has_core",
+        "pub fn cure_period_expired",
         "pub fn part_count",
         "pub fn has_heavy_part",
     ] {
