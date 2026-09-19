@@ -19,7 +19,8 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use rex_driver::{
-    compile_actors_str, compile_files, compile_str, render, ActorCompilation, MultiCompilation,
+    compile_actors_str, compile_files_with_imports, compile_str_with_imports, render,
+    ActorCompilation, MultiCompilation, SchemaImports,
 };
 use rex_vocab::{FileProvider, HttpProvider, LockEntry, Lockfile, VocabularyProvider};
 /// rexlang compiler command-line interface.
@@ -171,7 +172,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 }
             } else {
                 let sources = read_sources(&files)?;
-                let compilation = compile_sources(&sources);
+                let compilation = compile_sources(&sources)?;
                 report_multi_diagnostics(&sources, &compilation.diagnostics);
                 if compilation.model.is_some() {
                     for (path, _) in &sources {
@@ -200,7 +201,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 Ok(ExitCode::SUCCESS)
             } else {
                 let sources = read_sources(&files)?;
-                let compilation = compile_sources(&sources);
+                let compilation = compile_sources(&sources)?;
                 report_multi_diagnostics(&sources, &compilation.diagnostics);
                 let Some(model) = compilation.model else {
                     return Ok(ExitCode::FAILURE);
@@ -218,7 +219,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         } => {
             let files = expand_inputs(&files)?;
             let sources = read_sources(&files)?;
-            let compilation = compile_sources(&sources);
+            let compilation = compile_sources(&sources)?;
             report_multi_diagnostics(&sources, &compilation.diagnostics);
             let Some(model) = compilation.model else {
                 return Ok(ExitCode::FAILURE);
@@ -237,7 +238,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         } => {
             let files = expand_inputs(&files)?;
             let sources = read_sources(&files)?;
-            let compilation = compile_sources(&sources);
+            let compilation = compile_sources(&sources)?;
             report_multi_diagnostics(&sources, &compilation.diagnostics);
             let Some(model) = compilation.model else {
                 return Ok(ExitCode::FAILURE);
@@ -269,7 +270,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 Ok(ExitCode::SUCCESS)
             } else {
                 let sources = read_sources(&files)?;
-                let compilation = compile_sources(&sources);
+                let compilation = compile_sources(&sources)?;
                 report_multi_diagnostics(&sources, &compilation.diagnostics);
                 let Some(model) = compilation.model else {
                     return Ok(ExitCode::FAILURE);
@@ -297,7 +298,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 print_tool_manifests(&actor_model)?;
             } else {
                 let sources = read_sources(&files)?;
-                let compilation = compile_sources(&sources);
+                let compilation = compile_sources(&sources)?;
                 report_multi_diagnostics(&sources, &compilation.diagnostics);
                 let Some(model) = compilation.model else {
                     return Ok(ExitCode::FAILURE);
@@ -623,22 +624,59 @@ fn collect_mox_files(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Collects the JSON content of every `import schema` declaration across
+/// `sources`, resolving each import path **relative to the declaring `.mox`
+/// file's directory** (the `.actor` import-resolution precedent: the CLI
+/// owns filesystem access, the driver receives texts only). A missing
+/// import file is a clean error naming the resolved path. Syntax errors in
+/// a source surface later as compile diagnostics, so they are not fatal
+/// here.
+fn collect_schema_imports(sources: &[(String, String)]) -> anyhow::Result<SchemaImports> {
+    let mut imports = SchemaImports::new();
+    for (path, source) in sources {
+        let Some(ast) = &rex_syntax::parse(source).ast else {
+            continue;
+        };
+        let dir = Path::new(path)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        for decl in &ast.declarations {
+            let rex_syntax::ast::Decl::ImportSchema(import) = decl else {
+                continue;
+            };
+            let resolved = dir.join(&import.path);
+            let json = std::fs::read_to_string(&resolved).map_err(|error| {
+                anyhow::anyhow!(
+                    "cannot read imported schema {} (imported by {}): {error}",
+                    resolved.display(),
+                    path
+                )
+            })?;
+            imports.insert(path.clone(), import.path.clone(), json);
+        }
+    }
+    Ok(imports)
+}
+
 /// Compiles in-memory sources into one model: a single source keeps the
 /// single-file pipeline (identical diagnostics and IR); several sources
-/// compile as one multi-package model.
-fn compile_sources(sources: &[(String, String)]) -> MultiCompilation {
+/// compile as one multi-package model. Schema imports declared by the
+/// sources are read from disk first (see [`collect_schema_imports`]).
+fn compile_sources(sources: &[(String, String)]) -> anyhow::Result<MultiCompilation> {
+    let schema_imports = collect_schema_imports(sources)?;
     if let [(path, source)] = sources {
-        let compilation = compile_str(path, source);
-        MultiCompilation {
+        let compilation = compile_str_with_imports(path, source, &schema_imports);
+        Ok(MultiCompilation {
             model: compilation.model,
             diagnostics: compilation
                 .diagnostics
                 .into_iter()
                 .map(|diagnostic| (path.clone(), diagnostic))
                 .collect(),
-        }
+        })
     } else {
-        compile_files(sources)
+        Ok(compile_files_with_imports(sources, &schema_imports))
     }
 }
 

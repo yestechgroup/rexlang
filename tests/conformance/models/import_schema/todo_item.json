@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TodoItem",
+  "type": "object",
+  "properties": {
+    "title": { "type": "string" },
+    "done": { "type": "boolean" }
+  }
+}

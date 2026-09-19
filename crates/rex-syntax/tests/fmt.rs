@@ -923,3 +923,62 @@ class Book {
     let formatted = format(source).unwrap();
     assert_eq!(formatted, source, "doc comments survive formatting");
 }
+
+// ---------------------------------------------------------------------------
+// `import schema` declarations
+// ---------------------------------------------------------------------------
+
+#[test]
+fn import_schema_renders_after_the_package_before_other_declarations() {
+    // Canonical form: the package first, then the import-schema section
+    // (tight, one declaration per line), then every other declaration.
+    let source = "\
+package demo
+
+class Book { String title }
+
+import schema \"../schemas/todo_item.json\" as TodoItem
+import schema \"../schemas/todo_list.json\"
+";
+    let formatted = fmt(source);
+    assert_eq!(
+        formatted,
+        "\
+package demo
+
+import schema \"../schemas/todo_item.json\" as TodoItem
+import schema \"../schemas/todo_list.json\"
+
+class Book {
+    String title
+}
+"
+    );
+    // Fixpoint: the canonical form reformats to itself (`fmt --check` gate).
+    assert_eq!(fmt(&formatted), formatted);
+}
+
+#[test]
+fn import_schema_is_a_fixpoint_when_already_canonical() {
+    let source = "package demo\n\nimport schema \"a.json\" as A\n\nclass B {}\n";
+    assert_eq!(fmt(source), source);
+}
+
+#[test]
+fn import_schema_without_alias_and_with_comments() {
+    let source = "package demo\n\nimport   schema   \"a.json\"\nimport schema \"b.json\"  as  B\n";
+    assert_eq!(
+        fmt(source),
+        "package demo\n\nimport schema \"a.json\"\nimport schema \"b.json\" as B\n"
+    );
+}
+
+#[test]
+fn qualified_and_keyword_names_stay_in_place_around_import_hoisting() {
+    // A keyword inside a dotted reference (`nz.package.Thing`) and an
+    // identifier sequence that merely looks like an import (`import.schema.X`
+    // as a name segment) must never be mistaken for import declarations and
+    // hoisted to the top.
+    let source = "package demo\n\nclass A extends nz.package.Thing {}\n\nclass B extends nz.import.schema.Thing {}\n";
+    assert_eq!(fmt(source), source);
+}
