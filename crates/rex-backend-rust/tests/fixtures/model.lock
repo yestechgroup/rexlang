@@ -1,0 +1,10 @@
+{
+  "vocabularies": [
+    {
+      "source": "test:colors",
+      "version": "2026-01-01",
+      "digest": "sha256:3be6c30a436d1eab8d528ac9b0162502e602b8c2b29adbeb8252f59047d0dada",
+      "fetchedAt": "2026-09-19T00:00:00Z"
+    }
+  ]
+}

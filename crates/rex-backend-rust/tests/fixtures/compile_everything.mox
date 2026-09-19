@@ -1,0 +1,152 @@
+/// Compile-everything fixture (issue #16): one model reaching every v1
+/// emitter path of the Rust backend — every primitive × required/optional/
+/// many, every constraint keyword on applicable types (enum numeric bounds,
+/// vocabulary key-facet bounds), enum/datatype/vocabulary attributes with
+/// defaults, containment + cross references + containers with mutual
+/// opposites (single and many, plus a one-sided containment), expr/rust/
+/// body-less operations, derived features, and the `id readonly` /
+/// `readonly` modifiers.
+package rex.test.everything
+
+/// Datatype with a `format` hint (wire-level contract only).
+type Sku wraps String {
+    format "sku"
+}
+
+/// Opaque datatype with target bindings (per-target hints only).
+type Secret wraps opaque {
+    rust "rex_test::Secret"
+    csharp "Rex.Test.Secret"
+}
+
+/// Enum exercised with both constraint families (numeric bounds on literal
+/// values, length bounds on literal names).
+enum Vitality {
+    Low as "L" = 1
+    High as "H" = 9
+}
+
+/// String-keyed vocabulary: attributes follow the `name` key facet's
+/// declared primitive type (string family).
+vocabulary Color from "test:colors" {
+    version "2026-01-01"
+    key name
+    facet String name
+    facet String hex
+}
+
+/// One-sided containment target: no container back-pointer declared.
+class Gizmo {
+    String tag
+}
+
+/// Containment child carrying TWO container features back to the same owner
+/// class — the many end (`parts`/`holder`) and the single end
+/// (`core`/`holderOf`) — so load reconstruction must honor each opposite by
+/// name, not by owner class alone.
+class Part {
+    container Everything holder opposite parts
+    container Everything holderOf opposite core
+    String label = "unlabeled"
+    int weight
+    refers Peer[0..1] inspector opposite inspections
+}
+
+/// Cross-reference hub: many-many, single-many, and single-single mutual
+/// refers pairs, plus the identity modifier.
+class Peer {
+    id readonly String peerKey
+    String label
+    refers Part[] inspections opposite inspector
+    refers Everything[] neighbors opposite peers
+    refers Everything[0..1] bestOf opposite bestPeer
+}
+
+class Everything {
+    id readonly String entityKey
+    readonly String fixedLabel = "pinned"
+    // Every primitive × required / optional / many.
+    String reqString = "base"
+    String[0..1] optString
+    String[] manyString
+    int reqInt = 42
+    int[0..1] optInt
+    int[] manyInt
+    long reqLong = 7
+    long[0..1] optLong
+    long[] manyLong
+    short reqShort
+    short[0..1] optShort
+    short[] manyShort
+    float reqFloat
+    float[0..1] optFloat
+    float[] manyFloat
+    double reqDouble
+    double[0..1] optDouble
+    double[] manyDouble
+    boolean reqBoolean = true
+    boolean[0..1] optBoolean
+    boolean[] manyBoolean
+    byte reqByte
+    byte[0..1] optByte
+    byte[] manyByte
+    char reqChar
+    char[0..1] optChar
+    char[] manyChar
+    // Constraint keywords: string family.
+    String patternedCode { pattern "[a-z]+-[0-9]+" minLength 5 maxLength 12 }
+    String minOnlyName { minLength 2 }
+    String maxOnlyName { maxLength 5 }
+    String[0..1] optTagged { minLength 2 maxLength 4 }
+    // Constraint keywords: numeric family.
+    int boundedInt { minimum 0 maximum 100 }
+    long minLong { minimum -5 }
+    double maxDouble { maximum 10 }
+    // Bounds on short/byte/float are admitted but descriptive in this
+    // milestone (never runtime-checked) — the scenario pins that contract.
+    short boundedShort { minimum 0 maximum 99 }
+    byte boundedByte { minimum -10 }
+    float boundedFloat { minimum 0 }
+    // Collection-level and per-element bounds on many-valued attributes.
+    String[] manyTagged { unique minLength 2 maxLength 4 }
+    int[] manyScores { minimum 10 maximum 20 }
+    // Enum-typed: default plus both families.
+    Vitality vitality = High { minimum 2 maximum 10 minLength 3 maxLength 6 }
+    Vitality[] vitalities { unique minimum 5 }
+    // Datatype-typed: default plus string-family bounds.
+    Sku sku = "FIX-0001" { minLength 4 maxLength 16 }
+    Secret[0..1] secretToken
+    Secret[] manySecrets
+    // Vocabulary-typed: default is an entry key; bounds follow the String
+    // key facet.
+    Color favorite = Red { minLength 4 }
+    Color[] palette { unique minLength 4 }
+    Color[0..1] spareColor
+    // Containment + container with mutual opposites: many, single, and
+    // one-sided (no opposite).
+    contains Part[] parts opposite holder
+    contains Part[0..1] core opposite holderOf
+    contains Gizmo[] gizmos
+    // Cross references with mutual opposites: many and single.
+    refers Peer[] peers opposite neighbors
+    refers Peer[0..1] bestPeer opposite bestOf
+    // Operations: expr body, rust body, and body-less (abstract hook).
+    op int totalPartWeight() {
+        expr { parts.map(p => p.weight).sum() }
+    }
+    op Part findPart(String sought) {
+        expr { parts.first(p => p.label == sought) }
+    }
+    op boolean hasCore() {
+        rust { self.core.is_some() }
+    }
+    op String abstractHook()
+    // Derived features, lowered into accessors: the default 0..1 shape
+    // (Option result) and an explicitly required one.
+    derived int partCount {
+        expr { parts.size() }
+    }
+    derived boolean[1..1] hasHeavyPart {
+        expr { parts.any(p => p.weight > 50) }
+    }
+}

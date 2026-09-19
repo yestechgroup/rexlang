@@ -327,7 +327,15 @@ fn default_expr(unit: &Unit<'_>, feature: &Feature) -> anyhow::Result<String> {
     }
     if let Some(default) = &feature.default {
         return Ok(match default {
-            DefaultValue::String(value) => format!("{value:?}.to_string()"),
+            DefaultValue::String(value) => match &feature.type_ {
+                // A datatype-typed attribute stores the wrapped String: the
+                // default must construct the newtype, not the bare inner
+                // value.
+                TypeRef::Datatype { name, .. } => {
+                    format!("{}({value:?}.to_string())", rust_ident(name))
+                }
+                _ => format!("{value:?}.to_string()"),
+            },
             DefaultValue::Int(value) => value.to_string(),
             DefaultValue::Bool(value) => value.to_string(),
             DefaultValue::EnumLiteral(literal) => {
@@ -2000,6 +2008,39 @@ mod tests {
         assert!(
             code.contains("currency: Currency::EUR,"),
             "declared default must lower to the matching variant:\n{code}"
+        );
+    }
+
+    /// A declared default on a datatype-typed attribute must construct the
+    /// newtype, not the bare inner String (regression: the generated
+    /// `Default` impl assigned a `String` to the datatype's field and the
+    /// emitted crate did not compile — caught by the compile-everything
+    /// fixture, issue #16).
+    #[test]
+    fn datatype_attribute_default_wraps_the_newtype() {
+        let mut model = currency_model();
+        model.packages[0]
+            .datatypes
+            .push(DatatypeDef::new("Sku", None));
+        model.packages[0].classes[0].features.push(
+            Feature::new(
+                "sku",
+                FeatureKind::Attribute,
+                TypeRef::Datatype {
+                    package: PKG.to_string(),
+                    name: "Sku".to_string(),
+                },
+                Multiplicity::REQUIRED,
+            )
+            .with_default(DefaultValue::String("FIX-0001".to_string())),
+        );
+        let code = generate(&model)
+            .expect("generate")
+            .remove("models.rs")
+            .unwrap();
+        assert!(
+            code.contains("sku: Sku(\"FIX-0001\".to_string()),"),
+            "datatype default must wrap the newtype:\n{code}"
         );
     }
 
