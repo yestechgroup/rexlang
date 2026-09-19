@@ -7,7 +7,9 @@ serialized as a stable artifact. Code generators for multiple target languages
 (Rust, JSON Schema, Cedar, ...) consume only that IR. A complementary
 `.actor` policy dimension compiles to its own artifact and feeds the Cedar
 backend. The language reference lives in
-[docs/LANGUAGE.md](docs/LANGUAGE.md).
+[docs/LANGUAGE.md](docs/LANGUAGE.md); if you are writing a backend that
+consumes the IR — in or out of tree — start with
+[docs/BACKENDS.md](docs/BACKENDS.md).
 
 ```
 .mox source -> lexer/parser -> AST -> resolve & validate -> Core IR (.rex.json)
@@ -33,6 +35,7 @@ predicates are future work.
 ```
 rexlang check model.mox           # validate, render diagnostics
 rexlang ir model.mox -o model.rex.json
+rexlang artifact check model.rex.json   # validate any serialized artifact
 rexlang gen rust model.mox -o src-gen/
 rexlang gen json-schema model.mox --profile wire -o schemas/
 rexlang gen cedar model.mox -o policies/      # from inline actors blocks

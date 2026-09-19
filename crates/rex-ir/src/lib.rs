@@ -13,6 +13,16 @@
 //! [`Model::to_json_pretty`] / [`Model::to_json`]. A backend deserializes with
 //! [`Model::from_json`].
 //!
+//! # Writing a backend
+//!
+//! Backends live out of this workspace: consume [`Model`] (plus
+//! [`ActorModel`] for authorization-aware backends) — or read the serialized
+//! artifact directly — and emit anything. The backend-author guide
+//! ([docs/BACKENDS.md](https://github.com/yestechgroup/rexlang/blob/main/docs/BACKENDS.md))
+//! consolidates the contract: the IR boundary, the serialized-artifact rules
+//! below, the semver/`formatVersion` policy, and the `rexlang artifact check`
+//! test kit.
+//!
 //! # Wire format contract
 //!
 //! The serialized artifact is a **stable, versioned wire format**. The rules
