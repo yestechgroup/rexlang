@@ -2280,10 +2280,48 @@ fn bound_value(value: i64, span: Span, diags: &mut Vec<Diagnostic>) -> Option<u3
     })
 }
 
+/// Reports a literal default that cannot initialize the attribute's
+/// declared type, pointing at the default literal.
+fn report_default_mismatch(
+    form: &str,
+    literal: &str,
+    feature: &ir::Feature,
+    span: Span,
+    resolution: &Resolution,
+    diags: &mut Vec<Diagnostic>,
+) {
+    let description = match resolution.kind {
+        Resolved::Primitive(primitive) => primitive.to_string(),
+        Resolved::Enum => "enum-typed".to_string(),
+        Resolved::Datatype => "datatype-typed".to_string(),
+        Resolved::Class => "class-typed".to_string(),
+        Resolved::Interface => "interface-typed".to_string(),
+        Resolved::Vocabulary => "vocabulary-typed".to_string(),
+    };
+    let mut diagnostic = Diagnostic::error(
+        format!(
+            "{form} default '{literal}' on {description} attribute '{}'",
+            feature.name
+        ),
+        Some(span),
+    );
+    if resolution.kind == Resolved::Datatype {
+        diagnostic =
+            diagnostic.with_help("datatype-typed attributes admit only a string literal default");
+    }
+    diags.push(diagnostic);
+}
+
 /// Applies an attribute default value. The `Name` form is an enum literal
 /// reference on enum-typed attributes, or an entry-key reference on
 /// vocabulary-typed attributes (lowered to `DefaultValue::String`, since
 /// vocabulary keys are strings).
+///
+/// Literal defaults (`string`/`int`/`boolean`) are type-checked against the
+/// attribute's declared type: a string literal initializes text (string,
+/// char), a datatype's wrapped string, or a vocabulary key; an int literal
+/// initializes a numeric primitive; a boolean literal initializes `boolean`
+/// only. Unresolvable attribute types are left to the type diagnostic.
 #[allow(clippy::too_many_arguments)]
 fn apply_default(
     feature: ir::Feature,
@@ -2296,11 +2334,54 @@ fn apply_default(
         return feature;
     };
     match default {
-        mox::DefaultValue::Str { value, .. } => {
+        mox::DefaultValue::Str { value, span } => {
+            if let Some(resolution) = resolution {
+                let admitted = match resolution.kind {
+                    Resolved::Primitive(primitive) => {
+                        matches!(
+                            primitive,
+                            ir::PrimitiveType::String | ir::PrimitiveType::Char
+                        )
+                    }
+                    Resolved::Datatype | Resolved::Vocabulary => true,
+                    _ => false,
+                };
+                if !admitted {
+                    report_default_mismatch("string", value, &feature, *span, resolution, diags);
+                }
+            }
             feature.with_default(ir::DefaultValue::String(value.clone()))
         }
-        mox::DefaultValue::Int { value, .. } => feature.with_default(ir::DefaultValue::Int(*value)),
-        mox::DefaultValue::Bool { value, .. } => {
+        mox::DefaultValue::Int { value, span } => {
+            if let Some(resolution) = resolution {
+                let admitted = matches!(resolution.kind, Resolved::Primitive(p) if p.is_numeric());
+                if !admitted {
+                    report_default_mismatch(
+                        "int",
+                        &value.to_string(),
+                        &feature,
+                        *span,
+                        resolution,
+                        diags,
+                    );
+                }
+            }
+            feature.with_default(ir::DefaultValue::Int(*value))
+        }
+        mox::DefaultValue::Bool { value, span } => {
+            if let Some(resolution) = resolution {
+                let admitted = resolution.kind == Resolved::Primitive(ir::PrimitiveType::Boolean);
+                if !admitted {
+                    report_default_mismatch(
+                        "boolean",
+                        &value.to_string(),
+                        &feature,
+                        *span,
+                        resolution,
+                        diags,
+                    );
+                }
+            }
             feature.with_default(ir::DefaultValue::Bool(*value))
         }
         mox::DefaultValue::Name(name) => match resolution {
