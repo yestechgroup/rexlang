@@ -774,6 +774,7 @@ pub(crate) fn compile_multi(
     let mut classes: Vec<ClassRecord> = Vec::new();
     let mut class_files: Vec<usize> = Vec::new();
     let mut actors: Vec<ActorsRecord> = Vec::new();
+    let mut actor_files: Vec<usize> = Vec::new();
     let mut pending: Vec<PendingCondition> = Vec::new();
     for (index, file) in files.iter().enumerate() {
         let Some(package_index) = file_package[index] else {
@@ -791,6 +792,7 @@ pub(crate) fn compile_multi(
                     let (record, conditions) =
                         lower_actors(decl, file.source, file.path, &scope, &mut buckets[index]);
                     actors.push(record);
+                    actor_files.push(index);
                     pending.extend(conditions);
                 }
                 mox::Decl::Annotation(annotation) => out.annotations.push(ir::Annotation {
@@ -855,6 +857,15 @@ pub(crate) fn compile_multi(
         if let Some(package_index) = file_package[index] {
             model.packages[package_index].vocabularies = defs;
         }
+    }
+
+    // Inline actors blocks join their package after the union policy
+    // passes, mirroring the single-file join. Cross-file blocks with the
+    // same name stay separate blocks: the union semantics pool same-named
+    // actors at validation, and each package carries what it declares.
+    for (record, file_index) in actors.into_iter().zip(actor_files) {
+        let package_index = file_package[file_index].expect("actors files declare a package");
+        model.packages[package_index].actors.push(record.def);
     }
 
     // Feature ids are assigned by `ClassDef::new` in declaration order;
@@ -1062,6 +1073,7 @@ pub(crate) fn compile_union_per_file(files: &[MultiFile<'_>]) -> Vec<PerFileComp
     let mut out_packages: Vec<ir::Package> = Vec::new();
     let mut classes: Vec<ClassRecord> = Vec::new();
     let mut actors: Vec<ActorsRecord> = Vec::new();
+    let mut actor_files: Vec<usize> = Vec::new();
     let mut pending: Vec<(usize, PendingCondition)> = Vec::new();
     for (index, file) in files.iter().enumerate() {
         let Some(package_index) = file_package[index] else {
@@ -1079,6 +1091,7 @@ pub(crate) fn compile_union_per_file(files: &[MultiFile<'_>]) -> Vec<PerFileComp
                     let (record, conditions) =
                         lower_actors(decl, file.source, file.path, &scope, &mut buckets[index]);
                     actors.push(record);
+                    actor_files.push(index);
                     pending.extend(conditions.into_iter().map(|condition| (index, condition)));
                 }
                 mox::Decl::Annotation(annotation) => out.annotations.push(ir::Annotation {
@@ -1156,6 +1169,18 @@ pub(crate) fn compile_union_per_file(files: &[MultiFile<'_>]) -> Vec<PerFileComp
             let package_name = packages[package_index].name.as_str();
             model_package(&mut out_packages, package_name).vocabularies = defs;
         }
+    }
+
+    // Inline actors blocks join their package after the union policy
+    // passes, mirroring the single-file join. Cross-file blocks with the
+    // same name stay separate blocks: the union semantics pool same-named
+    // actors at validation, and each package carries what it declares.
+    for (record, file_index) in actors.into_iter().zip(actor_files) {
+        let package_index = file_package[file_index].expect("actors files declare a package");
+        let package_name = packages[package_index].name.as_str();
+        model_package(&mut out_packages, package_name)
+            .actors
+            .push(record.def);
     }
 
     // Feature ids are assigned by `ClassDef::new` in declaration order;
