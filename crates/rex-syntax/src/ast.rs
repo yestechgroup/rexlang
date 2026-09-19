@@ -214,6 +214,9 @@ pub enum Decl {
     Vocabulary(VocabularyDecl),
     /// An `actors { ... }` declaration.
     Actors(ActorsDecl),
+    /// An `import schema "<path>" (as <name>)?` declaration: a JSON Schema
+    /// type imported into the package's namespace.
+    ImportSchema(ImportSchemaDecl),
 }
 
 impl Decl {
@@ -227,11 +230,14 @@ impl Decl {
             Decl::Annotation(decl) => decl.span,
             Decl::Vocabulary(decl) => decl.span,
             Decl::Actors(decl) => decl.span,
+            Decl::ImportSchema(decl) => decl.span,
         }
     }
 
     /// The declared name, if the declaration kind has one. Annotations only
-    /// have a name when the `as` clause is present.
+    /// have a name when the `as` clause is present; an import schema only
+    /// when the `as` clause is present (otherwise the file stem names it,
+    /// which the driver derives).
     pub fn name(&self) -> Option<&Name> {
         match self {
             Decl::Class(decl) => Some(&decl.name),
@@ -241,6 +247,7 @@ impl Decl {
             Decl::Annotation(decl) => decl.name.as_ref(),
             Decl::Vocabulary(decl) => Some(&decl.name),
             Decl::Actors(decl) => Some(&decl.name),
+            Decl::ImportSchema(decl) => decl.alias.as_ref(),
         }
     }
 }
@@ -523,6 +530,24 @@ pub struct NeverBothDecl {
 pub struct ImportDecl {
     /// The imported path (the unescaped string literal payload).
     pub path: String,
+    /// Span of the whole declaration, `import` keyword included.
+    pub span: Span,
+}
+
+/// An `import schema "<path>" (as <name>)?` declaration of a `.mox` file:
+/// a JSON Schema type imported into the package's namespace. The `schema`
+/// word is a contextual keyword (only special directly after `import`), so
+/// existing models may keep using `schema` as an identifier. The driver
+/// derives the imported name from the `as` clause, or from the path's file
+/// stem when the clause is absent.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportSchemaDecl {
+    /// The imported path (the unescaped string literal payload), resolved
+    /// relative to the declaring `.mox` file's directory.
+    pub path: String,
+    /// The name the import joins the package namespace as, from the `as`
+    /// clause. `None` when the import relies on the path's file stem.
+    pub alias: Option<Name>,
     /// Span of the whole declaration, `import` keyword included.
     pub span: Span,
 }

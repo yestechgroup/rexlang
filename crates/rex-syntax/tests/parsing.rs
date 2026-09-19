@@ -1420,3 +1420,124 @@ fn unique_takes_no_value() {
         "`unique` must not accept a value"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `import schema` declarations
+// ---------------------------------------------------------------------------
+
+#[test]
+fn import_schema_with_alias_parses_top_level() {
+    let source = "package demo\n\nimport schema \"../schemas/todo_item.json\" as TodoItem";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let model = result.ast.expect("ast");
+    let Decl::ImportSchema(import) = &model.declarations[0] else {
+        panic!("expected import schema, found {:?}", model.declarations[0]);
+    };
+    assert_eq!(import.path, "../schemas/todo_item.json");
+    let alias = import.alias.as_ref().expect("alias");
+    assert_eq!(alias.text, "TodoItem");
+    assert!(span_text(source, import.span).starts_with("import schema"));
+}
+
+#[test]
+fn import_schema_without_alias_parses() {
+    let source = "import schema \"../x.json\"";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let Decl::ImportSchema(import) = &result.ast.expect("ast").declarations[0] else {
+        panic!("expected import schema");
+    };
+    assert_eq!(import.path, "../x.json");
+    assert!(import.alias.is_none(), "alias is optional");
+}
+
+#[test]
+fn import_schemas_sit_alongside_other_declarations() {
+    let source = concat!(
+        "package demo\n\n",
+        "import schema \"a.json\" as A\n",
+        "import schema \"b.json\"\n\n",
+        "enum Color { Red = 0 }\n\n",
+        "class Book { refers A a refers b.B b }"
+    );
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let declarations = &result.ast.expect("ast").declarations;
+    assert_eq!(declarations.len(), 4);
+    assert!(matches!(&declarations[0], Decl::ImportSchema(_)));
+    assert!(matches!(&declarations[1], Decl::ImportSchema(_)));
+    assert!(matches!(&declarations[2], Decl::Enum(_)));
+    assert!(matches!(&declarations[3], Decl::Class(_)));
+}
+
+#[test]
+fn schema_stays_a_contextual_keyword() {
+    // Regression guard: an existing model may use `schema` as a class name,
+    // a feature name, and a plain identifier — adding `import schema` must
+    // not reserve the word.
+    let source = concat!(
+        "package demo\n\n",
+        "class schema { String schema int schema2 }\n\n",
+        "class Other { refers schema[] schema }"
+    );
+    let result = parse(source);
+    assert!(
+        result.errors.is_empty(),
+        "`schema` must remain usable as an identifier: {:?}",
+        result.errors
+    );
+    let declarations = &result.ast.expect("ast").declarations;
+    let Decl::Class(class) = &declarations[0] else {
+        panic!("expected class named schema")
+    };
+    assert_eq!(class.name.text, "schema");
+}
+
+#[test]
+fn escaped_schema_is_an_ordinary_identifier() {
+    let source = "package demo\n\nclass ^schema { String ^schema }";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+}
+
+#[test]
+fn import_schema_requires_a_string_literal() {
+    let result = parse("package demo\n\nimport schema");
+    assert!(
+        !result.errors.is_empty(),
+        "`import schema` without a path must error"
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message.contains("string")),
+        "the diagnostic must mention the missing string literal: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn import_schema_alias_must_be_a_name() {
+    let result = parse("import schema \"a.json\" as");
+    assert!(!result.errors.is_empty(), "`as` without a name must error");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message.contains("`as`")),
+        "the diagnostic must mention the alias clause: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn import_without_schema_stays_an_error() {
+    // The plain `.actor` import surface does not exist in `.mox` files.
+    let result = parse("package demo\n\nimport \"other.mox\"");
+    assert!(
+        !result.errors.is_empty(),
+        "a plain `import` in a .mox file must error"
+    );
+}

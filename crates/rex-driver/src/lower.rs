@@ -17,13 +17,27 @@ use crate::diagnostic::{Diagnostic, DiagnosticCode};
 
 /// The kind of a top-level declaration that occupies the package namespace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TopKind {
+pub(crate) enum TopKind {
     Class,
     Interface,
     Enum,
     Datatype,
     Vocabulary,
     Actors,
+}
+
+impl TopKind {
+    /// The lowercase noun used in diagnostics, e.g. "a class".
+    fn label(self) -> &'static str {
+        match self {
+            TopKind::Class => "class",
+            TopKind::Interface => "interface",
+            TopKind::Enum => "enum",
+            TopKind::Datatype => "datatype",
+            TopKind::Vocabulary => "vocabulary",
+            TopKind::Actors => "actors block",
+        }
+    }
 }
 
 /// A fully classified type reference.
@@ -89,7 +103,7 @@ struct DomainPackage {
 enum Scope<'a> {
     Single {
         package: &'a str,
-        kinds: &'a HashMap<&'a str, TopKind>,
+        kinds: &'a HashMap<String, TopKind>,
     },
     Domains {
         packages: &'a [DomainPackage],
@@ -125,7 +139,7 @@ impl Scope<'_> {
 fn resolve_single(
     type_ref: &mox::TypeRef,
     package: &str,
-    kinds: &HashMap<&str, TopKind>,
+    kinds: &HashMap<String, TopKind>,
     diags: &mut Vec<Diagnostic>,
 ) -> Option<Resolution> {
     let segments = &type_ref.name.segments;
@@ -305,6 +319,159 @@ fn classify(
             None
         }
     }
+}
+
+// --- `import schema` declarations --------------------------------------------
+
+/// The name an `import schema` declaration joins its package's namespace
+/// as: the `as` alias, or the import path's file stem when the alias is
+/// absent (`"deep/dir/todo_item.json"` imports as `todo_item`).
+pub(crate) fn imported_name(decl: &mox::ImportSchemaDecl) -> String {
+    if let Some(alias) = &decl.alias {
+        return alias.text.clone();
+    }
+    Path::new(&decl.path)
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// One validated `import schema` declaration: the name it joins the
+/// namespace as (alias or file stem).
+#[derive(Debug, Clone)]
+pub(crate) struct SchemaImport {
+    /// The namespace name (alias, or the path's file stem).
+    pub name: String,
+}
+
+/// `true` for a valid `.mox` identifier shape (`[A-Za-z_][A-Za-z0-9_]*`),
+/// which a stem-derived import name must have to be referencable.
+fn is_identifier(text: &str) -> bool {
+    let mut chars = text.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Collects and validates the `import schema` declarations of one file.
+///
+/// v1 lowering is deliberately **opaque**: an import registers a nominal,
+/// feature-less class — no features, enums, or datatypes are derived from
+/// the JSON content (structural lowering is future work). The content is
+/// still validated: it must be provided (the driver is filesystem-free —
+/// the host passes JSON text through [`crate::SchemaImports`]) and it must
+/// parse as JSON.
+///
+/// Collisions are errors naming both sources: an alias (or stem) that
+/// matches a declaration of the same package, the same name imported twice,
+/// and two stem-derived names that collide. Validated imports are returned
+/// in source order; collided ones are skipped so the namespace stays clean
+/// for the remaining diagnostics.
+pub(crate) fn collect_schema_imports(
+    file_path: &str,
+    ast: &mox::Model,
+    provided: Option<&crate::SchemaImports>,
+    declared: &HashMap<String, TopKind>,
+    diags: &mut Vec<Diagnostic>,
+) -> Vec<SchemaImport> {
+    let mut imports: Vec<SchemaImport> = Vec::new();
+    let mut seen: HashMap<String, String> = HashMap::new();
+    for decl in ast.declarations.iter() {
+        let mox::Decl::ImportSchema(decl) = decl else {
+            continue;
+        };
+        let name = imported_name(decl);
+        let span = decl.span;
+        if let Some(kind) = declared.get(&name).copied() {
+            diags.push(
+                Diagnostic::error(
+                    format!(
+                        "import schema '{}' declares '{}', which is already declared in this \
+                         package as a {}",
+                        decl.path,
+                        name,
+                        kind.label()
+                    ),
+                    Some(span),
+                )
+                .with_help(format!(
+                    "rename the import: `import schema \"{}\" as <OtherName>`",
+                    decl.path
+                )),
+            );
+            continue;
+        }
+        if let Some(previous) = seen.get(&name) {
+            diags.push(
+                Diagnostic::error(
+                    format!(
+                        "duplicate import name '{name}': imported from '{previous}' and '{}'",
+                        decl.path
+                    ),
+                    Some(span),
+                )
+                .with_help("import each schema under a distinct `as` name"),
+            );
+            continue;
+        }
+        if name.is_empty() {
+            diags.push(Diagnostic::error(
+                format!(
+                    "import schema '{}' has no file stem to name the import",
+                    decl.path
+                ),
+                Some(span),
+            ));
+            continue;
+        }
+        if decl.alias.is_none() && !is_identifier(&name) {
+            diags.push(
+                Diagnostic::error(
+                    format!("imported schema name '{name}' is not a valid identifier"),
+                    Some(span),
+                )
+                .with_help(format!(
+                    "add an alias: `import schema \"{}\" as <Name>`",
+                    decl.path
+                )),
+            );
+            continue;
+        }
+        match provided.and_then(|schema| schema.get(file_path, &decl.path)) {
+            None => {
+                diags.push(
+                    Diagnostic::error(
+                        format!("imported schema '{}' was not provided", decl.path),
+                        Some(span),
+                    )
+                    .with_help(
+                        "import schema content is provided by the host: the CLI reads the \
+                         JSON next to the model; embedded callers pass it through \
+                         SchemaImports",
+                    ),
+                );
+                continue;
+            }
+            Some(json) => {
+                if let Err(error) = serde_json::from_str::<serde_json::Value>(json) {
+                    diags.push(Diagnostic::error(
+                        format!("imported schema '{}' is not valid JSON: {error}", decl.path),
+                        Some(span),
+                    ));
+                    continue;
+                }
+            }
+        }
+        seen.insert(name.clone(), decl.path.clone());
+        imports.push(SchemaImport { name });
+    }
+    imports
+}
+
+/// The nominal IR class one validated import lowers into: a feature-less,
+/// empty-extends `ClassDef` (v1 is opaque; structural lowering is future
+/// work).
+pub(crate) fn import_class_def(import: &SchemaImport) -> ir::ClassDef {
+    ir::ClassDef::new(import.name.clone(), Vec::new(), Vec::new())
 }
 
 /// The per-target backends known to the driver, in warning-message order.
@@ -617,6 +784,7 @@ pub(crate) struct MultiFile<'a> {
 /// each file's diagnostics contiguous and in input order.
 pub(crate) fn compile_multi(
     files: &[MultiFile<'_>],
+    schema_imports: Option<&crate::SchemaImports>,
 ) -> (Option<ir::Model>, Vec<(String, Diagnostic)>) {
     // Per-file diagnostic buckets keep each file's diagnostics contiguous;
     // the cross-file passes append their (already tagged) diagnostics after.
@@ -632,6 +800,7 @@ pub(crate) fn compile_multi(
     let mut packages: Vec<DomainPackage> = Vec::new();
     let mut file_package: Vec<Option<usize>> = vec![None; files.len()];
     let mut winning_enums: Vec<(usize, &mox::EnumDecl)> = Vec::new();
+    let mut file_imports: Vec<Vec<SchemaImport>> = files.iter().map(|_| Vec::new()).collect();
     for (index, file) in files.iter().enumerate() {
         let Some(ast) = file.ast else {
             continue; // parse diagnostics already reported; nothing to lower
@@ -665,7 +834,7 @@ pub(crate) fn compile_multi(
                 mox::Decl::Datatype(decl) => (TopKind::Datatype, &decl.name),
                 mox::Decl::Vocabulary(decl) => (TopKind::Vocabulary, &decl.name),
                 mox::Decl::Actors(decl) => (TopKind::Actors, &decl.name),
-                mox::Decl::Annotation(_) => continue,
+                mox::Decl::Annotation(_) | mox::Decl::ImportSchema(_) => continue,
             };
             if kinds.contains_key(&decl_name.text) {
                 buckets[index].push(
@@ -685,6 +854,14 @@ pub(crate) fn compile_multi(
                 }
             }
         }
+        // Validate and register the file's `import schema` declarations:
+        // each joins the namespace as a nominal class (alias or file stem).
+        let imports =
+            collect_schema_imports(file.path, ast, schema_imports, &kinds, &mut buckets[index]);
+        for import in &imports {
+            kinds.insert(import.name.clone(), TopKind::Class);
+        }
+        file_imports[index] = imports;
         file_package[index] = Some(packages.len());
         packages.push(DomainPackage { name, kinds });
     }
@@ -817,6 +994,8 @@ pub(crate) fn compile_multi(
                     ));
                     class_files.push(index);
                 }
+                // Imports lowered as nominal classes after the declared ones.
+                mox::Decl::ImportSchema(_) => {}
             }
         }
         out_packages.push(out);
@@ -849,6 +1028,20 @@ pub(crate) fn compile_multi(
         class.def.operations = std::mem::take(&mut class.operations);
         let package_index = file_package[file_index].expect("class files declare a package");
         model.packages[package_index].classes.push(class.def);
+    }
+
+    // Imported schemas join their package as nominal classes, after the
+    // declared ones, in import-declaration order.
+    for (index, imports) in file_imports.iter().enumerate() {
+        if imports.is_empty() {
+            continue;
+        }
+        let package_index = file_package[index].expect("import files declare a package");
+        for import in imports {
+            model.packages[package_index]
+                .classes
+                .push(import_class_def(import));
+        }
     }
 
     // Vocabularies join their package now that class lowering — the last
@@ -915,7 +1108,10 @@ pub(crate) struct PerFileCompilation {
 ///
 /// Unlike [`compile_multi`] there is deliberately no all-or-nothing model:
 /// callers assemble what they need from the per-file results.
-pub(crate) fn compile_union_per_file(files: &[MultiFile<'_>]) -> Vec<PerFileCompilation> {
+pub(crate) fn compile_union_per_file(
+    files: &[MultiFile<'_>],
+    schema_imports: Option<&crate::SchemaImports>,
+) -> Vec<PerFileCompilation> {
     // Per-file diagnostic buckets keep each file's diagnostics in its own
     // result; cross-file passes route their (already tagged) diagnostics to
     // the declaring file's bucket.
@@ -931,6 +1127,7 @@ pub(crate) fn compile_union_per_file(files: &[MultiFile<'_>]) -> Vec<PerFileComp
     let mut packages: Vec<DomainPackage> = Vec::new();
     let mut file_package: Vec<Option<usize>> = vec![None; files.len()];
     let mut winning_enums: Vec<(usize, &mox::EnumDecl)> = Vec::new();
+    let mut file_imports: Vec<Vec<SchemaImport>> = files.iter().map(|_| Vec::new()).collect();
     for (index, file) in files.iter().enumerate() {
         let Some(ast) = file.ast else {
             continue; // parse diagnostics already reported; nothing to lower
@@ -964,7 +1161,7 @@ pub(crate) fn compile_union_per_file(files: &[MultiFile<'_>]) -> Vec<PerFileComp
                 mox::Decl::Datatype(decl) => (TopKind::Datatype, &decl.name),
                 mox::Decl::Vocabulary(decl) => (TopKind::Vocabulary, &decl.name),
                 mox::Decl::Actors(decl) => (TopKind::Actors, &decl.name),
-                mox::Decl::Annotation(_) => continue,
+                mox::Decl::Annotation(_) | mox::Decl::ImportSchema(_) => continue,
             };
             if kinds.contains_key(&decl_name.text) {
                 buckets[index].push(
@@ -984,6 +1181,14 @@ pub(crate) fn compile_union_per_file(files: &[MultiFile<'_>]) -> Vec<PerFileComp
                 }
             }
         }
+        // Validate and register the file's `import schema` declarations:
+        // each joins the namespace as a nominal class (alias or file stem).
+        let imports =
+            collect_schema_imports(file.path, ast, schema_imports, &kinds, &mut buckets[index]);
+        for import in &imports {
+            kinds.insert(import.name.clone(), TopKind::Class);
+        }
+        file_imports[index] = imports;
         file_package[index] = Some(packages.len());
         packages.push(DomainPackage { name, kinds });
     }
@@ -1115,6 +1320,8 @@ pub(crate) fn compile_union_per_file(files: &[MultiFile<'_>]) -> Vec<PerFileComp
                         &mut buckets[index],
                     ));
                 }
+                // Imports lowered as nominal classes after the declared ones.
+                mox::Decl::ImportSchema(_) => {}
             }
         }
         out_packages.push(out);
@@ -1160,6 +1367,21 @@ pub(crate) fn compile_union_per_file(files: &[MultiFile<'_>]) -> Vec<PerFileComp
         model_package(&mut out_packages, packages[package_index].name.as_str())
             .classes
             .push(class.def);
+    }
+
+    // Imported schemas join their package as nominal classes, after the
+    // declared ones, in import-declaration order.
+    for (index, imports) in file_imports.iter().enumerate() {
+        if imports.is_empty() {
+            continue;
+        }
+        let package_index = file_package[index].expect("import files declare a package");
+        let package_name = packages[package_index].name.as_str();
+        for import in imports {
+            model_package(&mut out_packages, package_name)
+                .classes
+                .push(import_class_def(import));
+        }
     }
 
     // Vocabularies join their package now that class lowering — the last
@@ -1253,6 +1475,7 @@ pub(crate) fn compile(
     path: &str,
     source: &str,
     model: &mox::Model,
+    schema_imports: Option<&crate::SchemaImports>,
 ) -> (Option<ir::Model>, Vec<Diagnostic>) {
     let mut diags = Vec::new();
 
@@ -1272,7 +1495,7 @@ pub(crate) fn compile(
         .unwrap_or_else(|| PathBuf::from("."));
 
     // Index the package namespace and report duplicate declarations.
-    let mut kinds: HashMap<&str, TopKind> = HashMap::new();
+    let mut kinds: HashMap<String, TopKind> = HashMap::new();
     let mut enum_decls: HashMap<(&str, &str), &mox::EnumDecl> = HashMap::new();
     for decl in &model.declarations {
         let (kind, name) = match decl {
@@ -1282,7 +1505,8 @@ pub(crate) fn compile(
             mox::Decl::Datatype(decl) => (TopKind::Datatype, &decl.name),
             mox::Decl::Vocabulary(decl) => (TopKind::Vocabulary, &decl.name),
             mox::Decl::Actors(decl) => (TopKind::Actors, &decl.name),
-            mox::Decl::Annotation(_) => continue,
+            // Import-schema names join the namespace below, collision-checked.
+            mox::Decl::Annotation(_) | mox::Decl::ImportSchema(_) => continue,
         };
         if kinds.contains_key(name.text.as_str()) {
             diags.push(
@@ -1296,11 +1520,18 @@ pub(crate) fn compile(
                 )),
             );
         } else {
-            kinds.insert(&name.text, kind);
+            kinds.insert(name.text.clone(), kind);
             if let mox::Decl::Enum(enum_decl) = decl {
                 enum_decls.insert((package.as_str(), &enum_decl.name.text), enum_decl);
             }
         }
+    }
+
+    // Validate and register the file's `import schema` declarations: each
+    // joins the namespace as a nominal class (alias or file stem).
+    let imports = collect_schema_imports(path, model, schema_imports, &kinds, &mut diags);
+    for import in &imports {
+        kinds.insert(import.name.clone(), TopKind::Class);
     }
 
     // Lower vocabulary declarations first (in source order): their entry
@@ -1380,6 +1611,8 @@ pub(crate) fn compile(
             mox::Decl::Class(decl) => classes.push(lower_class(
                 decl, source, path, &package, &scope, &prep, &mut diags,
             )),
+            // Imports lowered as nominal classes after the declared ones.
+            mox::Decl::ImportSchema(_) => {}
         }
     }
     out.vocabularies = vocabulary_defs;
@@ -1408,6 +1641,11 @@ pub(crate) fn compile(
     for mut class in classes {
         class.def.operations = std::mem::take(&mut class.operations);
         out.classes.push(class.def);
+    }
+    // Imported schemas join their package as nominal classes, after the
+    // declared ones, in import-declaration order.
+    for import in &imports {
+        out.classes.push(import_class_def(import));
     }
     for record in actors {
         out.actors.push(record.def);
@@ -3918,7 +4156,9 @@ pub(crate) fn compile_actor_file(
     }
 
     // The combined namespace of the usable domains (imported and
-    // error-free), in first-appearance order.
+    // error-free), in first-appearance order. A domain that lowered
+    // successfully had its `import schema` declarations validated, so they
+    // contribute their nominal class names here.
     let packages: Vec<DomainPackage> = domains
         .iter()
         .filter_map(|unit| {
@@ -3926,16 +4166,24 @@ pub(crate) fn compile_actor_file(
             let ast = unit.ast?;
             let mut kinds: HashMap<String, TopKind> = HashMap::new();
             for decl in &ast.declarations {
-                let (kind, name) = match decl {
-                    mox::Decl::Class(decl) => (TopKind::Class, &decl.name),
-                    mox::Decl::Interface(decl) => (TopKind::Interface, &decl.name),
-                    mox::Decl::Enum(decl) => (TopKind::Enum, &decl.name),
-                    mox::Decl::Datatype(decl) => (TopKind::Datatype, &decl.name),
-                    mox::Decl::Vocabulary(decl) => (TopKind::Vocabulary, &decl.name),
-                    mox::Decl::Actors(decl) => (TopKind::Actors, &decl.name),
+                let kind = match decl {
+                    mox::Decl::Class(_) => TopKind::Class,
+                    mox::Decl::Interface(_) => TopKind::Interface,
+                    mox::Decl::Enum(_) => TopKind::Enum,
+                    mox::Decl::Datatype(_) => TopKind::Datatype,
+                    mox::Decl::Vocabulary(_) => TopKind::Vocabulary,
+                    mox::Decl::Actors(_) => TopKind::Actors,
                     mox::Decl::Annotation(_) => continue,
+                    mox::Decl::ImportSchema(decl) => {
+                        kinds.entry(imported_name(decl)).or_insert(TopKind::Class);
+                        continue;
+                    }
                 };
-                kinds.entry(name.text.clone()).or_insert(kind);
+                let name = decl
+                    .name()
+                    .map(|name| name.text.clone())
+                    .unwrap_or_default();
+                kinds.entry(name).or_insert(kind);
             }
             Some(DomainPackage {
                 name: model.packages[0].name.clone(),

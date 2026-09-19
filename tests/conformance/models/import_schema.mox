@@ -1,0 +1,13 @@
+package rex.conformance.import_schema
+
+import schema "import_schema/todo_item.json" as TodoItem
+import schema "import_schema/todo_list.json"
+
+/// Refers to both imported schema types.
+///
+/// v1: imported schemas are opaque nominal classes — the JSON content is
+/// validated but not lowered into features.
+class SchemaWrapper {
+    refers TodoItem item
+    refers todo_list list
+}
