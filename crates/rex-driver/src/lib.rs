@@ -75,6 +75,90 @@ pub fn parse_query(db: &dyn Db, file: SourceFile) -> ParseOutput {
     }
 }
 
+/// The JSON content of the `import schema` declarations of a compilation.
+///
+/// The driver is filesystem-free: a host that reads `.mox` files from disk
+/// (the CLI) or embeds them (tests, language servers) provides each
+/// import's JSON text through this type. Keys are the **(mox file path,
+/// import path)** pair, both exactly as the host names them — the mox path
+/// must match the path the file is compiled under, and the import path must
+/// match the string written in the `import schema "<path>"` declaration.
+/// Content provided for another mox file does not satisfy an import; a
+/// declared import without provided content is the error diagnostic
+/// ``imported schema '<path>' was not provided``.
+///
+/// Re-providing a `(mox, import)` pair replaces the earlier entry (last
+/// wins).
+///
+/// ```
+/// use rex_driver::{SchemaImports, compile_files_with_imports};
+///
+/// let imports = SchemaImports::new()
+///     .provide("demo.mox", "schemas/todo_item.json", r#"{"title": "Todo item"}"#);
+/// let compilation = compile_files_with_imports(
+///     &[("demo.mox".to_string(),
+///        "package demo\n\nimport schema \"schemas/todo_item.json\" as TodoItem\n\nclass C { refers TodoItem t }\n".to_string())],
+///     &imports,
+/// );
+/// assert!(compilation.diagnostics.is_empty());
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SchemaImports {
+    entries: Vec<(String, String, String)>,
+}
+
+impl SchemaImports {
+    /// Creates an empty provider.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Provides the JSON text for one `(mox path, import path)` pair.
+    pub fn provide(
+        mut self,
+        mox_path: impl Into<String>,
+        import_path: impl Into<String>,
+        json: impl Into<String>,
+    ) -> Self {
+        self.insert(mox_path, import_path, json);
+        self
+    }
+
+    /// Inserts one `(mox path, import path)` pair, replacing any earlier
+    /// entry for the same pair.
+    pub fn insert(
+        &mut self,
+        mox_path: impl Into<String>,
+        import_path: impl Into<String>,
+        json: impl Into<String>,
+    ) {
+        let mox_path = mox_path.into();
+        let import_path = import_path.into();
+        let json = json.into();
+        match self
+            .entries
+            .iter_mut()
+            .find(|(mox, import, _)| *mox == mox_path && *import == import_path)
+        {
+            Some(entry) => entry.2 = json,
+            None => self.entries.push((mox_path, import_path, json)),
+        }
+    }
+
+    /// The provided JSON text for the `(mox path, import path)` pair, if any.
+    pub fn get(&self, mox_path: &str, import_path: &str) -> Option<&str> {
+        self.entries
+            .iter()
+            .find(|(mox, import, _)| mox == mox_path && import == import_path)
+            .map(|(_, _, json)| json.as_str())
+    }
+
+    /// `true` when no content is provided at all.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
 /// The result of compiling a [`SourceFile`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Compiled {
@@ -89,13 +173,19 @@ pub struct Compiled {
 /// parse → resolve/validate → lower.
 #[salsa::tracked]
 pub fn compile(db: &dyn Db, file: SourceFile) -> Compiled {
+    compile_file(db, file, None)
+}
+
+/// The body of [`compile`], parameterized over the provided import-schema
+/// content (the tracked query cannot take the non-input `SchemaImports`).
+fn compile_file(db: &dyn Db, file: SourceFile, schema_imports: Option<&SchemaImports>) -> Compiled {
     let source = file.text(db);
     let parsed = parse_query(db, file);
     let mut diagnostics = parsed.diagnostics;
     let lowered = parsed
         .ast
         .as_ref()
-        .map(|ast| lower::compile(&file.path(db), &source, ast));
+        .map(|ast| lower::compile(&file.path(db), &source, ast, schema_imports));
     if let Some((_, semantic)) = &lowered {
         diagnostics.extend(semantic.iter().cloned());
     }
@@ -145,68 +235,158 @@ pub struct ActorCompilation {
     /// error-severity diagnostic was produced in any file. Warnings do not
     /// block lowering.
     pub model: Option<rex_ir::ActorModel>,
+    /// The imported domains lowered against their shared union namespace as
+    /// one multi-package model, or `None` when any domain failed to lower.
+    /// Cedar class lookup consumes this instead of recompiling the domains
+    /// standalone (which cannot resolve cross-package references).
+    pub domains_model: Option<rex_ir::Model>,
     /// Diagnostics from the actor file and each imported domain, each
     /// tagged with its file's path, in compilation order.
     pub diagnostics: Vec<(String, Diagnostic)>,
 }
 
+/// Matches an actor-file import against a provided domain file: the exact
+/// import string wins (the historical contract — [`compile_actors_str`]
+/// callers pass the paths they were given), with a lexical resolution of the
+/// import relative to the actor file's directory as the fallback (the CLI
+/// passes resolved paths so vocabulary snapshots locate the declaring
+/// file's `vocab/` directory regardless of the process CWD).
+fn import_matches(import: &str, actor_path: &str, candidate: &str) -> bool {
+    fn normalize(path: impl AsRef<std::path::Path>) -> std::path::PathBuf {
+        let mut out = std::path::PathBuf::new();
+        for component in path.as_ref().components() {
+            match component {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    out.pop();
+                }
+                other => out.push(other.as_os_str()),
+            }
+        }
+        out
+    }
+    if candidate == import {
+        return true;
+    }
+    let base = std::path::Path::new(actor_path)
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new(""));
+    normalize(base.join(import)) == normalize(candidate)
+}
+
 /// Compiles an `.actor` file against its imported domain models to the
 /// standalone [`rex_ir::ActorModel`] (memoized by salsa): parse the actor
-/// file, compile every named domain with [`compile`], then resolve and
-/// validate the union policy set.
+/// file, lower every named domain against the **union namespace of all
+/// imports** (so domains may reference types across packages — the same
+/// rule multi-file `.mox` compiles follow), then resolve and validate the
+/// union policy set.
 ///
-/// Extra provided domains no import names are ignored; domain files with
-/// errors contribute their diagnostics but no blocks.
+/// Extra provided domains no import names are ignored; a domain with
+/// errors contributes its diagnostics and no blocks, but the remaining
+/// domains keep resolving.
 #[salsa::tracked]
 pub fn compile_actors(
     db: &dyn Db,
     actor: SourceFile,
     domains: Vec<SourceFile>,
 ) -> ActorCompilation {
+    compile_actors_with(db, actor, domains, None)
+}
+
+/// The body of [`compile_actors`], parameterized over the provided
+/// import-schema content for the domain files.
+fn compile_actors_with(
+    db: &dyn Db,
+    actor: SourceFile,
+    domains: Vec<SourceFile>,
+    schema_imports: Option<&SchemaImports>,
+) -> ActorCompilation {
     let actor_path = actor.path(db);
     let actor_source = actor.text(db);
     let parsed = parse_actors_query(db, actor);
 
-    // Resolve imports to provided domains, deduplicated by path, in
+    // Resolve imports to provided domains, deduplicated by import path, in
     // first-appearance order. Only imported domains are compiled; extras
     // are ignored (their diagnostics must not leak).
-    let mut lookups: Vec<(String, Compiled, ParseOutput, String)> = Vec::new();
+    let mut lookups: Vec<(String, SourceFile)> = Vec::new();
     if let Some(ast) = &parsed.ast {
         for import in &ast.imports {
-            if lookups.iter().any(|(path, _, _, _)| *path == import.path) {
+            if lookups.iter().any(|(path, _)| *path == import.path) {
                 continue;
             }
-            if let Some(domain) = domains.iter().find(|file| file.path(db) == import.path) {
-                let compiled = compile(db, *domain);
-                let parse_output = parse_query(db, *domain);
-                lookups.push((
-                    import.path.clone(),
-                    compiled,
-                    parse_output,
-                    domain.text(db).clone(),
-                ));
+            if let Some(domain) = domains
+                .iter()
+                .find(|file| import_matches(&import.path, &actor_path, &file.path(db)))
+            {
+                lookups.push((import.path.clone(), *domain));
             }
         }
     }
-    let units: Vec<lower::DomainUnit<'_>> = lookups
+
+    // Lower every imported domain against the shared union namespace,
+    // keeping the results per file: a domain with errors yields no model
+    // while the remaining domains keep resolving.
+    let mut paths: Vec<String> = Vec::new();
+    let mut sources: Vec<String> = Vec::new();
+    let mut parse_outputs: Vec<ParseOutput> = Vec::new();
+    for (_, domain) in &lookups {
+        paths.push(domain.path(db));
+        sources.push(domain.text(db));
+        parse_outputs.push(parse_query(db, *domain));
+    }
+    let units: Vec<lower::MultiFile<'_>> = lookups
         .iter()
-        .map(|(path, compiled, parse_output, source)| lower::DomainUnit {
-            path,
-            source,
-            model: compiled.model.clone(),
-            ast: parse_output.ast.as_ref(),
-            diagnostics: &compiled.diagnostics,
+        .enumerate()
+        .map(|(index, _)| lower::MultiFile {
+            path: &paths[index],
+            source: &sources[index],
+            ast: parse_outputs[index].ast.as_ref(),
+            parse_diagnostics: &parse_outputs[index].diagnostics,
         })
         .collect();
+    let compilations = lower::compile_union_per_file(&units, schema_imports);
+
+    let domain_units: Vec<lower::DomainUnit<'_>> = lookups
+        .iter()
+        .enumerate()
+        .map(|(index, (path, _))| lower::DomainUnit {
+            path,
+            source: &sources[index],
+            model: compilations[index].model.clone(),
+            ast: parse_outputs[index].ast.as_ref(),
+            diagnostics: &compilations[index].diagnostics,
+        })
+        .collect();
+
+    // The union model of all imported domains, for Cedar class lookup —
+    // only meaningful when every domain lowered successfully.
+    let domains_model = if compilations
+        .iter()
+        .all(|compilation| compilation.model.is_some())
+    {
+        let mut union = rex_ir::Model::new();
+        for compilation in &compilations {
+            if let Some(model) = &compilation.model {
+                union.packages.extend(model.packages.clone());
+            }
+        }
+        Some(union)
+    } else {
+        None
+    };
 
     let (model, diagnostics) = lower::compile_actor_file(
         &actor_path,
         &actor_source,
         parsed.ast.as_ref(),
         &parsed.diagnostics,
-        &units,
+        &domain_units,
     );
-    ActorCompilation { model, diagnostics }
+    ActorCompilation {
+        model,
+        domains_model,
+        diagnostics,
+    }
 }
 
 /// The result of compiling several `.mox` files (one package per file) into
@@ -233,6 +413,17 @@ pub(crate) fn compile_multi(
     first: SourceFile,
     rest: Vec<SourceFile>,
 ) -> MultiCompilation {
+    compile_multi_files(db, first, rest, None)
+}
+
+/// The body of [`compile_multi`], parameterized over the provided
+/// import-schema content.
+fn compile_multi_files(
+    db: &dyn Db,
+    first: SourceFile,
+    rest: Vec<SourceFile>,
+    schema_imports: Option<&SchemaImports>,
+) -> MultiCompilation {
     let mut files: Vec<SourceFile> = vec![first];
     files.extend(rest);
     let mut paths: Vec<String> = Vec::new();
@@ -253,7 +444,7 @@ pub(crate) fn compile_multi(
             parse_diagnostics: &parse_outputs[index].diagnostics,
         })
         .collect();
-    let (model, diagnostics) = lower::compile_multi(&units);
+    let (model, diagnostics) = lower::compile_multi(&units, schema_imports);
     MultiCompilation { model, diagnostics }
 }
 
@@ -274,6 +465,17 @@ pub(crate) fn compile_multi(
 /// assert_eq!(compilation.model.unwrap().packages.len(), 2);
 /// ```
 pub fn compile_files(files: &[(String, String)]) -> MultiCompilation {
+    compile_files_with_imports(files, &SchemaImports::new())
+}
+
+/// Like [`compile_files`], but the JSON content of the files'
+/// `import schema` declarations is provided through [`SchemaImports`]
+/// instead of being absent: every declared import must have an entry for
+/// its `(mox path, import path)` pair or the compilation errors.
+pub fn compile_files_with_imports(
+    files: &[(String, String)],
+    schema_imports: &SchemaImports,
+) -> MultiCompilation {
     let db = Database::new();
     let sources: Vec<SourceFile> = files
         .iter()
@@ -282,7 +484,7 @@ pub fn compile_files(files: &[(String, String)]) -> MultiCompilation {
     let Some(first) = sources.first().copied() else {
         return MultiCompilation::default();
     };
-    compile_multi(&db, first, sources[1..].to_vec())
+    compile_multi_files(&db, first, sources[1..].to_vec(), Some(schema_imports))
 }
 
 /// The salsa database for the rexlang driver.
@@ -326,9 +528,19 @@ pub struct Compilation {
 /// assert!(compilation.model.is_some());
 /// ```
 pub fn compile_str(path: &str, source: &str) -> Compilation {
+    compile_str_with_imports(path, source, &SchemaImports::new())
+}
+
+/// Like [`compile_str`], but the JSON content of the source's
+/// `import schema` declarations is provided through [`SchemaImports`].
+pub fn compile_str_with_imports(
+    path: &str,
+    source: &str,
+    schema_imports: &SchemaImports,
+) -> Compilation {
     let db = Database::new();
     let file = SourceFile::new(&db, path.to_string(), source.to_string());
-    let compiled = compile(&db, file);
+    let compiled = compile_file(&db, file, Some(schema_imports));
     Compilation {
         model: compiled.model,
         diagnostics: compiled.diagnostics,
@@ -355,6 +567,20 @@ pub fn compile_actors_str(
     actor_source: &str,
     domains: &[(String, String)],
 ) -> ActorCompilation {
+    compile_actors_str_with_imports(actor_path, actor_source, domains, &SchemaImports::new())
+}
+
+/// Like [`compile_actors_str`], but the JSON content of the domain files'
+/// `import schema` declarations is provided through [`SchemaImports`]
+/// (keyed by the domain's path and the import string as written), so
+/// imported schema names resolve for capability bindings and `when`
+/// conditions in the union.
+pub fn compile_actors_str_with_imports(
+    actor_path: &str,
+    actor_source: &str,
+    domains: &[(String, String)],
+    schema_imports: &SchemaImports,
+) -> ActorCompilation {
     let db = Database::new();
     let actor = SourceFile::new(&db, actor_path.to_string(), actor_source.to_string());
     let mut seen: Vec<&str> = Vec::new();
@@ -369,5 +595,5 @@ pub fn compile_actors_str(
         })
         .map(|(path, source)| SourceFile::new(&db, path.clone(), source.clone()))
         .collect();
-    compile_actors(&db, actor, files)
+    compile_actors_with(&db, actor, files, Some(schema_imports))
 }

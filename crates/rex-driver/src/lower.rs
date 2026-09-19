@@ -17,13 +17,27 @@ use crate::diagnostic::{Diagnostic, DiagnosticCode};
 
 /// The kind of a top-level declaration that occupies the package namespace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TopKind {
+pub(crate) enum TopKind {
     Class,
     Interface,
     Enum,
     Datatype,
     Vocabulary,
     Actors,
+}
+
+impl TopKind {
+    /// The lowercase noun used in diagnostics, e.g. "a class".
+    fn label(self) -> &'static str {
+        match self {
+            TopKind::Class => "class",
+            TopKind::Interface => "interface",
+            TopKind::Enum => "enum",
+            TopKind::Datatype => "datatype",
+            TopKind::Vocabulary => "vocabulary",
+            TopKind::Actors => "actors block",
+        }
+    }
 }
 
 /// A fully classified type reference.
@@ -89,7 +103,7 @@ struct DomainPackage {
 enum Scope<'a> {
     Single {
         package: &'a str,
-        kinds: &'a HashMap<&'a str, TopKind>,
+        kinds: &'a HashMap<String, TopKind>,
     },
     Domains {
         packages: &'a [DomainPackage],
@@ -125,7 +139,7 @@ impl Scope<'_> {
 fn resolve_single(
     type_ref: &mox::TypeRef,
     package: &str,
-    kinds: &HashMap<&str, TopKind>,
+    kinds: &HashMap<String, TopKind>,
     diags: &mut Vec<Diagnostic>,
 ) -> Option<Resolution> {
     let segments = &type_ref.name.segments;
@@ -324,6 +338,159 @@ fn classify(
             None
         }
     }
+}
+
+// --- `import schema` declarations --------------------------------------------
+
+/// The name an `import schema` declaration joins its package's namespace
+/// as: the `as` alias, or the import path's file stem when the alias is
+/// absent (`"deep/dir/todo_item.json"` imports as `todo_item`).
+pub(crate) fn imported_name(decl: &mox::ImportSchemaDecl) -> String {
+    if let Some(alias) = &decl.alias {
+        return alias.text.clone();
+    }
+    Path::new(&decl.path)
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// One validated `import schema` declaration: the name it joins the
+/// namespace as (alias or file stem).
+#[derive(Debug, Clone)]
+pub(crate) struct SchemaImport {
+    /// The namespace name (alias, or the path's file stem).
+    pub name: String,
+}
+
+/// `true` for a valid `.mox` identifier shape (`[A-Za-z_][A-Za-z0-9_]*`),
+/// which a stem-derived import name must have to be referencable.
+fn is_identifier(text: &str) -> bool {
+    let mut chars = text.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Collects and validates the `import schema` declarations of one file.
+///
+/// v1 lowering is deliberately **opaque**: an import registers a nominal,
+/// feature-less class — no features, enums, or datatypes are derived from
+/// the JSON content (structural lowering is future work). The content is
+/// still validated: it must be provided (the driver is filesystem-free —
+/// the host passes JSON text through [`crate::SchemaImports`]) and it must
+/// parse as JSON.
+///
+/// Collisions are errors naming both sources: an alias (or stem) that
+/// matches a declaration of the same package, the same name imported twice,
+/// and two stem-derived names that collide. Validated imports are returned
+/// in source order; collided ones are skipped so the namespace stays clean
+/// for the remaining diagnostics.
+pub(crate) fn collect_schema_imports(
+    file_path: &str,
+    ast: &mox::Model,
+    provided: Option<&crate::SchemaImports>,
+    declared: &HashMap<String, TopKind>,
+    diags: &mut Vec<Diagnostic>,
+) -> Vec<SchemaImport> {
+    let mut imports: Vec<SchemaImport> = Vec::new();
+    let mut seen: HashMap<String, String> = HashMap::new();
+    for decl in ast.declarations.iter() {
+        let mox::Decl::ImportSchema(decl) = decl else {
+            continue;
+        };
+        let name = imported_name(decl);
+        let span = decl.span;
+        if let Some(kind) = declared.get(&name).copied() {
+            diags.push(
+                Diagnostic::error(
+                    format!(
+                        "import schema '{}' declares '{}', which is already declared in this \
+                         package as a {}",
+                        decl.path,
+                        name,
+                        kind.label()
+                    ),
+                    Some(span),
+                )
+                .with_help(format!(
+                    "rename the import: `import schema \"{}\" as <OtherName>`",
+                    decl.path
+                )),
+            );
+            continue;
+        }
+        if let Some(previous) = seen.get(&name) {
+            diags.push(
+                Diagnostic::error(
+                    format!(
+                        "duplicate import name '{name}': imported from '{previous}' and '{}'",
+                        decl.path
+                    ),
+                    Some(span),
+                )
+                .with_help("import each schema under a distinct `as` name"),
+            );
+            continue;
+        }
+        if name.is_empty() {
+            diags.push(Diagnostic::error(
+                format!(
+                    "import schema '{}' has no file stem to name the import",
+                    decl.path
+                ),
+                Some(span),
+            ));
+            continue;
+        }
+        if decl.alias.is_none() && !is_identifier(&name) {
+            diags.push(
+                Diagnostic::error(
+                    format!("imported schema name '{name}' is not a valid identifier"),
+                    Some(span),
+                )
+                .with_help(format!(
+                    "add an alias: `import schema \"{}\" as <Name>`",
+                    decl.path
+                )),
+            );
+            continue;
+        }
+        match provided.and_then(|schema| schema.get(file_path, &decl.path)) {
+            None => {
+                diags.push(
+                    Diagnostic::error(
+                        format!("imported schema '{}' was not provided", decl.path),
+                        Some(span),
+                    )
+                    .with_help(
+                        "import schema content is provided by the host: the CLI reads the \
+                         JSON next to the model; embedded callers pass it through \
+                         SchemaImports",
+                    ),
+                );
+                continue;
+            }
+            Some(json) => {
+                if let Err(error) = serde_json::from_str::<serde_json::Value>(json) {
+                    diags.push(Diagnostic::error(
+                        format!("imported schema '{}' is not valid JSON: {error}", decl.path),
+                        Some(span),
+                    ));
+                    continue;
+                }
+            }
+        }
+        seen.insert(name.clone(), decl.path.clone());
+        imports.push(SchemaImport { name });
+    }
+    imports
+}
+
+/// The nominal IR class one validated import lowers into: a feature-less,
+/// empty-extends `ClassDef` (v1 is opaque; structural lowering is future
+/// work).
+pub(crate) fn import_class_def(import: &SchemaImport) -> ir::ClassDef {
+    ir::ClassDef::new(import.name.clone(), Vec::new(), Vec::new())
 }
 
 /// The per-target backends known to the driver, in warning-message order.
@@ -636,6 +803,7 @@ pub(crate) struct MultiFile<'a> {
 /// each file's diagnostics contiguous and in input order.
 pub(crate) fn compile_multi(
     files: &[MultiFile<'_>],
+    schema_imports: Option<&crate::SchemaImports>,
 ) -> (Option<ir::Model>, Vec<(String, Diagnostic)>) {
     // Per-file diagnostic buckets keep each file's diagnostics contiguous;
     // the cross-file passes append their (already tagged) diagnostics after.
@@ -651,6 +819,7 @@ pub(crate) fn compile_multi(
     let mut packages: Vec<DomainPackage> = Vec::new();
     let mut file_package: Vec<Option<usize>> = vec![None; files.len()];
     let mut winning_enums: Vec<(usize, &mox::EnumDecl)> = Vec::new();
+    let mut file_imports: Vec<Vec<SchemaImport>> = files.iter().map(|_| Vec::new()).collect();
     for (index, file) in files.iter().enumerate() {
         let Some(ast) = file.ast else {
             continue; // parse diagnostics already reported; nothing to lower
@@ -684,7 +853,7 @@ pub(crate) fn compile_multi(
                 mox::Decl::Datatype(decl) => (TopKind::Datatype, &decl.name),
                 mox::Decl::Vocabulary(decl) => (TopKind::Vocabulary, &decl.name),
                 mox::Decl::Actors(decl) => (TopKind::Actors, &decl.name),
-                mox::Decl::Annotation(_) => continue,
+                mox::Decl::Annotation(_) | mox::Decl::ImportSchema(_) => continue,
             };
             if kinds.contains_key(&decl_name.text) {
                 buckets[index].push(
@@ -704,6 +873,14 @@ pub(crate) fn compile_multi(
                 }
             }
         }
+        // Validate and register the file's `import schema` declarations:
+        // each joins the namespace as a nominal class (alias or file stem).
+        let imports =
+            collect_schema_imports(file.path, ast, schema_imports, &kinds, &mut buckets[index]);
+        for import in &imports {
+            kinds.insert(import.name.clone(), TopKind::Class);
+        }
+        file_imports[index] = imports;
         file_package[index] = Some(packages.len());
         packages.push(DomainPackage { name, kinds });
     }
@@ -793,6 +970,7 @@ pub(crate) fn compile_multi(
     let mut classes: Vec<ClassRecord> = Vec::new();
     let mut class_files: Vec<usize> = Vec::new();
     let mut actors: Vec<ActorsRecord> = Vec::new();
+    let mut actor_files: Vec<usize> = Vec::new();
     let mut pending: Vec<PendingCondition> = Vec::new();
     for (index, file) in files.iter().enumerate() {
         let Some(package_index) = file_package[index] else {
@@ -810,6 +988,7 @@ pub(crate) fn compile_multi(
                     let (record, conditions) =
                         lower_actors(decl, file.source, file.path, &scope, &mut buckets[index]);
                     actors.push(record);
+                    actor_files.push(index);
                     pending.extend(conditions);
                 }
                 mox::Decl::Annotation(annotation) => out.annotations.push(ir::Annotation {
@@ -834,6 +1013,8 @@ pub(crate) fn compile_multi(
                     ));
                     class_files.push(index);
                 }
+                // Imports lowered as nominal classes after the declared ones.
+                mox::Decl::ImportSchema(_) => {}
             }
         }
         out_packages.push(out);
@@ -868,12 +1049,35 @@ pub(crate) fn compile_multi(
         model.packages[package_index].classes.push(class.def);
     }
 
+    // Imported schemas join their package as nominal classes, after the
+    // declared ones, in import-declaration order.
+    for (index, imports) in file_imports.iter().enumerate() {
+        if imports.is_empty() {
+            continue;
+        }
+        let package_index = file_package[index].expect("import files declare a package");
+        for import in imports {
+            model.packages[package_index]
+                .classes
+                .push(import_class_def(import));
+        }
+    }
+
     // Vocabularies join their package now that class lowering — the last
     // prep-map consumer borrowing the definitions — is done.
     for (index, defs) in vocab_defs.into_iter().enumerate() {
         if let Some(package_index) = file_package[index] {
             model.packages[package_index].vocabularies = defs;
         }
+    }
+
+    // Inline actors blocks join their package after the union policy
+    // passes, mirroring the single-file join. Cross-file blocks with the
+    // same name stay separate blocks: the union semantics pool same-named
+    // actors at validation, and each package carries what it declares.
+    for (record, file_index) in actors.into_iter().zip(actor_files) {
+        let package_index = file_package[file_index].expect("actors files declare a package");
+        model.packages[package_index].actors.push(record.def);
     }
 
     // Feature ids are assigned by `ClassDef::new` in declaration order;
@@ -900,6 +1104,386 @@ pub(crate) fn compile_multi(
     (model, diags)
 }
 
+/// The per-file outcome of [`compile_union_per_file`].
+pub(crate) struct PerFileCompilation {
+    /// The file's own package in a single-package model, or `None` when any
+    /// error-severity diagnostic was produced for this file.
+    pub model: Option<ir::Model>,
+    /// All diagnostics for this file, untagged (the caller knows the file).
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Compiles several `.mox` domain files against one shared union namespace,
+/// keeping the results per file: every file lowers against the union of all
+/// packages (so declarations may reference types across files), but a file
+/// with errors yields `(None, its diagnostics)` while the remaining files
+/// still compile successfully. This is the shape the `.actor` import path
+/// needs — an imported domain that fails to compile must not stop the other
+/// imports from resolving for capability bindings and `when` conditions
+/// (see [`compile_actor_file`], which re-lowers every error-free file's
+/// inline actors blocks against the same union and re-checks conditions
+/// against the combined context; identical diagnostics are deduplicated
+/// there).
+///
+/// Unlike [`compile_multi`] there is deliberately no all-or-nothing model:
+/// callers assemble what they need from the per-file results.
+pub(crate) fn compile_union_per_file(
+    files: &[MultiFile<'_>],
+    schema_imports: Option<&crate::SchemaImports>,
+) -> Vec<PerFileCompilation> {
+    // Per-file diagnostic buckets keep each file's diagnostics in its own
+    // result; cross-file passes route their (already tagged) diagnostics to
+    // the declaring file's bucket.
+    let mut buckets: Vec<Vec<Diagnostic>> = files.iter().map(|_| Vec::new()).collect();
+    for (index, file) in files.iter().enumerate() {
+        buckets[index].extend(file.parse_diagnostics.iter().cloned());
+    }
+
+    // Package declarations and per-file namespaces. Every file joins the
+    // union namespace — including files with a duplicate package name (the
+    // duplicate errors on the later file, but its unique declarations still
+    // resolve for the remaining diagnostics).
+    let mut packages: Vec<DomainPackage> = Vec::new();
+    let mut file_package: Vec<Option<usize>> = vec![None; files.len()];
+    let mut winning_enums: Vec<(usize, &mox::EnumDecl)> = Vec::new();
+    let mut file_imports: Vec<Vec<SchemaImport>> = files.iter().map(|_| Vec::new()).collect();
+    for (index, file) in files.iter().enumerate() {
+        let Some(ast) = file.ast else {
+            continue; // parse diagnostics already reported; nothing to lower
+        };
+        let Some(package_decl) = &ast.package else {
+            buckets[index].push(
+                Diagnostic::error("missing `package` declaration", None).with_help(
+                    "add a package clause at the top of the file, e.g. `package com.example.model`",
+                ),
+            );
+            continue;
+        };
+        let name = package_decl.name.full_name();
+        if packages.iter().any(|package| package.name == name) {
+            buckets[index].push(
+                Diagnostic::error(
+                    format!("duplicate package '{name}'"),
+                    Some(package_decl.name.span),
+                )
+                    .with_help(
+                        "each file must declare a distinct package; rename one package or merge the files",
+                    ),
+            );
+        }
+        let mut kinds: HashMap<String, TopKind> = HashMap::new();
+        for decl in &ast.declarations {
+            let (kind, decl_name) = match decl {
+                mox::Decl::Class(decl) => (TopKind::Class, &decl.name),
+                mox::Decl::Interface(decl) => (TopKind::Interface, &decl.name),
+                mox::Decl::Enum(decl) => (TopKind::Enum, &decl.name),
+                mox::Decl::Datatype(decl) => (TopKind::Datatype, &decl.name),
+                mox::Decl::Vocabulary(decl) => (TopKind::Vocabulary, &decl.name),
+                mox::Decl::Actors(decl) => (TopKind::Actors, &decl.name),
+                mox::Decl::Annotation(_) | mox::Decl::ImportSchema(_) => continue,
+            };
+            if kinds.contains_key(&decl_name.text) {
+                buckets[index].push(
+                    Diagnostic::error(
+                        format!("duplicate declaration of '{}'", decl_name.text),
+                        Some(decl_name.span),
+                    )
+                    .with_help(format!(
+                        "'{0}' is already declared in this package",
+                        decl_name.text
+                    )),
+                );
+            } else {
+                kinds.insert(decl_name.text.clone(), kind);
+                if let mox::Decl::Enum(enum_decl) = decl {
+                    winning_enums.push((index, enum_decl));
+                }
+            }
+        }
+        // Validate and register the file's `import schema` declarations:
+        // each joins the namespace as a nominal class (alias or file stem).
+        let imports =
+            collect_schema_imports(file.path, ast, schema_imports, &kinds, &mut buckets[index]);
+        for import in &imports {
+            kinds.insert(import.name.clone(), TopKind::Class);
+        }
+        file_imports[index] = imports;
+        file_package[index] = Some(packages.len());
+        packages.push(DomainPackage { name, kinds });
+    }
+
+    // Qualified constraint prep maps across all files, so enum closure
+    // checks and vocabulary key-facet family checks work for cross-package
+    // attribute types.
+    let mut enum_decls: HashMap<(&str, &str), &mox::EnumDecl> = HashMap::new();
+    for (index, enum_decl) in &winning_enums {
+        let package = packages[file_package[*index].expect("enum files declare a package")]
+            .name
+            .as_str();
+        enum_decls.insert((package, enum_decl.name.text.as_str()), enum_decl);
+    }
+    let mut vocab_key_facet_types: HashMap<(&str, &str), ir::PrimitiveType> = HashMap::new();
+    for (index, file) in files.iter().enumerate() {
+        let Some(package_index) = file_package[index] else {
+            continue;
+        };
+        let Some(ast) = file.ast else {
+            continue;
+        };
+        let package = packages[package_index].name.as_str();
+        for decl in &ast.declarations {
+            if let mox::Decl::Vocabulary(decl) = decl {
+                if let Some(key) = &decl.key {
+                    if let Some(facet) =
+                        decl.facets.iter().find(|facet| facet.name.text == key.text)
+                    {
+                        if let Some(primitive) = primitive_facet_type(&facet.type_ref) {
+                            vocab_key_facet_types
+                                .insert((package, decl.name.text.as_str()), primitive);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Vocabularies lower per file (snapshots resolve against the file's own
+    // directory) and must be known before any class lowers.
+    let mut vocab_defs: Vec<Vec<ir::VocabularyDef>> = files.iter().map(|_| Vec::new()).collect();
+    for (index, file) in files.iter().enumerate() {
+        if file_package[index].is_none() {
+            continue;
+        }
+        let base_dir = Path::new(file.path)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let Some(ast) = file.ast else {
+            continue;
+        };
+        for decl in &ast.declarations {
+            if let mox::Decl::Vocabulary(decl) = decl {
+                if let Some(def) = lower_vocabulary(decl, &base_dir, &mut buckets[index]) {
+                    vocab_defs[index].push(def);
+                }
+            }
+        }
+    }
+    let mut vocab_keys: HashMap<(&str, &str), HashSet<&str>> = HashMap::new();
+    for (index, defs) in vocab_defs.iter().enumerate() {
+        let Some(package_index) = file_package[index] else {
+            continue;
+        };
+        let package = packages[package_index].name.as_str();
+        for def in defs {
+            vocab_keys.insert(
+                (package, def.name.as_str()),
+                def.entries.iter().map(|entry| entry.key.as_str()).collect(),
+            );
+        }
+    }
+    let prep = PrepMaps {
+        enum_decls,
+        vocab_keys,
+        vocab_key_facet_types,
+    };
+
+    // Lower every file against the union namespace, keeping the lowered
+    // classes, actors and pending conditions per file.
+    let scope = Scope::Domains {
+        packages: &packages,
+    };
+    let mut out_packages: Vec<ir::Package> = Vec::new();
+    let mut classes: Vec<ClassRecord> = Vec::new();
+    let mut actors: Vec<ActorsRecord> = Vec::new();
+    let mut actor_files: Vec<usize> = Vec::new();
+    let mut pending: Vec<(usize, PendingCondition)> = Vec::new();
+    for (index, file) in files.iter().enumerate() {
+        let Some(package_index) = file_package[index] else {
+            continue;
+        };
+        let Some(ast) = file.ast else {
+            continue;
+        };
+        let mut out = ir::Package::new(packages[package_index].name.clone());
+        out.description = ast.package.as_ref().and_then(|decl| decl.doc.clone());
+        for decl in &ast.declarations {
+            match decl {
+                mox::Decl::Vocabulary(_) => {}
+                mox::Decl::Actors(decl) => {
+                    let (record, conditions) =
+                        lower_actors(decl, file.source, file.path, &scope, &mut buckets[index]);
+                    actors.push(record);
+                    actor_files.push(index);
+                    pending.extend(conditions.into_iter().map(|condition| (index, condition)));
+                }
+                mox::Decl::Annotation(annotation) => out.annotations.push(ir::Annotation {
+                    source: annotation.value.clone(),
+                    details: Default::default(),
+                }),
+                mox::Decl::Enum(decl) => out.enums.push(lower_enum(decl, &mut buckets[index])),
+                mox::Decl::Datatype(decl) => {
+                    out.datatypes
+                        .push(lower_datatype(decl, file.source, &mut buckets[index]))
+                }
+                mox::Decl::Interface(decl) => out.interfaces.push(lower_interface(decl)),
+                mox::Decl::Class(decl) => {
+                    classes.push(lower_class(
+                        decl,
+                        file.source,
+                        file.path,
+                        &packages[package_index].name,
+                        &scope,
+                        &prep,
+                        &mut buckets[index],
+                    ));
+                }
+                // Imports lowered as nominal classes after the declared ones.
+                mox::Decl::ImportSchema(_) => {}
+            }
+        }
+        out_packages.push(out);
+    }
+
+    // Cross-file class-graph passes over the assembled class universe. The
+    // passes tag diagnostics with the declaring file, so each lands in that
+    // file's bucket: a cycle or invalid opposite blocks only its own file's
+    // model, and the error-free files keep resolving for the actor path.
+    let mut tagged: Vec<(String, Diagnostic)> = Vec::new();
+    detect_inheritance_cycles(&classes, &mut tagged);
+    validate_opposites(&classes, &mut tagged);
+
+    // Inline actors blocks from every file join one union policy set: cycle
+    // detection runs per block first; separation of duty, self-narrowing,
+    // and delegations span the union (same-named actors pool their permits
+    // across files). `compile_actor_file` re-derives these for error-free
+    // files and deduplicates identical diagnostics, so files whose classes
+    // failed still get their actor-block diagnostics here.
+    let cyclic = detect_actor_cycles(&actors, &mut tagged);
+    if !cyclic {
+        validate_actor_never_both_union(&actors, &mut tagged);
+        validate_actor_self_narrowing_union(&actors, &mut tagged);
+        validate_actor_delegations_union(&actors, &mut tagged);
+    }
+    let mut file_by_path: HashMap<&str, usize> = HashMap::new();
+    for (index, file) in files.iter().enumerate() {
+        file_by_path.insert(file.path, index);
+    }
+    for (file, diagnostic) in tagged {
+        let index = file_by_path.get(file.as_str()).copied().unwrap_or(0);
+        buckets[index].push(diagnostic);
+    }
+
+    // Classes join their package after the cross-file passes; operations
+    // move into the def first, as in the single-file path.
+    for class in classes {
+        let mut class = class;
+        class.def.operations = std::mem::take(&mut class.operations);
+        let class_file = file_by_path.get(class.file.as_str()).copied();
+        let package_index = file_package[class_file.expect("class records carry a known file")]
+            .expect("class files declare a package");
+        model_package(&mut out_packages, packages[package_index].name.as_str())
+            .classes
+            .push(class.def);
+    }
+
+    // Imported schemas join their package as nominal classes, after the
+    // declared ones, in import-declaration order.
+    for (index, imports) in file_imports.iter().enumerate() {
+        if imports.is_empty() {
+            continue;
+        }
+        let package_index = file_package[index].expect("import files declare a package");
+        let package_name = packages[package_index].name.as_str();
+        for import in imports {
+            model_package(&mut out_packages, package_name)
+                .classes
+                .push(import_class_def(import));
+        }
+    }
+
+    // Vocabularies join their package now that class lowering — the last
+    // prep-map consumer borrowing the definitions — is done.
+    for (index, defs) in vocab_defs.into_iter().enumerate() {
+        if let Some(package_index) = file_package[index] {
+            let package_name = packages[package_index].name.as_str();
+            model_package(&mut out_packages, package_name).vocabularies = defs;
+        }
+    }
+
+    // Inline actors blocks join their package after the union policy
+    // passes, mirroring the single-file join. Cross-file blocks with the
+    // same name stay separate blocks: the union semantics pool same-named
+    // actors at validation, and each package carries what it declares.
+    for (record, file_index) in actors.into_iter().zip(actor_files) {
+        let package_index = file_package[file_index].expect("actors files declare a package");
+        let package_name = packages[package_index].name.as_str();
+        model_package(&mut out_packages, package_name)
+            .actors
+            .push(record.def);
+    }
+
+    // Feature ids are assigned by `ClassDef::new` in declaration order;
+    // keep them in sync with the final feature lists.
+    for package in &mut out_packages {
+        for class in &mut package.classes {
+            class.assign_feature_ids();
+        }
+    }
+
+    // Every `when` condition is now fully type-checked against its
+    // capability's class in the complete multi-package class universe.
+    let mut context_model = ir::Model::new();
+    context_model.packages = out_packages.clone();
+    let context = TypeContext::from_model(&context_model);
+    let pending: Vec<PendingCondition> = pending
+        .into_iter()
+        .map(|(_, condition)| condition)
+        .collect();
+    let conditions = check_pending_conditions(&pending, &context);
+    for (file, diagnostic) in conditions {
+        let index = file_by_path.get(file.as_str()).copied().unwrap_or(0);
+        buckets[index].push(diagnostic);
+    }
+
+    // Assemble one single-package model per file, dropped when that file
+    // produced any error.
+    files
+        .iter()
+        .enumerate()
+        .map(|(index, _file)| {
+            let blocked = buckets[index].iter().any(Diagnostic::is_error);
+            let model = (!blocked).then(|| {
+                let package_index = file_package[index].expect("lowered files declare a package");
+                let package_name = packages[package_index].name.clone();
+                let package = out_packages
+                    .iter()
+                    .find(|package| package.name == package_name)
+                    .expect("every indexed package was lowered")
+                    .clone();
+                let mut model = ir::Model::new();
+                model.packages.push(package);
+                model
+            });
+            PerFileCompilation {
+                model,
+                diagnostics: std::mem::take(&mut buckets[index]),
+            }
+        })
+        .collect()
+}
+
+/// Finds a lowered package by name in `packages` (the union may hold
+/// duplicate-named packages when a duplicate-package error fired; the first
+/// match wins, mirroring [`compile_multi`]).
+fn model_package<'a>(packages: &'a mut [ir::Package], name: &str) -> &'a mut ir::Package {
+    packages
+        .iter_mut()
+        .find(|package| package.name == name)
+        .expect("every indexed package was lowered")
+}
+
 /// Resolves and validates a parsed model and lowers it into the Core IR.
 ///
 /// Returns the IR (with `Model::rex_version` and `formatVersion` set) or
@@ -910,6 +1494,7 @@ pub(crate) fn compile(
     path: &str,
     source: &str,
     model: &mox::Model,
+    schema_imports: Option<&crate::SchemaImports>,
 ) -> (Option<ir::Model>, Vec<Diagnostic>) {
     let mut diags = Vec::new();
 
@@ -929,7 +1514,7 @@ pub(crate) fn compile(
         .unwrap_or_else(|| PathBuf::from("."));
 
     // Index the package namespace and report duplicate declarations.
-    let mut kinds: HashMap<&str, TopKind> = HashMap::new();
+    let mut kinds: HashMap<String, TopKind> = HashMap::new();
     let mut enum_decls: HashMap<(&str, &str), &mox::EnumDecl> = HashMap::new();
     for decl in &model.declarations {
         let (kind, name) = match decl {
@@ -939,7 +1524,8 @@ pub(crate) fn compile(
             mox::Decl::Datatype(decl) => (TopKind::Datatype, &decl.name),
             mox::Decl::Vocabulary(decl) => (TopKind::Vocabulary, &decl.name),
             mox::Decl::Actors(decl) => (TopKind::Actors, &decl.name),
-            mox::Decl::Annotation(_) => continue,
+            // Import-schema names join the namespace below, collision-checked.
+            mox::Decl::Annotation(_) | mox::Decl::ImportSchema(_) => continue,
         };
         if kinds.contains_key(name.text.as_str()) {
             diags.push(
@@ -953,11 +1539,18 @@ pub(crate) fn compile(
                 )),
             );
         } else {
-            kinds.insert(&name.text, kind);
+            kinds.insert(name.text.clone(), kind);
             if let mox::Decl::Enum(enum_decl) = decl {
                 enum_decls.insert((package.as_str(), &enum_decl.name.text), enum_decl);
             }
         }
+    }
+
+    // Validate and register the file's `import schema` declarations: each
+    // joins the namespace as a nominal class (alias or file stem).
+    let imports = collect_schema_imports(path, model, schema_imports, &kinds, &mut diags);
+    for import in &imports {
+        kinds.insert(import.name.clone(), TopKind::Class);
     }
 
     // Lower vocabulary declarations first (in source order): their entry
@@ -1037,6 +1630,8 @@ pub(crate) fn compile(
             mox::Decl::Class(decl) => classes.push(lower_class(
                 decl, source, path, &package, &scope, &prep, &mut diags,
             )),
+            // Imports lowered as nominal classes after the declared ones.
+            mox::Decl::ImportSchema(_) => {}
         }
     }
     out.vocabularies = vocabulary_defs;
@@ -1065,6 +1660,11 @@ pub(crate) fn compile(
     for mut class in classes {
         class.def.operations = std::mem::take(&mut class.operations);
         out.classes.push(class.def);
+    }
+    // Imported schemas join their package as nominal classes, after the
+    // declared ones, in import-declaration order.
+    for import in &imports {
+        out.classes.push(import_class_def(import));
     }
     for record in actors {
         out.actors.push(record.def);
@@ -2314,10 +2914,48 @@ fn bound_value(value: i64, span: Span, diags: &mut Vec<Diagnostic>) -> Option<u3
     })
 }
 
+/// Reports a literal default that cannot initialize the attribute's
+/// declared type, pointing at the default literal.
+fn report_default_mismatch(
+    form: &str,
+    literal: &str,
+    feature: &ir::Feature,
+    span: Span,
+    resolution: &Resolution,
+    diags: &mut Vec<Diagnostic>,
+) {
+    let description = match resolution.kind {
+        Resolved::Primitive(primitive) => primitive.to_string(),
+        Resolved::Enum => "enum-typed".to_string(),
+        Resolved::Datatype => "datatype-typed".to_string(),
+        Resolved::Class => "class-typed".to_string(),
+        Resolved::Interface => "interface-typed".to_string(),
+        Resolved::Vocabulary => "vocabulary-typed".to_string(),
+    };
+    let mut diagnostic = Diagnostic::error(
+        format!(
+            "{form} default '{literal}' on {description} attribute '{}'",
+            feature.name
+        ),
+        Some(span),
+    );
+    if resolution.kind == Resolved::Datatype {
+        diagnostic =
+            diagnostic.with_help("datatype-typed attributes admit only a string literal default");
+    }
+    diags.push(diagnostic);
+}
+
 /// Applies an attribute default value. The `Name` form is an enum literal
 /// reference on enum-typed attributes, or an entry-key reference on
 /// vocabulary-typed attributes (lowered to `DefaultValue::String`, since
 /// vocabulary keys are strings).
+///
+/// Literal defaults (`string`/`int`/`boolean`) are type-checked against the
+/// attribute's declared type: a string literal initializes text (string,
+/// char), a datatype's wrapped string, or a vocabulary key; an int literal
+/// initializes a numeric primitive; a boolean literal initializes `boolean`
+/// only. Unresolvable attribute types are left to the type diagnostic.
 #[allow(clippy::too_many_arguments)]
 fn apply_default(
     feature: ir::Feature,
@@ -2346,11 +2984,54 @@ fn apply_default(
         return feature;
     }
     match default {
-        mox::DefaultValue::Str { value, .. } => {
+        mox::DefaultValue::Str { value, span } => {
+            if let Some(resolution) = resolution {
+                let admitted = match resolution.kind {
+                    Resolved::Primitive(primitive) => {
+                        matches!(
+                            primitive,
+                            ir::PrimitiveType::String | ir::PrimitiveType::Char
+                        )
+                    }
+                    Resolved::Datatype | Resolved::Vocabulary => true,
+                    _ => false,
+                };
+                if !admitted {
+                    report_default_mismatch("string", value, &feature, *span, resolution, diags);
+                }
+            }
             feature.with_default(ir::DefaultValue::String(value.clone()))
         }
-        mox::DefaultValue::Int { value, .. } => feature.with_default(ir::DefaultValue::Int(*value)),
-        mox::DefaultValue::Bool { value, .. } => {
+        mox::DefaultValue::Int { value, span } => {
+            if let Some(resolution) = resolution {
+                let admitted = matches!(resolution.kind, Resolved::Primitive(p) if p.is_numeric());
+                if !admitted {
+                    report_default_mismatch(
+                        "int",
+                        &value.to_string(),
+                        &feature,
+                        *span,
+                        resolution,
+                        diags,
+                    );
+                }
+            }
+            feature.with_default(ir::DefaultValue::Int(*value))
+        }
+        mox::DefaultValue::Bool { value, span } => {
+            if let Some(resolution) = resolution {
+                let admitted = resolution.kind == Resolved::Primitive(ir::PrimitiveType::Boolean);
+                if !admitted {
+                    report_default_mismatch(
+                        "boolean",
+                        &value.to_string(),
+                        &feature,
+                        *span,
+                        resolution,
+                        diags,
+                    );
+                }
+            }
             feature.with_default(ir::DefaultValue::Bool(*value))
         }
         mox::DefaultValue::Name(name) => match resolution {
@@ -3535,7 +4216,9 @@ pub(crate) fn compile_actor_file(
     }
 
     // The combined namespace of the usable domains (imported and
-    // error-free), in first-appearance order.
+    // error-free), in first-appearance order. A domain that lowered
+    // successfully had its `import schema` declarations validated, so they
+    // contribute their nominal class names here.
     let packages: Vec<DomainPackage> = domains
         .iter()
         .filter_map(|unit| {
@@ -3543,16 +4226,24 @@ pub(crate) fn compile_actor_file(
             let ast = unit.ast?;
             let mut kinds: HashMap<String, TopKind> = HashMap::new();
             for decl in &ast.declarations {
-                let (kind, name) = match decl {
-                    mox::Decl::Class(decl) => (TopKind::Class, &decl.name),
-                    mox::Decl::Interface(decl) => (TopKind::Interface, &decl.name),
-                    mox::Decl::Enum(decl) => (TopKind::Enum, &decl.name),
-                    mox::Decl::Datatype(decl) => (TopKind::Datatype, &decl.name),
-                    mox::Decl::Vocabulary(decl) => (TopKind::Vocabulary, &decl.name),
-                    mox::Decl::Actors(decl) => (TopKind::Actors, &decl.name),
+                let kind = match decl {
+                    mox::Decl::Class(_) => TopKind::Class,
+                    mox::Decl::Interface(_) => TopKind::Interface,
+                    mox::Decl::Enum(_) => TopKind::Enum,
+                    mox::Decl::Datatype(_) => TopKind::Datatype,
+                    mox::Decl::Vocabulary(_) => TopKind::Vocabulary,
+                    mox::Decl::Actors(_) => TopKind::Actors,
                     mox::Decl::Annotation(_) => continue,
+                    mox::Decl::ImportSchema(decl) => {
+                        kinds.entry(imported_name(decl)).or_insert(TopKind::Class);
+                        continue;
+                    }
                 };
-                kinds.entry(name.text.clone()).or_insert(kind);
+                let name = decl
+                    .name()
+                    .map(|name| name.text.clone())
+                    .unwrap_or_default();
+                kinds.entry(name).or_insert(kind);
             }
             Some(DomainPackage {
                 name: model.packages[0].name.clone(),

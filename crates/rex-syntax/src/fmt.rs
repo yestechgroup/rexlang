@@ -53,6 +53,15 @@
 //!   source order (one per line, tight — no blank lines between them), then
 //!   its actors blocks; exactly one blank line separates the import section
 //!   from the first block.
+//! * An `import schema` declaration of a `.mox` source is hoisted into a
+//!   canonical section directly after the `package` declaration (mirroring
+//!   the `.actor` import rule): the section renders before every other
+//!   declaration, one per line, tight — no blank lines between imports, but
+//!   one blank line separating the section from the package above and from
+//!   the first following declaration. A top-level item is an import-schema
+//!   declaration only when it starts `import` → `schema` → string literal,
+//!   so keyword or identifier lookalikes inside dotted references
+//!   (`nz.package.Thing`, `nz.import.schema.X`) are never hoisted.
 
 use crate::ast::Span;
 use crate::lexer::{lex_with_comments, CommentKind, LexError, Token};
@@ -163,6 +172,10 @@ struct Formatter<'src> {
     /// When set, the next text joins the line without a leading space
     /// (used after `(` so param lists read `size(String unit)`).
     glue_next: bool,
+    /// Whether an `import schema` declaration was emitted already; the
+    /// section's first declaration gets the canonical blank line above it
+    /// (after the package), the rest render tight.
+    import_emitted: bool,
 }
 
 impl<'src> Formatter<'src> {
@@ -220,10 +233,12 @@ impl<'src> Formatter<'src> {
             indent: 0,
             pending: Vec::new(),
             glue_next: false,
+            import_emitted: false,
         }
     }
 
     fn run(&mut self) -> String {
+        self.hoist_import_schemas();
         loop {
             let front = self.front().cloned();
             match front {
@@ -238,6 +253,7 @@ impl<'src> Formatter<'src> {
                     Token::Type => self.scan_datatype(),
                     Token::Vocabulary => self.scan_vocabulary(),
                     Token::Actors => self.scan_actors(),
+                    Token::Import => self.scan_import_schema(),
                     _ => self.scan_top_junk(),
                 },
             }
@@ -1153,6 +1169,115 @@ impl<'src> Formatter<'src> {
 
     // --- top-level declarations ----------------------------------------------
 
+    /// Rewrites the node stream into canonical order: `package` (when it is
+    /// the first item) stays at the front, `import schema` declarations are
+    /// hoisted directly after it (in source order), and every other
+    /// top-level item keeps its relative order.
+    ///
+    /// Items are contiguous node ranges split at brace-depth 0 on the
+    /// top-level declaration keywords (plus `Import`); the first node
+    /// unconditionally begins item 0, so leading comments travel with it. An
+    /// item counts as an import-schema declaration only when its first three
+    /// tokens are `import`, the contextual `schema` identifier and a string
+    /// literal — lookalikes inside dotted references are left alone.
+    fn hoist_import_schemas(&mut self) {
+        /// The tokens that begin a top-level item (mirrors the parser's
+        /// declaration set; `Import` is included so junk recovery and the
+        /// import section agree on item boundaries).
+        fn starts_item(token: &Token<'_>) -> bool {
+            matches!(
+                token,
+                Token::Package
+                    | Token::Annotation
+                    | Token::Class
+                    | Token::Interface
+                    | Token::Enum
+                    | Token::Type
+                    | Token::Vocabulary
+                    | Token::Actors
+                    | Token::Import
+            )
+        }
+
+        /// Whether the item starting at `start` is an `import schema "…"`
+        /// declaration: the import keyword, the contextual `schema`
+        /// identifier, then a string literal (comments skipped).
+        fn is_import_schema(nodes: &[Node<'_>], start: usize) -> bool {
+            let mut tokens = nodes[start..].iter().filter_map(|node| match node {
+                Node::Token(token, _) => Some(token),
+                _ => None,
+            });
+            matches!(
+                (tokens.next(), tokens.next(), tokens.next()),
+                (
+                    Some(Token::Import),
+                    Some(Token::Ident("schema")),
+                    Some(Token::Str(_))
+                )
+            )
+        }
+
+        let mut items: Vec<(usize, usize)> = Vec::new();
+        let mut depth = 0usize;
+        for (index, node) in self.nodes.iter().enumerate() {
+            let token = match node {
+                Node::Token(token, _) => Some(token),
+                Node::Comment { .. } => None,
+            };
+            if items.is_empty() || (depth == 0 && token.is_some_and(starts_item)) {
+                items.push((index, index));
+            }
+            let last = items.len() - 1;
+            items[last].1 = index + 1;
+            match token {
+                Some(Token::LBrace) => depth += 1,
+                Some(Token::RBrace) => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+        if items.len() < 2 {
+            return;
+        }
+        // The package anchors the import section only when it is genuinely
+        // the first item; a keyword lookalike elsewhere is never moved.
+        let anchor = if matches!(self.nodes.first(), Some(Node::Token(Token::Package, _))) {
+            1
+        } else {
+            0
+        };
+        let imports: Vec<(usize, usize)> = items
+            .iter()
+            .enumerate()
+            .skip(anchor)
+            .filter_map(|(_position, (start, end))| {
+                is_import_schema(&self.nodes, *start).then_some((*start, *end))
+            })
+            .collect();
+        if imports.is_empty() {
+            return;
+        }
+        let is_moved = |index: usize, imports: &[(usize, usize)]| {
+            imports
+                .iter()
+                .any(|(start, end)| index >= *start && index < *end)
+        };
+        let mut reordered: Vec<Node<'src>> = Vec::with_capacity(self.nodes.len());
+        for (position, range) in items.iter().enumerate() {
+            if position == anchor {
+                // The canonical import section sits directly before the
+                // first non-package item.
+                for (start, end) in &imports {
+                    reordered.extend(self.nodes[*start..*end].iter().cloned());
+                }
+            }
+            if is_moved(range.0, &imports) {
+                continue;
+            }
+            reordered.extend(self.nodes[range.0..range.1].iter().cloned());
+        }
+        self.nodes = reordered;
+    }
+
     fn scan_package(&mut self) {
         self.begin_top_decl();
         self.advance();
@@ -1238,6 +1363,35 @@ impl<'src> Formatter<'src> {
         self.flush_line();
     }
 
+    /// Consumes and emits one `import schema "<path>" (as <name>)?`
+    /// declaration of a `.mox` file. The section mirrors the `.actor`
+    /// import rule: one declaration per line, tight — the first declaration
+    /// gets the canonical blank line above it (after the package), the rest
+    /// follow with no blank lines in between; the blank line before the
+    /// next non-import declaration comes from that declaration's
+    /// `begin_top_decl`.
+    fn scan_import_schema(&mut self) {
+        if self.import_emitted {
+            self.flush_line();
+            self.flush_pending(0);
+        } else {
+            self.import_emitted = true;
+            self.begin_top_decl();
+        }
+        self.advance(); // `import`
+        if matches!(
+            self.peek_tok(),
+            Some(Token::Ident(text)) if text == "schema"
+        ) {
+            self.advance(); // the contextual `schema` word
+        }
+        self.take_if(|token| matches!(token, Token::Str(_)));
+        if self.take_if(|token| matches!(token, Token::As)) {
+            self.take_name();
+        }
+        self.flush_line();
+    }
+
     /// Unrecognized top-level tokens of an `.actor` file: emit them on one
     /// line, stopping at the next `import`/`actors` keyword (mirrors the
     /// parser's declaration-level recovery for actor files).
@@ -1284,6 +1438,7 @@ fn is_top_keyword(token: &Token<'_>) -> bool {
             | Token::Type
             | Token::Vocabulary
             | Token::Actors
+            | Token::Import
     )
 }
 

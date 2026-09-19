@@ -1,0 +1,70 @@
+{
+  "formatVersion": 1,
+  "rexVersion": "0.1.0",
+  "packages": [
+    {
+      "name": "rex.conformance.import_schema",
+      "annotations": [],
+      "enums": [],
+      "datatypes": [],
+      "interfaces": [],
+      "classes": [
+        {
+          "name": "SchemaWrapper",
+          "description": "v1: imported schemas are opaque nominal classes — the JSON content is\nvalidated but not lowered into features.",
+          "extends": [],
+          "features": [
+            {
+              "id": 0,
+              "name": "item",
+              "kind": "crossReference",
+              "type": {
+                "type": "class",
+                "value": {
+                  "package": "rex.conformance.import_schema",
+                  "name": "TodoItem"
+                }
+              },
+              "multiplicity": {
+                "lower": 0,
+                "upper": "unbounded"
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            },
+            {
+              "id": 1,
+              "name": "list",
+              "kind": "crossReference",
+              "type": {
+                "type": "class",
+                "value": {
+                  "package": "rex.conformance.import_schema",
+                  "name": "todo_list"
+                }
+              },
+              "multiplicity": {
+                "lower": 0,
+                "upper": "unbounded"
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            }
+          ]
+        },
+        {
+          "name": "TodoItem",
+          "extends": [],
+          "features": []
+        },
+        {
+          "name": "todo_list",
+          "extends": [],
+          "features": []
+        }
+      ]
+    }
+  ]
+}

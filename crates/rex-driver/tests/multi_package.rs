@@ -3,7 +3,7 @@
 //! declarations may reference types across packages.
 
 use rex_driver::{compile_files, render, Diagnostic, MultiCompilation};
-use rex_ir::{DefaultValue, FeatureKind, TypeRef};
+use rex_ir::{DefaultValue, FeatureKind, GrantEffect, TypeRef};
 
 fn compile(files: &[(&str, &str)]) -> MultiCompilation {
     let files: Vec<(String, String)> = files
@@ -464,4 +464,109 @@ fn syntax_error_file_blocks_the_model_and_tags_its_diagnostics() {
     for (path, _) in &compilation.diagnostics {
         assert_eq!(path, "a.mox", "diagnostics must be tagged a.mox");
     }
+}
+
+/// Inline `actors` blocks must land on their declaring package in the
+/// multi-file model, exactly as the single-file path joins them. The
+/// capability's class resolves against the union namespace — here the
+/// block in `b.mox` binds to a class declared in `a.mox` — and the
+/// `when` condition type-checks against that class's features.
+#[test]
+fn inline_actors_blocks_join_their_package_in_compile_files() {
+    let first = "package a\n\nclass Ticket {\n    id String id\n    int amount\n}";
+    let second = "package b\n\nactors Support {\n    actor Manager\n\n    capability RaiseRefund on a.Ticket\n\n    grant Manager {\n        permit RaiseRefund when (amount > 0)\n    }\n}";
+    let compilation = compile(&[("a.mox", first), ("b.mox", second)]);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "unexpected diagnostics:\n{}",
+        compilation
+            .diagnostics
+            .iter()
+            .map(|(path, diagnostic)| render(
+                path,
+                if path == "a.mox" { first } else { second },
+                std::slice::from_ref(diagnostic)
+            ))
+            .collect::<String>()
+    );
+    let model = compilation.model.expect("a model on success");
+    assert_eq!(model.packages.len(), 2);
+
+    // The file without an actors block carries none.
+    assert!(
+        model.packages[0].actors.is_empty(),
+        "package 'a' declares no actors block"
+    );
+
+    // The block joins its own package, with the union-namespace class
+    // binding and the type-checked `when` condition intact.
+    let actors = &model.packages[1].actors;
+    assert_eq!(actors.len(), 1, "package 'b' carries its one block");
+    assert_eq!(actors[0].name, "Support");
+    assert_eq!(
+        actors[0]
+            .actors
+            .iter()
+            .map(|actor| actor.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Manager"]
+    );
+    assert_eq!(actors[0].capabilities.len(), 1);
+    assert_eq!(
+        actors[0].capabilities[0].class,
+        TypeRef::Class {
+            package: "a".to_string(),
+            name: "Ticket".to_string(),
+        }
+    );
+    assert_eq!(actors[0].grants.len(), 1);
+    assert_eq!(actors[0].grants[0].actor, "Manager");
+    assert_eq!(actors[0].grants[0].entries.len(), 1);
+    assert_eq!(actors[0].grants[0].entries[0].effect, GrantEffect::Permit);
+    assert_eq!(
+        actors[0].grants[0].entries[0].when.as_deref(),
+        Some("amount > 0")
+    );
+}
+
+/// Same-named actors in blocks across files pool their permits at
+/// validation (union semantics) — the blocks stay separate, one per
+/// package, and the union compiles. Validation still applies: a grant
+/// naming an undeclared actor errors.
+#[test]
+fn inline_actors_blocks_stay_separate_and_still_validate() {
+    let first = "package a\n\nclass Ticket { int amount }\n\nactors Support {\n    actor Manager\n\n    capability RaiseRefund on Ticket\n\n    grant Manager {\n        permit RaiseRefund\n    }\n}";
+    let second = "package b\n\nclass Ledger { int balance }\n\nactors Support {\n    actor Auditor\n\n    capability AuditLedger on Ledger\n\n    grant Ghost {\n        permit AuditLedger\n    }\n}";
+    let compilation = compile(&[("a.mox", first), ("b.mox", second)]);
+    let (model, diagnostic) = single(&compilation, "unknown actor `Ghost`");
+    assert_eq!(model, "b.mox");
+    assert_eq!(diagnostic.severity, rex_driver::Severity::Error);
+    assert!(
+        compilation.model.is_none(),
+        "an error-severity actors diagnostic blocks the model"
+    );
+
+    // Without the invalid grant, both blocks join their own packages and
+    // the same-named blocks pool at validation without erroring.
+    let valid_second =
+        "package b\n\nclass Ledger { int balance }\n\nactors Support {\n    actor Auditor\n\n    capability AuditLedger on Ledger\n\n    grant Auditor {\n        permit AuditLedger\n    }\n}";
+    let compilation = compile(&[("a.mox", first), ("b.mox", valid_second)]);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "unexpected diagnostics:\n{}",
+        compilation
+            .diagnostics
+            .iter()
+            .map(|(path, diagnostic)| render(
+                path,
+                if path == "a.mox" { first } else { valid_second },
+                std::slice::from_ref(diagnostic)
+            ))
+            .collect::<String>()
+    );
+    let model = compilation.model.expect("a model on success");
+    assert_eq!(model.packages[0].actors.len(), 1);
+    assert_eq!(model.packages[1].actors.len(), 1);
+    assert_eq!(model.packages[0].actors[0].name, "Support");
+    assert_eq!(model.packages[1].actors[0].name, "Support");
 }

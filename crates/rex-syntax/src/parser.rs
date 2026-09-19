@@ -1209,6 +1209,51 @@ fn import_decl<'src>() -> impl Parser<'src, Tokens<'src>, ImportDecl, MoxExtra<'
         })
 }
 
+/// The contextual `schema` word of an `import schema` declaration: an
+/// ordinary identifier that is special only directly after the `import`
+/// keyword of a `.mox` file (the `format`-entry precedent). Escaped
+/// `^schema` never matches.
+fn schema_keyword<'src>() -> impl Parser<'src, Tokens<'src>, Span, MoxExtra<'src>> + Clone {
+    select! { Token::Ident(text) = e if text == "schema" => e.span() }
+}
+
+/// An `import schema "<path>" (as <name>)?` declaration of a `.mox` source.
+/// Once the contextual `schema` word matched, the declaration is committed:
+/// a missing path literal or a missing alias name is a syntax error, but the
+/// AST still recovers a declaration so the surrounding model parses on.
+/// `import` without `schema` is not this declaration (the alternative fails
+/// and declaration-level recovery reports the region).
+fn import_schema_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>> + Clone {
+    kw(Token::Import)
+        .ignore_then(schema_keyword())
+        .then(string_lit().or_not())
+        .then(
+            kw(Token::As)
+                .or_not()
+                .then(name().or_not())
+                .map(|(as_kw, alias)| (as_kw.is_some(), alias)),
+        )
+        .map_with(|((schema_span, path), (has_as, alias)), e| {
+            (schema_span, path, has_as, alias, e.span())
+        })
+        .validate(|(schema_span, path, has_as, alias, span), _e, emitter| {
+            if path.is_none() {
+                emitter.emit(Rich::custom(
+                    schema_span,
+                    "`import schema` requires a string literal path",
+                ));
+            }
+            if has_as && alias.is_none() {
+                emitter.emit(Rich::custom(schema_span, "expected a name after `as`"));
+            }
+            Decl::ImportSchema(ImportSchemaDecl {
+                path: path.unwrap_or_default(),
+                alias,
+                span,
+            })
+        })
+}
+
 #[derive(Clone)]
 enum Item {
     Package(PackageDecl),
@@ -1224,7 +1269,7 @@ fn junk_decl<'src>() -> impl Parser<'src, Tokens<'src>, (), MoxExtra<'src>> + Cl
     let rest = select! {
         t if !matches!(
             t,
-            Token::Package | Token::Annotation | Token::Class | Token::Interface | Token::Enum | Token::Type | Token::Vocabulary | Token::Actors
+            Token::Package | Token::Annotation | Token::Class | Token::Interface | Token::Enum | Token::Type | Token::Vocabulary | Token::Actors | Token::Import
         ) =>
         ()
     };
@@ -1261,6 +1306,7 @@ fn model<'src>() -> impl Parser<'src, Tokens<'src>, Model, MoxExtra<'src>> + Clo
         datatype_decl().map(Item::Decl),
         vocabulary_decl().map(Item::Decl),
         actors_decl().map(Item::Decl),
+        import_schema_decl().map(Item::Decl),
     ))
     .or(junk_decl().to(Item::Junk));
 
@@ -1410,7 +1456,7 @@ fn attach_docs(model: &mut Model, comments: &[crate::lexer::Comment<'_>], source
             }
             Decl::Datatype(decl) => decl.doc = run_above(&docs, start_line),
             Decl::Vocabulary(decl) => decl.doc = run_above(&docs, start_line),
-            Decl::Annotation(_) | Decl::Actors(_) => {}
+            Decl::Annotation(_) | Decl::Actors(_) | Decl::ImportSchema(_) => {}
         }
     }
 }

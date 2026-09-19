@@ -10,8 +10,14 @@
 //! * `rexlang ir <file>... [-o <out>]` — compile and emit the Core IR JSON
 //!   to stdout or to a file; exits `1` on errors. On `.actor` files the
 //!   standalone ActorModel artifact is emitted.
+//! * `rexlang artifact check <artifact.json>...` — validate wire-format
+//!   artifacts (Core IR, standalone actor policy, canonical instance)
+//!   without the originating model; exits `1` on any violation. The
+//!   portable test kit for out-of-tree backends (see docs/BACKENDS.md).
 //! * `rexlang vocab fetch <file> [--provider file:<DIR>|http]` — fetch and
 //!   vendor vocabulary snapshots, updating `model.lock`.
+
+mod artifact_check;
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -19,7 +25,8 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use rex_driver::{
-    compile_actors_str, compile_files, compile_str, render, ActorCompilation, MultiCompilation,
+    compile_actors_str, compile_files_with_imports, compile_str_with_imports, render,
+    ActorCompilation, MultiCompilation, SchemaImports,
 };
 use rex_vocab::{FileProvider, HttpProvider, LockEntry, Lockfile, VocabularyProvider};
 /// rexlang compiler command-line interface.
@@ -67,10 +74,27 @@ enum Command {
     },
     /// Serve the rexlang language server over stdin/stdout.
     Lsp,
+    /// Validate serialized rexlang artifacts against the wire format.
+    Artifact {
+        #[command(subcommand)]
+        action: ArtifactAction,
+    },
     /// Vocabulary snapshot tooling.
     Vocab {
         #[command(subcommand)]
         action: VocabAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ArtifactAction {
+    /// Check each artifact file against the wire-format invariants: known
+    /// root shape, supported `formatVersion`, camelCase structural keys,
+    /// and (for instances) well-formed unique `$id`s with resolvable
+    /// `$ref`s. Exits `1` when any file fails.
+    Check {
+        /// Artifact JSON files to check.
+        files: Vec<PathBuf>,
     },
 }
 
@@ -171,7 +195,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 }
             } else {
                 let sources = read_sources(&files)?;
-                let compilation = compile_sources(&sources);
+                let compilation = compile_sources(&sources)?;
                 report_multi_diagnostics(&sources, &compilation.diagnostics);
                 if compilation.model.is_some() {
                     for (path, _) in &sources {
@@ -200,7 +224,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 Ok(ExitCode::SUCCESS)
             } else {
                 let sources = read_sources(&files)?;
-                let compilation = compile_sources(&sources);
+                let compilation = compile_sources(&sources)?;
                 report_multi_diagnostics(&sources, &compilation.diagnostics);
                 let Some(model) = compilation.model else {
                     return Ok(ExitCode::FAILURE);
@@ -218,7 +242,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         } => {
             let files = expand_inputs(&files)?;
             let sources = read_sources(&files)?;
-            let compilation = compile_sources(&sources);
+            let compilation = compile_sources(&sources)?;
             report_multi_diagnostics(&sources, &compilation.diagnostics);
             let Some(model) = compilation.model else {
                 return Ok(ExitCode::FAILURE);
@@ -237,7 +261,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         } => {
             let files = expand_inputs(&files)?;
             let sources = read_sources(&files)?;
-            let compilation = compile_sources(&sources);
+            let compilation = compile_sources(&sources)?;
             report_multi_diagnostics(&sources, &compilation.diagnostics);
             let Some(model) = compilation.model else {
                 return Ok(ExitCode::FAILURE);
@@ -261,13 +285,15 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 let Some(actor_model) = compilation.model else {
                     return Ok(ExitCode::FAILURE);
                 };
-                let domain_model = merged_domain_model(&pair.domains);
+                let Some(domain_model) = compilation.domains_model else {
+                    return Ok(ExitCode::FAILURE);
+                };
                 rex_backend_cedar::generate_to_dir(&actor_model, &domain_model, &out)?;
                 println!("generated Cedar policies and schema into {}", out.display());
                 Ok(ExitCode::SUCCESS)
             } else {
                 let sources = read_sources(&files)?;
-                let compilation = compile_sources(&sources);
+                let compilation = compile_sources(&sources)?;
                 report_multi_diagnostics(&sources, &compilation.diagnostics);
                 let Some(model) = compilation.model else {
                     return Ok(ExitCode::FAILURE);
@@ -295,7 +321,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 print_tool_manifests(&actor_model)?;
             } else {
                 let sources = read_sources(&files)?;
-                let compilation = compile_sources(&sources);
+                let compilation = compile_sources(&sources)?;
                 report_multi_diagnostics(&sources, &compilation.diagnostics);
                 let Some(model) = compilation.model else {
                     return Ok(ExitCode::FAILURE);
@@ -343,6 +369,38 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 }
             }
             if check && unformatted {
+                Ok(ExitCode::FAILURE)
+            } else {
+                Ok(ExitCode::SUCCESS)
+            }
+        }
+        Command::Artifact {
+            action: ArtifactAction::Check { files },
+        } => {
+            if files.is_empty() {
+                anyhow::bail!("no input files");
+            }
+            let mut failed = false;
+            for file in &files {
+                let text = match std::fs::read_to_string(file) {
+                    Ok(text) => text,
+                    Err(error) => {
+                        eprintln!("error: cannot read {}: {error}", file.display());
+                        failed = true;
+                        continue;
+                    }
+                };
+                match artifact_check::check_str(&file.display().to_string(), &text) {
+                    Ok(_) => println!("OK {}", file.display()),
+                    Err(errors) => {
+                        for error in errors {
+                            eprintln!("error: {error}");
+                        }
+                        failed = true;
+                    }
+                }
+            }
+            if failed {
                 Ok(ExitCode::FAILURE)
             } else {
                 Ok(ExitCode::SUCCESS)
@@ -621,22 +679,59 @@ fn collect_mox_files(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Collects the JSON content of every `import schema` declaration across
+/// `sources`, resolving each import path **relative to the declaring `.mox`
+/// file's directory** (the `.actor` import-resolution precedent: the CLI
+/// owns filesystem access, the driver receives texts only). A missing
+/// import file is a clean error naming the resolved path. Syntax errors in
+/// a source surface later as compile diagnostics, so they are not fatal
+/// here.
+fn collect_schema_imports(sources: &[(String, String)]) -> anyhow::Result<SchemaImports> {
+    let mut imports = SchemaImports::new();
+    for (path, source) in sources {
+        let Some(ast) = &rex_syntax::parse(source).ast else {
+            continue;
+        };
+        let dir = Path::new(path)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        for decl in &ast.declarations {
+            let rex_syntax::ast::Decl::ImportSchema(import) = decl else {
+                continue;
+            };
+            let resolved = dir.join(&import.path);
+            let json = std::fs::read_to_string(&resolved).map_err(|error| {
+                anyhow::anyhow!(
+                    "cannot read imported schema {} (imported by {}): {error}",
+                    resolved.display(),
+                    path
+                )
+            })?;
+            imports.insert(path.clone(), import.path.clone(), json);
+        }
+    }
+    Ok(imports)
+}
+
 /// Compiles in-memory sources into one model: a single source keeps the
 /// single-file pipeline (identical diagnostics and IR); several sources
-/// compile as one multi-package model.
-fn compile_sources(sources: &[(String, String)]) -> MultiCompilation {
+/// compile as one multi-package model. Schema imports declared by the
+/// sources are read from disk first (see [`collect_schema_imports`]).
+fn compile_sources(sources: &[(String, String)]) -> anyhow::Result<MultiCompilation> {
+    let schema_imports = collect_schema_imports(sources)?;
     if let [(path, source)] = sources {
-        let compilation = compile_str(path, source);
-        MultiCompilation {
+        let compilation = compile_str_with_imports(path, source, &schema_imports);
+        Ok(MultiCompilation {
             model: compilation.model,
             diagnostics: compilation
                 .diagnostics
                 .into_iter()
                 .map(|diagnostic| (path.clone(), diagnostic))
                 .collect(),
-        }
+        })
     } else {
-        compile_files(sources)
+        Ok(compile_files_with_imports(sources, &schema_imports))
     }
 }
 
@@ -680,8 +775,11 @@ struct ActorPair {
     path: String,
     /// The actor file's source text.
     source: String,
-    /// Each imported domain as `(import path as written, source)`; the
-    /// driver resolves an actor-file import by that exact string.
+    /// Each imported domain as `(resolved path, source)`; the driver
+    /// matches an actor-file import by exact string or by lexical
+    /// resolution relative to the actor file's directory, so resolved
+    /// paths keep vocabulary snapshots anchored to the declaring file no
+    /// matter where the process runs from.
     domains: Vec<(String, String)>,
 }
 
@@ -701,10 +799,12 @@ impl ActorPair {
 
 /// Reads an `.actor` file plus every domain it imports.
 ///
-/// Import paths resolve relative to the actor file's own directory, but are
-/// passed to the driver **exactly as written** (the driver matches imports
-/// by that string). A missing import file is a clean error naming the
-/// resolved path. Duplicate imports are read once.
+/// Import paths resolve relative to the actor file's own directory, and the
+/// **resolved** path is passed to the driver (the driver matches imports by
+/// exact string or by lexical resolution, and the domain's driver path also
+/// locates its `vocab/` directory — with raw import strings that lookup
+/// would be relative to the process CWD). A missing import file is a clean
+/// error naming the resolved path. Duplicate imports are read once.
 fn read_actor_pair(file: &Path) -> anyhow::Result<ActorPair> {
     let source = std::fs::read_to_string(file)
         .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
@@ -727,7 +827,7 @@ fn read_actor_pair(file: &Path) -> anyhow::Result<ActorPair> {
                     path
                 )
             })?;
-            domains.push((import.path.clone(), text));
+            domains.push((resolved.display().to_string(), text));
         }
     }
     Ok(ActorPair {
@@ -735,30 +835,6 @@ fn read_actor_pair(file: &Path) -> anyhow::Result<ActorPair> {
         source,
         domains,
     })
-}
-
-/// Merges the lowered models of every imported domain into one domain model
-/// for Cedar class lookup: packages keep first-appearance order; same-named
-/// packages merge their classes. Domains that failed to compile contribute
-/// nothing (their diagnostics already failed the actor compilation).
-fn merged_domain_model(domains: &[(String, String)]) -> rex_ir::Model {
-    let mut merged = rex_ir::Model::new();
-    for (path, source) in domains {
-        let Some(model) = compile_str(path, source).model else {
-            continue;
-        };
-        for package in model.packages {
-            match merged
-                .packages
-                .iter_mut()
-                .find(|existing| existing.name == package.name)
-            {
-                Some(existing) => existing.classes.extend(package.classes),
-                None => merged.packages.push(package),
-            }
-        }
-    }
-    merged
 }
 
 /// Prints the per-agent tool manifests of a compiled actor model as a

@@ -44,15 +44,54 @@ const MODELS: &[(&str, &str)] = &[
         "tests/conformance/models/packagedoc.mox",
         "tests/conformance/artifacts/packagedoc.rex.json",
     ),
+    (
+        "tests/conformance/models/import_schema.mox",
+        "tests/conformance/artifacts/import_schema.rex.json",
+    ),
 ];
 
+/// The one conformance model with `import schema` declarations. The driver
+/// is filesystem-free, so its harness resolves each import path relative to
+/// the model directory (exactly like the CLI does), reads the sibling JSON
+/// fixture, and passes the content through `compile_str_with_imports`.
+/// Every other model keeps compiling with plain `compile_str`.
 fn compile_conformance_model(relative_path: &str) -> rex_ir::Model {
     // Absolute path: the driver reads `vocab/` and `model.lock` relative to
     // the model path, and tests run with the crate dir as CWD.
     let absolute = fixture_path(relative_path);
     let source = std::fs::read_to_string(&absolute)
         .unwrap_or_else(|error| panic!("read conformance model {relative_path}: {error}"));
-    let compilation = compile_str(absolute.to_str().expect("utf-8 path"), &source);
+    let path = absolute.to_str().expect("utf-8 path");
+    let parsed = rex_syntax::parse(&source);
+    let imports = parsed
+        .ast
+        .as_ref()
+        .map(|ast| {
+            ast.declarations.iter().filter_map(|decl| match decl {
+                rex_syntax::ast::Decl::ImportSchema(import) => Some(import),
+                _ => None,
+            })
+        })
+        .map(|imports| imports.collect::<Vec<_>>())
+        .unwrap_or_default();
+    if imports.is_empty() {
+        let compilation = compile_str(path, &source);
+        assert!(
+            compilation.diagnostics.is_empty(),
+            "conformance model {relative_path} must compile cleanly: {:?}",
+            compilation.diagnostics
+        );
+        return compilation.model.expect("model lowered");
+    }
+    let dir = absolute.parent().expect("model has a parent");
+    let mut schema_imports = rex_driver::SchemaImports::new();
+    for import in imports {
+        let resolved = dir.join(&import.path);
+        let json = std::fs::read_to_string(&resolved)
+            .unwrap_or_else(|error| panic!("read imported schema {}: {error}", resolved.display()));
+        schema_imports = schema_imports.provide(path, import.path.clone(), json);
+    }
+    let compilation = rex_driver::compile_str_with_imports(path, &source, &schema_imports);
     assert!(
         compilation.diagnostics.is_empty(),
         "conformance model {relative_path} must compile cleanly: {:?}",

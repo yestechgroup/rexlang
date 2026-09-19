@@ -221,7 +221,7 @@ impl NavigationIndex {
                         + decl.grants.len()
                         + decl.never_both.len(),
                 ),
-                mox::Decl::Annotation(_) => continue,
+                mox::Decl::Annotation(_) | mox::Decl::ImportSchema(_) => continue,
             };
             top_level.entry(name.text.as_str()).or_insert(next_id);
             decl_ids.push(next_id);
@@ -241,7 +241,7 @@ impl NavigationIndex {
                 mox::Decl::Datatype(decl) => (&decl.name, SymbolKind::Datatype),
                 mox::Decl::Vocabulary(decl) => (&decl.name, SymbolKind::Vocabulary),
                 mox::Decl::Actors(decl) => (&decl.name, SymbolKind::Actors),
-                mox::Decl::Annotation(_) => continue,
+                mox::Decl::Annotation(_) | mox::Decl::ImportSchema(_) => continue,
             };
             let extends_text = match decl {
                 mox::Decl::Class(decl) if !decl.extends.is_empty() => Some(
@@ -575,8 +575,9 @@ impl NavigationIndex {
                     }
                 }
                 // Interfaces hold only target bindings (no names to index);
-                // annotations are unnamed.
-                mox::Decl::Interface(_) | mox::Decl::Annotation(_) => {}
+                // annotations are unnamed and imports are opaque in v1.
+                mox::Decl::Interface(_) | mox::Decl::Annotation(_) | mox::Decl::ImportSchema(_) => {
+                }
             }
         }
 

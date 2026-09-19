@@ -388,6 +388,89 @@ fn vocabulary_in_relation_position_uses_the_not_a_class_diagnostic() {
 }
 
 #[test]
+fn string_default_on_vocabulary_attribute_stays_accepted() {
+    let source = r#"
+        package demo
+
+        vocabulary Currency from "iso:4217" {
+            version "2024-01-01"
+            key alpha3
+            facet int minorUnits
+        }
+
+        class Price {
+            Currency ccy = "USD"
+        }
+    "#;
+    let (path, _dir) = setup("string-default", source, true, Some(&lockfile_for()));
+    let compilation = compile_str(&path, source);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "a string default names an entry key and stays accepted: {:?}",
+        compilation.diagnostics
+    );
+    let model = compilation.model.expect("model lowered");
+    assert_eq!(
+        model.packages[0].classes[0].features[0].default,
+        Some(DefaultValue::String("USD".to_string()))
+    );
+}
+
+#[test]
+fn int_default_on_vocabulary_attribute_is_rejected() {
+    let source = r#"
+        package demo
+
+        vocabulary Currency from "iso:4217" {
+            version "2024-01-01"
+            key alpha3
+            facet int minorUnits
+        }
+
+        class Price {
+            Currency ccy = 5
+        }
+    "#;
+    let (path, _dir) = setup("int-default", source, true, Some(&lockfile_for()));
+    let compilation = compile_str(&path, source);
+    assert!(compilation.model.is_none(), "errors block lowering");
+    let diagnostic = compilation
+        .diagnostics
+        .iter()
+        .find(|d| d.message == "int default '5' on vocabulary-typed attribute 'ccy'")
+        .expect("int default on vocabulary attribute is rejected");
+    assert!(diagnostic.is_error());
+}
+
+#[test]
+fn boolean_default_on_vocabulary_attribute_is_rejected() {
+    let source = r#"
+        package demo
+
+        vocabulary Currency from "iso:4217" {
+            version "2024-01-01"
+            key alpha3
+            facet int minorUnits
+        }
+
+        class Price {
+            Currency ccy = true
+        }
+    "#;
+    let (path, _dir) = setup("bool-default", source, true, Some(&lockfile_for()));
+    let compilation = compile_str(&path, source);
+    assert!(compilation.model.is_none(), "errors block lowering");
+    assert!(
+        compilation
+            .diagnostics
+            .iter()
+            .any(|d| d.message == "boolean default 'true' on vocabulary-typed attribute 'ccy'"),
+        "diagnostics: {:?}",
+        compilation.diagnostics
+    );
+}
+
+#[test]
 fn unknown_type_diagnostic_is_unchanged() {
     let source = r#"
         package demo

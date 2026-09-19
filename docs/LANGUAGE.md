@@ -25,21 +25,87 @@ reference; crate docs cover implementation.
   leading `^` (`^class` is an identifier).
 - **Keywords**: `package annotation as class extends interface enum type wraps
   opaque contains refers container opposite op derived vocabulary from version
-  key facet`. Contextual words usable as plain identifiers: `id readonly get
-  set String int ... date`.
+- **Keywords**: `package annotation as class extends interface enum type wraps
+  opaque contains refers container opposite op derived vocabulary from version
+  key facet actors actor agent capability grant permit forbid when obligation
+  on never_both delegation purpose cedar import`. Contextual words usable as
+  plain identifiers: `id readonly get set String int ... date` — among them
+  `schema`, which is special only directly after an `import` keyword of a
+  `.mox` file (see [Importing JSON Schema types](#importing-json-schema-types)),
+  and `to`, which is special only on a delegation's `to` line.
 
 ## Model structure
 
 A file holds one package and any number of declarations:
 
 ```
-model        := package_decl (annotation_decl | class_decl | interface_decl
-              | enum_decl | type_decl | vocabulary_decl)*
+model        := package_decl (annotation_decl | import_schema_decl | class_decl | interface_decl
+              | enum_decl | type_decl | vocabulary_decl | actors_decl)*
 package_decl := doc? "package" qualified_name
+annotation_decl := "annotation" string ("as" name)?
+import_schema_decl := "import" "schema" string ("as" name)?
 ```
 
 `doc` marks the optional doc-comment run described under Lexical rules; it
 becomes the package's `description` in the Core IR.
+
+`annotation_decl` attaches a package-level annotation: `annotation "<source>"`
+with an optional `as <name>` target. The source string and (empty) details
+map are carried on the package as `Annotation { source, details }` in the
+Core IR; the `as <name>` target is currently parsed but **not** persisted —
+it is reserved for future per-declaration attachment. Annotations are
+top-level only: they cannot appear inside class, enum, datatype, or actors
+bodies.
+
+### Inline actors blocks
+
+A `.mox` model may declare `actors` blocks alongside its classes, enums, and
+vocabularies — the `actors_block` grammar is identical to the one in
+[.actor files](#actor-policy-files-actor) (`actor`/`agent` with `extends`,
+`capability <name> on <type_ref>`, `purpose`, `grant` with `permit`/`forbid`
+entries, `when` conditions, obligations, `cedar` bodies, `delegation`,
+`never_both`). Each block lands on its declaring package as an `ActorsDef`
+in the Core IR (`Package.actors`).
+
+Blocks compile and validate exactly like the standalone surface: one block
+per name per file, and across files of a multi-file model same-named blocks
+pool their actors at validation (separation of duty and delegation checks
+span the union). A block's capabilities resolve against the union namespace,
+so a block may bind to a class declared in another package, and every `when`
+condition is type-checked against its capability's class.
+
+```mox
+package nz.example.support
+
+class Ticket {
+    id readonly String ticketNo
+    boolean internal
+    int refundCents
+}
+
+actors Support {
+    actor Agent
+    actor Manager
+
+    capability RaiseRefund on Ticket
+    capability ResolveTicket on Ticket
+
+    grant Agent {
+        permit RaiseRefund when (refundCents > 0 && refundCents <= 5000)
+    }
+
+    grant Manager {
+        permit ResolveTicket
+    }
+
+    never_both { RaiseRefund, ResolveTicket }
+}
+```
+
+The same block in a standalone `Support.actor` file (with
+`import "support.mox"`) produces an identical `ActorsDef` — the two surfaces
+differ only in where the block lives and how the artifact is emitted (one
+multi-package `Model` vs a standalone `ActorModel`).
 
 A model may span multiple `.mox` files — one package per file, named by its
 `package` declaration. Compiling several files produces **one** Core IR
@@ -57,6 +123,71 @@ vocabularies) are allowed; constraint family and enum-literal checks see
 through the package boundary. `contains`/`container` targets and `opposite`
 pairings must live in the declaring class's package: cross-package ownership
 and cross-package opposites are errors.
+
+### Importing JSON Schema types
+
+A `.mox` package can import JSON Schema types into its namespace:
+
+```
+import_schema_decl := "import" "schema" string ("as" name)?
+```
+
+```mox
+package nz.example.todos
+
+import schema "schemas/todo_item.json" as TodoItem
+import schema "schemas/todo_list.json"
+
+/// The aggregate root, referring to two imported schema types.
+class TodoList {
+    refers TodoItem[] items
+    refers todo_list meta
+}
+```
+
+The imported name is the `as` alias when present, otherwise the import
+path's **file stem** (`"schemas/todo_list.json"` imports as `todo_list`).
+A stem-derived name must be a valid identifier (`.mox` identifier rules) —
+anything else needs an explicit alias. The path resolves **relative to the
+declaring `.mox` file's directory**, like `.actor` imports.
+
+**v1 semantics are opaque.** An import registers a *nominal, feature-less
+class* in the importing package's namespace: `refers TodoItem` resolves to
+`TypeRef::Class` in that package, and the lowered IR carries an empty
+`ClassDef` named `TodoItem`. No features, enums, or datatypes are derived
+from the JSON content; structural lowering is future work. The content is
+still **validated** — it must parse as JSON, and a declared import must be
+provided at all.
+
+The `schema` word is a **contextual keyword** (like `format` inside
+datatype blocks and `to` on delegation lines): it is an ordinary
+identifier everywhere else, and existing models may keep using `schema` as
+a class, feature, or parameter name. Escaped `^schema` is never the
+keyword.
+
+Collisions are errors naming both sources:
+
+- an import name (alias or stem) that matches a declared class, interface,
+  enum, datatype, vocabulary, or actors block of the same package;
+- the same name imported twice (whether from the same or different paths);
+- two alias-less imports whose file stems collide.
+
+Malformed declarations are syntax errors: a missing path literal after
+`import schema`, or a missing name after `as`.
+
+**Resolution contract.** The driver stays filesystem-free: import content
+arrives as text. `rexlang check`/`ir`/`gen` read each import file from disk
+(relative to the model, as above) and hand it to the driver; a missing file
+is a clean CLI error naming the path. Embedded callers (tests, language
+servers) pass content through `rex_driver::SchemaImports`, keyed by the
+*(mox file path, import path)* pair exactly as named; `compile_str` and
+`compile_files` provide nothing, so a model with `import schema`
+declarations compiled through them errors with
+`imported schema '<path>' was not provided`.
+
+`rexlang fmt` canonicalizes import-schema declarations into a section
+directly after the `package` declaration, before every other declaration —
+one per line, no blank lines between them (the `.actor` import rule).
 
 ### Classes and features
 
