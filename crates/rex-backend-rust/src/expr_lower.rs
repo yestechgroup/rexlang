@@ -745,6 +745,7 @@ fn rust_type(ty: &Ty) -> Result<String, LowerError> {
             PrimitiveType::Boolean => "bool".to_string(),
             PrimitiveType::Byte => "i8".to_string(),
             PrimitiveType::Char => "char".to_string(),
+            PrimitiveType::Date => "rex_runtime::Date".to_string(),
         },
         Ty::Named {
             kind: NamedKind::Class,

@@ -744,6 +744,14 @@ fn primitive_schema(primitive: PrimitiveType, profile: Profile) -> serde_json::V
             schema.insert("minLength".to_string(), serde_json::json!(1));
             schema.insert("maxLength".to_string(), serde_json::json!(1));
         }
+        // The calendar date: an ISO-8601 `YYYY-MM-DD` string, in both
+        // profiles (the `format` keyword is the wire-level contract of the
+        // `date` primitive; no runtime validation beyond the loader's strict
+        // parse is implied).
+        PrimitiveType::Date => {
+            schema.insert("type".to_string(), serde_json::json!("string"));
+            schema.insert("format".to_string(), serde_json::json!("date"));
+        }
     }
     serde_json::Value::Object(schema)
 }
@@ -873,6 +881,21 @@ mod tests {
         assert_eq!(
             primitive_schema(PrimitiveType::Char, Profile::Wire),
             serde_json::json!({"maxLength": 1, "minLength": 1, "type": "string"})
+        );
+    }
+
+    #[test]
+    fn date_primitive_is_an_iso_string_in_both_profiles() {
+        // The `date` primitive's wire-level contract: `format: "date"` on an
+        // ISO-8601 string, emitted in the wire AND api profiles (unlike the
+        // platform-width numeric formats, which are api-only).
+        assert_eq!(
+            primitive_schema(PrimitiveType::Date, Profile::Wire),
+            serde_json::json!({"format": "date", "type": "string"})
+        );
+        assert_eq!(
+            primitive_schema(PrimitiveType::Date, Profile::Api),
+            serde_json::json!({"format": "date", "type": "string"})
         );
     }
 

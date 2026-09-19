@@ -11,15 +11,18 @@
 //!
 //! This crate is deliberately small: it re-exports [`slotmap`] (so generated
 //! code needs only this crate), defines the error type shared by runtime
-//! operations, and the [`Resource`] trait implemented by every generated
-//! root. Canonical instance JSON support extends these types in a
-//! backward-compatible way, and the [`validation`] types are what generated
-//! constraint-checking `validate` methods report.
+//! operations, the [`Date`] calendar type backing the `date` primitive
+//! (issue #9), and the [`validation`] types that generated constraint-checking
+//! `validate` methods report. Canonical instance JSON support extends these
+//! types in a backward-compatible way.
 
 /// Re-export of [`slotmap`] so generated code depends only on this crate.
 pub use slotmap;
 
+pub mod date;
 pub mod validation;
+
+pub use date::Date;
 
 /// The `$type` key of the canonical instance JSON format (document type or
 /// class name).

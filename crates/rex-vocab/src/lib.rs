@@ -429,6 +429,9 @@ fn facet_value(
                 | PrimitiveType::Byte => "an integer",
                 PrimitiveType::Float | PrimitiveType::Double => "a number",
                 PrimitiveType::Boolean => "a boolean",
+                // Unreachable through `rexlang` (the driver rejects date
+                // facets); named for totality over the IR.
+                PrimitiveType::Date => "an ISO-8601 date (YYYY-MM-DD)",
             };
             mismatch(expected)
         }

@@ -340,6 +340,10 @@ fn primitive_cedar_type(feature: &Feature) -> Option<&'static str> {
         return None;
     };
     Some(match primitive {
+        // Dates have no Cedar attribute representation: Cedar has no date
+        // type, so a date attribute is not a schema attribute and a `when`
+        // condition over it is refused by name (`is_primitive_attribute`).
+        PrimitiveType::Date => return None,
         PrimitiveType::String | PrimitiveType::Char => "String",
         PrimitiveType::Int | PrimitiveType::Long | PrimitiveType::Short | PrimitiveType::Byte => {
             "Long"
@@ -596,6 +600,40 @@ mod tests {
         assert_eq!(attributes["f"], serde_json::json!({"type": "Double"}));
         assert_eq!(attributes["d"], serde_json::json!({"type": "Double"}));
         assert_eq!(attributes["bo"], serde_json::json!({"type": "Boolean"}));
+    }
+
+    #[test]
+    fn date_attributes_have_no_cedar_representation() {
+        // Cedar has no date type: a date attribute is not a schema
+        // attribute, so a `when` condition over it is refused by name (see
+        // the policy-mapping refusals below).
+        let mut actors = ActorsDef::new("N");
+        actors = actors.actor(ActorDef::new("A"));
+        actors = actors.capability(CapabilityDef::new("Cap", class_ref("demo", "Timed")));
+        let mut model = Model::new();
+        let mut package = Package::new("demo");
+        package.classes = vec![class(
+            "Timed",
+            vec![
+                attribute("dueDate", PrimitiveType::Date),
+                attribute("s", PrimitiveType::String),
+            ],
+        )];
+        model.packages.push(package);
+        let actors = ActorModel::new().block(actors);
+        let files = generate(&actors, &model).expect("generate");
+        let schema: serde_json::Value =
+            serde_json::from_str(files.get("N.cedarschema.json").expect("schema")).expect("json");
+        let attributes = &schema["N"]["entityTypes"]["Timed"]["shape"]["attributes"];
+        assert_eq!(
+            attributes
+                .as_object()
+                .expect("attributes")
+                .keys()
+                .collect::<Vec<_>>(),
+            ["s"],
+            "the date attribute is omitted from the Cedar schema"
+        );
     }
 
     #[test]
