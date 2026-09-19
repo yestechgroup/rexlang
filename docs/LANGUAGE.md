@@ -26,7 +26,7 @@ reference; crate docs cover implementation.
 - **Keywords**: `package annotation as class extends interface enum type wraps
   opaque contains refers container opposite op derived vocabulary from version
   key facet`. Contextual words usable as plain identifiers: `id readonly get
-  set String int ...`.
+  set String int ... date`.
 
 ## Model structure
 
@@ -136,6 +136,24 @@ constraint_keyword := "pattern" | "minLength" | "maxLength" | "minimum"
 Multiplicity shorthand: `[]` = `[0..*]`; absent: attributes are `1..1`,
 `contains`/`refers` are `0..*`, `container` and `derived` are `0..1`.
 
+### Primitives and the `date` type
+
+Attribute, parameter, and facet positions admit the built-in primitives
+`String int long short float double boolean byte char` and, since issue #9,
+the calendar **`date`**: a timezone-less, time-less civil day that
+serializes as an ISO-8601 `YYYY-MM-DD` string. In expressions a date value
+is written `date("2026-09-17")` and carries typed ordering plus the
+calendar algebra (`plus_days`, `plus_months`, `diff_days`) — the normative
+rules are R5–R8 in `docs/EXPRESSIONS.md`. A declared type shadows the
+like-named built-in, so a pre-existing `type Date wraps opaque { ... }`
+datatype keeps working; write lowercase `date` for the primitive. Dates
+take **no declared defaults** (a `= "…"` default on a `date` attribute is a
+compile error; generated required date fields anchor at the epoch
+1970-01-01) and admit no constraint keywords. `datetime` does not exist in
+this milestone, and the expression language has no clock: "as at date D"
+queries take dates as parameters or attributes. The date facet type
+(`facet date …`) is likewise not supported yet.
+
 ### Enums, datatypes, interfaces, vocabularies
 
 ```
@@ -194,7 +212,13 @@ duplicates are collapsed. The compiled policy set is the **union** of the
 actor file's blocks followed by every imported domain's inline blocks
 (in that order), so capabilities typecheck against the imported domain's
 classes (`permit EscalateTicket when (amount > 0)` resolves `amount` on
-`Ticket`), and the separation-of-duty checks span files.
+`Ticket`), and the separation-of-duty checks span files. `when` conditions
+are restricted to a decidable subset at Cedar generation time — literals,
+primitive attributes, and the operators — and anything without a Cedar
+mapping (`let`, `if`, lambdas, collection algebra, `?.`, `?:`, `null`, list
+literals, operation calls, and date attributes or `date("…")` literals,
+since Cedar has no date type) is a generate-time error naming the
+capability.
 
 `agent` declares an autonomous LLM agent; the plain `actor` remains the
 human principal. Both take the same optional `extends` clause, and a
@@ -252,10 +276,11 @@ The cross-language exchange format (`$type`/`$id`/`$ref`):
 Rules: ids are `<singular>/<n>` in per-class insertion order; containment is
 inlined; **container features are never serialized** (reconstructed from
 nesting on load); cross references are `$ref` links; enums serialize the
-literal name, datatypes their inner string; optional attributes are omitted
-when unset; loading is strict (unknown features, serialized containers,
-duplicate ids, unresolved refs are errors). `load(save(x)) == x` is a tested
-property, not an aspiration.
+literal name, datatypes their inner string, `date` attributes their
+ISO-8601 `YYYY-MM-DD` string (loading strict-parses it); optional attributes
+are omitted when unset; loading is strict (unknown features, serialized
+containers, duplicate ids, unresolved refs are errors). `load(save(x)) == x`
+is a tested property, not an aspiration.
 
 ## Tools
 
