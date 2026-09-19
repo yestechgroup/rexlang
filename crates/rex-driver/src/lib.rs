@@ -145,18 +145,55 @@ pub struct ActorCompilation {
     /// error-severity diagnostic was produced in any file. Warnings do not
     /// block lowering.
     pub model: Option<rex_ir::ActorModel>,
+    /// The imported domains lowered against their shared union namespace as
+    /// one multi-package model, or `None` when any domain failed to lower.
+    /// Cedar class lookup consumes this instead of recompiling the domains
+    /// standalone (which cannot resolve cross-package references).
+    pub domains_model: Option<rex_ir::Model>,
     /// Diagnostics from the actor file and each imported domain, each
     /// tagged with its file's path, in compilation order.
     pub diagnostics: Vec<(String, Diagnostic)>,
 }
 
+/// Matches an actor-file import against a provided domain file: the exact
+/// import string wins (the historical contract — [`compile_actors_str`]
+/// callers pass the paths they were given), with a lexical resolution of the
+/// import relative to the actor file's directory as the fallback (the CLI
+/// passes resolved paths so vocabulary snapshots locate the declaring
+/// file's `vocab/` directory regardless of the process CWD).
+fn import_matches(import: &str, actor_path: &str, candidate: &str) -> bool {
+    fn normalize(path: impl AsRef<std::path::Path>) -> std::path::PathBuf {
+        let mut out = std::path::PathBuf::new();
+        for component in path.as_ref().components() {
+            match component {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    out.pop();
+                }
+                other => out.push(other.as_os_str()),
+            }
+        }
+        out
+    }
+    if candidate == import {
+        return true;
+    }
+    let base = std::path::Path::new(actor_path)
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new(""));
+    normalize(base.join(import)) == normalize(candidate)
+}
+
 /// Compiles an `.actor` file against its imported domain models to the
 /// standalone [`rex_ir::ActorModel`] (memoized by salsa): parse the actor
-/// file, compile every named domain with [`compile`], then resolve and
-/// validate the union policy set.
+/// file, lower every named domain against the **union namespace of all
+/// imports** (so domains may reference types across packages — the same
+/// rule multi-file `.mox` compiles follow), then resolve and validate the
+/// union policy set.
 ///
-/// Extra provided domains no import names are ignored; domain files with
-/// errors contribute their diagnostics but no blocks.
+/// Extra provided domains no import names are ignored; a domain with
+/// errors contributes its diagnostics and no blocks, but the remaining
+/// domains keep resolving.
 #[salsa::tracked]
 pub fn compile_actors(
     db: &dyn Db,
@@ -167,46 +204,88 @@ pub fn compile_actors(
     let actor_source = actor.text(db);
     let parsed = parse_actors_query(db, actor);
 
-    // Resolve imports to provided domains, deduplicated by path, in
+    // Resolve imports to provided domains, deduplicated by import path, in
     // first-appearance order. Only imported domains are compiled; extras
     // are ignored (their diagnostics must not leak).
-    let mut lookups: Vec<(String, Compiled, ParseOutput, String)> = Vec::new();
+    let mut lookups: Vec<(String, SourceFile)> = Vec::new();
     if let Some(ast) = &parsed.ast {
         for import in &ast.imports {
-            if lookups.iter().any(|(path, _, _, _)| *path == import.path) {
+            if lookups.iter().any(|(path, _)| *path == import.path) {
                 continue;
             }
-            if let Some(domain) = domains.iter().find(|file| file.path(db) == import.path) {
-                let compiled = compile(db, *domain);
-                let parse_output = parse_query(db, *domain);
-                lookups.push((
-                    import.path.clone(),
-                    compiled,
-                    parse_output,
-                    domain.text(db).clone(),
-                ));
+            if let Some(domain) = domains
+                .iter()
+                .find(|file| import_matches(&import.path, &actor_path, &file.path(db)))
+            {
+                lookups.push((import.path.clone(), *domain));
             }
         }
     }
-    let units: Vec<lower::DomainUnit<'_>> = lookups
+
+    // Lower every imported domain against the shared union namespace,
+    // keeping the results per file: a domain with errors yields no model
+    // while the remaining domains keep resolving.
+    let mut paths: Vec<String> = Vec::new();
+    let mut sources: Vec<String> = Vec::new();
+    let mut parse_outputs: Vec<ParseOutput> = Vec::new();
+    for (_, domain) in &lookups {
+        paths.push(domain.path(db));
+        sources.push(domain.text(db));
+        parse_outputs.push(parse_query(db, *domain));
+    }
+    let units: Vec<lower::MultiFile<'_>> = lookups
         .iter()
-        .map(|(path, compiled, parse_output, source)| lower::DomainUnit {
-            path,
-            source,
-            model: compiled.model.clone(),
-            ast: parse_output.ast.as_ref(),
-            diagnostics: &compiled.diagnostics,
+        .enumerate()
+        .map(|(index, _)| lower::MultiFile {
+            path: &paths[index],
+            source: &sources[index],
+            ast: parse_outputs[index].ast.as_ref(),
+            parse_diagnostics: &parse_outputs[index].diagnostics,
         })
         .collect();
+    let compilations = lower::compile_union_per_file(&units);
+
+    let domain_units: Vec<lower::DomainUnit<'_>> = lookups
+        .iter()
+        .enumerate()
+        .map(|(index, (path, _))| lower::DomainUnit {
+            path,
+            source: &sources[index],
+            model: compilations[index].model.clone(),
+            ast: parse_outputs[index].ast.as_ref(),
+            diagnostics: &compilations[index].diagnostics,
+        })
+        .collect();
+
+    // The union model of all imported domains, for Cedar class lookup —
+    // only meaningful when every domain lowered successfully.
+    let domains_model = if compilations
+        .iter()
+        .all(|compilation| compilation.model.is_some())
+    {
+        let mut union = rex_ir::Model::new();
+        for compilation in &compilations {
+            if let Some(model) = &compilation.model {
+                union.packages.extend(model.packages.clone());
+            }
+        }
+        Some(union)
+    } else {
+        None
+    };
 
     let (model, diagnostics) = lower::compile_actor_file(
         &actor_path,
         &actor_source,
         parsed.ast.as_ref(),
         &parsed.diagnostics,
-        &units,
+        &domain_units,
     );
-    ActorCompilation { model, diagnostics }
+    ActorCompilation {
+        model,
+        domains_model,
+        diagnostics,
+    }
 }
 
 /// The result of compiling several `.mox` files (one package per file) into

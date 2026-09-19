@@ -261,7 +261,9 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 let Some(actor_model) = compilation.model else {
                     return Ok(ExitCode::FAILURE);
                 };
-                let domain_model = merged_domain_model(&pair.domains);
+                let Some(domain_model) = compilation.domains_model else {
+                    return Ok(ExitCode::FAILURE);
+                };
                 rex_backend_cedar::generate_to_dir(&actor_model, &domain_model, &out)?;
                 println!("generated Cedar policies and schema into {}", out.display());
                 Ok(ExitCode::SUCCESS)
@@ -680,8 +682,11 @@ struct ActorPair {
     path: String,
     /// The actor file's source text.
     source: String,
-    /// Each imported domain as `(import path as written, source)`; the
-    /// driver resolves an actor-file import by that exact string.
+    /// Each imported domain as `(resolved path, source)`; the driver
+    /// matches an actor-file import by exact string or by lexical
+    /// resolution relative to the actor file's directory, so resolved
+    /// paths keep vocabulary snapshots anchored to the declaring file no
+    /// matter where the process runs from.
     domains: Vec<(String, String)>,
 }
 
@@ -701,10 +706,12 @@ impl ActorPair {
 
 /// Reads an `.actor` file plus every domain it imports.
 ///
-/// Import paths resolve relative to the actor file's own directory, but are
-/// passed to the driver **exactly as written** (the driver matches imports
-/// by that string). A missing import file is a clean error naming the
-/// resolved path. Duplicate imports are read once.
+/// Import paths resolve relative to the actor file's own directory, and the
+/// **resolved** path is passed to the driver (the driver matches imports by
+/// exact string or by lexical resolution, and the domain's driver path also
+/// locates its `vocab/` directory — with raw import strings that lookup
+/// would be relative to the process CWD). A missing import file is a clean
+/// error naming the resolved path. Duplicate imports are read once.
 fn read_actor_pair(file: &Path) -> anyhow::Result<ActorPair> {
     let source = std::fs::read_to_string(file)
         .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
@@ -727,7 +734,7 @@ fn read_actor_pair(file: &Path) -> anyhow::Result<ActorPair> {
                     path
                 )
             })?;
-            domains.push((import.path.clone(), text));
+            domains.push((resolved.display().to_string(), text));
         }
     }
     Ok(ActorPair {
@@ -735,30 +742,6 @@ fn read_actor_pair(file: &Path) -> anyhow::Result<ActorPair> {
         source,
         domains,
     })
-}
-
-/// Merges the lowered models of every imported domain into one domain model
-/// for Cedar class lookup: packages keep first-appearance order; same-named
-/// packages merge their classes. Domains that failed to compile contribute
-/// nothing (their diagnostics already failed the actor compilation).
-fn merged_domain_model(domains: &[(String, String)]) -> rex_ir::Model {
-    let mut merged = rex_ir::Model::new();
-    for (path, source) in domains {
-        let Some(model) = compile_str(path, source).model else {
-            continue;
-        };
-        for package in model.packages {
-            match merged
-                .packages
-                .iter_mut()
-                .find(|existing| existing.name == package.name)
-            {
-                Some(existing) => existing.classes.extend(package.classes),
-                None => merged.packages.push(package),
-            }
-        }
-    }
-    merged
 }
 
 /// Prints the per-agent tool manifests of a compiled actor model as a
