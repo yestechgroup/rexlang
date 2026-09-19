@@ -1,0 +1,9 @@
+{
+  "vocabulary": "test:colors",
+  "version": "2026-01-01",
+  "entries": [
+    { "name": "Red", "hex": "#ff0000" },
+    { "name": "Green", "hex": "#00ff00" },
+    { "name": "Blue", "hex": "#0000ff" }
+  ]
+}
