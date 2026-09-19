@@ -3,8 +3,13 @@ name = "rex-ir"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description.workspace = true
+description = "The Core IR and versioned wire format of the rexlang modeling language"
 repository.workspace = true
+homepage = "https://github.com/yestechgroup/rexlang"
+documentation = "https://docs.rs/rex-ir"
+readme = "README.md"
+keywords = ["dsl", "modeling", "metamodel", "ecore", "codegen"]
+categories = ["development-tools", "parser-implementations"]
 
 [lints]
 workspace = true

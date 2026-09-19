@@ -10,8 +10,14 @@
 //! * `rexlang ir <file>... [-o <out>]` — compile and emit the Core IR JSON
 //!   to stdout or to a file; exits `1` on errors. On `.actor` files the
 //!   standalone ActorModel artifact is emitted.
+//! * `rexlang artifact check <artifact.json>...` — validate wire-format
+//!   artifacts (Core IR, standalone actor policy, canonical instance)
+//!   without the originating model; exits `1` on any violation. The
+//!   portable test kit for out-of-tree backends (see docs/BACKENDS.md).
 //! * `rexlang vocab fetch <file> [--provider file:<DIR>|http]` — fetch and
 //!   vendor vocabulary snapshots, updating `model.lock`.
+
+mod artifact_check;
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -68,10 +74,27 @@ enum Command {
     },
     /// Serve the rexlang language server over stdin/stdout.
     Lsp,
+    /// Validate serialized rexlang artifacts against the wire format.
+    Artifact {
+        #[command(subcommand)]
+        action: ArtifactAction,
+    },
     /// Vocabulary snapshot tooling.
     Vocab {
         #[command(subcommand)]
         action: VocabAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ArtifactAction {
+    /// Check each artifact file against the wire-format invariants: known
+    /// root shape, supported `formatVersion`, camelCase structural keys,
+    /// and (for instances) well-formed unique `$id`s with resolvable
+    /// `$ref`s. Exits `1` when any file fails.
+    Check {
+        /// Artifact JSON files to check.
+        files: Vec<PathBuf>,
     },
 }
 
@@ -346,6 +369,38 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 }
             }
             if check && unformatted {
+                Ok(ExitCode::FAILURE)
+            } else {
+                Ok(ExitCode::SUCCESS)
+            }
+        }
+        Command::Artifact {
+            action: ArtifactAction::Check { files },
+        } => {
+            if files.is_empty() {
+                anyhow::bail!("no input files");
+            }
+            let mut failed = false;
+            for file in &files {
+                let text = match std::fs::read_to_string(file) {
+                    Ok(text) => text,
+                    Err(error) => {
+                        eprintln!("error: cannot read {}: {error}", file.display());
+                        failed = true;
+                        continue;
+                    }
+                };
+                match artifact_check::check_str(&file.display().to_string(), &text) {
+                    Ok(_) => println!("OK {}", file.display()),
+                    Err(errors) => {
+                        for error in errors {
+                            eprintln!("error: {error}");
+                        }
+                        failed = true;
+                    }
+                }
+            }
+            if failed {
                 Ok(ExitCode::FAILURE)
             } else {
                 Ok(ExitCode::SUCCESS)
