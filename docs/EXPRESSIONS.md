@@ -2,19 +2,23 @@
 
 rexlang's expression sublanguage is the deliberate replacement for Eclipse
 Xbase inside `.mox` bodies and derived-feature expressions. It is deliberately
-small: literals, field/feature access, method calls on model-declared
-operations, comparison and arithmetic, `if`/`let`, and a **fixed collection
-algebra** (`first`, `filter`, `map`, `any`, `size`, `sum`). There are **no
-arbitrary host-library calls** — that is the discipline that keeps expressions
-portable across backends.
+small: literals (including `date("YYYY-MM-DD")` date constants), field/feature
+access, method calls on model-declared operations, comparison and arithmetic,
+`if`/`let`, a **fixed collection algebra** (`first`, `filter`, `map`, `any`,
+`size`, `sum`), and a small typed calendar algebra on dates (`plus_days`,
+`plus_months`, `diff_days`). There are **no arbitrary host-library calls** —
+that is the discipline that keeps expressions portable across backends — and
+**no clock**: expressions stay pure, and "as at date D" queries take date
+values as operation parameters or attributes. `datetime` does not exist in
+this milestone; `date` is timezone-less and time-less by construction.
 
 The pipeline is: parse (`rex-expr`) → type-check once in Rust against the Core
 IR (`rex-expr`, over a `rex_ir::Model`) → each backend lowers the **typed**
 expression tree to idiomatic target code. Because backends see typed trees,
 semantics must be pinned down explicitly where target languages disagree —
-integer overflow, string equality, null/`Option`, and division by zero are the
-classic four. Those are rules **R1–R4** below; they are numbered so tests and
-backends can cite them.
+integer overflow, string equality, null/`Option`, division by zero, and the
+calendar rules for dates are the disagreeing corners. Those are rules
+**R1–R8** below; they are numbered so tests and backends can cite them.
 
 Status: this document is the normative spec for the expression *surface and
 typing* (the front half). Backend lowering rules land with each backend; the
@@ -32,7 +36,10 @@ algebra are in ["Rust lowering"](#rust-lowering).
 - **Identifiers**: `[A-Za-z_][A-Za-z0-9_]*`. `if else let true false null` are
   reserved keywords. `first filter map any size sum` are **contextual**: they
   name the collection algebra only in `name("...")` position after a `.`
-  (or `?.`), so a model feature may freely be called `size` or `first`.
+  (or `?.`), so a model feature may freely be called `size` or `first`. The
+  word `date` is likewise contextual: it names the date constructor only in
+  the `date ( STRING )` primary form, and a bare `date` is still an ordinary
+  name.
 - **Operators**: `== = != < <= > >= + - * / && || !` and the navigation
   operators `.` `?.` `?:`, plus `=>` (lambda arrow) and `;` (let separator).
 
@@ -54,12 +61,17 @@ postfix     := primary ((("." | "?.") member))*
 member      := NAME ("(" args? ")")?
 args        := expr ("," expr)*
 primary     := INT | STRING | "true" | "false" | "null" | NAME
+             | "date" "(" STRING ")"
              | "(" expr ")"
              | "[" (expr ("," expr)*)? "]"
              | "if" expr "{" expr "}" "else" "{" expr "}"
 ```
 
 Notes:
+
+- The `date` constructor's argument must be a **string literal** — any other
+  expression in the parentheses is a parse error (rule R6's syntactic half).
+  The calendar validity of the text is checked later, by the type-checker.
 
 - `let`, lambdas, and `?:` chains appear at the top level of an expression or
   inside parentheses/brackets/argument lists. A lambda body extends as far
@@ -96,8 +108,9 @@ expressions.
 
 Types (`Ty`):
 
-- **Primitives**: `string int long short float double boolean byte char`
-  (mirroring `rex_ir::PrimitiveType`).
+- **Primitives**: `string int long short float double boolean byte char date`
+  (mirroring `rex_ir::PrimitiveType`). A `date` is a timezone-less calendar
+  day (`YYYY-MM-DD`); it has no time-of-day component and no timezone.
 - **Named types**: class, enum, datatype, interface, vocabulary — always
   package-qualified in the checker (`Named { kind, package, name }`), because
   they come from a resolved `rex_ir::Model`.
@@ -119,10 +132,13 @@ are **no implicit conversions**: in particular there is no implicit
 `int → long` (see U1). A literal typed `int` whose value does not fit in 32
 bits is an R1 constant-overflow error.
 
-**L2 (numeric operand rule).** `+ - * /` require both operands to have the
-*same* numeric type and produce it. `< <= > >=` require the same numeric type
-and produce `boolean`. `&& || !` operate on `boolean` only; unary `-` takes a
-numeric. There is no ordering on `string`; strings support only equality.
+**L2 (operand rule).** `+ - * /` require both operands to have the *same*
+numeric type and produce it. `< <= > >=` require the same numeric type — or
+two `date` values (rule R7) — and produce `boolean`. `&& || !` operate on
+`boolean` only; unary `-` takes a numeric. There is no ordering on `string`;
+strings support only equality. Dates take no arithmetic operators at all:
+calendar arithmetic is the typed method algebra described under R8, never
+`+`/`-`.
 
 **U1 (if unification).** `if` requires a `boolean` condition. Both branches
 must have the *same* type — compared exactly, with no implicit `int → long`
@@ -150,12 +166,13 @@ the access would have yielded, wrapping only if the result is not already
 optional in this typing: a to-many feature is `List(T)` even when its lower
 bound is 0).
 
-## The four semantic rules
+## The semantic rules
 
-These four are where target languages disagree. They are **normative**: every
+These eight are where target languages disagree. They are **normative**: every
 backend lowering a typed expression tree must preserve them, and the
 type-checker enforces their compile-time halves. Each rule is cited by tests
-as `R1`–`R4`.
+as `R1`–`R8`. R1–R4 predate the `date` primitive; R5–R8 pin the calendar
+semantics that came with it (issue #9).
 
 ### R1 — INTEGER OVERFLOW
 
@@ -257,6 +274,88 @@ toward zero and panics on a zero divisor, which is exactly the contract:
 (self.pages / 2i32)   // truncating; panics when the divisor is zero
 ```
 
+### R5 — DATE ARITHMETIC OVERFLOW
+
+A date is an `i32` count of **days since the epoch 1970-01-01** (negative
+before it) in the proleptic Gregorian civil calendar. `plus_days(n)` and
+`diff_days(d)` are checked `i32` arithmetic on that day number: overflow is a
+**runtime panic contract** — never wrap, never saturate. `plus_months`
+obeys the same contract at its bounds (R8).
+
+Compile-time half: a `date("…")` literal whose day number does not fit the
+`i32` scale is rejected at compile time under R6, so a checked literal can
+never fail to construct downstream.
+
+**Rust lowering.** The runtime type `rex_runtime::Date` implements the
+arithmetic with `checked_add`/`checked_sub` and panics with an `R5`-citing
+message on overflow:
+
+```rust
+(self.effective_date.plus_days(30i32))   // checked; panics past the i32 scale
+```
+
+### R6 — INVALID DATE LITERAL
+
+`date("YYYY-MM-DD")` is a **constant**, not a constructor call: there is no
+runtime constructor in the language (generated code may build its target
+date type directly). Two halves, both compile-time:
+
+- **Parse-time (syntactic).** The argument must be a *string literal*; any
+  other expression in the parentheses is a parse error.
+- **Check-time (semantic).** The text must be a strict ISO-8601 calendar
+  date: a year of at least four digits (a leading `-` admits extended
+  negative years), two-digit month `01`–`12`, two-digit day, and a day that
+  exists in the proleptic Gregorian calendar (leap years included). Anything
+  else — `2026-9-17`, `2026-13-01`, `2026-02-30`, `2023-02-29` — is a
+  **type-check error** whose span is the string literal, plus the R5
+  day-number bound. A valid literal types as `date`.
+
+**Rust lowering.** The literal lowers to the runtime's strict parser with the
+validity already proven, so the `expect` documents an invariant:
+
+```rust
+rex_runtime::Date::from_str("2026-09-17").expect("R6-checked date literal")
+```
+
+### R7 — DATE ORDERING AND EQUALITY
+
+The six comparison operators are total on `date`:
+
+- `< <= > >=` order two dates by the **total civil-calendar order** — exactly
+  the day-number order of R5 (there is no separate "granularity": dates are
+  days).
+- `==`/`!=` are **value equality** (an R2 extension), null-safe like every
+  equality (an optional date compares against `null` per R2/R3).
+
+A date and a non-date are a type error for all six, per L2/L1 (no implicit
+conversions, no literal adaptation — the `date("…")` form is its own type).
+
+**Rust lowering.** Plain operators: `rex_runtime::Date` derives `PartialEq`
+and `Ord` over the day number, so `==`/`<`/… are integer comparisons:
+
+```rust
+(self.effective_date == self.due_date)
+```
+
+### R8 — MONTH-ADD CLAMPING
+
+`plus_months(n)` shifts the calendar month and **clamps the day** to the
+target month's length: Jan 31 + 1 month = Feb 28 (Feb 29 in a leap year),
+Aug 31 + 1 month = Sep 30, Dec 31 + 2 months = Feb 28/29. The clamp never
+carries into the next month, and it is **not sticky**: each step clamps
+against its own target month, so (Jan 31 + 1 month) + 1 month = Feb 28 + 1
+month = Mar 28. `plus_days` and `diff_days` are plain day arithmetic and
+never clamp. R5's panic contract applies when the result leaves the `i32`
+scale.
+
+**Rust lowering.** Implemented once, in `rex_runtime::Date::plus_months`
+(month arithmetic in `i64`, day clamped with `min(days_in_month)`, R5 panic
+on overflow); lowered calls are plain method calls:
+
+```rust
+(self.effective_date.plus_months(6i32))   // 2026-01-31 + 6 months → 2026-07-31
+```
+
 ## Collection algebra
 
 The algebra is fixed — these six, and nothing else. Lowerings must emit the
@@ -277,6 +376,12 @@ lambda passed to an algebra call has the receiver's element type `T`. A lambda
 outside an algebra call (where its parameter type cannot be inferred) is a
 type error. Inside the lambda body the parameter shadows outer bindings of the
 same name (shadowing is always allowed).
+
+The algebra is generic over the element type wherever the table says so, which
+includes `date` elements: `first`/`filter`/`map`/`any`/`size` work on
+`List<date>` unchanged (and the calendar-algebra methods may appear inside
+their lambdas), while `sum` remains numeric-only — summing dates is a type
+error.
 
 ## Rust lowering
 
@@ -329,14 +434,25 @@ actually selected (for A2, only the matches). A6 sums by shared borrow (`iter`
 plain `+`, keeping the R1 contract. An A1 result is naturally `Option`; the
 remaining forms yield plain values, so their `?.` forms wrap in `Some(..)`.
 
+**Dates in Rust.** The `date` primitive maps to `rex_runtime::Date`, the
+runtime support crate's `Copy` newtype over the R5 day number. A literal
+lowers to the strict-parse-plus-`expect` shape of R6; the calendar algebra
+lowers to plain method calls (`plus_days`/`plus_months`/`diff_days`), and `?.`
+over an optional date propagates with `map`:
+
+```rust
+(self.effective_date.plus_months(6i32))
+(self.maturity_date.map(|__rex_date| __rex_date.plus_days(1i32)))
+```
+
 ## Scoping and evaluation shape
 
 - `let x = e1; e2`: `x` is bound to the value of `e1` while checking/evaluating
   `e2`. Shadowing an existing binding (including lambda parameters) is
   allowed, including shadowing with a different type.
 - Expressions are total in the checker's model: every well-typed expression
-  yields a value of its type or panics per R1/R4 — there is no third failure
-  mode other than `Option` (R3).
+  yields a value of its type or panics per R1/R4/R5 — there is no third
+  failure mode other than `Option` (R3).
 
 ## Errors
 

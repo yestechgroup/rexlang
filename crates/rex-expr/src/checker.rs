@@ -2,11 +2,15 @@
 //! [`rex_ir::Model`] (one resolved package set).
 //!
 //! The checker implements the typing rules of `docs/EXPRESSIONS.md` — the
-//! four semantic rules R1–R4 plus the auxiliary rules L1/L2 (literal
-//! polymorphism / operand types), U1 (branch unification), and A1–A6 (the
-//! collection algebra). Its compile-time obligations are the constant halves
-//! of R1 (checked constant arithmetic, `int` literal bounds) and R4 (constant
-//! zero divisor); the runtime halves are lowering contracts on backends.
+//! semantic rules R1–R8 (integer overflow, string equality, option/null
+//! propagation, division by zero, date arithmetic overflow, date literals,
+//! date ordering/equality, month-add clamping) plus the auxiliary rules
+//! L1/L2 (literal polymorphism / operand types), U1 (branch unification),
+//! and A1–A6 (the collection algebra). Its compile-time obligations are the
+//! constant halves of R1 (checked constant arithmetic, `int` literal
+//! bounds), R4 (constant zero divisor), and R6 (the `date("…")` literal must
+//! name a real calendar day); the runtime halves are lowering contracts on
+//! backends.
 //!
 //! Errors are collected across the whole tree: a failed subexpression is
 //! *poisoned* so it never cascades into spurious operator errors, but its
@@ -177,6 +181,7 @@ impl TypeChecker {
             ExprKind::String(_) => Ok(Ty::string()),
             ExprKind::Bool(_) => Ok(Ty::boolean()),
             ExprKind::Null => Ok(Ty::Null),
+            ExprKind::Date { text, literal_span } => self.date_literal(text, *literal_span, errors),
             ExprKind::Name(text) => self.name(scope, text, expr.span, errors),
             ExprKind::Unary { op, expr: inner } => self.unary(scope, *op, inner, errors),
             ExprKind::Binary { op, lhs, rhs } => self.binary(scope, *op, lhs, rhs, errors),
@@ -238,6 +243,24 @@ impl TypeChecker {
             return Err(());
         }
         Ok(Ty::int())
+    }
+
+    /// Spec R6: the `date("…")` constructor's text must be a strict
+    /// ISO-8601 calendar date (`YYYY-MM-DD`) that names a real civil-calendar
+    /// day within the R5 day-number bounds. The error span is the string
+    /// literal. A valid literal types as the `date` primitive.
+    fn date_literal(&self, text: &str, span: Span, errors: &mut Vec<ExprError>) -> Checked {
+        if parse_date_text(text).is_none() {
+            errors.push(ExprError::new(
+                format!(
+                    "R6: invalid date literal {text:?} — expected a calendar date \
+                     `YYYY-MM-DD` (see docs/EXPRESSIONS.md rule R6)"
+                ),
+                span,
+            ));
+            return Err(());
+        }
+        Ok(Ty::Primitive(PrimitiveType::Date))
     }
 
     fn name(&self, scope: &Scope, text: &str, span: Span, errors: &mut Vec<ExprError>) -> Checked {
@@ -415,6 +438,12 @@ impl TypeChecker {
         let (lhs_ty, rhs_ty) = self.numeric_operands(scope, lhs, rhs, errors);
         let lhs_ty = lhs_ty?;
         let rhs_ty = rhs_ty?;
+        // L2 date extension (spec R7): `< <= > >=` compare two date values
+        // by the total civil-calendar order.
+        let date = Ty::Primitive(PrimitiveType::Date);
+        if lhs_ty == date && rhs_ty == date {
+            return Ok(Ty::boolean());
+        }
         if lhs_ty != rhs_ty || !lhs_ty.is_numeric() {
             errors.push(self.operand_mismatch(op, &lhs_ty, &rhs_ty, lhs.span));
             return Err(());
@@ -603,6 +632,12 @@ impl TypeChecker {
         errors: &mut Vec<ExprError>,
     ) -> Checked {
         let target = self.receiver_target(scope, receiver, optional_safe, name, errors)?;
+        // Calendar algebra on date values (spec R5–R8) precedes the
+        // model-declared operation lookup: these three builtins exist on
+        // every `date` value.
+        if target == Ty::Primitive(PrimitiveType::Date) {
+            return self.date_method(scope, name, args, optional_safe, errors);
+        }
         let (package, class) = match &target {
             Ty::Named {
                 kind: NamedKind::Class,
@@ -658,6 +693,56 @@ impl TypeChecker {
         }
 
         self.wrap_optional(Ty::from_type_ref(&operation.return_type), optional_safe)
+    }
+
+    /// The typed calendar algebra on `date` receivers (spec R5–R8):
+    /// `plus_days(int) -> date`, `plus_months(int) -> date` (month-end
+    /// clamp), `diff_days(date) -> int`. The `int` arguments follow L1;
+    /// anything else about the argument or the method name is a type error.
+    fn date_method(
+        &self,
+        scope: &Scope,
+        name: &Spanned<String>,
+        args: &[Expr],
+        optional_safe: bool,
+        errors: &mut Vec<ExprError>,
+    ) -> Checked {
+        let date = Ty::Primitive(PrimitiveType::Date);
+        let (expected, result) = match name.value.as_str() {
+            "plus_days" | "plus_months" => (Ty::int(), date),
+            "diff_days" => (date, Ty::int()),
+            other => {
+                errors.push(ExprError::new(
+                    format!("unknown operation `{other}` on `date`"),
+                    name.span,
+                ));
+                return Err(());
+            }
+        };
+        if args.len() != 1 {
+            errors.push(ExprError::new(
+                format!(
+                    "arity mismatch: date method `{}` expects 1 argument, found {}",
+                    name.value,
+                    args.len()
+                ),
+                name.span,
+            ));
+            return Err(());
+        }
+        let arg = &args[0];
+        if let Ok(ty) = self.check(scope, arg, Some(&expected), errors) {
+            if ty != expected {
+                errors.push(ExprError::new(
+                    format!(
+                        "argument type mismatch in call to `{}`: expected {expected}, found {ty}",
+                        name.value
+                    ),
+                    arg.span,
+                ));
+            }
+        }
+        self.wrap_optional(result, optional_safe)
     }
 
     /// Spec A1–A6.
@@ -876,6 +961,65 @@ impl TypeChecker {
             Ok(ty)
         }
     }
+}
+
+/// Strict ISO-8601 calendar-date text (`YYYY-MM-DD`, or a signed extended
+/// year for dates outside the four-digit range): exactly three dash-separated
+/// parts, a year of at least four digits, two-digit month and day, a real
+/// civil-calendar day (proleptic Gregorian), and a day number within the R5
+/// `i32` bounds. Returns the `(year, month, day)` components.
+///
+/// This mirrors `rex_runtime::Date::from_str` exactly (rex-expr cannot depend
+/// on the runtime crate); both are tested against the same calendar rules.
+fn parse_date_text(text: &str) -> Option<(i32, u32, u32)> {
+    let (sign, rest) = match text.strip_prefix('-') {
+        Some(rest) => (-1i64, rest),
+        None => (1, text),
+    };
+    let mut parts = rest.split('-');
+    let (year_text, month_text, day_text) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some() {
+        return None;
+    }
+    let number = |part: &str, min_width: usize| -> Option<i64> {
+        if part.len() < min_width || !part.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        part.parse::<i64>().ok()
+    };
+    let year = i32::try_from(sign * number(year_text, 4)?).ok()?;
+    let month = u32::try_from(number(month_text, 2)?).ok()?;
+    let day = u32::try_from(number(day_text, 2)?).ok()?;
+    if month == 0 || month > 12 {
+        return None;
+    }
+    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let length = match month {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    if day == 0 || day > length {
+        return None;
+    }
+    // R5 bound: the literal's day number must fit the i32 scale the runtime
+    // uses, so a checked literal can never fail to construct downstream.
+    days_from_civil(year, month, day)?;
+    Some((year, month, day))
+}
+
+/// Days from 1970-01-01 to `y-m-d` (Hinnant's `days_from_civil`), as `i64`;
+/// `None` when the value does not fit `i32`. Mirrors the runtime's calendar.
+fn days_from_civil(y: i32, m: u32, d: u32) -> Option<i32> {
+    let y = i64::from(y) - i64::from(m <= 2);
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = i64::from(if m > 2 { m - 3 } else { m + 9 });
+    let doy = (153 * mp + 2) / 5 + i64::from(d) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    i32::try_from(days).ok()
 }
 
 /// Whether an expression is an integer *literal* (optionally negated): the

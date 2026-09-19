@@ -43,6 +43,48 @@ pub fn parse(source: &str) -> ParseResult {
     }
 }
 
+/// The `date("YYYY-MM-DD")` primary form: the contextual word `date`
+/// followed by a parenthesized string literal (spec R6). `date` is not a
+/// keyword — a bare `date` with no string-literal argument still parses as
+/// an ordinary name. When the parenthesized argument is not a string
+/// literal, one clear error is emitted and an empty date literal is
+/// recovered (the checker is never reached with parse errors in the wired
+/// pipeline, so the placeholder cannot leak into lowering).
+fn date_literal<'src, I, P>(expr: &P) -> impl Parser<'src, I, Expr, ExExtra<'src>> + Clone
+where
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
+    P: Parser<'src, I, Expr, ExExtra<'src>> + Clone + 'src,
+{
+    select! { Token::Ident(text) = e if text == "date" => e.span() }
+        .ignore_then(
+            expr.clone()
+                .map(|inner| match inner.kind {
+                    ExprKind::String(text) => Ok(text),
+                    _ => Err(inner.span),
+                })
+                .validate(|arg, _e, emitter| match arg {
+                    Ok(text) => text,
+                    Err(span) => {
+                        emitter.emit(Rich::custom(
+                            span,
+                            "the `date` constructor takes a string literal \
+                                 (`date(\"YYYY-MM-DD\")`)",
+                        ));
+                        String::new()
+                    }
+                })
+                .map_with(|text, e| {
+                    let literal_span: Span = e.span();
+                    (text, literal_span)
+                })
+                .delimited_by(just(Token::LParen), just(Token::RParen)),
+        )
+        .map_with(|(text, literal_span), e| {
+            Expr::new(ExprKind::Date { text, literal_span }, e.span())
+        })
+        .boxed()
+}
+
 /// Consumes every token after a successfully parsed expression, emitting one
 /// error for the skipped region. Consuming zero tokens emits no error, so a
 /// clean parse stays clean.
@@ -244,6 +286,8 @@ where
         })
 }
 
+/// One date-literal parser, wired into the primary `choice` below.
+///
 /// The parser for one expression, level by level. Every level is
 /// [`Parser::boxed`]: the fully inlined combinator tower would be so deeply
 /// typed that merely constructing (or dropping) it can exhaust a small
@@ -256,6 +300,7 @@ where
         let atom = choice((
             int_lit().map_with(|value, e| Expr::new(ExprKind::Int(value), e.span())),
             string_lit().map_with(|value, e| Expr::new(ExprKind::String(value), e.span())),
+            date_literal(&expr),
             just(Token::True).map_with(|_, e| Expr::new(ExprKind::Bool(true), e.span())),
             just(Token::False).map_with(|_, e| Expr::new(ExprKind::Bool(false), e.span())),
             just(Token::Null).map_with(|_, e| Expr::new(ExprKind::Null, e.span())),

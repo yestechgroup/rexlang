@@ -7,7 +7,7 @@ use crate::ast::{Expr, Span};
 #[error("{message} at byte offsets {span}")]
 pub struct ExprError {
     /// Human-readable description of the error; semantic errors cite the
-    /// governing spec rule (`R1`–`R4`) by number.
+    /// governing spec rule (`R1`–`R8`) by number.
     pub message: String,
     /// Byte range the error refers to.
     pub span: Span,

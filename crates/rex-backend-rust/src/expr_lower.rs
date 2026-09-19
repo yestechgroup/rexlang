@@ -318,6 +318,14 @@ impl Lowerer<'_, '_> {
                 _ => format!("{value}i32"),
             }),
             ExprKind::String(text) => Ok(format!("{text:?}.to_string()")),
+            ExprKind::Date { text, .. } => {
+                // R6 was enforced at check time, so the parse cannot fail;
+                // the `expect` documents that invariant rather than adding a
+                // failure mode.
+                Ok(format!(
+                    "rex_runtime::Date::from_str({text:?}).expect(\"R6-checked date literal\")"
+                ))
+            }
             ExprKind::Bool(value) => Ok(value.to_string()),
             ExprKind::Null => Err(LowerError::new(
                 "`null` is only valid in equality and `?:` contexts (spec R2/R3)",
@@ -586,6 +594,11 @@ impl Lowerer<'_, '_> {
         let recv_ty = self.type_of(receiver)?;
         let recv_is_option = matches!(recv_ty, Ty::Option(_));
         let target = recv_ty.inner().unwrap_or(&recv_ty).clone();
+        // Calendar algebra on date values (spec R5–R8) lowers to the
+        // runtime type's methods, not to the arena.
+        if target == Ty::Primitive(PrimitiveType::Date) {
+            return self.date_method(receiver, name, args, optional_safe);
+        }
         let operation = self.ctx.find_operation(&target, &name.value)?;
         let recv_code = self.lower(receiver, &recv_ty)?;
         let (_, class) = class_of(&target)
@@ -614,6 +627,54 @@ impl Lowerer<'_, '_> {
                     "Some(res.{res_lookup}({recv_code}).expect(\"dangling `{class}` id\").{invoke})"
                 )
             }
+        })
+    }
+
+    /// The calendar algebra on `date` receivers (spec R5–R8): the runtime
+    /// `Date` methods, invoked on the lowered receiver. `?.` propagates the
+    /// optional receiver with `map` (dates are `Copy`, so the closure owns
+    /// its binding); a `?.` over a non-optional receiver wraps in `Some`.
+    fn date_method(
+        &mut self,
+        receiver: &Expr,
+        name: &rex_expr::Spanned<String>,
+        args: &[Expr],
+        optional_safe: bool,
+    ) -> Result<String, LowerError> {
+        let recv_ty = self.type_of(receiver)?;
+        let recv_is_option = matches!(recv_ty, Ty::Option(_));
+        if !matches!(
+            name.value.as_str(),
+            "plus_days" | "plus_months" | "diff_days"
+        ) {
+            return Err(LowerError::new(format!(
+                "unknown date method `{}`",
+                name.value
+            )));
+        }
+        let [arg] = args else {
+            return Err(LowerError::new(format!(
+                "date method `{}` expects exactly one argument",
+                name.value
+            )));
+        };
+        let arg_code = self.lower(arg, &self.type_of(arg)?)?;
+        let recv_code = self.lower(receiver, &recv_ty)?;
+        // A dereferenced closure parameter binds too loosely in Rust
+        // (`*d.m()` would deref the result), so the receiver parenthesizes.
+        let invoke = match recv_code.strip_prefix('*') {
+            Some(inner) => format!("(*{inner}).{}({arg_code})", name.value),
+            None => format!("{recv_code}.{}({arg_code})", name.value),
+        };
+        Ok(match (optional_safe, recv_is_option) {
+            (false, _) => format!("({invoke})"),
+            (true, true) => {
+                format!(
+                    "({recv_code}.map(|__rex_date| __rex_date.{}({arg_code})))",
+                    name.value
+                )
+            }
+            (true, false) => format!("Some(({invoke}))"),
         })
     }
 
@@ -745,6 +806,7 @@ fn rust_type(ty: &Ty) -> Result<String, LowerError> {
             PrimitiveType::Boolean => "bool".to_string(),
             PrimitiveType::Byte => "i8".to_string(),
             PrimitiveType::Char => "char".to_string(),
+            PrimitiveType::Date => "rex_runtime::Date".to_string(),
         },
         Ty::Named {
             kind: NamedKind::Class,

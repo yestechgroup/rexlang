@@ -66,6 +66,17 @@ fn save_expr(type_: &TypeRef, v: &str, deref: bool) -> String {
             }
             PrimitiveType::Boolean => format!("serde_json::Value::Bool({})", place(v)),
             PrimitiveType::Char => format!("serde_json::Value::String({v}.to_string())"),
+            // Dates serialize as their ISO-8601 string (the wire contract of
+            // the `date` primitive; issue #9). The deref must parenthesize:
+            // `*v.to_string()` would deref the produced string.
+            PrimitiveType::Date => {
+                let receiver = if deref {
+                    format!("(*{v})")
+                } else {
+                    v.to_string()
+                };
+                format!("serde_json::Value::String({receiver}.to_string())")
+            }
         },
         TypeRef::Enum { .. } => format!("serde_json::Value::String({v}.name().to_string())"),
         TypeRef::Datatype { .. } => format!("serde_json::Value::String({v}.0.clone())"),
@@ -93,6 +104,9 @@ fn load_expr(type_: &TypeRef, value: &str, where_: &str) -> String {
             PrimitiveType::Double => format!("expect_f64({value}, {w:?})?"),
             PrimitiveType::Boolean => format!("expect_bool({value}, {w:?})?"),
             PrimitiveType::Char => format!("expect_char({value}, {w:?})?"),
+            // Loading is strict: the string must parse as an ISO-8601
+            // calendar date (R6 discipline at the runtime boundary).
+            PrimitiveType::Date => format!("expect_date({value}, {w:?})?"),
         },
         TypeRef::Enum { name, .. } => format!(
             "{}::from_instance_name(expect_string({value}, {w:?})?)?",
@@ -188,6 +202,13 @@ fn emit_value_helpers(e: &mut String) {
          \x20       (Some(c), None) => Ok(c),\n\
          \x20       _ => Err(instance_error(format!(\"{where_} must be a single character\"))),\n\
          \x20   }\n\
+         }\n\n",
+    );
+    e.push_str(
+        "#[allow(dead_code)]\n\
+         fn expect_date(value: &serde_json::Value, where_: &str) -> Result<rex_runtime::Date, rex_runtime::RexError> {\n\
+         \x20   let s = expect_string(value, where_)?;\n\
+         \x20   s.parse::<rex_runtime::Date>().map_err(|_| instance_error(format!(\"{where_} must be an ISO-8601 date (YYYY-MM-DD)\")))\n\
          }\n\n",
     );
     e.push_str(
