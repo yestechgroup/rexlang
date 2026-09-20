@@ -1,0 +1,870 @@
+{
+  "formatVersion": 1,
+  "domains": [
+    {
+      "name": "sales",
+      "schemaName": "sales"
+    }
+  ],
+  "views": [
+    {
+      "name": "CustomerList",
+      "label": "Customer Management",
+      "isLandmark": true,
+      "isXor": false,
+      "isModal": false,
+      "params": [],
+      "properties": [
+        {
+          "key": "landmark",
+          "value": {
+            "type": "bool",
+            "value": true
+          }
+        },
+        {
+          "key": "position",
+          "value": {
+            "type": "object",
+            "value": [
+              {
+                "key": "x",
+                "value": {
+                  "type": "number",
+                  "value": 100.0
+                }
+              },
+              {
+                "key": "y",
+                "value": {
+                  "type": "number",
+                  "value": 200.0
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "containers": [],
+      "components": [
+        {
+          "name": "grid",
+          "componentType": {
+            "type": "list"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Customer"
+              }
+            },
+            {
+              "key": "fields",
+              "value": {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "identifier",
+                    "value": "name"
+                  },
+                  {
+                    "type": "identifier",
+                    "value": "email"
+                  },
+                  {
+                    "type": "identifier",
+                    "value": "status"
+                  }
+                ]
+              }
+            },
+            {
+              "key": "filter",
+              "value": {
+                "type": "binOp",
+                "value": {
+                  "left": {
+                    "type": "binOp",
+                    "value": {
+                      "left": {
+                        "type": "identifier",
+                        "value": "status"
+                      },
+                      "op": "eq",
+                      "right": {
+                        "type": "string",
+                        "value": "active"
+                      }
+                    }
+                  },
+                  "op": "and",
+                  "right": {
+                    "type": "binOp",
+                    "value": {
+                      "left": {
+                        "type": "identifier",
+                        "value": "tier"
+                      },
+                      "op": "ne",
+                      "right": {
+                        "type": "string",
+                        "value": "trial"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "key": "sortable",
+              "value": {
+                "type": "bool",
+                "value": true
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "select"
+              },
+              "params": [
+                "row"
+              ],
+              "requires": [],
+              "condition": {
+                "type": "binOp",
+                "value": {
+                  "left": {
+                    "type": "fieldExpr",
+                    "value": {
+                      "object": {
+                        "type": "ident",
+                        "value": "row"
+                      },
+                      "field": "active"
+                    }
+                  },
+                  "op": "eq",
+                  "right": {
+                    "type": "boolLit",
+                    "value": true
+                  }
+                }
+              },
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "CustomerEdit",
+                  "binding": {
+                    "pairs": [
+                      [
+                        "customerId",
+                        {
+                          "type": "fieldExpr",
+                          "value": {
+                            "object": {
+                              "type": "ident",
+                              "value": "row"
+                            },
+                            "field": "id"
+                          }
+                        }
+                      ],
+                      [
+                        "slug",
+                        {
+                          "type": "stringLit",
+                          "value": "detail"
+                        }
+                      ]
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "create"
+              },
+              "params": [],
+              "requires": [],
+              "condition": null,
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "CustomerEdit",
+                  "binding": null
+                }
+              }
+            },
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "refreshData"
+              },
+              "params": [],
+              "requires": [],
+              "condition": null,
+              "action": {
+                "type": "refresh",
+                "value": {
+                  "target": "grid",
+                  "binding": null
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ],
+      "events": [],
+      "moduleUses": [],
+      "roles": [
+        "admin",
+        "manager"
+      ],
+      "requires": [],
+      "condition": null,
+      "position": {
+        "x": 100.0,
+        "y": 200.0
+      }
+    },
+    {
+      "name": "CustomerEdit",
+      "label": null,
+      "isLandmark": false,
+      "isXor": false,
+      "isModal": false,
+      "params": [
+        {
+          "name": "customerId",
+          "typeRef": "Uuid",
+          "default": null
+        },
+        {
+          "name": "slug",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "home"
+          }
+        }
+      ],
+      "properties": [],
+      "containers": [],
+      "components": [
+        {
+          "name": "editor",
+          "componentType": {
+            "type": "form"
+          },
+          "spec": {
+            "type": "form",
+            "value": {
+              "fields": [
+                {
+                  "name": "title",
+                  "input": {
+                    "type": "text"
+                  },
+                  "required": true,
+                  "validations": [
+                    {
+                      "type": "binOp",
+                      "value": {
+                        "left": {
+                          "type": "call",
+                          "value": {
+                            "name": "len",
+                            "args": [
+                              {
+                                "type": "ident",
+                                "value": "title"
+                              }
+                            ]
+                          }
+                        },
+                        "op": "gt",
+                        "right": {
+                          "type": "numLit",
+                          "value": 2.0
+                        }
+                      }
+                    },
+                    {
+                      "type": "binOp",
+                      "value": {
+                        "left": {
+                          "type": "ident",
+                          "value": "title"
+                        },
+                        "op": "ne",
+                        "right": {
+                          "type": "stringLit",
+                          "value": ""
+                        }
+                      }
+                    }
+                  ],
+                  "values": [],
+                  "messages": [
+                    "Title too short",
+                    "Title required"
+                  ]
+                },
+                {
+                  "name": "tier",
+                  "input": {
+                    "type": "dropdown"
+                  },
+                  "required": false,
+                  "validations": [],
+                  "values": [],
+                  "messages": []
+                }
+              ]
+            }
+          },
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Customer"
+              }
+            },
+            {
+              "key": "mode",
+              "value": {
+                "type": "identifier",
+                "value": "edit"
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "save"
+              },
+              "params": [
+                "values"
+              ],
+              "requires": [
+                "ManageCustomer",
+                "ApproveCustomer"
+              ],
+              "condition": {
+                "type": "binOp",
+                "value": {
+                  "left": {
+                    "type": "fieldExpr",
+                    "value": {
+                      "object": {
+                        "type": "ident",
+                        "value": "values"
+                      },
+                      "field": "name"
+                    }
+                  },
+                  "op": "ne",
+                  "right": {
+                    "type": "stringLit",
+                    "value": ""
+                  }
+                }
+              },
+              "action": {
+                "type": "actionInvocation",
+                "value": {
+                  "name": "UpdateCustomer",
+                  "body": {
+                    "properties": [
+                      {
+                        "key": "body",
+                        "value": {
+                          "type": "identifier",
+                          "value": "values"
+                        }
+                      }
+                    ],
+                    "handlers": [
+                      {
+                        "eventType": {
+                          "type": "custom",
+                          "value": "success"
+                        },
+                        "params": [],
+                        "requires": [],
+                        "condition": null,
+                        "action": {
+                          "type": "navigate",
+                          "value": {
+                            "target": "CustomerDetail",
+                            "binding": {
+                              "pairs": [
+                                [
+                                  "customerId",
+                                  {
+                                    "type": "fieldExpr",
+                                    "value": {
+                                      "object": {
+                                        "type": "ident",
+                                        "value": "params"
+                                      },
+                                      "field": "customerId"
+                                    }
+                                  }
+                                ]
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "eventType": {
+                          "type": "custom",
+                          "value": "error"
+                        },
+                        "params": [],
+                        "requires": [],
+                        "condition": null,
+                        "action": {
+                          "type": "stay"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "eventType": {
+                "type": "cancel"
+              },
+              "params": [],
+              "requires": [],
+              "condition": null,
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "CustomerList",
+                  "binding": null
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ],
+      "events": [],
+      "moduleUses": [],
+      "roles": [],
+      "requires": [
+        "ManageCustomer"
+      ],
+      "condition": null,
+      "position": null
+    },
+    {
+      "name": "Report",
+      "label": null,
+      "isLandmark": false,
+      "isXor": true,
+      "isModal": false,
+      "params": [],
+      "properties": [
+        {
+          "key": "xor",
+          "value": {
+            "type": "bool",
+            "value": true
+          }
+        }
+      ],
+      "containers": [
+        {
+          "name": "Summary",
+          "label": null,
+          "isDefault": true,
+          "isXor": false,
+          "params": [],
+          "properties": [
+            {
+              "key": "default",
+              "value": {
+                "type": "bool",
+                "value": true
+              }
+            }
+          ],
+          "containers": [],
+          "components": [
+            {
+              "name": "revenue",
+              "componentType": {
+                "type": "chart"
+              },
+              "spec": {
+                "type": "chart",
+                "value": {
+                  "kind": "bar",
+                  "labelField": "region",
+                  "valueFields": [
+                    "revenue",
+                    "cost"
+                  ]
+                }
+              },
+              "properties": [],
+              "events": [],
+              "condition": null
+            }
+          ],
+          "events": [],
+          "moduleUses": [],
+          "condition": null,
+          "position": null
+        },
+        {
+          "name": "Detail",
+          "label": null,
+          "isDefault": false,
+          "isXor": false,
+          "params": [],
+          "properties": [],
+          "containers": [],
+          "components": [
+            {
+              "name": "rows",
+              "componentType": {
+                "type": "table"
+              },
+              "spec": {
+                "type": "table",
+                "value": {
+                  "columns": [
+                    {
+                      "type": "field",
+                      "value": {
+                        "label": "Name",
+                        "field": {
+                          "entity": "Customer",
+                          "property": "name"
+                        }
+                      }
+                    },
+                    {
+                      "type": "lookup",
+                      "value": {
+                        "label": "Status",
+                        "field": {
+                          "entity": "Customer",
+                          "property": "status"
+                        },
+                        "lookup": "status_labels"
+                      }
+                    },
+                    {
+                      "type": "expression",
+                      "value": {
+                        "label": "Score",
+                        "expr": {
+                          "type": "binOp",
+                          "value": {
+                            "left": {
+                              "type": "call",
+                              "value": {
+                                "name": "score",
+                                "args": [
+                                  {
+                                    "type": "fieldExpr",
+                                    "value": {
+                                      "object": {
+                                        "type": "ident",
+                                        "value": "Customer"
+                                      },
+                                      "field": "history"
+                                    }
+                                  }
+                                ]
+                              }
+                            },
+                            "op": "mul",
+                            "right": {
+                              "type": "numLit",
+                              "value": 100.0
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "pagination": true
+                }
+              },
+              "properties": [
+                {
+                  "key": "paginated",
+                  "value": {
+                    "type": "bool",
+                    "value": true
+                  }
+                }
+              ],
+              "events": [],
+              "condition": null
+            }
+          ],
+          "events": [],
+          "moduleUses": [],
+          "condition": null,
+          "position": null
+        }
+      ],
+      "components": [],
+      "events": [],
+      "moduleUses": [],
+      "roles": [],
+      "requires": [],
+      "condition": null,
+      "position": null
+    },
+    {
+      "name": "Dashboard",
+      "label": null,
+      "isLandmark": false,
+      "isXor": false,
+      "isModal": false,
+      "params": [],
+      "properties": [],
+      "containers": [],
+      "components": [
+        {
+          "name": "recentOrders",
+          "componentType": {
+            "type": "list"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Order"
+              }
+            },
+            {
+              "key": "fields",
+              "value": {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "identifier",
+                    "value": "id"
+                  },
+                  {
+                    "type": "identifier",
+                    "value": "total"
+                  },
+                  {
+                    "type": "identifier",
+                    "value": "date"
+                  }
+                ]
+              }
+            },
+            {
+              "key": "filter",
+              "value": {
+                "type": "binOp",
+                "value": {
+                  "left": {
+                    "type": "identifier",
+                    "value": "date"
+                  },
+                  "op": "eq",
+                  "right": {
+                    "type": "call",
+                    "value": [
+                      "today",
+                      []
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "select"
+              },
+              "params": [
+                "row"
+              ],
+              "requires": [],
+              "condition": null,
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "CustomerDetail",
+                  "binding": {
+                    "pairs": [
+                      [
+                        "customerId",
+                        {
+                          "type": "fieldExpr",
+                          "value": {
+                            "object": {
+                              "type": "ident",
+                              "value": "row"
+                            },
+                            "field": "customerId"
+                          }
+                        }
+                      ]
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ],
+      "events": [
+        {
+          "eventType": {
+            "type": "load"
+          },
+          "params": [],
+          "requires": [],
+          "condition": null,
+          "action": {
+            "type": "refresh",
+            "value": {
+              "target": "recentOrders",
+              "binding": null
+            }
+          }
+        }
+      ],
+      "moduleUses": [
+        {
+          "module": "Pagination",
+          "alias": "pager",
+          "properties": [
+            {
+              "key": "page_size",
+              "value": {
+                "type": "number",
+                "value": 25.0
+              }
+            }
+          ]
+        }
+      ],
+      "roles": [],
+      "requires": [],
+      "condition": null,
+      "position": null
+    }
+  ],
+  "actions": [
+    {
+      "name": "UpdateCustomer",
+      "properties": [
+        {
+          "key": "target",
+          "value": {
+            "type": "identifier",
+            "value": "Customer"
+          }
+        }
+      ],
+      "events": []
+    }
+  ],
+  "modules": [
+    {
+      "name": "Pagination",
+      "inputParams": [
+        {
+          "name": "page",
+          "typeRef": "Int",
+          "default": null
+        },
+        {
+          "name": "pageSize",
+          "typeRef": "Int",
+          "default": null
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "total",
+          "typeRef": "Int",
+          "default": null
+        }
+      ],
+      "properties": [],
+      "containers": [],
+      "components": [
+        {
+          "name": "pager",
+          "componentType": {
+            "type": "list"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            },
+            {
+              "key": "fields",
+              "value": {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "identifier",
+                    "value": "name"
+                  }
+                ]
+              }
+            }
+          ],
+          "events": [],
+          "condition": null
+        }
+      ],
+      "events": []
+    }
+  ],
+  "actors": [
+    {
+      "name": "Admin",
+      "properties": [
+        {
+          "key": "role",
+          "value": {
+            "type": "identifier",
+            "value": "admin"
+          }
+        }
+      ]
+    }
+  ],
+  "imports": [
+    "rexlang/auth.actor"
+  ]
+}

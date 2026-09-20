@@ -1,0 +1,280 @@
+// ── Entry point ──────────────────────────────────────────────────
+ifml_model = {
+    SOI ~
+    (import_declaration | domain_declaration)* ~
+    (import_declaration | view_declaration | action_declaration | module_declaration | actor_declaration)* ~
+    EOI
+}
+
+// ── Import declaration ────────────────────────────────────────────
+// `import "rexlang/auth.actor";` — the raw string value is kept verbatim;
+// resolution/dedup is a downstream concern. Trailing `;` is optional.
+import_declaration = { "import" ~ string ~ ";"? }
+
+// ── Domain declaration ────────────────────────────────────────────
+domain_declaration = {
+    "domain" ~ string ~ "{" ~
+        "schema" ~ string ~ ";" ~
+    "}"
+}
+
+// ── View declarations ─────────────────────────────────────────────
+view_declaration = {
+    "view" ~ string ~ view_body
+}
+
+view_body = {
+    "{" ~
+        params_block? ~
+        label_declaration? ~
+        property_assignment* ~
+        (container_declaration | component_declaration | event_handler | condition_statement | module_use_statement)* ~
+    "}"
+}
+
+container_declaration = {
+    "container" ~ string ~ container_body
+}
+
+container_body = {
+    "{" ~
+        params_block? ~
+        label_declaration? ~
+        property_assignment* ~
+        (container_declaration | component_declaration | event_handler | condition_statement | module_use_statement)* ~
+    "}"
+}
+
+params_block = { "params" ~ parameter_block ~ ";" }
+
+parameter_block = {
+    "{" ~ parameter_decl ~ ("," ~ parameter_decl)* ~ "}"
+}
+
+parameter_decl = {
+    identifier ~ ":" ~ type_ref ~ ("=" ~ param_default)?
+}
+
+param_default = { string | number | boolean }
+
+module_use_statement = {
+    "use" ~ string ~ ("as" ~ identifier)? ~ (module_use_body ~ ";"? | ";")
+}
+
+module_use_body = { "{" ~ property_assignment* ~ "}" }
+
+label_declaration = { "label" ~ string ~ ";" }
+
+// ── Component declarations ────────────────────────────────────────
+component_declaration = {
+    "component" ~ string ~ component_body
+}
+
+component_body = {
+    "{" ~
+        property_assignment* ~
+        (column_decl | field_decl | chart_decl | condition_statement)* ~
+        (event_handler | condition_statement)* ~
+    "}"
+}
+
+// ── Typed component declarations ──────────────────────────────────
+column_decl = {
+    "column" ~ string ~ "->" ~ (column_lookup | column_field | column_expr) ~ ";"
+}
+
+column_lookup = { "lookup" ~ property_ref ~ "via" ~ identifier }
+
+column_field = { "field" ~ property_ref }
+
+column_expr = { "expr" ~ expression }
+
+property_ref = { identifier ~ "." ~ identifier }
+
+field_decl = {
+    "field" ~ identifier ~ "->" ~ "input" ~ input_type ~ (input_body | ";")
+}
+
+input_type = {
+    "textarea" | "password" | "email" | "number" | "datetime" | "dropdown" |
+    "checkbox" | "radio" | "toggle" | "hidden" | "text" | "date" | "time" |
+    "file" | identifier
+}
+
+input_body = { "{" ~ property_assignment* ~ "}" }
+
+chart_decl = { "chart" ~ chart_kind ~ (chart_body | ";") }
+
+chart_kind = { "bar" | "line" | "pie" | "radar" | "metric" }
+
+chart_body = { "{" ~ property_assignment* ~ "}" }
+
+// ── Properties ────────────────────────────────────────────────────
+property_assignment = {
+    identifier ~ ":" ~ value_expression ~ ";"
+}
+
+value_expression = { logical_or | array_literal | object_literal }
+
+array_literal = {
+    "[" ~ (value_expression ~ ("," ~ value_expression)*)? ~ "]"
+}
+
+object_literal = {
+    "{" ~
+        (object_member ~ (";" ~ object_member)*)? ~
+        ";"? ~
+    "}"
+}
+
+object_member = { identifier ~ ":" ~ object_member_value }
+
+object_member_value = { logical_or | array_literal }
+
+// ── Event handlers ────────────────────────────────────────────────
+event_handler = {
+    "on" ~ event_type ~ event_param? ~ event_requires? ~ event_condition? ~ "->" ~ event_action ~ ";"
+}
+
+event_requires = { "requires" ~ ":" ~ "[" ~ identifier ~ ("," ~ identifier)* ~ "]" }
+
+event_condition = { "if" ~ expression }
+
+event_type = {
+    "select" | "submit" | "click" | "change" | "load" |
+    "save" | "cancel" | "delete" | "confirm" | "back" |
+    identifier
+}
+
+event_param = {
+    "(" ~ identifier ~ ("," ~ identifier)* ~ ")"
+}
+
+event_action = {
+    navigate_action |
+    refresh_action |
+    action_invocation |
+    stay_statement
+}
+
+navigate_action = {
+    "navigate" ~ "(" ~ string ~ ("," ~ parameter_binding)? ~ ")"
+}
+
+refresh_action = {
+    "refresh" ~ "(" ~ string ~ ("," ~ parameter_binding)? ~ ")"
+}
+
+action_invocation = {
+    "action" ~ "(" ~ string ~ ("," ~ action_body)? ~ ")"
+}
+
+action_body = {
+    "{" ~
+        property_assignment* ~
+        event_handler* ~
+    "}"
+}
+
+stay_statement = { "stay" }
+
+parameter_binding = {
+    "{" ~ (parameter_binding_pair ~ ("," ~ parameter_binding_pair)*)? ~ "}"
+}
+
+parameter_binding_pair = {
+    identifier ~ ":" ~ expression
+}
+
+// ── Action declarations ────────────────────────────────────────────
+action_declaration = {
+    "action" ~ string ~ "{" ~
+        property_assignment* ~
+        event_handler* ~
+    "}"
+}
+
+// ── Module declarations ────────────────────────────────────────────
+module_declaration = {
+    "module" ~ string ~ "{" ~
+        "input" ~ parameter_block ~
+        "output" ~ parameter_block ~
+        property_assignment* ~
+        (container_declaration | component_declaration | event_handler)* ~
+    "}"
+}
+
+// ── Actor declarations ─────────────────────────────────────────────
+actor_declaration = {
+    "actor" ~ string ~ "{" ~
+        property_assignment* ~
+    "}"
+}
+
+// ── Conditional guards ────────────────────────────────────────────
+condition_statement = { "if" ~ expression ~ ";" }
+
+// ── C-like expressions ────────────────────────────────────────────
+expression = { logical_or }
+
+logical_or = { logical_and ~ ("||" ~ logical_and)* }
+logical_and = { comparison ~ ("&&" ~ comparison)* }
+
+comparison = {
+    addition ~ (comparison_op ~ addition)*
+}
+
+comparison_op = { "<=" | ">=" | "==" | "!=" | "~=" | "!~" | "<" | ">" }
+
+addition = {
+    multiplication ~ (add_op ~ multiplication)*
+}
+
+add_op = { "+" | "-" }
+
+multiplication = {
+    unary ~ (mul_op ~ unary)*
+}
+
+mul_op = { "*" | "/" | "%" }
+
+unary = {
+    unary_not |
+    unary_neg |
+    primary
+}
+
+unary_not = { "!" ~ unary }
+unary_neg = { "-" ~ unary }
+
+primary = {
+    string |
+    number |
+    boolean |
+    call_expr |
+    field_expr |
+    identifier |
+    group_expr
+}
+
+call_expr = { identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
+field_expr = { identifier ~ "." ~ identifier }
+group_expr = { "(" ~ expression ~ ")" }
+
+// ── Lexical rules ──────────────────────────────────────────────────
+identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+
+string = @{ "\"" ~ (escape_char | (!("\"" | "\\") ~ ANY))* ~ "\"" }
+
+escape_char = @{ "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t" | "u" ~ ASCII_HEX_DIGIT{4}) }
+
+number = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
+
+boolean = { "true" | "false" }
+
+type_ref = { "Uuid" | "String" | "Int" | "Float" | "Boolean" | "DateTime" | identifier }
+
+comment = @{ "//" ~ (!"\n" ~ ANY)* }
+
+WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
+COMMENT = _{ comment }

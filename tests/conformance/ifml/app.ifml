@@ -1,0 +1,124 @@
+// Canonical IFML conformance model: exercises imports, domains, actors,
+// view params/defaults, landmarks/roles/requires, containers (xor), list /
+// form / table / chart components, event guards, capability requirements,
+// action invocation bodies, module declaration + instantiation, and
+// C-like expressions. Parse → IfmlModel::to_json_pretty must byte-match the
+// committed golden artifact.
+
+import "rexlang/auth.actor";
+
+domain "sales" {
+    schema "sales";
+}
+
+actor "Admin" {
+    role: admin;
+}
+
+view "CustomerList" {
+    label "Customer Management";
+    landmark: true;
+    roles: [admin, manager];
+    position: { x: 100; y: 200 };
+
+    component "grid" {
+        type: list;
+        data: Customer;
+        fields: [name, email, status];
+        filter: status == "active" && tier != "trial";
+        sortable: true;
+
+        on select(row) if row.active == true -> navigate("CustomerEdit", {
+            customerId: row.id,
+            slug: "detail"
+        });
+
+        on create -> navigate("CustomerEdit");
+        on refreshData -> refresh("grid");
+    }
+}
+
+view "CustomerEdit" {
+    params { customerId: Uuid, slug: String = "home" };
+    requires: [ManageCustomer];
+
+    component "editor" {
+        type: form;
+        data: Customer;
+        mode: edit;
+
+        field title -> input text {
+            required: true;
+            validations: [len(title) > 2, title != ""];
+            messages: ["Title too short", "Title required"];
+        }
+
+        field tier -> input dropdown;
+
+        on save(values) requires: [ManageCustomer, ApproveCustomer] if values.name != "" -> action("UpdateCustomer", {
+            body: values;
+            on success -> navigate("CustomerDetail", {
+                customerId: params.customerId
+            });
+            on error -> stay;
+        });
+
+        on cancel -> navigate("CustomerList");
+    }
+}
+
+view "Report" {
+    xor: true;
+
+    container "Summary" {
+        default: true;
+
+        component "revenue" {
+            type: chart;
+            chart bar { label: region; values: [revenue, cost]; }
+        }
+    }
+
+    container "Detail" {
+        component "rows" {
+            type: table;
+            paginated: true;
+
+            column "Name"   -> field Customer.name;
+            column "Status" -> lookup Customer.status via status_labels;
+            column "Score"  -> expr score(Customer.history) * 100;
+        }
+    }
+}
+
+module "Pagination" {
+    input { page: Int, pageSize: Int }
+    output { total: Int }
+
+    component "pager" {
+        type: list;
+        data: Item;
+        fields: [name];
+    }
+}
+
+view "Dashboard" {
+    on load -> refresh("recentOrders");
+
+    use "Pagination" as pager { page_size: 25; };
+
+    component "recentOrders" {
+        type: list;
+        data: Order;
+        fields: [id, total, date];
+        filter: date == today();
+
+        on select(row) -> navigate("CustomerDetail", {
+            customerId: row.customerId
+        });
+    }
+}
+
+action "UpdateCustomer" {
+    target: Customer;
+}
