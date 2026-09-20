@@ -1,0 +1,20 @@
+[package]
+name = "rex-ifml"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "IFML interaction-flow DSL: Pest parser producing rex-ir IfmlModel artifacts"
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+rex-ir = { workspace = true }
+pest = { workspace = true }
+pest_derive = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+pest = { workspace = true, features = ["pretty-print"] }
+serde_json = { workspace = true }

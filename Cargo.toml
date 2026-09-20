@@ -4,6 +4,7 @@ members = [
     "crates/rex-syntax",
     "crates/rex-ir",
     "crates/rex-expr",
+    "crates/rex-ifml",
     "crates/rex-driver",
     "crates/rex-backend-rust",
     "crates/rex-backend-jsonschema",
@@ -32,6 +33,7 @@ all = "warn"
 rex-syntax = { path = "crates/rex-syntax" }
 rex-ir = { path = "crates/rex-ir" }
 rex-expr = { path = "crates/rex-expr" }
+rex-ifml = { path = "crates/rex-ifml" }
 rex-driver = { path = "crates/rex-driver" }
 rex-backend-rust = { path = "crates/rex-backend-rust" }
 rex-backend-jsonschema = { path = "crates/rex-backend-jsonschema" }
@@ -47,6 +49,8 @@ chumsky = "0.10"
 clap = { version = "4.5", features = ["derive"] }
 jsonschema = "0.55"
 logos = "0.15"
+pest = "2"
+pest_derive = "2"
 proptest = "1.11"
 salsa = "0.23"
 serde = { version = "1.0", features = ["derive"] }

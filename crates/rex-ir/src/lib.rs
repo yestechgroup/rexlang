@@ -124,6 +124,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+pub mod ifml;
+
 /// The artifact format version this crate writes and accepts.
 ///
 /// Bump whenever the wire format changes incompatibly; see the [wire format
