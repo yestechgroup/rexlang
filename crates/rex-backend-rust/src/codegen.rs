@@ -2563,7 +2563,7 @@ mod tests {
         package.classes.push(ClassDef::new("Book", vec![], vec![]));
         model.packages.push(package);
 
-        let error = generate(&model).expect_err("L2 violation must fail generation");
+        let error = generate(&model).expect_err("R9 violation must fail generation");
         assert!(
             error.to_string().contains("'broken'"),
             "error must name the operation: {error:#}"
@@ -2571,7 +2571,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("operator `+` requires numeric operands"),
+                .contains("cannot concatenate string and int"),
             "error must carry the checker message: {error:#}"
         );
     }

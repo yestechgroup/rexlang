@@ -791,3 +791,285 @@ fn formatted_output_round_trips_structurally() {
     );
     assert_eq!(once.ast, twice.ast);
 }
+
+// --- search projections ------------------------------------------------------
+
+/// A full-featured search projection: every member kind, out of canonical
+/// order (the formatter reorders), a concat document entry, a brace-bearing
+/// conditional document entry, a `;` inside a string literal, per-field
+/// boost/analyzer, the camelCase `tfIdf` keyword, and a capability clause.
+const SEARCH: &str = r#"
+import "library.mox"
+
+application Library {
+    module media {
+        // a leading line comment
+        search MediaSearch {
+            capability SearchMedia
+            pagination {
+                cursor
+                max 100
+                limit 20
+            }
+            analyzer "english"
+            ranking bm25
+            document {
+                headline = title;
+                blurb = title + " - " + synopsis;
+                teaser = if (runtimeMinutes > 100) { title + " (long)" } else { "a; b" };
+            }
+            sort {
+                title
+            }
+            filters {
+                genre
+            }
+            text {
+                title boost 3
+                synopsis analyzer "english"
+            }
+            entity Movie
+        }
+    }
+}
+"#;
+
+fn expect_search<'a>(file: &'a DddFile, name: &str) -> &'a DddSearch {
+    expect_module(file, "media")
+        .searches
+        .iter()
+        .find(|search| search.name.text == name)
+        .unwrap_or_else(|| panic!("expected search `{name}`"))
+}
+
+#[test]
+fn search_decl_parses_with_all_members() {
+    let result = parse_ddd(SEARCH);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let search = expect_search(&file, "MediaSearch");
+
+    assert_eq!(search.entity.as_ref().expect("entity").full_name(), "Movie");
+    assert_eq!(search.text.len(), 2);
+    assert_eq!(search.text[0].property.full_name(), "title");
+    assert_eq!(search.text[0].boost, Some(3));
+    assert_eq!(search.text[0].analyzer, None);
+    assert_eq!(search.text[1].property.full_name(), "synopsis");
+    assert_eq!(search.text[1].boost, None);
+    assert_eq!(search.text[1].analyzer.as_deref(), Some("english"));
+    assert_eq!(
+        search
+            .filters
+            .iter()
+            .map(|name| name.full_name())
+            .collect::<Vec<_>>(),
+        vec!["genre"]
+    );
+    assert_eq!(
+        search
+            .sort
+            .iter()
+            .map(|name| name.full_name())
+            .collect::<Vec<_>>(),
+        vec!["title"]
+    );
+    assert_eq!(search.document.len(), 3);
+    assert_eq!(search.document[0].name.text, "headline");
+    assert_eq!(span_text(SEARCH, search.document[0].expr), "title");
+    assert_eq!(search.document[1].name.text, "blurb");
+    assert_eq!(
+        span_text(SEARCH, search.document[1].expr),
+        r#"title + " - " + synopsis"#
+    );
+    assert_eq!(search.document[2].name.text, "teaser");
+    assert_eq!(
+        span_text(SEARCH, search.document[2].expr),
+        r#"if (runtimeMinutes > 100) { title + " (long)" } else { "a; b" }"#
+    );
+    assert_eq!(search.ranking, Some(DddRanking::Bm25));
+    assert_eq!(search.analyzer.as_deref(), Some("english"));
+    let pagination = search.pagination.as_ref().expect("pagination");
+    assert_eq!(pagination.limit, Some(20));
+    assert_eq!(pagination.max, Some(100));
+    assert!(pagination.cursor);
+    assert_eq!(
+        search
+            .capabilities
+            .iter()
+            .map(|name| name.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["SearchMedia"]
+    );
+    assert!(search.doc.is_none(), "`//` comments are not doc runs");
+}
+
+#[test]
+fn search_repeated_clauses_merge_and_singles_are_idempotent() {
+    let source = concat!(
+        "application A {\n",
+        "    module m {\n",
+        "        search S {\n",
+        "            entity Book\n",
+        "            text { title }\n",
+        "            filters { genre }\n",
+        "            entity Movie\n", // idempotent: the first wins
+        "            ranking bm25\n",
+        "            ranking exact\n", // idempotent: the first wins
+        "            text { synopsis boost 2 }\n",
+        "            sort { title }\n",
+        "        }\n",
+        "    }\n",
+        "}\n",
+    );
+    let result = parse_ddd(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let search = &result
+        .ast
+        .expect("expected an AST")
+        .application
+        .unwrap()
+        .modules[0]
+        .searches[0];
+    assert_eq!(search.entity.as_ref().expect("entity").full_name(), "Book");
+    assert_eq!(search.ranking, Some(DddRanking::Bm25));
+    assert_eq!(
+        search
+            .text
+            .iter()
+            .map(|field| field.property.full_name())
+            .collect::<Vec<_>>(),
+        vec!["title", "synopsis"]
+    );
+    assert_eq!(search.text[1].boost, Some(2));
+    assert_eq!(search.filters.len(), 1);
+    assert_eq!(search.sort.len(), 1);
+}
+
+#[test]
+fn search_parse_failures_are_clean_errors() {
+    for (source, label) in [
+        (
+            "application A { module m { search { entity B } } }",
+            "missing name",
+        ),
+        (
+            "application A { module m { search S { document { h = title } } } }",
+            "unterminated document entry",
+        ),
+        (
+            "application A { module m { search S { document { h = ; } } } }",
+            "empty document entry",
+        ),
+        (
+            "application A { module m { search S { ranking } } }",
+            "ranking without a strategy",
+        ),
+        (
+            r#"application A { module m { search S { ranking custom } } }"#,
+            "custom without a string",
+        ),
+    ] {
+        let result = parse_ddd(source);
+        assert!(!result.errors.is_empty(), "{label} must be an error");
+    }
+}
+
+#[test]
+fn search_formats_canonically_and_is_idempotent() {
+    let formatted = fmt_ddd(SEARCH);
+    assert_eq!(
+        formatted,
+        concat!(
+            "import \"library.mox\";\n",
+            "\n",
+            "application Library {\n",
+            "    module media {\n",
+            "        // a leading line comment\n",
+            "        search MediaSearch {\n",
+            "            entity Movie\n",
+            "            text {\n",
+            "                title boost 3\n",
+            "                synopsis analyzer \"english\"\n",
+            "            }\n",
+            "            filters {\n",
+            "                genre\n",
+            "            }\n",
+            "            sort {\n",
+            "                title\n",
+            "            }\n",
+            "            document {\n",
+            "                headline = title;\n",
+            "                blurb = title + \" - \" + synopsis;\n",
+            "                teaser = if(runtimeMinutes > 100) { title + \" (long)\" } else { \"a; b\" };\n",
+            "            }\n",
+            "            ranking bm25\n",
+            "            analyzer \"english\"\n",
+            "            pagination {\n",
+            "                cursor\n",
+            "                max 100\n",
+            "                limit 20\n",
+            "            }\n",
+            "            capability SearchMedia\n",
+            "        }\n",
+            "    }\n",
+            "}\n",
+        ),
+        "members must reorder into the canonical order, got:\n{formatted}"
+    );
+    assert_eq!(
+        fmt_ddd(&formatted),
+        formatted,
+        "formatting must be idempotent"
+    );
+}
+
+#[test]
+fn search_output_round_trips_structurally() {
+    let formatted = fmt_ddd(SEARCH);
+    let once = parse_ddd(&formatted);
+    assert!(
+        once.errors.is_empty(),
+        "formatted output must parse cleanly, got {:?}",
+        once.errors
+    );
+    let twice = parse_ddd(&fmt_ddd(&formatted));
+    assert!(
+        twice.errors.is_empty(),
+        "re-formatted output must parse cleanly, got {:?}",
+        twice.errors
+    );
+    assert_eq!(once.ast, twice.ast);
+}
+
+#[test]
+fn adversarial_search_inputs_do_not_panic() {
+    let sources = [
+        "search",
+        "search S",
+        "search S {",
+        "search S { entity",
+        "search S { text { } filters { } document { } }",
+        "search S { document { = title; } }",
+        "search S { document { h = title } document { h2 = synopsis; } }",
+        "search S { document { h = \"unterminated } } }",
+        "search S { document { h = (((title) ; } }",
+        "search S { pagination { limit } }",
+        "search S { pagination { max x } }",
+        "search S { text { title boost -3 } }",
+        "application A { module m { search S { entity E } search T { entity F } } }",
+    ];
+    for source in sources {
+        let _ = parse_ddd(source);
+        // Formatting may fail on lex errors (e.g. unterminated strings);
+        // the contract is only that neither path panics.
+        let _ = format_ddd(source);
+    }
+}

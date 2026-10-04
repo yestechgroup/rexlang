@@ -902,7 +902,7 @@ pub struct DddBase {
 }
 
 /// A `module <name> { ... }` of a [`DddApplication`]: a cohesive slice of
-/// application services and designed classes.
+/// application services, designed classes, and search projections.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DddModule {
     /// The module name.
@@ -911,6 +911,8 @@ pub struct DddModule {
     pub services: Vec<DddService>,
     /// Class designs in source order.
     pub designs: Vec<DddDesign>,
+    /// Search projections in source order.
+    pub searches: Vec<DddSearch>,
     /// Span of the whole declaration, `module` keyword included.
     pub span: Span,
 }
@@ -1149,4 +1151,96 @@ impl DddBuiltinOp {
             DddBuiltinOp::Delete => "delete",
         }
     }
+}
+
+/// A `search <name> { ... }` projection of a [`DddModule`]: the declarative
+/// search intent over one designed entity — indexed text fields, filter and
+/// sort facets, computed document entries, ranking, pagination, and the
+/// actor capabilities guarding it.
+///
+/// The interleaved source order of the members is not preserved; each
+/// member kind is collected in its own source order (the same split the
+/// wire artifact makes, and the canonical order the formatter emits).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DddSearch {
+    /// The search projection name.
+    pub name: Name,
+    /// Description from the doc comment directly above the declaration
+    /// (contiguous `///` lines, joined).
+    pub doc: Option<String>,
+    /// The designed entity the projection is over; `None` when the source
+    /// omitted the `entity` line (a driver-side validation error, not a
+    /// syntax one).
+    pub entity: Option<QualifiedName>,
+    /// Indexed text fields in source order.
+    pub text: Vec<DddSearchField>,
+    /// Filter facet names in source order.
+    pub filters: Vec<QualifiedName>,
+    /// Sort facet names in source order.
+    pub sort: Vec<QualifiedName>,
+    /// Document projection entries in source order.
+    pub document: Vec<DddDocumentEntry>,
+    /// The declared ranking strategy, when present.
+    pub ranking: Option<DddRanking>,
+    /// The search-wide default analyzer, when present.
+    pub analyzer: Option<String>,
+    /// The declared pagination, when present.
+    pub pagination: Option<DddPagination>,
+    /// Actor capability names guarding the search, in source order.
+    pub capabilities: Vec<Name>,
+    /// Span of the whole declaration, `search` keyword included.
+    pub span: Span,
+}
+
+/// One entry of a search's `text { ... }` clause: an indexed property with
+/// its optional boost and per-field analyzer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DddSearchField {
+    /// The indexed feature of the search's entity.
+    pub property: QualifiedName,
+    /// The `boost <int>` weight, when present.
+    pub boost: Option<i64>,
+    /// The `analyzer "<name>"` override, when present.
+    pub analyzer: Option<String>,
+    /// Span covering the whole field.
+    pub span: Span,
+}
+
+/// One `name = <expr>;` entry of a search's `document { ... }` clause. The
+/// expression is captured raw — its span slices the expression source
+/// strictly between the `=` and the terminating `;` — exactly like the
+/// `.mox` op bodies; parsing it is the driver's job.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DddDocumentEntry {
+    /// The document field name.
+    pub name: Name,
+    /// Span of the raw expression source (the `;` excluded).
+    pub expr: Span,
+}
+
+/// The `ranking <strategy>` line of a [`DddSearch`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DddRanking {
+    /// `ranking bm25`.
+    Bm25,
+    /// `ranking tfIdf`.
+    TfIdf,
+    /// `ranking exact`.
+    Exact,
+    /// `ranking custom "<name>"`.
+    Custom(String),
+}
+
+/// The `pagination { ... }` block of a [`DddSearch`]: every member is
+/// optional and defaults per the consumer's profile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DddPagination {
+    /// The `limit <int>` default page size.
+    pub limit: Option<i64>,
+    /// The `max <int>` page-size ceiling.
+    pub max: Option<i64>,
+    /// Whether `cursor` pagination was declared.
+    pub cursor: bool,
+    /// Span of the whole block, `pagination` keyword included.
+    pub span: Span,
 }

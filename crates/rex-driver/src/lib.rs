@@ -420,7 +420,11 @@ fn compile_actors_with(
 ///
 /// Diagnostics come from every file involved, so each is tagged with its
 /// path; group or render them per file (see [`render`](crate::render)).
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Eq` is deliberately not derived: the artifact's search fields carry an
+/// `f32` boost, so only [`PartialEq`] equality is available (mirroring
+/// [`rex_ir::ddd::DddModel`]).
+#[derive(Debug, Clone, PartialEq)]
 pub struct DddCompilation {
     /// The design artifact, or `None` when any error-severity diagnostic
     /// was produced in any file. Warnings do not block lowering.
@@ -739,6 +743,7 @@ fn compile_ddd_with(
 
     let (model, diagnostics) = ddd::compile_ddd_file(
         &design_path,
+        &design.text(db),
         parsed.ast.as_ref(),
         &parsed.diagnostics,
         &domain_units,
@@ -842,20 +847,35 @@ fn compile_ddd_with(
 ///    annotation on a return type or parameter lowers into the
 ///    artifact's cardinality slots (`returnMultiplicity` / parameter
 ///    `multiplicity`).
-/// 8. **Delegations** — the target must resolve to a service or a
-///    repository declared anywhere in the application, and the operation
-///    must name an operation on it (repository built-ins included).
-///    Service → repository delegation across different modules is the
+/// 8. **Delegations** — the target must resolve to a service, a repository,
+///    or a search declared anywhere in the application, and the operation
+///    must name an operation on it (repository built-ins included; a search
+///    exposes only the virtual operation `search`). Service → repository
+///    and service → search delegation across different modules is the
 ///    module-coupling error ("interaction between a Service in one Module
-///    and a Repository in another Module is not allowed; go via a
+///    and a Repository/Search in another Module is not allowed; go via a
 ///    Service"); service → service across modules is allowed.
-/// 9. **inject** — every dependency name must resolve to a service or a
-///    repository of the application.
+/// 9. **inject** — every dependency name must resolve to a service, a
+///    repository, or a search of the application.
 /// 10. **Capabilities** — only [`compile_ddd_str_with_actors`] validates:
 ///     each declared capability name must exist in the union of the actor
 ///     model's blocks' capabilities. Plain compiles record the names
 ///     unvalidated — the design dimension is loosely coupled to the policy
 ///     dimension by design.
+/// 11. **Searches** — a search's name is unique application-wide. Its
+///     `entity` line is required, resolves like a design target, and must
+///     bind to an entity design **of the same module** (the repository
+///     coupling rule; non-root entities may be searched — a projection over
+///     a contained entity is legitimate). Text fields must name a direct
+///     feature of the entity that is text-like (the string primitives,
+///     enums, datatypes — the string-family default the constraint rules
+///     use — and vocabularies whose key facet is a string primitive), with
+///     a boost of at least 1 and a non-empty analyzer; filters and sorts
+///     must name direct features that are not class references; document
+///     field names are unique per search and every document expression is
+///     parsed and type-checked with the entity as `self` (any value type is
+///     legal — the consumer decides the rendered form). Pagination bounds
+///     must satisfy `1 ≤ limit ≤ max`.
 ///
 /// ## Aggregate derivation
 ///

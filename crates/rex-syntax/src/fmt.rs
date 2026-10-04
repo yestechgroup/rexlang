@@ -62,7 +62,13 @@
 //!   auditable optimisticLocking nonPersistent cache` regardless of source
 //!   order (with `abstract` before the stereotype), and every
 //!   operation/`inject`/import line ends in `;`. The `capability a, b`
-//!   clause stays on the operation's line.
+//!   clause stays on the operation's line. A search projection's members
+//!   are canonicalized to the fixed order `entity text filters sort
+//!   document ranking analyzer pagination capability` regardless of source
+//!   order; clause *contents* (text fields, filter/sort names, document
+//!   entries, pagination members) keep their source order, and a document
+//!   expression is emitted verbatim token-by-token at canonical spacing
+//!   (so `;` inside string literals survives and nested braces balance).
 //! * An `import schema` declaration of a `.mox` source is hoisted into a
 //!   canonical section directly after the `package` declaration (mirroring
 //!   the `.actor` import rule): the section renders before every other
@@ -176,6 +182,16 @@ enum BodyKind {
     DddService,
     /// builtin/declared operations of a `.ddd` repository.
     DddRepository,
+    /// members of a `.ddd` search projection.
+    DddSearch,
+    /// indexed fields of a `.ddd` search's `text` clause.
+    DddSearchField,
+    /// names of a `.ddd` search's `filters`/`sort` clauses.
+    DddSearchNames,
+    /// `name = expr;` entries of a `.ddd` search's `document` clause.
+    DddSearchDocument,
+    /// `limit`/`max`/`cursor` members of a `.ddd` search's `pagination`.
+    DddSearchPagination,
 }
 
 impl BodyKind {
@@ -878,6 +894,11 @@ impl<'src> Formatter<'src> {
                 BodyKind::DddModule => self.scan_ddd_module_item(),
                 BodyKind::DddService => self.scan_ddd_service_item(),
                 BodyKind::DddRepository => self.scan_ddd_repository_item(),
+                BodyKind::DddSearch => self.scan_ddd_search_item(),
+                BodyKind::DddSearchField => self.scan_ddd_search_field_item(),
+                BodyKind::DddSearchNames => self.scan_ddd_search_name_item(),
+                BodyKind::DddSearchDocument => self.scan_ddd_search_document_item(),
+                BodyKind::DddSearchPagination => self.scan_ddd_search_pagination_item(),
             }
             self.flush_line();
         }
@@ -1265,6 +1286,7 @@ impl<'src> Formatter<'src> {
                 self.take_name();
                 self.scan_body(BodyKind::DddService);
             }
+            Some(Token::Ident("search")) => self.scan_ddd_search(),
             Some(Token::Ident("abstract" | "entity" | "value" | "dto")) => self.scan_ddd_design(),
             _ => {
                 // Junk always consumes the front token first (the stop set
@@ -1421,6 +1443,258 @@ impl<'src> Formatter<'src> {
                 // progress otherwise) — unless the front is the body's
                 // closing `}` (or the stream ended), which the loop breaks
                 // on; a drained trailing comment may have just revealed it.
+                if !matches!(self.peek_tok(), Some(Token::RBrace) | None) {
+                    self.advance();
+                    self.scan_junk_until(|token| {
+                        matches!(
+                            token,
+                            Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_)
+                        )
+                    });
+                }
+            }
+        }
+    }
+
+    /// Consumes and emits one `search <name> { ... }` projection. The body's
+    /// members are rewritten into the canonical order (see
+    /// [`Formatter::reorder_ddd_search_members`]) before the linear scan.
+    fn scan_ddd_search(&mut self) {
+        self.advance(); // the `search` keyword
+        self.take_name();
+        self.reorder_ddd_search_members();
+        self.scan_body(BodyKind::DddSearch);
+    }
+
+    /// The canonical rank of a search member's leading keyword: `entity`,
+    /// `text`, `filters`, `sort`, `document`, `ranking`, `analyzer`,
+    /// `pagination`, then the `capability` clause.
+    fn search_member_rank(token: &Token<'_>) -> Option<usize> {
+        match token {
+            Token::Ident("entity") => Some(0),
+            Token::Ident("text") => Some(1),
+            Token::Ident("filters") => Some(2),
+            Token::Ident("sort") => Some(3),
+            Token::Ident("document") => Some(4),
+            Token::Ident("ranking") => Some(5),
+            Token::Ident("analyzer") => Some(6),
+            Token::Ident("pagination") => Some(7),
+            Token::Capability => Some(8),
+            _ => None,
+        }
+    }
+
+    /// Rewrites the node stream of the search body ahead of the formatter
+    /// (positioned at the body's `{`) so its members appear in the canonical
+    /// order whatever the source order — the same node-range technique the
+    /// import hoists use. Segments split at brace-depth 0 on the
+    /// member-leading keywords; segments that start with anything else (junk
+    /// from a parse-error region) keep their relative order at the end, and
+    /// a segment's leading comments travel with it.
+    fn reorder_ddd_search_members(&mut self) {
+        if !matches!(self.front(), Some(Node::Token(Token::LBrace, _))) {
+            return;
+        }
+        let open = self.pos;
+        let mut depth = 0usize;
+        let close = loop {
+            match self.nodes.get(self.pos) {
+                Some(Node::Token(Token::LBrace, _)) => {
+                    depth += 1;
+                    self.pos += 1;
+                }
+                Some(Node::Token(Token::RBrace, _)) => {
+                    depth = depth.saturating_sub(1);
+                    self.pos += 1;
+                    if depth == 0 {
+                        break self.pos;
+                    }
+                }
+                Some(_) => self.pos += 1,
+                None => return,
+            }
+        };
+        let mut segments: Vec<(usize, Vec<Node<'src>>)> = Vec::new();
+        let mut depth = 0usize;
+        for node in self.nodes[open + 1..close - 1].iter() {
+            let rank = match node {
+                Node::Token(token, _) if depth == 0 => Self::search_member_rank(token),
+                _ => None,
+            };
+            if segments.is_empty() {
+                segments.push((rank.unwrap_or(usize::MAX), Vec::new()));
+            } else if let Some(rank) = rank {
+                segments.push((rank, Vec::new()));
+            }
+            match node {
+                Node::Token(Token::LBrace, _) => depth += 1,
+                Node::Token(Token::RBrace, _) => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            segments.last_mut().unwrap().1.push(node.clone());
+        }
+        segments.sort_by_key(|(rank, _)| *rank);
+        let mut reordered: Vec<Node<'src>> = self.nodes[..=open].to_vec();
+        for (_, segment) in &segments {
+            reordered.extend(segment.iter().cloned());
+        }
+        reordered.extend(self.nodes[close - 1..].iter().cloned());
+        self.pos = open;
+        self.nodes = reordered;
+    }
+
+    fn scan_ddd_search_item(&mut self) {
+        match self.peek_tok() {
+            Some(Token::Ident("entity")) => {
+                self.advance();
+                self.scan_qname();
+            }
+            Some(Token::Ident("text")) => {
+                self.advance();
+                self.scan_body(BodyKind::DddSearchField);
+            }
+            Some(Token::Ident("filters" | "sort")) => {
+                self.advance();
+                self.scan_body(BodyKind::DddSearchNames);
+            }
+            Some(Token::Ident("document")) => {
+                self.advance();
+                self.scan_body(BodyKind::DddSearchDocument);
+            }
+            Some(Token::Ident("ranking")) => {
+                self.advance();
+                if matches!(self.peek_tok(), Some(Token::Ident(_)) | Some(Token::Str(_))) {
+                    self.advance();
+                }
+            }
+            Some(Token::Ident("analyzer")) => {
+                self.advance();
+                self.take_if(|token| matches!(token, Token::Str(_)));
+            }
+            Some(Token::Ident("pagination")) => {
+                self.advance();
+                self.scan_body(BodyKind::DddSearchPagination);
+            }
+            Some(Token::Capability) => self.scan_ddd_capabilities(),
+            _ => {
+                // Junk always consumes the front token first (the stop set
+                // contains identifiers, and the body loop cannot make
+                // progress otherwise) — unless the front is the body's
+                // closing `}` (or the stream ended), which the loop breaks
+                // on; a drained trailing comment may have just revealed it.
+                if !matches!(self.peek_tok(), Some(Token::RBrace) | None) {
+                    self.advance();
+                    self.scan_junk_until(|token| {
+                        matches!(
+                            token,
+                            Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_)
+                        )
+                    });
+                }
+            }
+        }
+    }
+
+    /// One `text` field: `<property> (boost <int>)? (analyzer "<...>")?`,
+    /// one field per line.
+    fn scan_ddd_search_field_item(&mut self) {
+        match self.peek_tok() {
+            Some(Token::Ident(_) | Token::IdentEscaped(_)) => {
+                self.scan_qname();
+                if self.take_if(|token| matches!(token, Token::Ident("boost"))) {
+                    self.take_if(|token| matches!(token, Token::Int(_)));
+                }
+                if self.take_if(|token| matches!(token, Token::Ident("analyzer"))) {
+                    self.take_if(|token| matches!(token, Token::Str(_)));
+                }
+            }
+            _ => {
+                if !matches!(self.peek_tok(), Some(Token::RBrace) | None) {
+                    self.advance();
+                    self.scan_junk_until(|token| {
+                        matches!(
+                            token,
+                            Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_)
+                        )
+                    });
+                }
+            }
+        }
+    }
+
+    /// One name of a `filters`/`sort` clause, one per line.
+    fn scan_ddd_search_name_item(&mut self) {
+        match self.peek_tok() {
+            Some(Token::Ident(_) | Token::IdentEscaped(_)) => self.scan_qname(),
+            _ => {
+                if !matches!(self.peek_tok(), Some(Token::RBrace) | None) {
+                    self.advance();
+                    self.scan_junk_until(|token| {
+                        matches!(
+                            token,
+                            Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_)
+                        )
+                    });
+                }
+            }
+        }
+    }
+
+    /// One `name = <expr>;` entry of a `document` clause: the expression is
+    /// re-emitted verbatim token by token (canonical spacing), terminating
+    /// at the depth-0 `;`. String literals are single tokens, so a `;`
+    /// inside one never terminates; a missing terminator leaves the closing
+    /// `}` for the body loop.
+    fn scan_ddd_search_document_item(&mut self) {
+        match self.peek_tok() {
+            Some(Token::Ident(_) | Token::IdentEscaped(_)) => {
+                self.take_name();
+                self.take_if(|token| matches!(token, Token::Eq));
+                let mut depth = 0usize;
+                loop {
+                    match self.peek_tok() {
+                        None => break,
+                        Some(Token::Other(';')) if depth == 0 => {
+                            self.advance();
+                            break;
+                        }
+                        Some(Token::RBrace) if depth == 0 => break,
+                        Some(token) => {
+                            match token {
+                                Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
+                                Token::RParen | Token::RBracket | Token::RBrace => {
+                                    depth = depth.saturating_sub(1)
+                                }
+                                _ => {}
+                            }
+                            self.advance();
+                        }
+                    }
+                }
+            }
+            _ => {
+                if !matches!(self.peek_tok(), Some(Token::RBrace) | None) {
+                    self.advance();
+                    self.scan_junk_until(|token| {
+                        matches!(
+                            token,
+                            Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_)
+                        )
+                    });
+                }
+            }
+        }
+    }
+
+    /// One `limit <int>` / `max <int>` / `cursor` member of `pagination`.
+    fn scan_ddd_search_pagination_item(&mut self) {
+        match self.peek_tok() {
+            Some(Token::Ident("limit" | "max")) => {
+                self.advance();
+                self.take_if(|token| matches!(token, Token::Int(_)));
+            }
+            Some(Token::Ident("cursor")) => self.advance(),
+            _ => {
                 if !matches!(self.peek_tok(), Some(Token::RBrace) | None) {
                     self.advance();
                     self.scan_junk_until(|token| {

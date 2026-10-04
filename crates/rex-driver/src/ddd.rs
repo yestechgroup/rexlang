@@ -18,8 +18,9 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use rex_ir::ddd::{
-    Application, BuiltinRepositoryOp, DddModel, Delegation, Design, DesignFlags, Module,
-    Repository, RepositoryOperation, Service, ServiceOperation, Stereotype,
+    Application, BuiltinRepositoryOp, DddModel, Delegation, Design, DesignFlags, DocumentField,
+    Module, Pagination, RankingStrategy, Repository, RepositoryOperation, SearchDef, SearchField,
+    SearchFilter, SearchSort, Service, ServiceOperation, Stereotype,
 };
 use rex_syntax::ast as dsl;
 use rex_syntax::Span;
@@ -49,10 +50,35 @@ struct RootCandidate {
     repository_span: Span,
 }
 
+/// One entity design: the resolved class key, the module holding the
+/// design, and the authored class name for diagnostics. Searches bind to
+/// these (rule 11), and the containment closure walks them (rule 6).
+struct EntityDesign {
+    package: String,
+    class: String,
+    module: String,
+}
+
+/// A declared search projection awaiting the completed registries.
+struct SearchEntry {
+    module: String,
+}
+
 /// A delegation awaiting the completed service/repository registries.
 struct DelegationCheck<'a> {
     module: String,
     delegation: &'a dsl::DddDelegation,
+}
+
+/// A search awaiting the completed entity-design registry: the binding
+/// check (rule 11) runs after every module so a search may reference an
+/// entity designed later in the file.
+struct SearchBindingCheck<'a> {
+    search: &'a str,
+    module: &'a str,
+    package: String,
+    class: String,
+    entity: &'a dsl::QualifiedName,
 }
 
 /// An `inject` dependency awaiting the completed registries.
@@ -60,10 +86,11 @@ struct InjectCheck<'a> {
     dependency: &'a dsl::Name,
 }
 
-/// One capability reference awaiting the actor model.
+/// One capability reference awaiting the actor model: `context` names where
+/// the clause was declared ("operation 'x' of service 'Y'" or
+/// "search 'Z'").
 struct CapabilityCheck<'a> {
-    service: String,
-    op: String,
+    context: String,
     capability: &'a dsl::Name,
 }
 
@@ -76,6 +103,7 @@ struct CapabilityCheck<'a> {
 /// contract.
 pub(crate) fn compile_ddd_file(
     path: &str,
+    design_source: &str,
     ast: Option<&dsl::DddFile>,
     parse_diagnostics: &[Diagnostic],
     domains: &[DomainUnit<'_>],
@@ -171,10 +199,12 @@ pub(crate) fn compile_ddd_file(
     let mut module_names: Vec<(String, Span)> = Vec::new();
     let mut services: Vec<(String, ServiceEntry)> = Vec::new();
     let mut repositories: Vec<(String, RepositoryEntry)> = Vec::new();
+    let mut searches: Vec<(String, SearchEntry)> = Vec::new();
     let mut design_keys: Vec<(String, String)> = Vec::new();
-    let mut entity_classes: Vec<(String, String)> = Vec::new();
+    let mut entity_designs: Vec<EntityDesign> = Vec::new();
     let mut root_candidates: Vec<RootCandidate> = Vec::new();
     let mut delegation_checks: Vec<DelegationCheck<'_>> = Vec::new();
+    let mut search_bindings: Vec<SearchBindingCheck<'_>> = Vec::new();
     let mut inject_checks: Vec<InjectCheck<'_>> = Vec::new();
     let mut capability_checks: Vec<CapabilityCheck<'_>> = Vec::new();
 
@@ -246,8 +276,10 @@ pub(crate) fn compile_ddd_file(
                     .collect();
                 for capability in &op.capabilities {
                     capability_checks.push(CapabilityCheck {
-                        service: service.name.text.clone(),
-                        op: op.name.text.clone(),
+                        context: format!(
+                            "operation '{}' of service '{}'",
+                            op.name.text, service.name.text
+                        ),
                         capability,
                     });
                 }
@@ -434,7 +466,11 @@ pub(crate) fn compile_ddd_file(
                     // Every stereotyped entity is a potential container;
                     // those with a repository are additionally candidates
                     // for the non-root verdict.
-                    entity_classes.push((package.clone(), class.clone()));
+                    entity_designs.push(EntityDesign {
+                        package: package.clone(),
+                        class: class.clone(),
+                        module: module.name.text.clone(),
+                    });
                     if design_out.repository.is_some() {
                         root_candidates.push(RootCandidate {
                             repository_span: design
@@ -453,7 +489,363 @@ pub(crate) fn compile_ddd_file(
             module_out.designs.push(design_out);
         }
 
+        // Rule 11 — search projections: the entity line resolves and binds
+        // to an entity design of the same module; members resolve against
+        // the entity class's features; document expressions type-check with
+        // the entity as `self`.
+        for search in &module.searches {
+            // Rule 2 — search names are unique application-wide.
+            if searches.iter().any(|(name, _)| *name == search.name.text) {
+                local.push(
+                    Diagnostic::error(
+                        format!("duplicate search '{}'", search.name.text),
+                        Some(search.name.span),
+                    )
+                    .with_help(format!(
+                        "'{}' is already declared in this application",
+                        search.name.text
+                    )),
+                );
+            }
+
+            // The entity line: required, resolving like a design target,
+            // and bound to an entity design of the same module.
+            let mut resolved_entity: Option<(String, String)> = None;
+            match &search.entity {
+                None => local.push(
+                    Diagnostic::error(
+                        format!("search '{}' does not declare an entity", search.name.text),
+                        Some(search.span),
+                    )
+                    .with_help("add `entity <Class>` to the search body"),
+                ),
+                Some(entity) => {
+                    let help = format!(
+                        "the search '{}' in module '{}' must target a class declared \
+                         in the imported domains",
+                        search.name.text, module.name.text
+                    );
+                    let resolved = lower::resolve_ddd_class(
+                        &dsl::TypeRef {
+                            name: entity.clone(),
+                            span: entity.span,
+                        },
+                        &packages,
+                        base.as_deref(),
+                        &help,
+                        &mut local,
+                    );
+                    if let Some((package, class)) = resolved {
+                        search_bindings.push(SearchBindingCheck {
+                            search: &search.name.text,
+                            module: &module.name.text,
+                            package: package.clone(),
+                            class: class.clone(),
+                            entity,
+                        });
+                        resolved_entity = Some((package, class));
+                    }
+                }
+            }
+
+            // Feature-level checks run only against a fully lowered union
+            // (a failed domain may hide features; its diagnostics already
+            // block the artifact). Inherited features resolve too.
+            let entity_features = resolved_entity.as_ref().and_then(|(package, class)| {
+                union
+                    .as_ref()
+                    .and_then(|union| class_features(union, package, class))
+            });
+
+            let mut search_out = SearchDef::new(
+                search.name.text.clone(),
+                search
+                    .entity
+                    .as_ref()
+                    .map(|entity| entity.full_name())
+                    .unwrap_or_default(),
+            );
+            search_out.description = search.doc.clone();
+            for capability in &search.capabilities {
+                search_out.capabilities.push(capability.text.clone());
+                capability_checks.push(CapabilityCheck {
+                    context: format!("search '{}'", search.name.text),
+                    capability,
+                });
+            }
+
+            if let Some(features) = entity_features {
+                // Text fields: a direct, text-like feature of the entity.
+                for field in &search.text {
+                    let Some(name) = single_segment(&field.property) else {
+                        local.push(
+                            Diagnostic::error(
+                                format!(
+                                    "text field '{}' must name a feature of '{}' directly",
+                                    field.property.full_name(),
+                                    search_out.entity
+                                ),
+                                Some(field.property.span),
+                            )
+                            .with_help("path projections are not carried by the artifact"),
+                        );
+                        continue;
+                    };
+                    let Some(feature) = features.iter().find(|f| f.name == name) else {
+                        local.push(
+                            Diagnostic::error(
+                                format!("unknown text field '{name}' on '{}'", search_out.entity),
+                                Some(field.property.span),
+                            )
+                            .with_help(format!(
+                                "'{}' declares: {}",
+                                search_out.entity,
+                                feature_list(&features)
+                            )),
+                        );
+                        continue;
+                    };
+                    if !text_indexable(&feature.type_, union.as_ref().expect("checked above")) {
+                        local.push(Diagnostic::error(
+                            format!(
+                                "text field '{name}' is not text-like; only string, \
+                                 enum, datatype, and text-keyed vocabulary features may \
+                                 be indexed"
+                            ),
+                            Some(field.property.span),
+                        ));
+                    }
+                    if let Some(boost) = field.boost {
+                        if boost < 1 {
+                            local.push(Diagnostic::error(
+                                format!("boost of text field '{name}' must be at least 1"),
+                                Some(field.property.span),
+                            ));
+                        }
+                    }
+                    if field
+                        .analyzer
+                        .as_ref()
+                        .is_some_and(|analyzer| analyzer.is_empty())
+                    {
+                        local.push(Diagnostic::error(
+                            format!("analyzer of text field '{name}' must not be empty"),
+                            Some(field.property.span),
+                        ));
+                    }
+                    let mut field_out = SearchField::new(field.property.full_name());
+                    field_out.boost = field.boost.map(|boost| boost as f32);
+                    field_out.analyzer = field.analyzer.clone();
+                    search_out.text.push(field_out);
+                }
+
+                // Filters and sorts: direct, non-class features.
+                for (names, label, kind) in [
+                    (&search.filters, "filter", "filter"),
+                    (&search.sort, "sort", "sort"),
+                ] {
+                    for property in names.iter() {
+                        let Some(name) = single_segment(property) else {
+                            local.push(
+                                Diagnostic::error(
+                                    format!(
+                                        "{label} '{0}' must name a feature of '{1}' directly",
+                                        property.full_name(),
+                                        search_out.entity
+                                    ),
+                                    Some(property.span),
+                                )
+                                .with_help("path projections are not carried by the artifact"),
+                            );
+                            continue;
+                        };
+                        let Some(feature) = features.iter().find(|f| f.name == name) else {
+                            local.push(Diagnostic::error(
+                                format!("unknown {label} '{name}' on '{}'", search_out.entity),
+                                Some(property.span),
+                            ));
+                            continue;
+                        };
+                        if matches!(
+                            feature.type_,
+                            rex_ir::TypeRef::Class { .. } | rex_ir::TypeRef::Interface { .. }
+                        ) {
+                            local.push(Diagnostic::error(
+                                format!(
+                                    "{kind} '{name}' is a class reference; only value \
+                                     features may {kind}"
+                                ),
+                                Some(property.span),
+                            ));
+                            continue;
+                        }
+                        match kind {
+                            "filter" => search_out
+                                .filters
+                                .push(SearchFilter::new(property.full_name())),
+                            _ => search_out.sort.push(SearchSort::new(property.full_name())),
+                        }
+                    }
+                }
+
+                // Document entries: unique names, expressions type-checked
+                // with the entity as `self` (any value type is legal).
+                let mut document_names: Vec<&str> = Vec::new();
+                for entry in &search.document {
+                    if document_names.contains(&entry.name.text.as_str()) {
+                        local.push(
+                            Diagnostic::error(
+                                format!(
+                                    "duplicate document field '{}' in search '{}'",
+                                    entry.name.text, search.name.text
+                                ),
+                                Some(entry.name.span),
+                            )
+                            .with_help("a document field is declared once per search"),
+                        );
+                    } else {
+                        document_names.push(&entry.name.text);
+                    }
+                    let text = design_source[entry.expr.start..entry.expr.end].trim();
+                    let parsed = rex_expr::parse(text);
+                    for error in &parsed.errors {
+                        let start = entry
+                            .expr
+                            .start
+                            .saturating_add(error.span.start)
+                            .min(entry.expr.end);
+                        let end = entry
+                            .expr
+                            .start
+                            .saturating_add(error.span.end)
+                            .clamp(start, entry.expr.end);
+                        local.push(Diagnostic::error(
+                            format!(
+                                "invalid document expression in field '{}': {}",
+                                entry.name.text, error.message
+                            ),
+                            Some((start..end).into()),
+                        ));
+                    }
+                    if let (Some(ast), Some((package, class))) =
+                        (&parsed.ast, resolved_entity.as_ref())
+                    {
+                        let context = rex_expr::TypeContext::from_model(
+                            union.as_ref().expect("checked above"),
+                        );
+                        let checker = rex_expr::TypeChecker::new(context).with_self(package, class);
+                        if let Err(errors) = checker.type_of(ast) {
+                            for error in errors {
+                                let start = entry
+                                    .expr
+                                    .start
+                                    .saturating_add(error.span.start)
+                                    .min(entry.expr.end);
+                                let end = entry
+                                    .expr
+                                    .start
+                                    .saturating_add(error.span.end)
+                                    .clamp(start, entry.expr.end);
+                                local.push(Diagnostic::error(
+                                    format!(
+                                        "invalid document expression in field '{}': {}",
+                                        entry.name.text, error.message
+                                    ),
+                                    Some((start..end).into()),
+                                ));
+                            }
+                        }
+                    }
+                    search_out.document.push(DocumentField::new(
+                        entry.name.text.clone(),
+                        text.to_string(),
+                    ));
+                }
+            }
+
+            // Ranking, analyzer, and pagination lower as authored; the
+            // value-range rules are validation, not rewriting.
+            search_out.ranking = search.ranking.as_ref().map(|ranking| match ranking {
+                dsl::DddRanking::Bm25 => RankingStrategy::Bm25,
+                dsl::DddRanking::TfIdf => RankingStrategy::TfIdf,
+                dsl::DddRanking::Exact => RankingStrategy::Exact,
+                dsl::DddRanking::Custom(name) => RankingStrategy::Custom(name.clone()),
+            });
+            search_out.analyzer = search.analyzer.clone();
+            if let Some(pagination) = &search.pagination {
+                for (value, label) in [(pagination.limit, "limit"), (pagination.max, "max")] {
+                    if value.is_some_and(|value| value < 1) {
+                        local.push(Diagnostic::error(
+                            format!("pagination {label} must be at least 1"),
+                            Some(pagination.span),
+                        ));
+                    }
+                }
+                if let (Some(limit), Some(max)) = (pagination.limit, pagination.max) {
+                    if limit > max {
+                        local.push(Diagnostic::error(
+                            format!("pagination limit {limit} exceeds the max {max}"),
+                            Some(pagination.span),
+                        ));
+                    }
+                }
+                let mut pagination_out = Pagination::default();
+                pagination_out.limit = pagination.limit.map(|value| value.max(0) as u32);
+                pagination_out.max_limit = pagination.max.map(|value| value.max(0) as u32);
+                pagination_out.cursor = pagination.cursor;
+                search_out.pagination = Some(pagination_out);
+            }
+
+            if !searches.iter().any(|(name, _)| *name == search.name.text) {
+                searches.push((
+                    search.name.text.clone(),
+                    SearchEntry {
+                        module: module.name.text.clone(),
+                    },
+                ));
+            }
+            module_out.searches.push(search_out);
+        }
+
         model.modules.push(module_out);
+    }
+
+    // Rule 11 — the search→entity binding: the entity design must exist in
+    // the search's own module. Deferred so a search may reference an entity
+    // designed later in the file.
+    for check in &search_bindings {
+        let designed_here = entity_designs.iter().any(|design| {
+            design.package == check.package
+                && design.class == check.class
+                && design.module == check.module
+        });
+        if designed_here {
+            continue;
+        }
+        let help = match entity_designs
+            .iter()
+            .find(|design| design.package == check.package && design.class == check.class)
+        {
+            Some(design) => format!(
+                "'{0}' is designed as an entity in module '{1}'; move the search \
+                 there, or drop that design",
+                check.class, design.module
+            ),
+            None => format!(
+                "add an `entity {0}` design to module '{1}' first",
+                check.class, check.module
+            ),
+        };
+        local.push(
+            Diagnostic::error(
+                format!(
+                    "search '{}' targets '{}', which has no entity design in module '{}'",
+                    check.search, check.class, check.module
+                ),
+                Some(check.entity.span),
+            )
+            .with_help(help),
+        );
     }
 
     // Rule 6 — the aggregate boundary: an entity contained by another
@@ -463,13 +855,15 @@ pub(crate) fn compile_ddd_file(
     if let Some(union) = &union {
         let edges = containment_edges(union);
         for candidate in &root_candidates {
-            for (package, class) in &entity_classes {
-                if (package, class) == (&candidate.package, &candidate.class) {
+            for design in &entity_designs {
+                if (design.package.as_str(), design.class.as_str())
+                    == (&candidate.package, &candidate.class)
+                {
                     continue;
                 }
                 if reaches(
                     &edges,
-                    (package, class),
+                    (&design.package, &design.class),
                     (&candidate.package, &candidate.class),
                 ) {
                     local.push(
@@ -477,7 +871,7 @@ pub(crate) fn compile_ddd_file(
                             format!(
                                 "entity '{}' is contained by '{}'; only aggregate roots \
                                  may declare a repository",
-                                candidate.authored, class
+                                candidate.authored, design.class
                             ),
                             Some(candidate.repository_span),
                         )
@@ -485,7 +879,7 @@ pub(crate) fn compile_ddd_file(
                             "remove the repository from design '{0}', or change the entity \
                              design of '{1}' so the containment no longer marks '{0}' a \
                              non-root aggregate",
-                            candidate.authored, class
+                            candidate.authored, design.class
                         )),
                     );
                     break;
@@ -494,13 +888,16 @@ pub(crate) fn compile_ddd_file(
         }
     }
 
-    // Rule 9 — every injected dependency names a service or repository of
-    // the application.
+    // Rule 9 — every injected dependency names a service, repository, or
+    // search of the application.
     for check in &inject_checks {
         let known = services
             .iter()
             .any(|(name, _)| *name == check.dependency.text)
             || repositories
+                .iter()
+                .any(|(name, _)| *name == check.dependency.text)
+            || searches
                 .iter()
                 .any(|(name, _)| *name == check.dependency.text);
         if !known {
@@ -510,16 +907,18 @@ pub(crate) fn compile_ddd_file(
                     Some(check.dependency.span),
                 )
                 .with_help(format!(
-                    "'{}' is not a service or repository declared in this application",
+                    "'{}' is not a service, repository, or search declared in this \
+                     application",
                     check.dependency.text
                 )),
             );
         }
     }
 
-    // Rule 8 — delegations resolve to a service or repository of the
-    // application, and name an operation on it; a service delegating to a
-    // repository of another module breaks the module coupling rule.
+    // Rule 8 — delegations resolve to a service, repository, or search of
+    // the application, and name an operation on it; a service delegating to
+    // a repository or search of another module breaks the module coupling
+    // rule.
     for check in &delegation_checks {
         let target = check.delegation.target.full_name();
         let operation = check.delegation.operation.text.as_str();
@@ -551,6 +950,29 @@ pub(crate) fn compile_ddd_file(
                     Some(check.delegation.span),
                 ));
             }
+        } else if let Some((_, entry)) = searches.iter().find(|(name, _)| *name == target) {
+            // A search projection exposes exactly one virtual operation,
+            // `search`; coupling follows the repository rule.
+            if entry.module != check.module {
+                local.push(
+                    Diagnostic::error(
+                        "interaction between a Service in one Module and a Search in \
+                         another Module is not allowed; go via a Service",
+                        Some(check.delegation.span),
+                    )
+                    .with_help(format!(
+                        "the service runs in module '{}' and search '{target}' lives in \
+                         module '{}'",
+                        check.module, entry.module
+                    )),
+                );
+            }
+            if operation != "search" {
+                local.push(Diagnostic::error(
+                    format!("search '{target}' exposes only the virtual operation 'search'"),
+                    Some(check.delegation.span),
+                ));
+            }
         } else {
             local.push(
                 Diagnostic::error(
@@ -558,8 +980,8 @@ pub(crate) fn compile_ddd_file(
                     Some(check.delegation.span),
                 )
                 .with_help(
-                    "delegate to an injected dependency: a service or repository \
-                     declared in this application",
+                    "delegate to an injected dependency: a service, repository, or \
+                     search declared in this application",
                 ),
             );
         }
@@ -587,8 +1009,8 @@ pub(crate) fn compile_ddd_file(
                 local.push(
                     Diagnostic::error(
                         format!(
-                            "unknown capability '{}' on operation '{}' of service '{}'",
-                            check.capability.text, check.op, check.service
+                            "unknown capability '{}' on {}",
+                            check.capability.text, check.context
                         ),
                         Some(check.capability.span),
                     )
@@ -799,6 +1221,99 @@ fn lower_multiplicity(multiplicity: &dsl::Multiplicity) -> rex_ir::Multiplicity 
                 dsl::MultBound::Int(bound) => rex_ir::Upper::Finite(bound.max(0) as u32),
             },
         },
+    }
+}
+
+/// The single segment of a name that must reference a feature directly;
+/// `None` for a multi-segment (path) reference.
+fn single_segment(name: &dsl::QualifiedName) -> Option<&str> {
+    match name.segments.as_slice() {
+        [segment] => Some(segment.text.as_str()),
+        _ => None,
+    }
+}
+
+/// The features of a class including everything inherited through its
+/// `extends` chain (cycle-safe), in own-first order.
+fn class_features<'a>(
+    union: &'a rex_ir::Model,
+    package: &str,
+    class: &str,
+) -> Option<Vec<&'a rex_ir::Feature>> {
+    fn find_class<'a>(
+        union: &'a rex_ir::Model,
+        package: &str,
+        class: &str,
+    ) -> Option<&'a rex_ir::ClassDef> {
+        union
+            .packages
+            .iter()
+            .find(|candidate| candidate.name == package)
+            .and_then(|candidate| candidate.classes.iter().find(|c| c.name == class))
+    }
+    let mut collected: Vec<&rex_ir::Feature> = Vec::new();
+    let mut visited: Vec<(String, String)> = vec![(package.to_string(), class.to_string())];
+    let mut queue: Vec<(String, String)> = vec![(package.to_string(), class.to_string())];
+    while let Some((package, class)) = queue.pop() {
+        let def = find_class(union, &package, &class)?;
+        collected.extend(def.features.iter());
+        for base in &def.extends {
+            if let rex_ir::TypeRef::Class {
+                package: base_package,
+                name: base_name,
+            } = base
+            {
+                let key = (base_package.clone(), base_name.clone());
+                if !visited.contains(&key) {
+                    visited.push(key.clone());
+                    queue.push(key);
+                }
+            }
+        }
+    }
+    Some(collected)
+}
+
+/// The comma-joined feature names of a class, for "did you mean" help.
+fn feature_list(features: &[&rex_ir::Feature]) -> String {
+    features
+        .iter()
+        .map(|feature| feature.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Whether a feature's type is text-like and may be indexed: the string
+/// primitives, enums (literal names are text), datatypes (the string-family
+/// default the constraint rules use), and vocabularies whose key facet is a
+/// string primitive. Class references, numerics, booleans, and dates are
+/// filter/sort facets, not indexed prose.
+fn text_indexable(type_: &rex_ir::TypeRef, union: &rex_ir::Model) -> bool {
+    match type_ {
+        rex_ir::TypeRef::Primitive(primitive) => matches!(
+            primitive,
+            rex_ir::PrimitiveType::String | rex_ir::PrimitiveType::Char
+        ),
+        rex_ir::TypeRef::Enum { .. } => true,
+        rex_ir::TypeRef::Datatype { .. } => true,
+        rex_ir::TypeRef::Vocabulary { package, name } => union
+            .packages
+            .iter()
+            .find(|candidate| candidate.name == *package)
+            .and_then(|candidate| candidate.vocabularies.iter().find(|v| v.name == *name))
+            .and_then(|vocabulary| {
+                vocabulary
+                    .facets
+                    .iter()
+                    .find(|facet| facet.name == vocabulary.key)
+            })
+            .is_some_and(|key| {
+                matches!(
+                    key.type_,
+                    rex_ir::PrimitiveType::String | rex_ir::PrimitiveType::Char
+                )
+            }),
+        rex_ir::TypeRef::Class { .. } | rex_ir::TypeRef::Interface { .. } => false,
     }
 }
 

@@ -35,6 +35,7 @@ class Chapter {
 class Movie extends Media {
     MovieGenre genre
     int runtimeMinutes
+    String synopsis
 }
 
 class PhysicalMedia {

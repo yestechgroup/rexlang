@@ -73,12 +73,20 @@
                 "target": "PersonService",
                 "operation": "register"
               }
+            },
+            {
+              "name": "findMedia",
+              "delegation": {
+                "target": "MediaSearch",
+                "operation": "search"
+              }
             }
           ],
           "dependencies": [
             "PhysicalMediaRepository",
             "MovieRepository",
-            "PersonService"
+            "PersonService",
+            "MediaSearch"
           ]
         }
       ],
@@ -235,6 +243,55 @@
             ]
           }
         }
+      ],
+      "searches": [
+        {
+          "name": "MediaSearch",
+          "description": "Full-text search over the movie catalogue.",
+          "entity": "Movie",
+          "text": [
+            {
+              "property": "title",
+              "boost": 3.0
+            },
+            {
+              "property": "synopsis",
+              "analyzer": "english"
+            }
+          ],
+          "filters": [
+            {
+              "property": "genre"
+            }
+          ],
+          "sort": [
+            {
+              "property": "title"
+            }
+          ],
+          "document": [
+            {
+              "name": "headline",
+              "expr": "title"
+            },
+            {
+              "name": "blurb",
+              "expr": "title + \" - \" + synopsis"
+            }
+          ],
+          "ranking": {
+            "type": "bm25"
+          },
+          "analyzer": "english",
+          "pagination": {
+            "limit": 20,
+            "maxLimit": 100,
+            "cursor": true
+          },
+          "capabilities": [
+            "SearchMedia"
+          ]
+        }
       ]
     },
     {
@@ -307,6 +364,43 @@
                 ]
               }
             ]
+          }
+        }
+      ],
+      "searches": [
+        {
+          "name": "MemberDirectory",
+          "entity": "Person",
+          "text": [
+            {
+              "property": "fullName",
+              "boost": 2.0
+            }
+          ],
+          "filters": [
+            {
+              "property": "joinedOn"
+            }
+          ],
+          "sort": [
+            {
+              "property": "fullName"
+            },
+            {
+              "property": "joinedOn"
+            }
+          ],
+          "document": [
+            {
+              "name": "displayName",
+              "expr": "fullName"
+            }
+          ],
+          "ranking": {
+            "type": "tfIdf"
+          },
+          "pagination": {
+            "limit": 10
           }
         }
       ]

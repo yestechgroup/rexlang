@@ -1,7 +1,7 @@
-//! The DDD design artifact: application, modules, application services, and
-//! per-class design decisions (Sculptor-style), produced by the `.ddd`
-//! design DSL and ingested by downstream consumers exactly like
-//! [`crate::ifml::IfmlModel`].
+//! The DDD design artifact: application, modules, application services,
+//! per-class design decisions (Sculptor-style), and search definitions,
+//! produced by the `.ddd` design DSL and ingested by downstream consumers
+//! exactly like [`crate::ifml::IfmlModel`].
 //!
 //! This is a standalone, versioned wire artifact in the [rexlang] family,
 //! versioned independently of [`crate::FORMAT_VERSION`] via
@@ -14,7 +14,9 @@
 //!   `returnType`, `optimisticLocking`, ...). Unit-only enums serialize as
 //!   bare strings: [`Stereotype`] lowercase (`"entity" | "value" | "dto"`),
 //!   [`BuiltinRepositoryOp`] camelCase (`"findById"`, `"findAll"`,
-//!   `"save"`, `"delete"`).
+//!   `"save"`, `"delete"`). The one payload-bearing enum,
+//!   [`RankingStrategy`], is adjacently tagged instead (`{"type":
+//!   "tfIdf"}`, `{"type": "custom", "value": "..."}`).
 //! - **Version gate.** [`DddModel::from_json`] rejects any other
 //!   `formatVersion` (absent reports as 0) with
 //!   [`crate::IrError::UnsupportedFormatVersion`] rather than guessing.
@@ -60,11 +62,15 @@ use crate::{IrError, Multiplicity, OperationParam, TypeRef};
 pub const DDD_MODEL_FORMAT_VERSION: u32 = 1;
 
 /// The root of a DDD design artifact: one application with its modules of
-/// application services and class designs.
+/// application services, class designs, and search definitions.
 ///
 /// See the [wire format contract](crate#wire-format-contract) and the
 /// [module docs](self).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Eq` is deliberately not derived: [`Module`]'s search fields carry an
+/// `f32` boost, so only [`PartialEq`] equality is available (value equality
+/// is unaffected).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DddModel {
     /// Artifact format version. Always [`DDD_MODEL_FORMAT_VERSION`] for
@@ -160,9 +166,9 @@ impl Application {
     }
 }
 
-/// A module of the application: a cohesive slice of services and designed
-/// classes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A module of the application: a cohesive slice of services, designed
+/// classes, and search definitions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Module {
     /// Module name.
@@ -173,6 +179,9 @@ pub struct Module {
     /// Class designs declared in this module, in declaration order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub designs: Vec<Design>,
+    /// Search definitions declared in this module, in declaration order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub searches: Vec<SearchDef>,
 }
 
 impl Module {
@@ -182,6 +191,7 @@ impl Module {
             name: name.into(),
             services: Vec::new(),
             designs: Vec::new(),
+            searches: Vec::new(),
         }
     }
 }
@@ -463,6 +473,268 @@ pub enum BuiltinRepositoryOp {
     Delete,
 }
 
+/// A search definition designed over one entity: the indexed full-text
+/// fields, the structured filter and sort keys, the computed document
+/// projection, and the ranking/analyzer/pagination knobs.
+///
+/// Like [`Design::class`], [`SearchDef::entity`] loosely references a
+/// `.mox` class (unqualified or package-qualified at this layer);
+/// resolution against the domain [`crate::Model`] is a driver/consumer
+/// concern, never a wire concern.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchDef {
+    /// Search name, unique within its module (not validated at the wire
+    /// layer, consistent with the other artifacts).
+    pub name: String,
+    /// Human-readable description of what the search finds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The referenced entity class whose instances are searched.
+    pub entity: String,
+    /// Full-text fields, in declaration order: the indexed prose a query's
+    /// terms match against, ranked by relevance.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text: Vec<SearchField>,
+    /// Structured filter keys, in declaration order: exact-match facets a
+    /// query may constrain (never free-text searched).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filters: Vec<SearchFilter>,
+    /// Structured sort keys, in declaration order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sort: Vec<SearchSort>,
+    /// Computed projection entries of the search document, in declaration
+    /// order: named values derived from the matched instance.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub document: Vec<DocumentField>,
+    /// The relevance ranking strategy; `None` lets the consumer choose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ranking: Option<RankingStrategy>,
+    /// The default analyzer applied to the indexed text; per-field
+    /// overrides live on [`SearchField::analyzer`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analyzer: Option<String>,
+    /// Pagination knobs; `None` lets the consumer choose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pagination: Option<Pagination>,
+    /// Actor capability names guarding the search (the
+    /// [`crate::ActorModel`] dimension); loosely coupled, not validated at
+    /// the wire layer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
+}
+
+impl SearchDef {
+    /// Creates a search over `entity` with no text fields, filters, sort
+    /// keys, document projection, ranking, analyzer, pagination, or
+    /// capabilities.
+    pub fn new(name: impl Into<String>, entity: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            description: None,
+            entity: entity.into(),
+            text: Vec::new(),
+            filters: Vec::new(),
+            sort: Vec::new(),
+            document: Vec::new(),
+            ranking: None,
+            analyzer: None,
+            pagination: None,
+            capabilities: Vec::new(),
+        }
+    }
+
+    /// Chainable setter for the description.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Chainable setter for the full-text fields.
+    pub fn with_text(mut self, text: Vec<SearchField>) -> Self {
+        self.text = text;
+        self
+    }
+
+    /// Chainable setter for the filter keys.
+    pub fn with_filters(mut self, filters: Vec<SearchFilter>) -> Self {
+        self.filters = filters;
+        self
+    }
+
+    /// Chainable setter for the sort keys.
+    pub fn with_sort(mut self, sort: Vec<SearchSort>) -> Self {
+        self.sort = sort;
+        self
+    }
+
+    /// Chainable setter for the document projection.
+    pub fn with_document(mut self, document: Vec<DocumentField>) -> Self {
+        self.document = document;
+        self
+    }
+
+    /// Chainable setter for the ranking strategy.
+    pub fn with_ranking(mut self, ranking: RankingStrategy) -> Self {
+        self.ranking = Some(ranking);
+        self
+    }
+
+    /// Chainable setter for the default analyzer.
+    pub fn with_analyzer(mut self, analyzer: impl Into<String>) -> Self {
+        self.analyzer = Some(analyzer.into());
+        self
+    }
+
+    /// Chainable setter for the pagination knobs.
+    pub fn with_pagination(mut self, pagination: Pagination) -> Self {
+        self.pagination = Some(pagination);
+        self
+    }
+
+    /// Chainable setter for the guarding capabilities.
+    pub fn with_capabilities(mut self, capabilities: Vec<String>) -> Self {
+        self.capabilities = capabilities;
+        self
+    }
+}
+
+/// A full-text field of a [`SearchDef`]: the indexed prose of one entity
+/// property, optionally weighted and analyzed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchField {
+    /// The entity property whose text is indexed.
+    pub property: String,
+    /// Relevance boost multiplier for matches in this field; `None` uses
+    /// the consumer's default weight.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boost: Option<f32>,
+    /// Analyzer override for this field; `None` uses the search's default
+    /// ([`SearchDef::analyzer`], else the consumer's default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analyzer: Option<String>,
+}
+
+impl SearchField {
+    /// Creates a field with no boost and no analyzer override.
+    pub fn new(property: impl Into<String>) -> Self {
+        Self {
+            property: property.into(),
+            boost: None,
+            analyzer: None,
+        }
+    }
+
+    /// Chainable setter for the relevance boost.
+    pub fn with_boost(mut self, boost: f32) -> Self {
+        self.boost = Some(boost);
+        self
+    }
+
+    /// Chainable setter for the analyzer override.
+    pub fn with_analyzer(mut self, analyzer: impl Into<String>) -> Self {
+        self.analyzer = Some(analyzer.into());
+        self
+    }
+}
+
+/// A structured filter key of a [`SearchDef`]: an exact-match facet a query
+/// may constrain. A struct, not a bare string, so the wire format can grow
+/// per-filter knobs without a breaking change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchFilter {
+    /// The entity property the filter constrains.
+    pub property: String,
+}
+
+impl SearchFilter {
+    /// Creates a filter key.
+    pub fn new(property: impl Into<String>) -> Self {
+        Self {
+            property: property.into(),
+        }
+    }
+}
+
+/// A structured sort key of a [`SearchDef`]. A struct, not a bare string,
+/// so the wire format can grow per-key knobs without a breaking change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchSort {
+    /// The entity property the sort orders by.
+    pub property: String,
+}
+
+impl SearchSort {
+    /// Creates a sort key.
+    pub fn new(property: impl Into<String>) -> Self {
+        Self {
+            property: property.into(),
+        }
+    }
+}
+
+/// A computed projection entry of a [`SearchDef`]'s document: one named
+/// value of the search result, derived from the matched instance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentField {
+    /// The entry's name in the search document.
+    pub name: String,
+    /// The verbatim expression source computing the value (the same
+    /// convention as a domain feature's `expr` body); typed against the
+    /// entity by the consumer, never at the wire layer.
+    pub expr: String,
+}
+
+impl DocumentField {
+    /// Creates a document field from its name and expression source.
+    pub fn new(name: impl Into<String>, expr: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            expr: expr.into(),
+        }
+    }
+}
+
+/// The relevance ranking strategy of a [`SearchDef`].
+///
+/// Adjacently tagged (the crate's `{"type": ..., "value": ...}` rule):
+/// unit variants serialize without content — exactly `{"type": "bm25"}`,
+/// `{"type": "tfIdf"}`, `{"type": "exact"}` — and the newtype variant as
+/// `{"type": "custom", "value": "..."}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "camelCase")]
+pub enum RankingStrategy {
+    /// BM25 relevance scoring.
+    Bm25,
+    /// TF-IDF relevance scoring.
+    TfIdf,
+    /// Exact-match filtering only; no relevance ranking.
+    Exact,
+    /// A consumer-provided strategy, referenced by name — loosely coupled,
+    /// like every cross-artifact reference in this module.
+    Custom(String),
+}
+
+/// The pagination knobs of a [`SearchDef`]. A fully-default value
+/// serializes as `{}` (the field itself is optional on the search).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Pagination {
+    /// The default page size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// The maximum page size a query may request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_limit: Option<u32>,
+    /// The search pages by cursor (keyset) rather than by offset.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cursor: bool,
+}
+
 fn is_false(flag: &bool) -> bool {
     !*flag
 }
@@ -578,6 +850,7 @@ mod tests {
                         repository: None,
                     },
                 ],
+                searches: Vec::new(),
             })
     }
 
@@ -757,6 +1030,104 @@ mod tests {
                 .map(|a| a.base.unwrap_or_default())
                 .as_deref(),
             Some("nz.example.library")
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Search definitions (the `searches` feature of the artifact)
+    // -----------------------------------------------------------------------
+
+    /// A full-featured search definition: every collection populated, a
+    /// per-field boost and analyzer, `Custom` ranking, pagination, and
+    /// capabilities.
+    fn sample_search() -> SearchDef {
+        SearchDef::new("BookSearch", "nz.example.library::Book")
+            .with_description("Full-text catalogue search")
+            .with_text(vec![
+                SearchField::new("title")
+                    .with_boost(2.0)
+                    .with_analyzer("standard"),
+                SearchField::new("synopsis"),
+            ])
+            .with_filters(vec![SearchFilter::new("category")])
+            .with_sort(vec![SearchSort::new("title")])
+            .with_document(vec![DocumentField::new(
+                "label",
+                r#"title + " - " + synopsis"#,
+            )])
+            .with_ranking(RankingStrategy::Custom("recency".to_string()))
+            .with_analyzer("english")
+            .with_pagination(Pagination {
+                limit: Some(20),
+                max_limit: Some(100),
+                cursor: true,
+            })
+            .with_capabilities(vec!["SearchBooks".to_string()])
+    }
+
+    /// The sample model with the search definition installed.
+    fn search_model() -> DddModel {
+        let mut module = Module::new("catalogue");
+        module.searches.push(sample_search());
+        DddModel::new().module(module)
+    }
+
+    #[test]
+    fn full_search_round_trips_through_json() {
+        let model = search_model();
+        let json = model.to_json().expect("serialize");
+        let parsed = DddModel::from_json(&json).expect("deserialize");
+        assert_eq!(parsed, model);
+        assert_eq!(parsed.to_json().expect("re-serialize"), json);
+    }
+
+    #[test]
+    fn search_wire_format_is_camel_case_with_adjacent_ranking_tags() {
+        let json = search_model().to_json().expect("serialize");
+        assert!(json.contains("\"searches\":[{"), "{json}");
+        assert!(json.contains("\"maxLimit\":100"), "{json}");
+        assert!(json.contains("\"boost\":2.0"), "{json}");
+        assert!(
+            json.contains(r#"{"type":"custom","value":"recency"}"#),
+            "ranking is adjacently tagged: {json}"
+        );
+        assert!(
+            json.contains(r#"title + \" - \" + synopsis"#),
+            "the expr is verbatim source: {json}"
+        );
+        assert!(!json.contains('_'), "no snake_case keys: {json}");
+    }
+
+    #[test]
+    fn ranking_strategies_serialize_as_adjacent_tags() {
+        for (strategy, json) in [
+            (RankingStrategy::Bm25, r#"{"type":"bm25"}"#),
+            (RankingStrategy::TfIdf, r#"{"type":"tfIdf"}"#),
+            (RankingStrategy::Exact, r#"{"type":"exact"}"#),
+        ] {
+            assert_eq!(serde_json::to_string(&strategy).expect("serialize"), json);
+            assert_eq!(
+                serde_json::from_str::<RankingStrategy>(json).expect("deserialize"),
+                strategy
+            );
+        }
+        assert_eq!(
+            serde_json::to_string(&RankingStrategy::Custom("x".to_string())).expect("serialize"),
+            r#"{"type":"custom","value":"x"}"#
+        );
+    }
+
+    #[test]
+    fn a_search_less_module_omits_the_searches_key() {
+        let module = Module {
+            name: "catalogue".to_string(),
+            services: vec![Service::new("LoanService")],
+            designs: vec![Design::new("Money", Stereotype::Value)],
+            searches: Vec::new(),
+        };
+        assert_eq!(
+            serde_json::to_string(&module).expect("serialize"),
+            r#"{"name":"catalogue","services":[{"name":"LoanService"}],"designs":[{"class":"Money","stereotype":"value"}]}"#
         );
     }
 }

@@ -21,11 +21,11 @@ pub mod parser;
 
 pub use ast::{
     ActorFile, AnnotationDecl, BindingEntry, ClassDecl, DatatypeDecl, DddBase, DddBuiltinOp,
-    DddDelegation, DddDesign, DddFile, DddFlagKind, DddFlags, DddModule, DddParam, DddRepository,
-    DddRepositoryOp, DddService, DddServiceOp, DddStereotype, Decl, DefaultValue, EnumDecl,
-    EnumLiteral, FeatureDecl, ImportDecl, InterfaceDecl, Model, MultBound, Multiplicity,
-    MultiplicityKind, Name, Param, QualifiedName, Span, TypeRef, VocabularyDecl,
-    VocabularyFacetDecl, Wraps,
+    DddDelegation, DddDesign, DddDocumentEntry, DddFile, DddFlagKind, DddFlags, DddModule,
+    DddPagination, DddParam, DddRanking, DddRepository, DddRepositoryOp, DddSearch, DddSearchField,
+    DddService, DddServiceOp, DddStereotype, Decl, DefaultValue, EnumDecl, EnumLiteral,
+    FeatureDecl, ImportDecl, InterfaceDecl, Model, MultBound, Multiplicity, MultiplicityKind, Name,
+    Param, QualifiedName, Span, TypeRef, VocabularyDecl, VocabularyFacetDecl, Wraps,
 };
 pub use fmt::{format, format_actors, format_ddd, FormatError};
 pub use lexer::{lex, lex_with_comments, Comment, CommentKind, LexError, Token};

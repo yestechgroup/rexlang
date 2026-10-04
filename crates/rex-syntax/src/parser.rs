@@ -1488,6 +1488,10 @@ fn attach_ddd_docs(file: &mut DddFile, comments: &[crate::lexer::Comment<'_>], s
                 let start_line = line_of(service.span.start);
                 service.doc = doc_run_above(&docs, start_line).map(|text| text.replace('\n', " "));
             }
+            for search in &mut module.searches {
+                let start_line = line_of(search.span.start);
+                search.doc = doc_run_above(&docs, start_line).map(|text| text.replace('\n', " "));
+            }
         }
     }
 }
@@ -1960,11 +1964,284 @@ fn ddd_repository_decl<'src>(
         })
 }
 
+/// Scans a raw expression: tokens up to the terminating `;`, tracking the
+/// nesting depth of `()`, `[]` and `{}` so an `if ... { ... } else { ... }`
+/// expression's braces stay inside the capture while the terminator must sit
+/// at depth 0. String literals are single tokens, so a `;` inside one never
+/// terminates. The returned span slices the expression source strictly
+/// between the `=` and the `;` (the `;` excluded), the `.mox` op-body
+/// convention; at least one token is required, so a bare `name = ;` fails.
+fn ddd_raw_expr<'src>() -> impl Parser<'src, Tokens<'src>, Span, MoxExtra<'src>> + Clone {
+    let balanced = recursive(|body| {
+        let atom = select! {
+            t if !matches!(
+                t,
+                Token::LParen
+                    | Token::RParen
+                    | Token::LBracket
+                    | Token::RBracket
+                    | Token::LBrace
+                    | Token::RBrace
+                    | Token::Other(';')
+            ) =>
+                ()
+        };
+        let parens = kw(Token::LParen)
+            .ignore_then(body.clone())
+            .then_ignore(kw(Token::RParen));
+        let brackets = kw(Token::LBracket)
+            .ignore_then(body.clone())
+            .then_ignore(kw(Token::RBracket));
+        let braces = kw(Token::LBrace)
+            .ignore_then(body)
+            .then_ignore(kw(Token::RBrace));
+        atom.or(parens)
+            .or(brackets)
+            .or(braces)
+            .repeated()
+            .at_least(1)
+    });
+    balanced
+        .map_with(|(), e| e.span())
+        .then_ignore(kw(Token::Other(';')))
+}
+
+/// One `name = <expr>;` entry of a `document { ... }` clause.
+fn ddd_document_entry<'src>(
+) -> impl Parser<'src, Tokens<'src>, DddDocumentEntry, MoxExtra<'src>> + Clone {
+    name()
+        .then_ignore(kw(Token::Eq))
+        .then(ddd_raw_expr())
+        .map(|(name, expr)| DddDocumentEntry { name, expr })
+}
+
+/// One `text { ... }` field: `<property> (boost <int>)? (analyzer "<...>")?`.
+fn ddd_search_field<'src>(
+) -> impl Parser<'src, Tokens<'src>, DddSearchField, MoxExtra<'src>> + Clone {
+    qname()
+        .then(ddd_keyword("boost").ignore_then(int_lit()).or_not())
+        .then(ddd_keyword("analyzer").ignore_then(string_lit()).or_not())
+        .map_with(|((property, boost), analyzer), e| DddSearchField {
+            property,
+            boost,
+            analyzer,
+            span: e.span(),
+        })
+}
+
+/// The `ranking (bm25 | tfIdf | exact | custom "<...>")` line.
+fn ddd_ranking<'src>() -> impl Parser<'src, Tokens<'src>, DddRanking, MoxExtra<'src>> + Clone {
+    ddd_keyword("ranking").ignore_then(choice((
+        ddd_keyword("bm25").to(DddRanking::Bm25),
+        ddd_keyword("tfIdf").to(DddRanking::TfIdf),
+        ddd_keyword("exact").to(DddRanking::Exact),
+        ddd_keyword("custom")
+            .ignore_then(string_lit())
+            .map(DddRanking::Custom),
+    )))
+}
+
+/// The `pagination { (limit <int>)? (max <int>)? (cursor)? }` block. An
+/// empty block is legal at the syntax layer (the driver judges it).
+fn ddd_pagination<'src>() -> impl Parser<'src, Tokens<'src>, DddPagination, MoxExtra<'src>> + Clone
+{
+    let member = choice((
+        ddd_keyword("limit")
+            .ignore_then(int_lit())
+            .map(|value| (Some(value), None, false)),
+        ddd_keyword("max")
+            .ignore_then(int_lit())
+            .map(|value| (None, Some(value), false)),
+        ddd_keyword("cursor").to((None, None, true)),
+    ));
+    ddd_keyword("pagination")
+        .ignore_then(kw(Token::LBrace))
+        .ignore_then(member.repeated().collect::<Vec<_>>())
+        .then_ignore(kw(Token::RBrace))
+        .map_with(|members, e| DddPagination {
+            limit: members.iter().find_map(|(limit, _, _)| *limit),
+            max: members.iter().find_map(|(_, max, _)| *max),
+            cursor: members.iter().any(|(_, _, cursor)| *cursor),
+            span: e.span(),
+        })
+}
+
+/// One member of a `search` body.
+#[derive(Clone)]
+enum DddSearchMember {
+    Entity(QualifiedName),
+    Text(DddSearchField),
+    Filter(QualifiedName),
+    Sort(QualifiedName),
+    Document(DddDocumentEntry),
+    Ranking(DddRanking),
+    Analyzer(String),
+    Pagination(DddPagination),
+    Capability(Name),
+}
+
+/// Consumes a run of tokens that cannot start or continue a search member,
+/// stopping before the body's closing `}` and before identifiers (which
+/// could begin the next member). Always consumes at least one token.
+fn junk_ddd_search_member<'src>() -> impl Parser<'src, Tokens<'src>, (), MoxExtra<'src>> + Clone {
+    let first = select! { t if !matches!(t, Token::RBrace) => () };
+    let rest = select! {
+        t if !matches!(t, Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_)) => ()
+    };
+    first
+        .ignore_then(rest.repeated().ignored())
+        .validate(|(), e, emitter| {
+            emitter.emit(Rich::custom(e.span(), "expected a search member"));
+        })
+}
+
+/// One member of a `search` body with junk recovery. Repeated `text`,
+/// `filters`, `sort`, and `document` clauses merge into their lists;
+/// `entity`, `ranking`, `analyzer`, and `pagination` are single — a repeat
+/// is idempotent, the first declaration wins (the design-flags precedent).
+fn ddd_search_member<'src>(
+) -> impl Parser<'src, Tokens<'src>, Vec<DddSearchMember>, MoxExtra<'src>> + Clone {
+    let entity = ddd_keyword("entity")
+        .ignore_then(qname())
+        .map(|qname| vec![DddSearchMember::Entity(qname)]);
+    let text = ddd_keyword("text")
+        .ignore_then(kw(Token::LBrace))
+        .ignore_then(
+            ddd_search_field()
+                .map(Some)
+                .or(junk_ddd_search_member().to(None))
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .then_ignore(kw(Token::RBrace))
+        .map(|fields| {
+            fields
+                .into_iter()
+                .flatten()
+                .map(DddSearchMember::Text)
+                .collect()
+        });
+    let document = ddd_keyword("document")
+        .ignore_then(kw(Token::LBrace))
+        .ignore_then(
+            ddd_document_entry()
+                .map(Some)
+                .or(junk_ddd_search_member().to(None))
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .then_ignore(kw(Token::RBrace))
+        .map(|entries| {
+            entries
+                .into_iter()
+                .flatten()
+                .map(DddSearchMember::Document)
+                .collect::<Vec<_>>()
+        });
+    let ranking = ddd_ranking().map(|ranking| vec![DddSearchMember::Ranking(ranking)]);
+    let analyzer = ddd_keyword("analyzer")
+        .ignore_then(string_lit())
+        .map(|analyzer| vec![DddSearchMember::Analyzer(analyzer)]);
+    let pagination =
+        ddd_pagination().map(|pagination| vec![DddSearchMember::Pagination(pagination)]);
+    let capability = kw(Token::Capability)
+        .ignore_then(name())
+        .map(|capability| vec![DddSearchMember::Capability(capability)]);
+    choice((
+        entity,
+        text,
+        ddd_search_names("filters", DddSearchMember::Filter),
+        ddd_search_names("sort", DddSearchMember::Sort),
+        document,
+        ranking,
+        analyzer,
+        pagination,
+        capability,
+    ))
+    .or(junk_ddd_search_member().to(Vec::new()))
+}
+
+/// The `filters { ... }` / `sort { ... }` bodies: newline-separated
+/// qualified names, one per line, with junk recovery between them.
+fn ddd_search_names<'src>(
+    keyword: &'static str,
+    wrap: fn(QualifiedName) -> DddSearchMember,
+) -> impl Parser<'src, Tokens<'src>, Vec<DddSearchMember>, MoxExtra<'src>> + Clone {
+    ddd_keyword(keyword)
+        .ignore_then(kw(Token::LBrace))
+        .ignore_then(
+            qname()
+                .map(Some)
+                .or(junk_ddd_search_member().to(None))
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .then_ignore(kw(Token::RBrace))
+        .map(move |names| names.into_iter().flatten().map(wrap).collect())
+}
+
+/// A `search <name> { ... }` projection of a `module`. Doc comments (`///`
+/// runs) directly above it become the search description after parsing.
+fn ddd_search_decl<'src>() -> impl Parser<'src, Tokens<'src>, DddSearch, MoxExtra<'src>> + Clone {
+    ddd_keyword("search")
+        .ignore_then(name())
+        .then_ignore(kw(Token::LBrace))
+        .then(ddd_search_member().repeated().collect::<Vec<_>>())
+        .then_ignore(kw(Token::RBrace))
+        .map_with(|(name, members), e| {
+            let mut search = DddSearch {
+                name,
+                doc: None,
+                entity: None,
+                text: Vec::new(),
+                filters: Vec::new(),
+                sort: Vec::new(),
+                document: Vec::new(),
+                ranking: None,
+                analyzer: None,
+                pagination: None,
+                capabilities: Vec::new(),
+                span: e.span(),
+            };
+            for member in members.into_iter().flatten() {
+                match member {
+                    DddSearchMember::Entity(entity) => {
+                        if search.entity.is_none() {
+                            search.entity = Some(entity);
+                        }
+                    }
+                    DddSearchMember::Text(field) => search.text.push(field),
+                    DddSearchMember::Filter(name) => search.filters.push(name),
+                    DddSearchMember::Sort(name) => search.sort.push(name),
+                    DddSearchMember::Document(entry) => search.document.push(entry),
+                    DddSearchMember::Ranking(ranking) => {
+                        if search.ranking.is_none() {
+                            search.ranking = Some(ranking);
+                        }
+                    }
+                    DddSearchMember::Analyzer(analyzer) => {
+                        if search.analyzer.is_none() {
+                            search.analyzer = Some(analyzer);
+                        }
+                    }
+                    DddSearchMember::Pagination(pagination) => {
+                        if search.pagination.is_none() {
+                            search.pagination = Some(pagination);
+                        }
+                    }
+                    DddSearchMember::Capability(name) => search.capabilities.push(name),
+                }
+            }
+            search
+        })
+}
+
 /// One member of a `module` body.
 #[derive(Clone)]
 enum DddModuleMember {
     Service(DddService),
     Design(DddDesign),
+    Search(DddSearch),
 }
 
 /// Consumes a run of tokens that cannot start or continue a module member,
@@ -1988,6 +2265,7 @@ fn ddd_module_member<'src>(
     choice((
         ddd_service_decl().map(DddModuleMember::Service),
         ddd_design_decl().map(DddModuleMember::Design),
+        ddd_search_decl().map(DddModuleMember::Search),
     ))
     .map(Some)
     .or(junk_ddd_module_member().to(None))
@@ -2003,10 +2281,12 @@ fn ddd_module_decl<'src>() -> impl Parser<'src, Tokens<'src>, DddModule, MoxExtr
         .map_with(|(name, members), e| {
             let mut services = Vec::new();
             let mut designs = Vec::new();
+            let mut searches = Vec::new();
             for member in members {
                 match member {
                     Some(DddModuleMember::Service(service)) => services.push(service),
                     Some(DddModuleMember::Design(design)) => designs.push(design),
+                    Some(DddModuleMember::Search(search)) => searches.push(search),
                     None => {}
                 }
             }
@@ -2014,6 +2294,7 @@ fn ddd_module_decl<'src>() -> impl Parser<'src, Tokens<'src>, DddModule, MoxExtr
                 name,
                 services,
                 designs,
+                searches,
                 span: e.span(),
             }
         })

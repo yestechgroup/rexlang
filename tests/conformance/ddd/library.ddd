@@ -8,10 +8,12 @@ application Library {
             inject PhysicalMediaRepository;
             inject MovieRepository;
             inject PersonService;
+            inject MediaSearch;
             boolean borrow(String mediaId, Person borrower) capability BorrowMedia;
             PhysicalMedia registerMedia(String status);
             save => PhysicalMediaRepository.save;
             registerBorrower => PersonService.register;
+            findMedia => MediaSearch.search;
         }
         entity Library scaffold cache repository LibraryRepository {
             findById;
@@ -37,6 +39,32 @@ application Library {
             delete;
             PhysicalMedia findByStatus(String status);
         }
+        /// Full-text search over the movie catalogue.
+        search MediaSearch {
+            entity Movie
+            text {
+                title boost 3
+                synopsis analyzer "english"
+            }
+            filters {
+                genre
+            }
+            sort {
+                title
+            }
+            document {
+                headline = title;
+                blurb = title + " - " + synopsis;
+            }
+            ranking bm25
+            analyzer "english"
+            pagination {
+                limit 20
+                max 100
+                cursor
+            }
+            capability SearchMedia
+        }
     }
     module person {
         /// Keeps the member register current.
@@ -51,6 +79,26 @@ application Library {
             save;
             delete;
             Person findByName(String fullName);
+        }
+        search MemberDirectory {
+            entity Person
+            text {
+                fullName boost 2
+            }
+            filters {
+                joinedOn
+            }
+            sort {
+                fullName
+                joinedOn
+            }
+            document {
+                displayName = fullName;
+            }
+            ranking tfIdf
+            pagination {
+                limit 10
+            }
         }
     }
 }

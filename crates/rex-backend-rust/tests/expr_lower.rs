@@ -1,6 +1,6 @@
 //! Lowering-rule tests for the Rust backend's `expr` bodies: the typed
 //! expression tree (`rex_expr`) is lowered to exact Rust source text, and
-//! every test here pins one rule of `docs/EXPRESSIONS.md` (R1–R4, L1/L2/U1,
+//! every test here pins one rule of `docs/EXPRESSIONS.md` (R1–R4, R9, L1/L2/U1,
 //! A1–A6, feature access). The scratch-crate end-to-end test then proves the
 //! pinned text compiles and evaluates.
 
@@ -70,6 +70,12 @@ fn library_model() -> Model {
             .with_opposite("Library", "books"),
             Feature::new(
                 "title",
+                FeatureKind::Attribute,
+                TypeRef::Primitive(PrimitiveType::String),
+                Multiplicity::REQUIRED,
+            ),
+            Feature::new(
+                "synopsis",
                 FeatureKind::Attribute,
                 TypeRef::Primitive(PrimitiveType::String),
                 Multiplicity::REQUIRED,
@@ -398,6 +404,22 @@ fn r1_arithmetic_is_plain_and_width_typed() {
 #[test]
 fn r4_division_is_plain_truncating_slash() {
     lower_in("Book", "pages / 2", "(self.pages / 2i32)");
+}
+
+// ---------------------------------------------------------------------------
+// R9 string concatenation — plain `+` on owned String operands
+// ---------------------------------------------------------------------------
+
+#[test]
+fn r9_string_concatenation_is_plain_plus_on_owned_strings() {
+    // Left-associative chain: every binary node is parenthesized, and every
+    // string operand lowers to an owned `String`, so Rust's consuming `Add`
+    // moves them through the chain.
+    lower_in(
+        "Book",
+        r#"title + " - " + synopsis"#,
+        "((self.title.clone() + \" - \".to_string()) + self.synopsis.clone())",
+    );
 }
 
 // ---------------------------------------------------------------------------

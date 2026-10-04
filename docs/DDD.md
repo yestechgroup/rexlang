@@ -82,7 +82,7 @@ ddd_file      := import_decl* application_decl
 import_decl   := "import" string (";")?
 application   := "application" name "{" base_decl? module* "}"
 base_decl     := "base" qualified_name
-module        := "module" name "{" (service_decl | design_decl)* "}"
+module        := "module" name "{" (service_decl | design_decl | search_decl)* "}"
 service_decl  := "service" name "{" (service_op | inject_decl)* "}"
 service_op    := signature capability_clause? ";"
                | name "=>" target "." operation capability_clause? ";"
@@ -97,6 +97,18 @@ flag          := "scaffold" | "auditable" | "optimisticLocking"
 repository_decl  := "repository" name "{" repository_op* "}"
 repository_op := ("findById" | "findAll" | "save" | "delete") ";"
                | signature ";"
+search_decl   := "search" name "{" search_member* "}"
+search_member := "entity" qualified_name
+               | "text" "{" search_field+ "}"
+               | "filters" "{" qualified_name+ "}"
+               | "sort" "{" qualified_name+ "}"
+               | "document" "{" (name "=" expr ";")* "}"
+               | "ranking" ("bm25" | "tfIdf" | "exact" | "custom" string)
+               | "analyzer" string
+               | "pagination" "{" pagination_member* "}"
+               | capability_clause
+search_field  := qualified_name ("boost" int)? ("analyzer" string)?
+pagination_member := "limit" int | "max" int | "cursor"
 ```
 
 Lexical and structural rules:
@@ -121,6 +133,16 @@ Lexical and structural rules:
 - Multiplicity annotations on return types and parameters (`String[]`,
   `Book[0,3]`) lower into the artifact's cardinality slots
   (`returnMultiplicity` / parameter `multiplicity`).
+- A `search` projection's members may appear in any order (the formatter
+  canonicalizes them); repeated `text`/`filters`/`sort`/`document` clauses
+  merge, and repeats of the single members (`entity`, `ranking`,
+  `analyzer`, `pagination`) are idempotent — the first declaration wins.
+- A document entry's expression is captured **raw** (tokens up to the `;`,
+  nested brackets and string literals respected) and stored verbatim in the
+  artifact; parsing and type-checking it is the driver's job (rule 11). The
+  expression language is the Tier-2 neutral expression language with the
+  entity's features as `self` — string concatenation via `+` is rule R9 of
+  `docs/EXPRESSIONS.md`.
 
 ---
 
@@ -164,20 +186,35 @@ consumers resolve against the domain model.
    the bare/qualified rules above (any declared kind — class, enum,
    datatype, interface, vocabulary). A multiplicity annotation on a return
    type or parameter lowers into the artifact's cardinality slots.
-8. **Delegations** — the target must resolve to a service or a repository
-   declared anywhere in the application, and the operation must name an
-   operation on it (repository built-ins included). Service → repository
-   delegation across different modules is the module-coupling error
-   ("interaction between a Service in one Module and a Repository in
-   another Module is not allowed; go via a Service"); service → service
-   across modules is allowed.
-9. **inject** — every dependency name must resolve to a service or a
-   repository of the application.
+8. **Delegations** — the target must resolve to a service, a repository,
+   or a search declared anywhere in the application, and the operation must
+   name an operation on it (repository built-ins included; a search exposes
+   only the virtual operation `search`). Service → repository and
+   service → search delegation across different modules is the
+   module-coupling error ("interaction between a Service in one Module and
+   a Repository/Search in another Module is not allowed; go via a
+   Service"); service → service across modules is allowed.
+9. **inject** — every dependency name must resolve to a service, a
+   repository, or a search of the application.
 10. **Capabilities** — only `compile_ddd_str_with_actors` validates: each
     declared capability name must exist in the union of the actor model's
     blocks' capabilities. Plain compiles record the names unvalidated —
     the design dimension is loosely coupled to the policy dimension by
     design.
+11. **Searches** — a search's name is unique application-wide. Its `entity`
+    line is required, resolves like a design target, and must bind to an
+    entity design **of the same module** (the repository coupling rule;
+    non-root entities may be searched — a projection over a contained
+    entity is legitimate). Text fields must name a direct feature of the
+    entity (inherited features included) that is text-like: the string
+    primitives, enums, datatypes — the string-family default the constraint
+    rules use — and vocabularies whose key facet is a string primitive;
+    boosts are at least 1 and analyzers non-empty. Filters and sorts name
+    direct features that are not class references. Document field names are
+    unique per search, and every document expression is parsed and
+    type-checked with the entity as `self` (any value type is legal; the
+    consumer decides the rendered form). Pagination bounds satisfy
+    `1 ≤ limit ≤ max`.
 
 ## Aggregate derivation
 
@@ -222,7 +259,10 @@ rexlang artifact check library.ddd.json    # validate the serialized artifact
 - `rexlang fmt` formats `.ddd` files with the canonical layout rules:
   imports hoisted into a tight first section (each ending in `;`), then
   the `application` block; `base` first, design flags canonicalized to
-  `scaffold auditable optimisticLocking nonPersistent cache`, and every
+  `scaffold auditable optimisticLocking nonPersistent cache`, search
+  members canonicalized to `entity text filters sort document ranking
+  analyzer pagination capability` (clause contents keep their source
+  order; document expressions are re-emitted verbatim), and every
   operation/`inject` line ending in `;`.
 - Directory inputs stay `.mox`-only: designs are compiled by naming the
   `.ddd` file explicitly.
@@ -242,6 +282,8 @@ rexlang artifact check library.ddd.json    # validate the serialized artifact
 | `belongsTo` / `!aggregateRoot` | derived from the domain model's containment graph (see aggregate derivation) |
 | Module | `module` label grouping services and designs |
 | DTO | `dto` design |
+| `findByQuery` / `findByCondition` finders | `search` projection (intent only: text fields with boosts, filters, sorts, ranking, pagination, document projections) — the backend chooses the engine (Postgres FTS, Tantivy, OpenSearch, ...) |
+| generated `GET /things/search?q=` endpoints | consumer concern — the artifact is backend-independent |
 
 ---
 
