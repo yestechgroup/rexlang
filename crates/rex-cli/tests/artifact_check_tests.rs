@@ -117,6 +117,22 @@ const GOOD_INSTANCE: &str = r#"{
 }
 "#;
 
+const GOOD_DDD_ARTIFACT: &str = r#"{
+  "formatVersion": 1,
+  "application": {
+    "name": "Demo"
+  },
+  "modules": [
+    {
+      "name": "core",
+      "designs": [
+        { "class": "Thing", "stereotype": "entity" }
+      ]
+    }
+  ]
+}
+"#;
+
 #[test]
 fn artifact_check_passes_on_valid_ir_actor_and_instance_artifacts() {
     let ir = write_artifact("valid.rex.json", GOOD_IR_ARTIFACT);
@@ -150,6 +166,24 @@ fn artifact_check_passes_on_valid_ir_actor_and_instance_artifacts() {
 }
 
 #[test]
+fn artifact_check_passes_on_a_valid_ddd_artifact() {
+    let ddd = write_artifact("valid.ddd.json", GOOD_DDD_ARTIFACT);
+    let output = rexlang()
+        .args(["artifact", "check", ddd.to_str().unwrap()])
+        .output()
+        .expect("run rexlang artifact check");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("OK {}\n", ddd.display())
+    );
+}
+
+#[test]
 fn artifact_check_rejects_unsupported_format_version_and_names_it() {
     let cases: Vec<(&str, String)> = vec![
         ("ir_v2.rex.json", version_bump(GOOD_IR_ARTIFACT)),
@@ -158,6 +192,7 @@ fn artifact_check_rejects_unsupported_format_version_and_names_it() {
             version_bump(GOOD_ACTOR_ARTIFACT),
         ),
         ("instance_v2.json", version_bump(GOOD_INSTANCE)),
+        ("ddd_v2.ddd.json", version_bump(GOOD_DDD_ARTIFACT)),
     ];
     for (name, contents) in cases {
         let path = write_artifact(name, &contents);

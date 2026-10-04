@@ -1,0 +1,56 @@
+import "library.mox";
+
+application Library {
+    base nz.example.library
+    module media {
+        /// Coordinates lending of physical media across branches.
+        service MediaService {
+            inject PhysicalMediaRepository;
+            inject MovieRepository;
+            inject PersonService;
+            boolean borrow(String mediaId, Person borrower) capability BorrowMedia;
+            PhysicalMedia registerMedia(String status);
+            save => PhysicalMediaRepository.save;
+            registerBorrower => PersonService.register;
+        }
+        entity Library scaffold cache repository LibraryRepository {
+            findById;
+            findAll;
+            save;
+            delete;
+            boolean renameLibrary(String name);
+        }
+        entity Book
+        abstract entity Media
+        entity Chapter auditable
+        entity Movie repository MovieRepository {
+            findById;
+            findAll;
+            save;
+            delete;
+            Movie findByTitle(String title);
+        }
+        entity PhysicalMedia scaffold repository PhysicalMediaRepository {
+            findById;
+            findAll;
+            save;
+            delete;
+            PhysicalMedia findByStatus(String status);
+        }
+    }
+    module person {
+        /// Keeps the member register current.
+        service PersonService {
+            inject PersonRepository;
+            register => PersonRepository.save;
+            findByName => PersonRepository.findByName;
+        }
+        entity Person repository PersonRepository {
+            findById;
+            findAll;
+            save;
+            delete;
+            Person findByName(String fullName);
+        }
+    }
+}

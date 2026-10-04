@@ -3,6 +3,11 @@
 //! Every node carries a [`Span`] (a byte range into the original source text).
 //! All types are owned (no borrows of the source), which keeps the AST easy to
 //! cache in long-lived services such as a language server.
+//!
+//! The `.ddd` design DSL reuses the shared node types ([`Name`],
+//! [`QualifiedName`], [`TypeRef`], [`Multiplicity`], [`ImportDecl`]) and adds
+//! the `Ddd`-prefixed declarations at the bottom of this file, mirroring the
+//! `rex_ir::ddd` wire artifact field for field.
 
 use chumsky::span::SimpleSpan;
 
@@ -851,6 +856,297 @@ impl FeatureDecl {
             FeatureDecl::Container { .. } => "container",
             FeatureDecl::Op { .. } => "op",
             FeatureDecl::Derived { .. } => "derived",
+        }
+    }
+}
+
+// --- .ddd design DSL ---------------------------------------------------------
+
+/// The root node of a parsed `.ddd` source: `import` declarations followed by
+/// exactly one `application` declaration. The application is mandatory per the
+/// grammar; a source without one still parses (with an error) to
+/// `application: None` so recovery never loses the imports. An `import` after
+/// the application is a syntax error and is dropped from the AST.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DddFile {
+    /// The `import` declarations in source order.
+    pub imports: Vec<ImportDecl>,
+    /// The `application` declaration, when one was parsed.
+    pub application: Option<DddApplication>,
+}
+
+/// The `application <name> { ... }` declaration of a `.ddd` file: the
+/// designed application with its optional `base` package and its modules.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DddApplication {
+    /// The application name.
+    pub name: Name,
+    /// The `base` package declaration, when present. The grammar pins it to
+    /// the first member position; a misplaced or repeated `base` is a syntax
+    /// error reported by the parser.
+    pub base: Option<DddBase>,
+    /// The modules in source order.
+    pub modules: Vec<DddModule>,
+    /// Span of the whole declaration, `application` keyword included.
+    pub span: Span,
+}
+
+/// The `base <qualified-name>` member of a [`DddApplication`]: the default
+/// domain package for unqualified references.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DddBase {
+    /// The declared package name.
+    pub package: QualifiedName,
+    /// Span of the whole declaration, `base` keyword included.
+    pub span: Span,
+}
+
+/// A `module <name> { ... }` of a [`DddApplication`]: a cohesive slice of
+/// application services and designed classes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DddModule {
+    /// The module name.
+    pub name: Name,
+    /// Application services in source order.
+    pub services: Vec<DddService>,
+    /// Class designs in source order.
+    pub designs: Vec<DddDesign>,
+    /// Span of the whole declaration, `module` keyword included.
+    pub span: Span,
+}
+
+/// A `service <name> { ... }` of a [`DddModule`]: a stateless application
+/// service. The interleaved order of operations and `inject` lines is not
+/// preserved; operations and dependencies are collected in their own source
+/// orders (the same split the wire artifact makes).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DddService {
+    /// The service name.
+    pub name: Name,
+    /// Description from the doc comment directly above the declaration
+    /// (contiguous `///` lines, joined).
+    pub doc: Option<String>,
+    /// Declared and delegated operations, in source order.
+    pub operations: Vec<DddServiceOp>,
+    /// Injected dependency names (`inject <name>;`), in source order.
+    pub dependencies: Vec<Name>,
+    /// Span of the whole declaration, `service` keyword included.
+    pub span: Span,
+}
+
+/// One operation of a [`DddService`]: either a declared signature or a
+/// delegation to an injected dependency's operation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DddServiceOp {
+    /// The operation name. Contextual keywords are legal here: a delegated
+    /// op may be named `save`.
+    pub name: Name,
+    /// The declared return type; `None` for delegation operations.
+    pub return_type: Option<TypeRef>,
+    /// Multiplicity annotation on the return type, if any.
+    pub multiplicity: Option<Multiplicity>,
+    /// Parameters in source order.
+    pub params: Vec<DddParam>,
+    /// The delegation target, when this operation forwards instead of
+    /// declaring a signature.
+    pub delegation: Option<DddDelegation>,
+    /// Actor capability names from the `capability` clause, in source order.
+    pub capabilities: Vec<Name>,
+    /// Span of the whole operation, `;` included.
+    pub span: Span,
+}
+
+/// The `=> <target>.<operation>` delegation of a [`DddServiceOp`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct DddDelegation {
+    /// The injected dependency receiving the call.
+    pub target: QualifiedName,
+    /// The operation invoked on the target.
+    pub operation: Name,
+    /// Span covering `target.operation`.
+    pub span: Span,
+}
+
+/// One parameter of a declared operation: `type_ref multiplicity? name`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DddParam {
+    /// The parameter type.
+    pub type_ref: TypeRef,
+    /// Multiplicity annotation, if any.
+    pub multiplicity: Option<Multiplicity>,
+    /// The parameter name.
+    pub name: Name,
+    /// Span covering the whole parameter.
+    pub span: Span,
+}
+
+/// The DDD stereotype of a [`DddDesign`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DddStereotype {
+    /// `entity` — a class with identity.
+    Entity,
+    /// `value` — an immutable value object.
+    Value,
+    /// `dto` — a data transfer object.
+    Dto,
+}
+
+/// Which design flag a [`DddFlags::push`] recorded. The flags are contextual
+/// keywords, so — like [`ModifierKind`] — the parser needs the kind to fill
+/// the right slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DddFlagKind {
+    /// `scaffold` — generate scaffolding.
+    Scaffold,
+    /// `auditable` — record an audit trail.
+    Auditable,
+    /// `optimisticLocking` — optimistic locking on persistent state.
+    OptimisticLocking,
+    /// `nonPersistent` — the class is never persisted.
+    NonPersistent,
+    /// `cache` — cache instances.
+    Cache,
+}
+
+impl DddFlagKind {
+    /// The keyword text as written in the source.
+    pub fn keyword(self) -> &'static str {
+        match self {
+            DddFlagKind::Scaffold => "scaffold",
+            DddFlagKind::Auditable => "auditable",
+            DddFlagKind::OptimisticLocking => "optimisticLocking",
+            DddFlagKind::NonPersistent => "nonPersistent",
+            DddFlagKind::Cache => "cache",
+        }
+    }
+}
+
+/// The design flags of a [`DddDesign`], each carrying the span of the flag
+/// keyword as written. Absence means the flag is off. Repeating a flag is
+/// idempotent (the first span wins).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DddFlags {
+    /// Span of the `scaffold` keyword, if present.
+    pub scaffold: Option<Span>,
+    /// Span of the `auditable` keyword, if present.
+    pub auditable: Option<Span>,
+    /// Span of the `optimisticLocking` keyword, if present.
+    pub optimistic_locking: Option<Span>,
+    /// Span of the `nonPersistent` keyword, if present.
+    pub non_persistent: Option<Span>,
+    /// Span of the `cache` keyword, if present.
+    pub cache: Option<Span>,
+}
+
+impl DddFlags {
+    /// Records one flag; repeats are idempotent (the first span wins).
+    pub fn push(&mut self, kind: DddFlagKind, span: Span) {
+        match kind {
+            DddFlagKind::Scaffold => self.scaffold = self.scaffold.or(Some(span)),
+            DddFlagKind::Auditable => self.auditable = self.auditable.or(Some(span)),
+            DddFlagKind::OptimisticLocking => {
+                self.optimistic_locking = self.optimistic_locking.or(Some(span))
+            }
+            DddFlagKind::NonPersistent => self.non_persistent = self.non_persistent.or(Some(span)),
+            DddFlagKind::Cache => self.cache = self.cache.or(Some(span)),
+        }
+    }
+
+    /// `true` when no flag is present.
+    pub fn is_empty(&self) -> bool {
+        self.scaffold.is_none()
+            && self.auditable.is_none()
+            && self.optimistic_locking.is_none()
+            && self.non_persistent.is_none()
+            && self.cache.is_none()
+    }
+}
+
+/// A design declaration of a [`DddModule`]: the DDD decisions for one
+/// referenced `.mox` class — `("abstract")? stereotype name flag*
+/// ("repository" ...)?`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DddDesign {
+    /// The referenced `.mox` class name.
+    pub class: Name,
+    /// The DDD stereotype.
+    pub stereotype: DddStereotype,
+    /// Whether the `abstract` modifier was written before the stereotype.
+    pub is_abstract: bool,
+    /// The design flags, in canonical field order regardless of source order.
+    pub flags: DddFlags,
+    /// The class's repository, when designed.
+    pub repository: Option<DddRepository>,
+    /// Span of the whole declaration (`abstract` included, when present).
+    pub span: Span,
+}
+
+/// The `repository <name> { ... }` block of a [`DddDesign`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct DddRepository {
+    /// The repository name.
+    pub name: Name,
+    /// Repository operations in source order: built-ins and declared
+    /// signatures interleaved as written.
+    pub operations: Vec<DddRepositoryOp>,
+    /// Span of the whole declaration, `repository` keyword included.
+    pub span: Span,
+}
+
+/// One operation of a [`DddRepository`]: either a built-in (whose signature
+/// the consumer knows) or a declared operation with an explicit signature.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DddRepositoryOp {
+    /// The operation name; for built-ins this is the written keyword.
+    pub name: Name,
+    /// The built-in op, when this is one; a built-in has no signature of its
+    /// own.
+    pub builtin: Option<DddBuiltinOp>,
+    /// The declared return type; always `Some` for declared operations (the
+    /// grammar requires it) and `None` for built-ins.
+    pub return_type: Option<TypeRef>,
+    /// Multiplicity annotation on the return type, if any.
+    pub multiplicity: Option<Multiplicity>,
+    /// Declared parameters in source order.
+    pub params: Vec<DddParam>,
+    /// Span of the whole operation, `;` included.
+    pub span: Span,
+}
+
+/// A built-in repository operation, recognized by its contextual keyword in
+/// repository-member position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DddBuiltinOp {
+    /// `findById` — fetch one aggregate by identity.
+    FindById,
+    /// `findAll` — fetch all aggregates.
+    FindAll,
+    /// `save` — insert or update an aggregate.
+    Save,
+    /// `delete` — delete an aggregate.
+    Delete,
+}
+
+impl DddBuiltinOp {
+    /// The built-in introduced by the given contextual keyword, or `None`
+    /// for any other identifier.
+    pub fn from_keyword(text: &str) -> Option<Self> {
+        match text {
+            "findById" => Some(DddBuiltinOp::FindById),
+            "findAll" => Some(DddBuiltinOp::FindAll),
+            "save" => Some(DddBuiltinOp::Save),
+            "delete" => Some(DddBuiltinOp::Delete),
+            _ => None,
+        }
+    }
+
+    /// The keyword text as written in the source.
+    pub fn keyword(self) -> &'static str {
+        match self {
+            DddBuiltinOp::FindById => "findById",
+            DddBuiltinOp::FindAll => "findAll",
+            DddBuiltinOp::Save => "save",
+            DddBuiltinOp::Delete => "delete",
         }
     }
 }

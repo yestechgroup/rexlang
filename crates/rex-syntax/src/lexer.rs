@@ -13,7 +13,12 @@ use crate::ast::Span;
 /// while the token span still covers the raw `^keyword` text.
 ///
 /// Note that `get`, `set`, `id` and `readonly` are *not* keywords: they lex as
-/// ordinary identifiers so they may be used as feature names unescaped.
+/// ordinary identifiers so they may be used as feature names unescaped. The
+/// same holds for every `.ddd` design-DSL word (`application`, `base`,
+/// `module`, `service`, `inject`, `repository`, `entity`, `value`, `dto`,
+/// `abstract`, `scaffold`, `auditable`, `optimisticLocking`, `nonPersistent`,
+/// `cache`, `findById`, `findAll`, `save`, `delete`): they are special only in
+/// the grammar positions the `.ddd` parser gives them, never at the lex level.
 #[derive(Debug, Clone, PartialEq, Eq, Logos)]
 pub enum Token<'src> {
     #[token("package")]
@@ -128,6 +133,8 @@ pub enum Token<'src> {
     RBracket,
     #[token("=")]
     Eq,
+    #[token("=>")]
+    FatArrow,
     #[token("*")]
     Star,
 
@@ -229,6 +236,7 @@ impl fmt::Display for Token<'_> {
             Token::LBracket => f.write_str("`[`"),
             Token::RBracket => f.write_str("`]`"),
             Token::Eq => f.write_str("`=`"),
+            Token::FatArrow => f.write_str("`=>`"),
             Token::Star => f.write_str("`*`"),
             Token::Error => f.write_str("invalid token"),
             // Keyword variants are handled by the `keyword()` early return;
@@ -512,6 +520,50 @@ mod tests {
         assert_eq!(
             kinds("-42 0 007"),
             vec![Token::Int(-42), Token::Int(0), Token::Int(7)]
+        );
+    }
+
+    #[test]
+    fn fat_arrow_lexes_as_one_token_and_wins_over_eq() {
+        let tokens = lex("a => b").unwrap();
+        assert_eq!(tokens[0], (Token::Ident("a"), (0..1).into()));
+        assert_eq!(tokens[1], (Token::FatArrow, (2..4).into()));
+        assert_eq!(tokens[2], (Token::Ident("b"), (5..6).into()));
+        // A lone `=` is still `Eq`; `=` followed by a separate `>` never
+        // merges into the arrow.
+        assert_eq!(kinds("="), vec![Token::Eq]);
+        assert_eq!(kinds("= >"), vec![Token::Eq, Token::Other('>')]);
+    }
+
+    #[test]
+    fn ddd_words_lex_as_plain_identifiers() {
+        assert_eq!(
+            kinds(
+                "application base module service inject repository entity value dto abstract \
+                 scaffold auditable optimisticLocking nonPersistent cache findById findAll save \
+                 delete"
+            ),
+            vec![
+                Token::Ident("application"),
+                Token::Ident("base"),
+                Token::Ident("module"),
+                Token::Ident("service"),
+                Token::Ident("inject"),
+                Token::Ident("repository"),
+                Token::Ident("entity"),
+                Token::Ident("value"),
+                Token::Ident("dto"),
+                Token::Ident("abstract"),
+                Token::Ident("scaffold"),
+                Token::Ident("auditable"),
+                Token::Ident("optimisticLocking"),
+                Token::Ident("nonPersistent"),
+                Token::Ident("cache"),
+                Token::Ident("findById"),
+                Token::Ident("findAll"),
+                Token::Ident("save"),
+                Token::Ident("delete"),
+            ]
         );
     }
 

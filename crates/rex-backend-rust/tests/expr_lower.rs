@@ -54,6 +54,7 @@ fn library_model() -> Model {
         vec![OperationParam {
             name: "title".to_string(),
             type_: TypeRef::Primitive(PrimitiveType::String),
+            multiplicity: None,
         }],
     ));
     package.classes.push(ClassDef::new(
@@ -140,6 +141,7 @@ fn lower_in(class: &str, source: &str, expected: &str) {
         &[OperationParam {
             name: "title".to_string(),
             type_: TypeRef::Primitive(PrimitiveType::String),
+            multiplicity: None,
         }]
     } else {
         &[]

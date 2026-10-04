@@ -52,6 +52,18 @@ enum Resolved {
 }
 
 impl Resolved {
+    /// The lowercase noun used in diagnostics, e.g. "class" or "enum".
+    fn label(self) -> &'static str {
+        match self {
+            Resolved::Primitive(_) => "primitive",
+            Resolved::Enum => "enum",
+            Resolved::Datatype => "datatype",
+            Resolved::Class => "class",
+            Resolved::Interface => "interface",
+            Resolved::Vocabulary => "vocabulary",
+        }
+    }
+
     /// Builds the resolved IR type reference.
     fn to_ir(self, package: &str, name: &str) -> ir::TypeRef {
         match self {
@@ -92,9 +104,11 @@ struct Resolution {
 /// The type namespace of one package in a combined multi-package namespace
 /// (imported domains of `.actor` files, or the files of a multi-file
 /// compile).
-struct DomainPackage {
-    name: String,
-    kinds: HashMap<String, TopKind>,
+pub(crate) struct DomainPackage {
+    /// The package name (the `.mox` `package` declaration).
+    pub(crate) name: String,
+    /// The top-level declarations the package contributes, by name.
+    pub(crate) kinds: HashMap<String, TopKind>,
 }
 
 /// The namespace a block resolves type references against: either a single
@@ -300,6 +314,104 @@ fn resolve_domains(
             );
             None
         }
+    }
+}
+
+/// Resolves a type reference against the combined domain namespace, with an
+/// optional preferred (base) package: a bare single-segment name that the
+/// base package declares resolves there immediately, before the
+/// unique-across-all-packages lookup runs. Qualified names ignore the base.
+/// This is the `.ddd` resolution rule (see `compile_ddd_str`); on failure the
+/// standard cross-package diagnostics are emitted.
+fn resolve_preferred(
+    type_ref: &mox::TypeRef,
+    packages: &[DomainPackage],
+    base: Option<&str>,
+    diags: &mut Vec<Diagnostic>,
+) -> Option<Resolution> {
+    if type_ref.name.segments.len() == 1 {
+        if let Some(index) =
+            base.and_then(|base| packages.iter().position(|package| package.name == base))
+        {
+            if packages[index]
+                .kinds
+                .contains_key(type_ref.name.segments[0].text.as_str())
+            {
+                return resolve_domains(type_ref, &packages[index..=index], diags);
+            }
+        }
+    }
+    resolve_domains(type_ref, packages, diags)
+}
+
+/// Resolves a `.ddd` signature type to its IR type reference: any declared
+/// kind resolves (classes, enums, datatypes, interfaces, vocabularies) plus
+/// the primitives; a failed resolution reports through `diags` and yields a
+/// placeholder (the artifact is discarded whenever errors exist).
+pub(crate) fn resolve_ddd_type(
+    type_ref: &mox::TypeRef,
+    packages: &[DomainPackage],
+    base: Option<&str>,
+    diags: &mut Vec<Diagnostic>,
+) -> ir::TypeRef {
+    let resolution = resolve_preferred(type_ref, packages, base, diags);
+    ir_type_of(
+        resolution.as_ref(),
+        base.unwrap_or_else(|| {
+            packages
+                .first()
+                .map(|package| package.name.as_str())
+                .unwrap_or("")
+        }),
+        type_ref,
+    )
+}
+
+/// Resolves a `.ddd` design's class target: only a class resolves. On
+/// failure the resolution diagnostics stand, enriched with `design_help`
+/// when they do not already carry a help line; a non-class resolution gets
+/// its own error naming the found kind.
+pub(crate) fn resolve_ddd_class(
+    type_ref: &mox::TypeRef,
+    packages: &[DomainPackage],
+    base: Option<&str>,
+    design_help: &str,
+    diags: &mut Vec<Diagnostic>,
+) -> Option<(String, String)> {
+    let before = diags.len();
+    let resolution = resolve_preferred(type_ref, packages, base, diags);
+    let Some(resolution) = resolution else {
+        if let Some(diagnostic) = diags.get_mut(before) {
+            if diagnostic.help.is_none() {
+                diagnostic.help = Some(design_help.to_string());
+            }
+        }
+        return None;
+    };
+    if resolution.kind == Resolved::Class {
+        return Some((resolution.package, resolution.name));
+    }
+    let label = resolution.kind.label();
+    diags.push(
+        Diagnostic::error(
+            format!(
+                "design target '{}' is {} {label}, not a class",
+                type_ref.name.full_name(),
+                article(label)
+            ),
+            Some(type_ref.span),
+        )
+        .with_help(design_help),
+    );
+    None
+}
+
+/// The indefinite article for a lowercase kind label ("an enum",
+/// "a class").
+fn article(label: &str) -> &'static str {
+    match label {
+        "enum" | "interface" | "actors block" => "an",
+        _ => "a",
     }
 }
 
@@ -2686,6 +2798,7 @@ fn lower_class(
                             scope.fallback_package(),
                             &param.type_ref,
                         ),
+                        multiplicity: None,
                     });
                 }
                 let mut operation = ir::Operation::new(
@@ -4162,6 +4275,45 @@ pub(crate) struct DomainUnit<'a> {
     pub diagnostics: &'a [Diagnostic],
 }
 
+/// Builds the combined type namespace of the error-free domains (in
+/// first-appearance order): each domain's declared top-level types plus its
+/// `import schema` nominal classes. This is the shared namespace the
+/// `.actor` and `.ddd` pipelines resolve their references against.
+pub(crate) fn domain_namespaces(domains: &[DomainUnit<'_>]) -> Vec<DomainPackage> {
+    domains
+        .iter()
+        .filter_map(|unit| {
+            let model = unit.model.as_ref()?;
+            let ast = unit.ast?;
+            let mut kinds: HashMap<String, TopKind> = HashMap::new();
+            for decl in &ast.declarations {
+                let kind = match decl {
+                    mox::Decl::Class(_) => TopKind::Class,
+                    mox::Decl::Interface(_) => TopKind::Interface,
+                    mox::Decl::Enum(_) => TopKind::Enum,
+                    mox::Decl::Datatype(_) => TopKind::Datatype,
+                    mox::Decl::Vocabulary(_) => TopKind::Vocabulary,
+                    mox::Decl::Actors(_) => TopKind::Actors,
+                    mox::Decl::Annotation(_) => continue,
+                    mox::Decl::ImportSchema(decl) => {
+                        kinds.entry(imported_name(decl)).or_insert(TopKind::Class);
+                        continue;
+                    }
+                };
+                let name = decl
+                    .name()
+                    .map(|name| name.text.clone())
+                    .unwrap_or_default();
+                kinds.entry(name).or_insert(kind);
+            }
+            Some(DomainPackage {
+                name: model.packages[0].name.clone(),
+                kinds,
+            })
+        })
+        .collect()
+}
+
 /// Compiles an `.actor` file against its imported domain models:
 ///
 /// 1. every import must name a provided domain (duplicates are fine — the
@@ -4219,38 +4371,7 @@ pub(crate) fn compile_actor_file(
     // error-free), in first-appearance order. A domain that lowered
     // successfully had its `import schema` declarations validated, so they
     // contribute their nominal class names here.
-    let packages: Vec<DomainPackage> = domains
-        .iter()
-        .filter_map(|unit| {
-            let model = unit.model.as_ref()?;
-            let ast = unit.ast?;
-            let mut kinds: HashMap<String, TopKind> = HashMap::new();
-            for decl in &ast.declarations {
-                let kind = match decl {
-                    mox::Decl::Class(_) => TopKind::Class,
-                    mox::Decl::Interface(_) => TopKind::Interface,
-                    mox::Decl::Enum(_) => TopKind::Enum,
-                    mox::Decl::Datatype(_) => TopKind::Datatype,
-                    mox::Decl::Vocabulary(_) => TopKind::Vocabulary,
-                    mox::Decl::Actors(_) => TopKind::Actors,
-                    mox::Decl::Annotation(_) => continue,
-                    mox::Decl::ImportSchema(decl) => {
-                        kinds.entry(imported_name(decl)).or_insert(TopKind::Class);
-                        continue;
-                    }
-                };
-                let name = decl
-                    .name()
-                    .map(|name| name.text.clone())
-                    .unwrap_or_default();
-                kinds.entry(name).or_insert(kind);
-            }
-            Some(DomainPackage {
-                name: model.packages[0].name.clone(),
-                kinds,
-            })
-        })
-        .collect();
+    let packages = domain_namespaces(domains);
     let scope = Scope::Domains {
         packages: &packages,
     };

@@ -2396,6 +2396,7 @@ mod tests {
                     OperationParam {
                         name: "title".to_string(),
                         type_: TypeRef::Primitive(PrimitiveType::String),
+                        multiplicity: None,
                     },
                     OperationParam {
                         name: "shelf".to_string(),
@@ -2403,6 +2404,7 @@ mod tests {
                             package: "demo".to_string(),
                             name: "Shelf".to_string(),
                         },
+                        multiplicity: None,
                     },
                 ],
             )
@@ -2514,6 +2516,7 @@ mod tests {
                 vec![OperationParam {
                     name: "title".to_string(),
                     type_: TypeRef::Primitive(PrimitiveType::String),
+                    multiplicity: None,
                 }],
             )
             .with_body("expr", "books.first(b => b.title == title)"),

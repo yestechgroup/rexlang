@@ -64,6 +64,7 @@ fn body_model(rust_body: String, create: String, convert: String) -> Model {
             vec![OperationParam {
                 name: "title".to_string(),
                 type_: TypeRef::Primitive(PrimitiveType::String),
+                multiplicity: None,
             }],
         )
         .with_body("rust", rust_body),

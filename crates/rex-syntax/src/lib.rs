@@ -1,6 +1,6 @@
 //! Syntax crate for rexlang: a logos-based lexer, a fault-tolerant
 //! chumsky-based parser, and the spanned AST they produce for `.mox` model
-//! sources and `.actor` actor-policy sources.
+//! sources, `.actor` actor-policy sources, and `.ddd` design sources.
 //!
 //! Typical use:
 //!
@@ -12,7 +12,7 @@
 //! ```
 //!
 //! `.actor` files use the separate [`parse_actors`] entry point, mirroring
-//! the shape of [`parse`].
+//! the shape of [`parse`]; `.ddd` files use [`parse_ddd`] the same way.
 
 pub mod ast;
 pub mod fmt;
@@ -20,11 +20,15 @@ pub mod lexer;
 pub mod parser;
 
 pub use ast::{
-    ActorFile, AnnotationDecl, BindingEntry, ClassDecl, DatatypeDecl, Decl, DefaultValue, EnumDecl,
+    ActorFile, AnnotationDecl, BindingEntry, ClassDecl, DatatypeDecl, DddBase, DddBuiltinOp,
+    DddDelegation, DddDesign, DddFile, DddFlagKind, DddFlags, DddModule, DddParam, DddRepository,
+    DddRepositoryOp, DddService, DddServiceOp, DddStereotype, Decl, DefaultValue, EnumDecl,
     EnumLiteral, FeatureDecl, ImportDecl, InterfaceDecl, Model, MultBound, Multiplicity,
     MultiplicityKind, Name, Param, QualifiedName, Span, TypeRef, VocabularyDecl,
     VocabularyFacetDecl, Wraps,
 };
-pub use fmt::{format, format_actors, FormatError};
+pub use fmt::{format, format_actors, format_ddd, FormatError};
 pub use lexer::{lex, lex_with_comments, Comment, CommentKind, LexError, Token};
-pub use parser::{parse, parse_actors, ActorsParseResult, ParseError, ParseResult};
+pub use parser::{
+    parse, parse_actors, parse_ddd, ActorsParseResult, DddParseResult, ParseError, ParseResult,
+};

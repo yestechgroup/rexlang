@@ -2,12 +2,12 @@
 //! test kit behind `rexlang artifact check`.
 //!
 //! Third-party backends consume [`rex_ir::Model`] / [`rex_ir::ActorModel`]
-//! (or read the serialized artifact directly) and emit canonical instance
-//! JSON. This module checks the *format* invariants of those documents
-//! without needing the originating model:
+//! / [`rex_ir::ddd::DddModel`] (or read the serialized artifact directly)
+//! and emit canonical instance JSON. This module checks the *format*
+//! invariants of those documents without needing the originating model:
 //!
 //! * the root shape matches a known artifact kind (IR artifact, standalone
-//!   actor-policy artifact, or canonical instance),
+//!   actor-policy artifact, DDD design artifact, or canonical instance),
 //! * `formatVersion` is present and supported — a higher version is rejected
 //!   with an error naming it, mirroring the readers' version gate
 //!   ([`rex_ir::IrError::UnsupportedFormatVersion`]),
@@ -36,6 +36,10 @@ pub enum ArtifactKind {
     /// A standalone actor-policy artifact (`rex_ir::ActorModel`): root
     /// carries `blocks` (omitted when empty).
     ActorModel,
+    /// A standalone DDD design artifact (`rex_ir::ddd::DddModel`): root
+    /// carries an `application` object or a `modules` array (both omitted
+    /// when empty).
+    DddModel,
     /// A canonical instance document: root `$type` is `rex.instance`.
     Instance,
 }
@@ -75,9 +79,30 @@ pub fn check(text: &str) -> Result<ArtifactKind, Vec<String>> {
     if root.contains_key("packages") || root.contains_key("rexVersion") {
         return check_ir_model(root);
     }
-    // No `packages`/`rexVersion`: the canonical block-less ActorModel is
-    // exactly `{"formatVersion": N}` — a Model always emits `packages`.
-    check_actor_model(root)
+    // A DDD design artifact carries an `application` object or a `modules`
+    // array — keys no other artifact has — so its check runs before the
+    // actor fallback: anything with the design shape must validate as a
+    // DddModel, never as a (block-less) ActorModel.
+    if root.get("formatVersion").is_some_and(Value::is_u64)
+        && !root.contains_key("blocks")
+        && (root.get("application").is_some_and(Value::is_object)
+            || root.get("modules").is_some_and(Value::is_array))
+    {
+        return check_ddd_model(root);
+    }
+    // No `packages`/`rexVersion`, no DDD design shape: the canonical
+    // block-less ActorModel is exactly `{"formatVersion": N}` — a Model
+    // always emits `packages`, a DddModel always carries the design keys.
+    // Anything else has no known root shape.
+    if root.contains_key("blocks") || (root.len() == 1 && root.contains_key("formatVersion")) {
+        return check_actor_model(root);
+    }
+    Err(vec![format!(
+        "unrecognized artifact: no known root shape (IR artifacts carry \"packages\", \
+         actor artifacts \"blocks\", DDD design artifacts \"application\"/\"modules\", \
+         instances declare $type {:?})",
+        rex_runtime::INSTANCE_TYPE
+    )])
 }
 
 fn check_ir_model(root: &serde_json::Map<String, Value>) -> Result<ArtifactKind, Vec<String>> {
@@ -104,6 +129,44 @@ fn check_actor_model(root: &serde_json::Map<String, Value>) -> Result<ArtifactKi
     }
     scan_snake_case_keys(&Value::Object(root.clone()), &mut errors);
     finish(ArtifactKind::ActorModel, errors)
+}
+
+/// Validates a DDD design artifact exactly like the other kinds: the
+/// version gate mirrors `rex_ir::ddd::DddModel::from_json` (only
+/// [`rex_ir::ddd::DDD_MODEL_FORMAT_VERSION`] passes), the `application`
+/// object must carry a non-empty string `name`, and `modules` must be an
+/// array of named objects.
+fn check_ddd_model(root: &serde_json::Map<String, Value>) -> Result<ArtifactKind, Vec<String>> {
+    let mut errors = Vec::new();
+    if let Some(error) = format_version_error(
+        root,
+        rex_ir::ddd::DDD_MODEL_FORMAT_VERSION,
+        "DDD design artifact",
+    ) {
+        errors.push(error);
+    }
+    if let Some(application) = root.get("application") {
+        match application.as_object() {
+            None => errors.push(format!(
+                "\"application\" must be an object, found {application}"
+            )),
+            Some(object) => match object.get("name") {
+                None => {
+                    errors.push("the DDD design \"application\" is missing \"name\"".to_string())
+                }
+                Some(name) if name.as_str().is_none_or(str::is_empty) => errors.push(format!(
+                    "the DDD design \"application\" \"name\" must be a non-empty \
+                     string, found {name}"
+                )),
+                _ => {}
+            },
+        }
+    }
+    if let Some(modules) = root.get("modules") {
+        check_named_array(modules, "modules", &mut errors);
+    }
+    scan_snake_case_keys(&Value::Object(root.clone()), &mut errors);
+    finish(ArtifactKind::DddModel, errors)
 }
 
 fn check_instance(root: &serde_json::Map<String, Value>) -> Result<ArtifactKind, Vec<String>> {
@@ -195,14 +258,18 @@ fn check_named_array(value: &Value, key: &str, errors: &mut Vec<String>) {
     }
 }
 
-/// Every structural (non model-defined) key of the IR and actor wire
-/// formats, from the `rex-ir` serde shapes — the camelCase spellings a
-/// snake_case key is compared against. Sorted for binary search.
+/// Every structural (non model-defined) key of the IR, actor, and DDD
+/// design wire formats, from the `rex-ir` serde shapes — the camelCase
+/// spellings a snake_case key is compared against. Sorted for binary search.
 const STRUCTURAL_KEYS: &[&str] = &[
     "actors",
     "annotations",
+    "application",
+    "base",
     "blocks",
     "bodies",
+    "builtin",
+    "cache",
     "capabilities",
     "capability",
     "cedar",
@@ -214,7 +281,9 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "datatypes",
     "default",
     "delegations",
+    "dependencies",
     "description",
+    "designs",
     "details",
     "effect",
     "entries",
@@ -223,6 +292,7 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "facets",
     "features",
     "finite",
+    "flags",
     "format",
     "formatVersion",
     "from",
@@ -241,21 +311,30 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "maximum",
     "minLength",
     "minimum",
+    "modules",
     "multiplicity",
     "name",
     "neverBoth",
+    "nonPersistent",
     "objects",
     "obligations",
+    "operation",
     "operations",
     "opposite",
+    "optimisticLocking",
     "packages",
     "params",
     "pattern",
     "platform",
     "purposes",
-    "rexVersion",
+    "repository",
+    "returnMultiplicity",
     "returnType",
+    "rexVersion",
+    "services",
     "source",
+    "stereotype",
+    "target",
     "targetBindings",
     "to",
     "type",
@@ -271,9 +350,9 @@ const STRUCTURAL_KEYS: &[&str] = &[
 /// is a known structural key — the readers ignore unknown fields (forward
 /// compatibility), so such artifacts load but silently drop the value.
 ///
-/// Runs on IR and actor artifacts only: their keys are entirely structural.
-/// Instance objects' feature keys are model-defined names, so instance
-/// documents are exempt.
+/// Runs on IR, actor, and DDD design artifacts only: their keys are
+/// entirely structural. Instance objects' feature keys are model-defined
+/// names, so instance documents are exempt.
 fn scan_snake_case_keys(value: &Value, errors: &mut Vec<String>) {
     match value {
         Value::Object(map) => {
@@ -539,6 +618,91 @@ mod tests {
         let errors = check(r#"{"$type": "something.else", "formatVersion": 1}"#).unwrap_err();
         assert!(
             errors[0].contains("something.else") && errors[0].contains("rex.instance"),
+            "errors: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn application_or_modules_keys_classify_as_ddd_model() {
+        assert_eq!(
+            check(r#"{"formatVersion": 1, "application": {"name": "Library"}, "modules": []}"#),
+            Ok(ArtifactKind::DddModel)
+        );
+        assert_eq!(
+            check(r#"{"formatVersion": 1, "application": {"name": "Library"}}"#),
+            Ok(ArtifactKind::DddModel)
+        );
+        assert_eq!(
+            check(r#"{"formatVersion": 1, "modules": [{"name": "core"}]}"#),
+            Ok(ArtifactKind::DddModel)
+        );
+    }
+
+    #[test]
+    fn a_ddd_artifact_does_not_fall_through_to_the_actor_fallback() {
+        // Regression for the fallback order: before the DddModel check
+        // existed, the actor fallback claimed any versioned document
+        // without `packages`/`$type` — a malformed DDD design was reported
+        // as a (block-less) ActorModel missing its formatVersion.
+        let errors = check(
+            r#"{"formatVersion": 1, "application": {"name": "X"}, "modules": [{"oops": true}]}"#,
+        )
+        .unwrap_err();
+        assert!(
+            errors.iter().any(|error| error.contains("modules[0]")),
+            "must validate as a DddModel, not an ActorModel: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn the_dddd_golden_artifact_classifies_as_ddd_model() {
+        // The real emitter output (`rexlang ir` on the canonical fixture):
+        // it carries no `packages`/`blocks`/`$type`, so only the DddModel
+        // check may claim it.
+        let golden = include_str!("../../../tests/conformance/ddd/library.ddd.json");
+        assert_eq!(check(golden), Ok(ArtifactKind::DddModel));
+    }
+
+    #[test]
+    fn ddd_format_version_gate_names_both_versions() {
+        let errors = check(r#"{"formatVersion": 2, "application": {"name": "X"}}"#).unwrap_err();
+        assert!(
+            errors[0].contains("formatVersion 2") && errors[0].contains("formatVersion 1"),
+            "errors: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn ddd_application_must_be_a_named_object_and_modules_named_objects() {
+        let errors = check(r#"{"formatVersion": 1, "application": "Library", "modules": [42]}"#)
+            .unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("\"application\" must be an object")),
+            "errors: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|error| error.contains("modules[0]")),
+            "errors: {errors:?}"
+        );
+
+        let errors = check(r#"{"formatVersion": 1, "application": {"name": ""}}"#).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("non-empty string")),
+            "errors: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_root_shape_is_reported_as_unrecognized() {
+        // The tightened fallback: a truly unknown v1 artifact is no longer
+        // misclassified as a block-less ActorModel.
+        let errors = check(r#"{"formatVersion": 1, "nobodyKnowsMe": true}"#).unwrap_err();
+        assert!(
+            errors[0].contains("unrecognized artifact"),
             "errors: {errors:?}"
         );
     }

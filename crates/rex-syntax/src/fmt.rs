@@ -53,6 +53,16 @@
 //!   source order (one per line, tight — no blank lines between them), then
 //!   its actors blocks; exactly one blank line separates the import section
 //!   from the first block.
+//! * A `.ddd` source (see [`format_ddd`]) mirrors the `.actor` layout:
+//!   imports are hoisted into a tight first section (one per line, in source
+//!   order, each ending in `;`), then the `application` block with exactly
+//!   one blank line between the sections. Inside the application the `base`
+//!   line comes first, then modules and their members in source order. A
+//!   design's flags are canonicalized to the fixed order `scaffold
+//!   auditable optimisticLocking nonPersistent cache` regardless of source
+//!   order (with `abstract` before the stereotype), and every
+//!   operation/`inject`/import line ends in `;`. The `capability a, b`
+//!   clause stays on the operation's line.
 //! * An `import schema` declaration of a `.mox` source is hoisted into a
 //!   canonical section directly after the `package` declaration (mirroring
 //!   the `.actor` import rule): the section renders before every other
@@ -98,6 +108,23 @@ pub fn format_actors(source: &str) -> Result<String, FormatError> {
     Ok(fmt.run_actors())
 }
 
+/// Format a `.ddd` source text, preserving comments verbatim.
+///
+/// The canonical layout mirrors [`format_actors`]: `import` declarations are
+/// hoisted into a tight first section (one per line, source order, each
+/// ending in `;`), followed by the `application` block after exactly one
+/// blank line. Inside the application the `base` line comes first, then
+/// modules and their members in source order. A design's flags are
+/// canonicalized to `scaffold auditable optimisticLocking nonPersistent
+/// cache` regardless of source order. Returns the formatted text ending in
+/// exactly one `\n` (empty input formats to empty output), or
+/// [`FormatError::Lex`] if the source cannot be tokenized.
+pub fn format_ddd(source: &str) -> Result<String, FormatError> {
+    let (tokens, comments) = lex_with_comments(source)?;
+    let mut fmt = Formatter::new(source, tokens, comments);
+    Ok(fmt.run_ddd())
+}
+
 /// One node of the merged stream the formatter walks: a token or a comment,
 /// ordered by source position.
 #[derive(Debug, Clone)]
@@ -141,6 +168,14 @@ enum BodyKind {
     /// `from`/`to`/`purpose` lines and `permit`/`forbid` entries of a
     /// `delegation`.
     Delegation,
+    /// `base`/`module` items of a `.ddd` application.
+    DddApplication,
+    /// `service`/design items of a `.ddd` module.
+    DddModule,
+    /// declared/delegated operations and `inject` lines of a `.ddd` service.
+    DddService,
+    /// builtin/declared operations of a `.ddd` repository.
+    DddRepository,
 }
 
 impl BodyKind {
@@ -273,6 +308,26 @@ impl<'src> Formatter<'src> {
                     Token::Import => self.scan_import(),
                     Token::Actors => self.scan_actors(),
                     _ => self.scan_top_junk_actors(),
+                },
+            }
+        }
+        self.finish()
+    }
+
+    /// Like [`Formatter::run_actors`], but for `.ddd` files: the only
+    /// recognized top-level constructs are `import` declarations and the
+    /// `application` block, with imports hoisted ahead of it.
+    fn run_ddd(&mut self) -> String {
+        self.hoist_ddd_imports();
+        loop {
+            let front = self.front().cloned();
+            match front {
+                None => break,
+                Some(Node::Comment { .. }) => self.advance(),
+                Some(Node::Token(token, _)) => match token {
+                    Token::Import => self.scan_ddd_import(),
+                    Token::Ident("application") => self.scan_ddd_application(),
+                    _ => self.scan_top_junk_ddd(),
                 },
             }
         }
@@ -819,6 +874,10 @@ impl<'src> Formatter<'src> {
                 BodyKind::Actors => self.scan_actors_item(),
                 BodyKind::Grant => self.scan_grant_entry(),
                 BodyKind::Delegation => self.scan_delegation_item(),
+                BodyKind::DddApplication => self.scan_ddd_application_item(),
+                BodyKind::DddModule => self.scan_ddd_module_item(),
+                BodyKind::DddService => self.scan_ddd_service_item(),
+                BodyKind::DddRepository => self.scan_ddd_repository_item(),
             }
             self.flush_line();
         }
@@ -1167,6 +1226,214 @@ impl<'src> Formatter<'src> {
         self.take_if(|token| matches!(token, Token::RBrace));
     }
 
+    // --- .ddd bodies ---------------------------------------------------------
+
+    fn scan_ddd_application_item(&mut self) {
+        match self.peek_tok() {
+            Some(Token::Ident("base")) => {
+                self.advance();
+                self.scan_qname();
+            }
+            Some(Token::Ident("module")) => {
+                self.advance();
+                self.take_name();
+                self.scan_body(BodyKind::DddModule);
+            }
+            _ => {
+                // Junk always consumes the front token first (the stop set
+                // contains identifiers, and the body loop cannot make
+                // progress otherwise) — unless the front is the body's
+                // closing `}` (or the stream ended), which the loop breaks
+                // on; a drained trailing comment may have just revealed it.
+                if !matches!(self.peek_tok(), Some(Token::RBrace) | None) {
+                    self.advance();
+                    self.scan_junk_until(|token| {
+                        matches!(
+                            token,
+                            Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_)
+                        )
+                    });
+                }
+            }
+        }
+    }
+
+    fn scan_ddd_module_item(&mut self) {
+        match self.peek_tok() {
+            Some(Token::Ident("service")) => {
+                self.advance();
+                self.take_name();
+                self.scan_body(BodyKind::DddService);
+            }
+            Some(Token::Ident("abstract" | "entity" | "value" | "dto")) => self.scan_ddd_design(),
+            _ => {
+                // Junk always consumes the front token first (the stop set
+                // contains identifiers, and the body loop cannot make
+                // progress otherwise) — unless the front is the body's
+                // closing `}` (or the stream ended), which the loop breaks
+                // on; a drained trailing comment may have just revealed it.
+                if !matches!(self.peek_tok(), Some(Token::RBrace) | None) {
+                    self.advance();
+                    self.scan_junk_until(|token| {
+                        matches!(
+                            token,
+                            Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_)
+                        )
+                    });
+                }
+            }
+        }
+    }
+
+    /// One design declaration: `abstract`? stereotype, the class name, the
+    /// five design flags — collected and re-emitted in the canonical order
+    /// `scaffold auditable optimisticLocking nonPersistent cache` whatever
+    /// the source order (mirroring the parser's `DddFlags`, whose fields the
+    /// driver reads positionally) — and an optional `repository` block.
+    fn scan_ddd_design(&mut self) {
+        if matches!(self.peek_tok(), Some(Token::Ident("abstract"))) {
+            self.advance();
+        }
+        self.advance(); // the stereotype keyword
+        self.take_name();
+        const FLAG_ORDER: [&str; 5] = [
+            "scaffold",
+            "auditable",
+            "optimisticLocking",
+            "nonPersistent",
+            "cache",
+        ];
+        let mut seen = [false; 5];
+        loop {
+            let index = match self.peek_tok() {
+                Some(Token::Ident(text)) => FLAG_ORDER.iter().position(|keyword| *keyword == text),
+                _ => None,
+            };
+            match index {
+                Some(index) => {
+                    self.bump_token();
+                    seen[index] = true;
+                }
+                None => break,
+            }
+        }
+        for (index, text) in FLAG_ORDER.iter().enumerate() {
+            if seen[index] {
+                self.push_text(text, false);
+            }
+        }
+        if matches!(self.peek_tok(), Some(Token::Ident("repository"))) {
+            self.advance();
+            self.take_name();
+            self.scan_body(BodyKind::DddRepository);
+        }
+    }
+
+    fn scan_ddd_service_item(&mut self) {
+        match self.peek_tok() {
+            Some(Token::Ident("inject")) => {
+                self.advance();
+                self.take_name();
+                self.take_if(|token| matches!(token, Token::Other(';')));
+            }
+            Some(Token::Ident(_) | Token::IdentEscaped(_)) => {
+                self.scan_qname();
+                if self.take_if(|token| matches!(token, Token::FatArrow)) {
+                    // Delegated: the `Target.operation` pair (one dotted
+                    // reference).
+                    self.scan_qname();
+                } else {
+                    // Declared: multiplicity, operation name, parameters.
+                    self.scan_multiplicity();
+                    self.take_name();
+                    self.scan_ddd_params();
+                }
+                self.scan_ddd_capabilities();
+                self.take_if(|token| matches!(token, Token::Other(';')));
+            }
+            _ => {
+                // Junk always consumes the front token first (the stop set
+                // contains identifiers, and the body loop cannot make
+                // progress otherwise) — unless the front is the body's
+                // closing `}` (or the stream ended), which the loop breaks
+                // on; a drained trailing comment may have just revealed it.
+                if !matches!(self.peek_tok(), Some(Token::RBrace) | None) {
+                    self.advance();
+                    self.scan_junk_until(|token| {
+                        matches!(
+                            token,
+                            Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_)
+                        )
+                    });
+                }
+            }
+        }
+    }
+
+    /// Consumes and emits an optional `capability A, B` clause, kept on the
+    /// operation's line.
+    fn scan_ddd_capabilities(&mut self) {
+        if !self.take_if(|token| matches!(token, Token::Capability)) {
+            return;
+        }
+        self.take_name();
+        while self.take_if(|token| matches!(token, Token::Comma)) {
+            self.take_name();
+        }
+    }
+
+    /// Like [`Formatter::scan_params`], but for `.ddd` parameters, which may
+    /// carry a multiplicity between the type and the name.
+    fn scan_ddd_params(&mut self) {
+        if !self.take_if(|token| matches!(token, Token::LParen)) {
+            return;
+        }
+        if self.take_if(|token| matches!(token, Token::RParen)) {
+            return;
+        }
+        loop {
+            self.scan_qname();
+            self.scan_multiplicity();
+            self.take_name();
+            if !self.take_if(|token| matches!(token, Token::Comma)) {
+                break;
+            }
+        }
+        self.take_if(|token| matches!(token, Token::RParen));
+    }
+
+    fn scan_ddd_repository_item(&mut self) {
+        match self.peek_tok() {
+            Some(Token::Ident("findById" | "findAll" | "save" | "delete")) => {
+                self.advance();
+                self.take_if(|token| matches!(token, Token::Other(';')));
+            }
+            Some(Token::Ident(_) | Token::IdentEscaped(_)) => {
+                self.scan_qname();
+                self.scan_multiplicity();
+                self.take_name();
+                self.scan_ddd_params();
+                self.take_if(|token| matches!(token, Token::Other(';')));
+            }
+            _ => {
+                // Junk always consumes the front token first (the stop set
+                // contains identifiers, and the body loop cannot make
+                // progress otherwise) — unless the front is the body's
+                // closing `}` (or the stream ended), which the loop breaks
+                // on; a drained trailing comment may have just revealed it.
+                if !matches!(self.peek_tok(), Some(Token::RBrace) | None) {
+                    self.advance();
+                    self.scan_junk_until(|token| {
+                        matches!(
+                            token,
+                            Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_)
+                        )
+                    });
+                }
+            }
+        }
+    }
+
     // --- top-level declarations ----------------------------------------------
 
     /// Rewrites the node stream into canonical order: `package` (when it is
@@ -1278,6 +1545,76 @@ impl<'src> Formatter<'src> {
         self.nodes = reordered;
     }
 
+    /// Rewrites the node stream into canonical order for `.ddd` files:
+    /// `import` declarations first (source order), then the `application`
+    /// block and any junk items in source order.
+    ///
+    /// Items are contiguous node ranges split at brace-depth 0 on `Import`
+    /// tokens and the contextual `application` identifier; the first node
+    /// unconditionally begins item 0, so leading comments travel with their
+    /// item.
+    fn hoist_ddd_imports(&mut self) {
+        let mut items: Vec<(usize, usize)> = Vec::new();
+        let mut depth = 0usize;
+        for (index, node) in self.nodes.iter().enumerate() {
+            let token = match node {
+                Node::Token(token, _) => Some(token),
+                Node::Comment { .. } => None,
+            };
+            let starts_item = matches!(
+                token,
+                Some(Token::Import) | Some(Token::Ident("application"))
+            );
+            if items.is_empty() || (depth == 0 && starts_item) {
+                items.push((index, index));
+            }
+            let last = items.len() - 1;
+            items[last].1 = index + 1;
+            match token {
+                Some(Token::LBrace) => depth += 1,
+                Some(Token::RBrace) => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+        if items.len() < 2 {
+            return;
+        }
+        // A leading comment block (a file header) stays at the very front:
+        // the import section is inserted after it.
+        let anchor = if matches!(self.nodes.first(), Some(Node::Comment { .. })) {
+            1
+        } else {
+            0
+        };
+        let imports: Vec<(usize, usize)> = items
+            .iter()
+            .copied()
+            .filter(|(start, _)| matches!(self.nodes[*start], Node::Token(Token::Import, _)))
+            .collect();
+        if imports.is_empty() {
+            return;
+        }
+        let is_moved = |index: usize, imports: &[(usize, usize)]| {
+            imports
+                .iter()
+                .any(|(start, end)| index >= *start && index < *end)
+        };
+        let mut reordered: Vec<Node<'src>> = Vec::with_capacity(self.nodes.len());
+        for range in &items[..anchor] {
+            reordered.extend(self.nodes[range.0..range.1].iter().cloned());
+        }
+        for range in &imports {
+            reordered.extend(self.nodes[range.0..range.1].iter().cloned());
+        }
+        for range in &items[anchor..] {
+            if is_moved(range.0, &imports) {
+                continue;
+            }
+            reordered.extend(self.nodes[range.0..range.1].iter().cloned());
+        }
+        self.nodes = reordered;
+    }
+
     fn scan_package(&mut self) {
         self.begin_top_decl();
         self.advance();
@@ -1363,6 +1700,22 @@ impl<'src> Formatter<'src> {
         self.flush_line();
     }
 
+    /// Consumes and emits one `import "<path>";` declaration of a `.ddd`
+    /// file: the tight import section of the `.actor` formatter, plus the
+    /// canonical trailing `;` (emitted whether or not the source had one; a
+    /// source `;` is consumed silently so it never doubles up).
+    fn scan_ddd_import(&mut self) {
+        self.flush_line();
+        self.flush_pending(0);
+        self.advance();
+        self.take_if(|token| matches!(token, Token::Str(_)));
+        if matches!(self.front(), Some(Node::Token(Token::Other(';'), _))) {
+            self.bump_token();
+        }
+        self.push_text(";", true);
+        self.flush_line();
+    }
+
     /// Consumes and emits one `import schema "<path>" (as <name>)?`
     /// declaration of a `.mox` file. The section mirrors the `.actor`
     /// import rule: one declaration per line, tight — the first declaration
@@ -1400,6 +1753,31 @@ impl<'src> Formatter<'src> {
         loop {
             match self.peek_tok() {
                 Some(token) if !matches!(token, Token::Import | Token::Actors) => self.advance(),
+                _ => break,
+            }
+        }
+        self.flush_line();
+    }
+
+    /// Consumes and emits the `application <name> { ... }` block of a
+    /// `.ddd` file.
+    fn scan_ddd_application(&mut self) {
+        self.begin_top_decl();
+        self.advance();
+        self.take_name();
+        self.scan_body(BodyKind::DddApplication);
+    }
+
+    /// Unrecognized top-level tokens of a `.ddd` file: emit them on one
+    /// line, stopping at the next `import` keyword or the contextual
+    /// `application` keyword (mirrors the parser's file-level recovery).
+    fn scan_top_junk_ddd(&mut self) {
+        self.begin_top_decl();
+        loop {
+            match self.peek_tok() {
+                Some(token) if !matches!(token, Token::Import | Token::Ident("application")) => {
+                    self.advance()
+                }
                 _ => break,
             }
         }
@@ -1485,6 +1863,7 @@ fn token_text(token: &Token<'_>) -> String {
         Token::LBracket => "[".to_string(),
         Token::RBracket => "]".to_string(),
         Token::Eq => "=".to_string(),
+        Token::FatArrow => "=>".to_string(),
         Token::Star => "*".to_string(),
         _ => token.keyword().map(str::to_string).unwrap_or_default(),
     }

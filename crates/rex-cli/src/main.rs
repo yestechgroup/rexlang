@@ -3,17 +3,18 @@
 //! Subcommands:
 //!
 //! * `rexlang check <file>...` — compile and render diagnostics; exits `1`
-//!   on errors. Accepts `.mox` models and `.actor` policy files (the latter
-//!   compile against the domain models they import). Each input is a file or
-//!   a directory (scanned recursively for `*.mox`); several `.mox` inputs
-//!   compile as one multi-package model.
+//!   on errors. Accepts `.mox` models, `.actor` policy files, and `.ddd`
+//!   design files (the latter two compile against the domain models they
+//!   import). Each input is a file or a directory (scanned recursively for
+//!   `*.mox`); several `.mox` inputs compile as one multi-package model.
 //! * `rexlang ir <file>... [-o <out>]` — compile and emit the Core IR JSON
 //!   to stdout or to a file; exits `1` on errors. On `.actor` files the
-//!   standalone ActorModel artifact is emitted.
+//!   standalone ActorModel artifact is emitted; on `.ddd` files the
+//!   standalone DDD design artifact is emitted.
 //! * `rexlang artifact check <artifact.json>...` — validate wire-format
-//!   artifacts (Core IR, standalone actor policy, canonical instance)
-//!   without the originating model; exits `1` on any violation. The
-//!   portable test kit for out-of-tree backends (see docs/BACKENDS.md).
+//!   artifacts (Core IR, standalone actor policy, DDD design, canonical
+//!   instance) without the originating model; exits `1` on any violation.
+//!   The portable test kit for out-of-tree backends (see docs/BACKENDS.md).
 //! * `rexlang vocab fetch <file> [--provider file:<DIR>|http]` — fetch and
 //!   vendor vocabulary snapshots, updating `model.lock`.
 
@@ -25,8 +26,8 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use rex_driver::{
-    compile_actors_str, compile_files_with_imports, compile_str_with_imports, render,
-    ActorCompilation, MultiCompilation, SchemaImports,
+    compile_actors_str, compile_ddd_str, compile_files_with_imports, compile_str_with_imports,
+    render, ActorCompilation, MultiCompilation, SchemaImports,
 };
 use rex_vocab::{FileProvider, HttpProvider, LockEntry, Lockfile, VocabularyProvider};
 /// rexlang compiler command-line interface.
@@ -39,19 +40,20 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Parse, resolve, and validate `.mox` or `.actor` files, rendering
-    /// diagnostics grouped per file.
+    /// Parse, resolve, and validate `.mox`, `.actor`, or `.ddd` files,
+    /// rendering diagnostics grouped per file.
     Check {
-        /// Paths to compile: `.mox`/`.actor` files, or directories scanned
-        /// recursively for `*.mox`.
+        /// Paths to compile: `.mox`/`.actor`/`.ddd` files, or directories
+        /// scanned recursively for `*.mox`.
         files: Vec<PathBuf>,
     },
-    /// Compile `.mox` or `.actor` files to the Core IR and emit it as JSON
-    /// (`.actor` files emit the standalone ActorModel artifact; several
-    /// `.mox` files emit one multi-package model).
+    /// Compile `.mox`, `.actor`, or `.ddd` files and emit the artifact as
+    /// JSON (`.actor` files emit the standalone ActorModel artifact, `.ddd`
+    /// files the standalone DDD design artifact; several `.mox` files emit
+    /// one multi-package model).
     Ir {
-        /// Paths to compile: `.mox`/`.actor` files, or directories scanned
-        /// recursively for `*.mox`.
+        /// Paths to compile: `.mox`/`.actor`/`.ddd` files, or directories
+        /// scanned recursively for `*.mox`.
         files: Vec<PathBuf>,
         /// Write the JSON to this path instead of stdout.
         #[arg(short, long, value_name = "FILE")]
@@ -62,7 +64,8 @@ enum Command {
         #[command(subcommand)]
         target: GenTarget,
     },
-    /// Format `.mox` files in place, preserving comments.
+    /// Format `.mox`, `.actor`, or `.ddd` files in place, preserving
+    /// comments.
     Fmt {
         /// List files whose formatting would change instead of rewriting
         /// them; exits `1` when any file is unformatted.
@@ -183,7 +186,17 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     match cli.command {
         Command::Check { files } => {
             let files = expand_inputs(&files)?;
-            if files.len() == 1 && is_actor_file(&files[0]) {
+            if files.len() == 1 && is_ddd_file(&files[0]) {
+                let design = read_ddd_design(&files[0])?;
+                let compilation = compile_ddd_str(&design.path, &design.source, &design.domains);
+                report_ddd_diagnostics(&design, &compilation);
+                if compilation.model.is_some() {
+                    println!("OK {}", design.path);
+                    Ok(ExitCode::SUCCESS)
+                } else {
+                    Ok(ExitCode::FAILURE)
+                }
+            } else if files.len() == 1 && is_actor_file(&files[0]) {
                 let pair = read_actor_pair(&files[0])?;
                 let compilation = compile_actors_str(&pair.path, &pair.source, &pair.domains);
                 report_actor_diagnostics(&pair, &compilation);
@@ -209,7 +222,20 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         }
         Command::Ir { files, out } => {
             let files = expand_inputs(&files)?;
-            if files.len() == 1 && is_actor_file(&files[0]) {
+            if files.len() == 1 && is_ddd_file(&files[0]) {
+                let design = read_ddd_design(&files[0])?;
+                let compilation = compile_ddd_str(&design.path, &design.source, &design.domains);
+                report_ddd_diagnostics(&design, &compilation);
+                let Some(ddd_model) = compilation.model else {
+                    return Ok(ExitCode::FAILURE);
+                };
+                let json = ddd_model.to_json_pretty()?;
+                match out {
+                    Some(out_path) => std::fs::write(out_path, json)?,
+                    None => println!("{json}"),
+                }
+                Ok(ExitCode::SUCCESS)
+            } else if files.len() == 1 && is_actor_file(&files[0]) {
                 let pair = read_actor_pair(&files[0])?;
                 let compilation = compile_actors_str(&pair.path, &pair.source, &pair.domains);
                 report_actor_diagnostics(&pair, &compilation);
@@ -352,7 +378,9 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             for file in &files {
                 let source = std::fs::read_to_string(file)
                     .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
-                let formatted = if is_actor_file(file) {
+                let formatted = if is_ddd_file(file) {
+                    rex_syntax::fmt::format_ddd(&source)?
+                } else if is_actor_file(file) {
                     rex_syntax::fmt::format_actors(&source)?
                 } else {
                     rex_syntax::fmt::format(&source)?
@@ -762,6 +790,12 @@ fn report_multi_diagnostics(
     }
 }
 
+/// `true` for `.ddd` paths: the standalone DDD design surface, compiled
+/// against the domain models it imports.
+fn is_ddd_file(file: &Path) -> bool {
+    file.extension().and_then(|extension| extension.to_str()) == Some("ddd")
+}
+
 /// `true` for `.actor` paths: the standalone actor-policy surface, compiled
 /// against the domain models it imports.
 fn is_actor_file(file: &Path) -> bool {
@@ -837,6 +871,75 @@ fn read_actor_pair(file: &Path) -> anyhow::Result<ActorPair> {
     })
 }
 
+/// A `.ddd` file plus the domain sources it imports, ready for
+/// [`rex_driver::compile_ddd_str`].
+struct DddDesignPair {
+    /// The design file's path as given on the command line.
+    path: String,
+    /// The design file's source text.
+    source: String,
+    /// Each imported domain as `(resolved path, source)`, in import order;
+    /// the driver matches a design import by exact string or by lexical
+    /// resolution relative to the design file's directory, so resolved
+    /// paths keep vocabulary snapshots anchored to the declaring file no
+    /// matter where the process runs from.
+    domains: Vec<(String, String)>,
+}
+
+impl DddDesignPair {
+    /// The source text of the file with the given driver path, if it is the
+    /// design file or an imported domain.
+    fn source_of(&self, path: &str) -> Option<&str> {
+        if path == self.path {
+            return Some(&self.source);
+        }
+        self.domains
+            .iter()
+            .find(|(name, _)| name == path)
+            .map(|(_, source)| source.as_str())
+    }
+}
+
+/// Reads a `.ddd` file plus every domain it imports.
+///
+/// Import paths resolve relative to the design file's own directory, and the
+/// **resolved** path is passed to the driver (the driver matches imports by
+/// exact string or by lexical resolution, and the domain's driver path also
+/// locates its `vocab/` directory — with raw import strings that lookup
+/// would be relative to the process CWD). A missing import file is a clean
+/// error naming the resolved path. Duplicate imports are read once.
+fn read_ddd_design(file: &Path) -> anyhow::Result<DddDesignPair> {
+    let source = std::fs::read_to_string(file)
+        .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
+    let path = file.display().to_string();
+    let mut domains: Vec<(String, String)> = Vec::new();
+    if let Some(ast) = &rex_syntax::parse_ddd(&source).ast {
+        let dir = file
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        for import in &ast.imports {
+            if domains.iter().any(|(existing, _)| *existing == import.path) {
+                continue;
+            }
+            let resolved = dir.join(&import.path);
+            let text = std::fs::read_to_string(&resolved).map_err(|error| {
+                anyhow::anyhow!(
+                    "cannot read imported file {} (imported by {}): {error}",
+                    resolved.display(),
+                    path
+                )
+            })?;
+            domains.push((resolved.display().to_string(), text));
+        }
+    }
+    Ok(DddDesignPair {
+        path,
+        source,
+        domains,
+    })
+}
+
 /// Prints the per-agent tool manifests of a compiled actor model as a
 /// single pretty JSON document to stdout.
 fn print_tool_manifests(actor_model: &rex_ir::ActorModel) -> anyhow::Result<()> {
@@ -851,6 +954,30 @@ fn print_tool_manifests(actor_model: &rex_ir::ActorModel) -> anyhow::Result<()> 
 /// diagnostics are ariadne-rendered against that file's own source, the way
 /// `check` renders single-model diagnostics.
 fn report_actor_diagnostics(pair: &ActorPair, compilation: &ActorCompilation) {
+    if compilation.diagnostics.is_empty() {
+        return;
+    }
+    let mut groups: Vec<(&str, Vec<rex_driver::Diagnostic>)> = Vec::new();
+    for (path, diagnostic) in &compilation.diagnostics {
+        match groups.last_mut() {
+            Some((group_path, group)) if *group_path == path.as_str() => {
+                group.push(diagnostic.clone())
+            }
+            _ => groups.push((path.as_str(), vec![diagnostic.clone()])),
+        }
+    }
+    for (path, group) in groups {
+        let Some(source) = pair.source_of(path) else {
+            continue;
+        };
+        eprint!("{}", render(path, source, &group));
+    }
+}
+
+/// Renders a `.ddd` compilation's diagnostics grouped per file: each file's
+/// diagnostics are ariadne-rendered against that file's own source, the way
+/// `check` renders single-model diagnostics.
+fn report_ddd_diagnostics(pair: &DddDesignPair, compilation: &rex_driver::DddCompilation) {
     if compilation.diagnostics.is_empty() {
         return;
     }

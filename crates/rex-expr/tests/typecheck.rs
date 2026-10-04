@@ -60,6 +60,7 @@ fn library_model() -> Model {
         vec![OperationParam {
             name: "title".to_string(),
             type_: TypeRef::Primitive(PrimitiveType::String),
+            multiplicity: None,
         }],
     ));
     package.classes[0].operations.push(Operation::new(
@@ -68,6 +69,7 @@ fn library_model() -> Model {
         vec![OperationParam {
             name: "year".to_string(),
             type_: TypeRef::Primitive(PrimitiveType::Int),
+            multiplicity: None,
         }],
     ));
     package.classes.push(ClassDef::new(
