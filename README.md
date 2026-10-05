@@ -12,14 +12,18 @@ consumes the IR — in or out of tree — start with
 [docs/BACKENDS.md](docs/BACKENDS.md).
 
 ```
-.mox source -> lexer/parser -> AST -> resolve & validate -> Core IR (.rex.json)
-                                                                 |
-                                     +----------------+---------+-----------+
-                                     v                v                     v
-                                rust backend   json-schema backend      cedar backend
-                                                                      ^
-.actor policy file -> imports + actors blocks -> resolve & check ----+-+
-                                                    -> ActorModel (.actors.rex.json)
+.mox source  -> lexer/parser -> AST -> resolve & validate -> Core IR (.rex.json)
+   ^                                                              |
+   |                                   +----------------+--------+-----------+
+   |                                   v                v                     v
+   |                              rust backend   json-schema backend      cedar backend
+   |                                                                      ^
+   +-- import schema "x.json"    .actor policy file -> resolve & check ---+-+
+   +-- import sigil "x.rosetta"                       -> ActorModel (.actors.rex.json)
+                                    .ddd design file  -> resolve & validate
+                                                    -> DddModel (.ddd.json)
+                                    .ifml flow file   -> parse
+                                                    -> IfmlModel (.ifml.json)
 ```
 
 ## Status
@@ -27,9 +31,10 @@ consumes the IR — in or out of tree — start with
 Front-end, Core IR, wire format, Rust backend, canonical JSON instances,
 JSON Schema (wire/api), the Tier-2 expression language, hermetic
 vocabularies, the `.actor` authorization dimension with Cedar policy
-generation, and the `.ddd` Sculptor-style design layer over imported
-domains — implemented and CI-enforced. C#/Java backends and filter/query
-predicates are future work.
+generation, the `.ddd` Sculptor-style design layer over imported domains,
+the `.ifml` interaction-flow surface, and structural `import schema` /
+`import sigil` (Rune DSL) imports — implemented and CI-enforced. C#/Java
+backends and filter/query predicates are future work.
 
 ## Usage
 
@@ -44,6 +49,76 @@ rexlang gen cedar policy.actor -o policies/   # from a standalone actor file
 rexlang vocab fetch model.mox --provider file:vocab-sources/
 rexlang lsp                       # start the language server (stdio)
 ```
+
+## Consuming rexlang from other projects
+
+There are two supported integration styles; both are consumed in anger by
+sibling projects today.
+
+**Style A — artifacts through the CLI (language-agnostic).** Each surface
+compiles to a versioned JSON artifact with a stable wire contract (camelCase
+keys, a `formatVersion` gate, additive-only evolution):
+`rexlang ir model.mox -o model.rex.json` (Core IR), `policy.actor` →
+`ActorModel`, `design.ddd` → `DddModel`, `flow.ifml` → `IfmlModel`.
+`rexlang artifact check <files>` validates any serialized artifact without
+the toolchain. Treat the artifact as the interface and any Rust version
+becomes an implementation detail.
+
+**Style B — library crates pinned by git rev (in-process).** Depend on the
+crates the way [sigil](https://github.com/yestechgroup/sigil) embedders do —
+a git dependency pinned to a revision:
+
+```toml
+[dependencies]
+rex-ir     = { git = "https://github.com/yestechgroup/rexlang.git", rev = "<rev>" }
+rex-driver = { git = "https://github.com/yestechgroup/rexlang.git", rev = "<rev>" }
+rex-expr   = { git = "https://github.com/yestechgroup/rexlang.git", rev = "<rev>" }
+rex-ifml   = { git = "https://github.com/yestechgroup/rexlang.git", rev = "<rev>" }
+```
+
+The crates are the compatibility boundary:
+
+| Crate | Role for a consumer |
+|---|---|
+| `rex-ir` | The artifacts (`Model`, `ActorModel`, `ddd::DddModel`, `ifml::IfmlModel`) with `from_json`/`to_json` and their version gates — the type-level boundary |
+| `rex-driver` | Compilation: one call per surface, rich byte-span diagnostics, ariadne `render` |
+| `rex-expr` | The neutral expression language (parser, type checker) behind `when` conditions and `expr` bodies |
+| `rex-ifml` | The `.ifml` parser (`parse_ifml`/`parse_ifml_file` → `IfmlModel`) |
+
+Everything else (`rex-syntax`, the backends, `rex-vocab`, `rex-lsp`,
+`rex-runtime`) is implementation detail for the compiler itself.
+
+Entry points per surface — the driver is filesystem-free: sources and any
+import content arrive as text:
+
+```rust
+// .mox (multi-package): import content provided by the host
+let compilation = rex_driver::compile_files_with_imports(
+    &sources,                                   // (path, source) pairs
+    &schema_imports,                            // SchemaImports: import schema JSON
+    &sigil_imports,                             // SigilImports: import sigil rosetta
+);
+// .actor — policy artifact + union domain model; imports bundle for the domains
+let actor = rex_driver::compile_actors_str("policy.actor", &source, &domains, &imports);
+// .ddd — design artifact; the _with_actors variant also validates capabilities
+let design = rex_driver::compile_ddd_str_with_actors("design.ddd", &source, &domains, &imports, &actors);
+// .ifml — parses directly, no domain needed
+let ifml = rex_ifml::parse_ifml(&source)?;
+```
+
+`Compilation`/`ActorCompilation`/`DddCompilation` carry every file's
+diagnostics tagged with its path (`sigil` content errors are tagged with the
+rosetta path); `rex_driver::render(path, source, &diagnostics)` produces
+ariadne output, and every diagnostic span is a byte offset into its file.
+Hosts read `import schema` JSON, `import sigil` rosetta, and imported
+domains from disk themselves — relative to the declaring file — and thread
+them through `SchemaImports`/`SigilImports`/`DomainImports`.
+
+Normative contracts: the language in [docs/LANGUAGE.md](docs/LANGUAGE.md),
+the design layer in [docs/DDD.md](docs/DDD.md), interaction flows in
+[docs/IFML.md](docs/IFML.md), expression rules in
+[docs/EXPRESSIONS.md](docs/EXPRESSIONS.md), and the out-of-tree backend
+contract in [docs/BACKENDS.md](docs/BACKENDS.md).
 
 ## Actor policies (.actor)
 
