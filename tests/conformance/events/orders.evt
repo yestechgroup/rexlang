@@ -1,0 +1,28 @@
+// Event contracts for the sample order flow.
+import "orders.mox"
+
+event OrderPlaced version "1.0.0" {
+    orderId: String;
+    total: int;
+    status: OrderStatus;
+}
+
+event OrderCancelled version "1.1.0" {
+    orderId: String;
+    reason: String;
+}
+
+channel orders {
+    publishes OrderPlaced;
+    publishes OrderCancelled;
+}
+
+subscription billing {
+    events [ OrderPlaced OrderCancelled ]
+    consumer billing_service
+}
+
+subscription analytics {
+    events [ OrderPlaced ]
+    consumer analytics_service
+}

@@ -117,14 +117,14 @@
 //!     `"date"`) requires a reader that knows the tag. Values surface on the
 //!     wire (instance JSON) as ISO-8601 `YYYY-MM-DD` strings.
 //! 14. **Equality policy.** Every artifact root — [`Model`],
-//!     [`ActorModel`], [`ddd::DddModel`], and [`ifml::IfmlModel`] — and
-//!     every type nested inside them derives [`Eq`] (structural value
-//!     equality). The artifacts' only floating-point values are wrapped in
-//!     ordered newtypes: [`ddd::Boost`] (the search-field relevance
-//!     weight) and [`ifml::Float`] (IFML layout coordinates, property
-//!     numbers, and condition literals). Both serialize *transparently* as
-//!     the bare JSON number they wrap — byte-identical to a raw
-//!     `f32`/`f64` — and take `Eq`/`Ord`/`Hash` from `total_cmp`
+//!     [`ActorModel`], [`ddd::DddModel`], [`events::EventModel`], and
+//!     [`ifml::IfmlModel`] — and every type nested inside them derives
+//!     [`Eq`] (structural value equality). The artifacts' only floating-point
+//!     values are wrapped in ordered newtypes: [`ddd::Boost`] (the
+//!     search-field relevance weight) and [`ifml::Float`] (IFML layout
+//!     coordinates, property numbers, and condition literals). Both serialize
+//!     *transparently* as the bare JSON number they wrap — byte-identical to
+//!     a raw `f32`/`f64` — and take `Eq`/`Ord`/`Hash` from `total_cmp`
 //!     semantics: reflexive even for `NaN`, `-0.0` distinguished from
 //!     `0.0`. Wire artifacts therefore compare and hash deterministically,
 //!     and a raw float never appears in a public artifact field.
@@ -137,6 +137,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 pub mod ddd;
+pub mod events;
 pub mod ifml;
 
 /// The artifact format version this crate writes and accepts.

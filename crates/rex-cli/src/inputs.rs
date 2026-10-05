@@ -1,5 +1,5 @@
 //! Turning command-line inputs into in-memory sources and driver
-//! compilations: input expansion, source reading, the `.actor`/`.ddd`
+//! compilations: input expansion, source reading, the `.actor`/`.ddd`/`.evt`
 //! readers, and the shared compile step over collected sources.
 
 use std::path::{Path, PathBuf};
@@ -110,6 +110,12 @@ pub(crate) fn is_ddd_file(file: &Path) -> bool {
 /// against the domain models it imports.
 pub(crate) fn is_actor_file(file: &Path) -> bool {
     file.extension().and_then(|extension| extension.to_str()) == Some("actor")
+}
+
+/// `true` for `.evt` paths: the standalone event-contract surface, compiled
+/// against the domain models it imports.
+pub(crate) fn is_evt_file(file: &Path) -> bool {
+    file.extension().and_then(|extension| extension.to_str()) == Some("evt")
 }
 
 /// An `.actor` file plus the domain sources it imports, ready for
@@ -290,6 +296,100 @@ pub(crate) fn read_ddd_design(file: &Path) -> anyhow::Result<DddDesignPair> {
     let schemas = collect_schema_imports(&domains)?;
     let sigil = collect_sigil_imports(&domains)?;
     Ok(DddDesignPair {
+        path,
+        source,
+        domains,
+        schemas,
+        sigil,
+    })
+}
+
+/// An `.evt` file plus the domain sources it imports, ready for
+/// [`rex_driver::compile_evt_str`].
+pub(crate) struct EvtPair {
+    /// The contract file's path as given on the command line.
+    pub(crate) path: String,
+    /// The contract file's source text.
+    pub(crate) source: String,
+    /// Each imported domain as `(resolved path, source)`; the driver
+    /// matches an `.evt` import by exact string or by lexical resolution
+    /// relative to the contract file's directory, so resolved paths keep
+    /// vocabulary snapshots anchored to the declaring file no matter where
+    /// the process runs from.
+    pub(crate) domains: Vec<(String, String)>,
+    /// The domains' `import schema` content, keyed by domain path.
+    schemas: SchemaImports,
+    /// The domains' `import sigil` content, plus the rosetta sources for
+    /// rendering sigil diagnostics.
+    sigil: SigilSources,
+}
+
+impl EvtPair {
+    /// The import bundle the driver entry point takes.
+    pub(crate) fn imports(&self) -> DomainImports {
+        DomainImports {
+            schemas: self.schemas.clone(),
+            sigil: self.sigil.imports.clone(),
+        }
+    }
+
+    /// The source text of the file with the given driver path, if it is the
+    /// contract file, an imported domain, or a rosetta source.
+    pub(crate) fn source_of(&self, path: &str) -> Option<&str> {
+        if path == self.path {
+            return Some(&self.source);
+        }
+        self.domains
+            .iter()
+            .find(|(name, _)| name == path)
+            .map(|(_, source)| source.as_str())
+            .or_else(|| {
+                self.sigil
+                    .sources
+                    .iter()
+                    .find(|(name, _)| name == path)
+                    .map(|(_, source)| source.as_str())
+            })
+    }
+}
+
+/// Reads an `.evt` file plus every domain it imports.
+///
+/// Import paths resolve relative to the contract file's own directory, and
+/// the **resolved** path is passed to the driver (the driver matches
+/// imports by exact string or by lexical resolution, and the domain's
+/// driver path also locates its `vocab/` directory — with raw import
+/// strings that lookup would be relative to the process CWD). A missing
+/// import file is a clean error naming the resolved path. Duplicate imports
+/// are read once.
+pub(crate) fn read_evt_pair(file: &Path) -> anyhow::Result<EvtPair> {
+    let source = std::fs::read_to_string(file)
+        .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
+    let path = file.display().to_string();
+    let mut domains: Vec<(String, String)> = Vec::new();
+    if let Some(ast) = &rex_syntax::parse_evt(&source).ast {
+        let dir = file
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        for import in &ast.imports {
+            if domains.iter().any(|(existing, _)| *existing == import.path) {
+                continue;
+            }
+            let resolved = dir.join(&import.path);
+            let text = std::fs::read_to_string(&resolved).map_err(|error| {
+                anyhow::anyhow!(
+                    "cannot read imported file {} (imported by {}): {error}",
+                    resolved.display(),
+                    path
+                )
+            })?;
+            domains.push((resolved.display().to_string(), text));
+        }
+    }
+    let schemas = collect_schema_imports(&domains)?;
+    let sigil = collect_sigil_imports(&domains)?;
+    Ok(EvtPair {
         path,
         source,
         domains,

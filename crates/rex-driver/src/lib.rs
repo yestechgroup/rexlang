@@ -28,6 +28,7 @@
 
 mod ddd;
 pub mod diagnostic;
+pub(crate) mod events;
 pub(crate) mod lower;
 pub mod manifest;
 pub mod navigation;
@@ -383,6 +384,31 @@ pub fn parse_ddd_query(db: &dyn Db, file: SourceFile) -> DddParseOutput {
     }
 }
 
+/// The outcome of parsing a [`SourceFile`] as an `.evt` file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvtParseOutput {
+    /// The recovered event-contract file, or `None` when nothing could be
+    /// produced.
+    pub ast: Option<rex_syntax::EvtFile>,
+    /// All syntax errors, as diagnostics.
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Lexes and parses a [`SourceFile`] as an `.evt` file (memoized by salsa).
+#[salsa::tracked]
+pub fn parse_evt_query(db: &dyn Db, file: SourceFile) -> EvtParseOutput {
+    let source = file.text(db);
+    let parsed = rex_syntax::parse_evt(&source);
+    EvtParseOutput {
+        ast: parsed.ast,
+        diagnostics: parsed
+            .errors
+            .into_iter()
+            .map(|error| Diagnostic::error(error.message, Some(error.span)))
+            .collect(),
+    }
+}
+
 /// The result of compiling a [`SourceFile`] as an `.actor` file against its
 /// imported domain models.
 ///
@@ -623,6 +649,26 @@ pub struct DddCompilation {
     /// one multi-package model, or `None` when any domain failed to lower.
     pub domains_model: Option<rex_ir::Model>,
     /// Diagnostics from the design file and each imported domain, each
+    /// tagged with its file's path, in compilation order.
+    pub diagnostics: Vec<(String, Diagnostic)>,
+}
+
+/// The result of compiling an `.evt` event-contract file against its
+/// imported domain models. Mirrors [`ActorCompilation`].
+///
+/// Diagnostics come from every file involved, so each is tagged with its
+/// path; group or render them per file (see [`render`](crate::render)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventCompilation {
+    /// The event-contract artifact, or `None` when any error-severity
+    /// diagnostic was produced in any file. Warnings do not block lowering.
+    pub model: Option<rex_ir::events::EventModel>,
+    /// The imported domains lowered against their shared union namespace as
+    /// one multi-package model, or `None` when any domain failed to lower.
+    /// Field-type resolution consumes the union (the same model
+    /// [`ActorCompilation`] carries for Cedar class lookup).
+    pub domains_model: Option<rex_ir::Model>,
+    /// Diagnostics from the `.evt` file and each imported domain, each
     /// tagged with its file's path, in compilation order.
     pub diagnostics: Vec<(String, Diagnostic)>,
 }
@@ -901,6 +947,58 @@ fn compile_ddd_with(
     }
 }
 
+/// Compiles an `.evt` event-contract file against its imported domain models
+/// to the standalone [`rex_ir::events::EventModel`] (memoized by salsa):
+/// parse the contract file, lower every named domain through the ordinary
+/// domain pipeline (the same union-namespace rule
+/// [`compile_actors_str`](crate::compile_actors_str) uses), then lower and
+/// validate the contract against the resolved domain namespaces.
+#[salsa::tracked]
+pub fn compile_evt(
+    db: &dyn Db,
+    contract: SourceFile,
+    domains: Vec<SourceFile>,
+) -> EventCompilation {
+    compile_evt_with(db, contract, domains, &DomainImports::default())
+}
+
+/// The body of [`compile_evt`], parameterized over the provided import
+/// content for the domain files (see [`compile_file`] for the shape).
+fn compile_evt_with(
+    db: &dyn Db,
+    contract: SourceFile,
+    domains: Vec<SourceFile>,
+    imports: &DomainImports,
+) -> EventCompilation {
+    let contract_path = contract.path(db);
+    let parsed = parse_evt_query(db, contract);
+    let domains = lower_domains(
+        db,
+        &contract_path,
+        parsed
+            .ast
+            .as_ref()
+            .map(|ast| ast.imports.as_slice())
+            .unwrap_or_default(),
+        &domains,
+        imports,
+    );
+
+    let (model, diagnostics) = events::compile_evt_file(
+        &contract_path,
+        parsed.ast.as_ref(),
+        &parsed.diagnostics,
+        &domains.domain_units,
+    );
+    let mut diagnostics = diagnostics;
+    diagnostics.extend(domains.sigil_diagnostics);
+    EventCompilation {
+        model,
+        domains_model: domains.domains_model,
+        diagnostics,
+    }
+}
+
 /// Compiles a `.ddd` design file against its imported domain models in one
 /// call.
 ///
@@ -1085,4 +1183,118 @@ fn compile_ddd_str_inner(
         .map(|(path, source)| SourceFile::new(&db, path.clone(), source.clone()))
         .collect();
     compile_ddd_with(&db, design, files, actors, imports)
+}
+
+/// Compiles an `.evt` event-contract file against its imported domain models
+/// in one call.
+///
+/// Each domain is a `(path, source)` pair; a contract import resolves by
+/// exact path match with a lexical resolution relative to the contract
+/// file's directory as the fallback (the same rule
+/// [`compile_actors_str`](crate::compile_actors_str) applies). Extra pairs
+/// no import names are ignored; an import no provided pair names is the
+/// error `imported file "<path>" was not provided`. The result carries
+/// diagnostics from every file involved, each tagged with its path — the
+/// same shape [`compile_actors_str`](crate::compile_actors_str) returns, so
+/// a host renders both with ariadne identically.
+///
+/// ```
+/// let domains = [(
+///     "orders.mox".to_string(),
+///     "package nz.example.orders\n\nclass Order { String orderId }".to_string(),
+/// )];
+/// let source = concat!(
+///     "import \"orders.mox\"\n",
+///     "\n",
+///     "event OrderPlaced version \"1.0.0\" {\n",
+///     "    orderId: String;\n",
+///     "}\n",
+///     "\n",
+///     "channel orders { publishes OrderPlaced; }\n",
+/// );
+/// let compilation = rex_driver::compile_evt_str(
+///     "orders.evt",
+///     source,
+///     &domains,
+///     &rex_driver::DomainImports::default(),
+/// );
+/// assert!(compilation.diagnostics.is_empty());
+/// let model = compilation.model.unwrap();
+/// assert_eq!(model.events.len(), 1);
+/// assert_eq!(model.channels[0].publishes.len(), 1);
+/// ```
+///
+/// # Normative contract
+///
+/// ## Entry points
+///
+/// - [`compile_evt_str`] — parse, domain lowering, contract lowering and
+///   validation, in one call.
+/// - [`compile_evt`] / [`parse_evt_query`] — the salsa-tracked queries the
+///   one-shot wrapper runs on a fresh [`Database`].
+///
+/// ## Resolution semantics
+///
+/// Event payload field types resolve against the **union namespace of the
+/// imported domains** (the same rule multi-file `.mox` compiles follow)
+/// through the shared helper [`lower::resolve_ddd_type`]: the `rex-syntax`
+/// primitives resolve everywhere; every other reference resolves with the
+/// `.mox` cross-package rules (a bare single-segment name must be unique
+/// across all domain packages — ambiguity, unknown names, and
+/// actors-block-as-type each report through the same diagnostics the `.mox`
+/// and `.ddd` surfaces use). Any declared kind resolves: class, enum,
+/// datatype, interface, vocabulary.
+///
+/// ## Validation rules
+///
+/// Any error-severity diagnostic anywhere (the contract file or an imported
+/// domain) drops the artifact; warnings do not.
+///
+/// 1. **Syntax** — parse errors are reported against the `.evt` file.
+/// 2. **Imports** — every `import "<path>"` must name a provided domain,
+///    else `imported file "<path>" was not provided`.
+/// 3. **Field types** — an event payload field type that is neither a
+///    primitive nor resolvable in the domain namespaces errors, naming the
+///    type (`unknown type 'X'`).
+/// 4. **Publications** — every `publishes X` entry of a channel must name
+///    an event declared in the same file (`unknown event 'X' on channel
+///    'C'`).
+/// 5. **Subscription events** — every entry of a subscription's
+///    `events [...]` list must name an event declared in the same file
+///    (`unknown event 'X' in subscription 'S'`).
+/// 6. **Uniqueness** — event, channel, and subscription names are unique
+///    within the file, and payload field names are unique within their
+///    event.
+/// 7. **Subscription shape** — an empty `events [...]` list or an empty
+///    consumer name errors (`subscription 'S' subscribes to no events` /
+///    `subscription 'S' names an empty consumer`; the empty consumer is
+///    only reachable through parser recovery, whose syntax error fires
+///    alongside).
+///
+/// Diagnostics are ordered deterministically: the contract file's parse
+/// diagnostics first, then the import errors, then each domain's own
+/// diagnostics (import order), then the contract's semantic diagnostics
+/// grouped by declaration kind (events, channels, subscriptions; each in
+/// source order).
+pub fn compile_evt_str(
+    path: &str,
+    source: &str,
+    domains: &[(String, String)],
+    imports: &DomainImports,
+) -> EventCompilation {
+    let db = Database::new();
+    let contract = SourceFile::new(&db, path.to_string(), source.to_string());
+    let mut seen: Vec<&str> = Vec::new();
+    let files: Vec<SourceFile> = domains
+        .iter()
+        .filter(|(path, _)| {
+            if seen.contains(&path.as_str()) {
+                return false;
+            }
+            seen.push(path.as_str());
+            true
+        })
+        .map(|(path, source)| SourceFile::new(&db, path.clone(), source.clone()))
+        .collect();
+    compile_evt_with(&db, contract, files, imports)
 }

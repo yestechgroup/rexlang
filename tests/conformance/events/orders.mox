@@ -1,0 +1,13 @@
+package nz.example.orders
+
+enum OrderStatus {
+    Draft as "D" = 0
+    Placed as "P" = 1
+    Cancelled as "C" = 2
+}
+
+class Order {
+    String orderId
+    int total
+    OrderStatus status
+}

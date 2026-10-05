@@ -10,7 +10,8 @@ exactly once, in the parser module docs
 (`crates/rex-syntax/src/parser.rs`, rendered as
 [`rex_syntax::parser`](https://docs.rs/rex-syntax/latest/rex_syntax/parser/) —
 sections: *`.mox` model sources*, *the shared `actors_block`*, *`.actor`
-policy files*, *`.ddd` design sources*). The sections below link to it
+policy files*, *`.ddd` design sources*, *`.evt` event-contract sources*).
+The sections below link to it
 instead of restating the grammar; when this page and the parser disagree,
 the parser wins. The `.ifml` surface's authority is its Pest grammar file
 (`crates/rex-ifml/src/grammar/ifml.pest`, see [docs/IFML.md](IFML.md)); the
@@ -495,8 +496,8 @@ is a tested property, not an aspiration.
 
 | Command | Purpose |
 |---|---|
-| `rexlang check <file>...` | validate; ariadne-rendered diagnostics grouped per file (`.mox`, `.actor`, and `.ddd`; each input may be a directory, scanned recursively for `*.mox`) |
-| `rexlang ir <file>... -o <out>` | emit the Core IR artifact (`.actor`: the ActorModel artifact; `.ddd`: the DDD design artifact; several `.mox`: one multi-package model) |
+| `rexlang check <file>...` | validate; ariadne-rendered diagnostics grouped per file (`.mox`, `.actor`, `.ddd`, and `.evt`; each input may be a directory, scanned recursively for `*.mox`) |
+| `rexlang ir <file>... -o <out>` | emit the Core IR artifact (`.actor`: the ActorModel artifact; `.ddd`: the DDD design artifact; `.evt`: the EventModel artifact; several `.mox`: one multi-package model) |
 | `rexlang gen rust <file>... -o <dir>` | arena-based Rust models |
 | `rexlang gen json-schema <file>... --profile wire\|api -o <dir>` | JSON Schema |
 | `rexlang gen cedar <file>... -o <dir>` | Cedar policies + schema (`.mox`: inline blocks; `.actor`: file + imported domains) |
@@ -507,4 +508,8 @@ is a tested property, not an aspiration.
 
 `.ddd` files are a separate design surface — a Sculptor-style DDD design
 layer compiled against the domain models they import; `check`, `ir`, and
-`fmt` dispatch on the `.ddd` extension. See [docs/DDD.md](DDD.md).
+`fmt` dispatch on the `.ddd` extension. See [docs/DDD.md](DDD.md). `.evt`
+files are a separate event-contract surface — events, channels, and
+subscriptions compiled against the domain models they import; `check`,
+`ir`, and `fmt` dispatch on the `.evt` extension. See
+[docs/EVENTS.md](EVENTS.md).
