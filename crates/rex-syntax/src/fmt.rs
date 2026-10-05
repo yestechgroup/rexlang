@@ -69,6 +69,14 @@
 //!   entries, pagination members) keep their source order, and a document
 //!   expression is emitted verbatim token-by-token at canonical spacing
 //!   (so `;` inside string literals survives and nested braces balance).
+//! * An `.evt` source (see [`format_evt`]) canonicalizes the whole file into
+//!   section order: `import` declarations first (tight, one per line), then
+//!   `event`, `channel`, and `subscription` declarations — each kind grouped
+//!   in that order regardless of source order (source order is kept within a
+//!   kind). Event fields render `name: Type;` one per line; `publishes`
+//!   entries render with a canonical trailing `;` (emitted whether or not
+//!   the source had one, like the `.ddd` import rule); a subscription's body
+//!   is exactly the two lines `events [ A B ]` and `consumer C`.
 //! * An `import schema` or `import sigil` declaration of a `.mox` source is
 //!   hoisted into a canonical section directly after the `package`
 //!   declaration (mirroring the `.actor` import rule): the section renders
@@ -133,6 +141,22 @@ pub fn format_ddd(source: &str) -> Result<String, FormatError> {
     Ok(fmt.run_ddd())
 }
 
+/// Format an `.evt` source text, preserving comments verbatim.
+///
+/// The canonical layout mirrors [`format_ddd`]: `import` declarations are
+/// hoisted into a tight first section (one per line, in source order), then
+/// the `event`, `channel`, and `subscription` declarations follow — grouped
+/// by kind in that order whatever the source order (source order is kept
+/// within a kind), with exactly one blank line between declarations.
+/// Returns the formatted text ending in exactly one `\n` (empty input
+/// formats to empty output), or [`FormatError::Lex`] if the source cannot be
+/// tokenized.
+pub fn format_evt(source: &str) -> Result<String, FormatError> {
+    let (tokens, comments) = lex_with_comments(source)?;
+    let mut fmt = Formatter::new(source, tokens, comments);
+    Ok(fmt.run_evt())
+}
+
 /// One node of the merged stream the formatter walks: a token or a comment,
 /// ordered by source position.
 #[derive(Debug, Clone)]
@@ -194,6 +218,12 @@ enum BodyKind {
     DddSearchDocument,
     /// `limit`/`max`/`cursor` members of a `.ddd` search's `pagination`.
     DddSearchPagination,
+    /// typed payload fields of an `.evt` event declaration.
+    EvtEvent,
+    /// `publishes` entries of an `.evt` channel declaration.
+    EvtChannel,
+    /// the `events [...]`/`consumer` lines of an `.evt` subscription.
+    EvtSubscription,
 }
 
 impl BodyKind {
@@ -347,6 +377,30 @@ impl<'src> Formatter<'src> {
                     Token::Import => self.scan_ddd_import(),
                     Token::Ident(ddd::APPLICATION) => self.scan_ddd_application(),
                     _ => self.scan_top_junk_ddd(),
+                },
+            }
+        }
+        self.finish()
+    }
+
+    /// Like [`Formatter::run_ddd`], but for `.evt` files: the only
+    /// recognized top-level constructs are `import` declarations and
+    /// `event`/`channel`/`subscription` declarations, canonicalized into
+    /// imports → events → channels → subscriptions order by
+    /// [`Formatter::hoist_evt_items`].
+    fn run_evt(&mut self) -> String {
+        self.hoist_evt_items();
+        loop {
+            let front = self.front().cloned();
+            match front {
+                None => break,
+                Some(Node::Comment { .. }) => self.advance(),
+                Some(Node::Token(token, _)) => match token {
+                    Token::Import => self.scan_import(),
+                    Token::Event => self.scan_evt_event(),
+                    Token::Channel => self.scan_evt_channel(),
+                    Token::Subscription => self.scan_evt_subscription(),
+                    _ => self.scan_top_junk_evt(),
                 },
             }
         }
@@ -902,6 +956,9 @@ impl<'src> Formatter<'src> {
                 BodyKind::DddSearchNames => self.scan_ddd_search_name_item(),
                 BodyKind::DddSearchDocument => self.scan_ddd_search_document_item(),
                 BodyKind::DddSearchPagination => self.scan_ddd_search_pagination_item(),
+                BodyKind::EvtEvent => self.scan_evt_event_item(),
+                BodyKind::EvtChannel => self.scan_evt_channel_item(),
+                BodyKind::EvtSubscription => self.scan_evt_subscription_item(),
             }
             self.flush_line();
         }
@@ -1694,6 +1751,119 @@ impl<'src> Formatter<'src> {
         }
     }
 
+    // --- .evt bodies ---------------------------------------------------------
+
+    /// One `name: Type;` payload field of an event body. The `:` and the
+    /// trailing `;` are emitted canonically whether or not the source had
+    /// them (the `.ddd` import-`;` rule).
+    fn scan_evt_event_item(&mut self) {
+        match self.peek_tok() {
+            Some(Token::Ident(_) | Token::IdentEscaped(_)) => {
+                self.take_name();
+                if matches!(self.peek_tok(), Some(Token::Other(':'))) {
+                    self.bump_token();
+                }
+                self.push_text(":", true);
+                self.scan_qname();
+                if matches!(self.peek_tok(), Some(Token::Other(';'))) {
+                    self.bump_token();
+                }
+                self.push_text(";", true);
+            }
+            _ => {
+                // Junk always consumes the front token first (the stop set
+                // contains identifiers, and the body loop cannot make
+                // progress otherwise) — unless the front is the body's
+                // closing `}` (or the stream ended), which the loop breaks
+                // on; a drained trailing comment may have just revealed it.
+                if !matches!(self.peek_tok(), Some(Token::RBrace) | None) {
+                    self.advance();
+                    self.scan_junk_until(|token| {
+                        matches!(
+                            token,
+                            Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_)
+                        )
+                    });
+                }
+            }
+        }
+    }
+
+    /// One `publishes <event>;` entry of a channel body, with the canonical
+    /// trailing `;` (the `.ddd` import-`;` rule).
+    fn scan_evt_channel_item(&mut self) {
+        match self.peek_tok() {
+            Some(Token::Publishes) => {
+                self.advance();
+                self.take_name();
+                if matches!(self.peek_tok(), Some(Token::Other(';'))) {
+                    self.bump_token();
+                }
+                self.push_text(";", true);
+            }
+            _ => {
+                if !matches!(self.peek_tok(), Some(Token::RBrace) | None) {
+                    self.advance();
+                    self.scan_junk_until(|token| {
+                        matches!(
+                            token,
+                            Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_)
+                        )
+                    });
+                }
+            }
+        }
+    }
+
+    /// The `events [ <event>* ]` clause of a subscription body, rendered on
+    /// one line with spaced brackets (`events [ Ping Pong ]`). A
+    /// `consumer` word inside the brackets ends the list (the
+    /// contextual-word reading the parser commits to), so a missing `]`
+    /// never swallows the consumer line.
+    fn scan_evt_events_clause(&mut self) {
+        self.advance(); // the contextual `events` word
+        if matches!(self.peek_tok(), Some(Token::LBracket)) {
+            self.bump_token();
+        }
+        self.push_text("[", false);
+        loop {
+            match self.peek_tok() {
+                Some(Token::Ident("consumer")) => break,
+                Some(Token::Ident(_) | Token::IdentEscaped(_)) => {
+                    self.take_name();
+                }
+                _ => break,
+            }
+        }
+        if matches!(self.peek_tok(), Some(Token::RBracket)) {
+            self.bump_token();
+        }
+        self.push_text("]", false);
+    }
+
+    /// One item of a subscription body: the `events [...]` list or the
+    /// `consumer <name>` line.
+    fn scan_evt_subscription_item(&mut self) {
+        match self.peek_tok() {
+            Some(Token::Ident("events")) => self.scan_evt_events_clause(),
+            Some(Token::Ident("consumer")) => {
+                self.advance();
+                self.take_name();
+            }
+            _ => {
+                if !matches!(self.peek_tok(), Some(Token::RBrace) | None) {
+                    self.advance();
+                    self.scan_junk_until(|token| {
+                        matches!(
+                            token,
+                            Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_)
+                        )
+                    });
+                }
+            }
+        }
+    }
+
     // --- top-level declarations ----------------------------------------------
 
     /// Rewrites the node stream into canonical order: `package` (when it is
@@ -1876,6 +2046,87 @@ impl<'src> Formatter<'src> {
         self.nodes = reordered;
     }
 
+    /// Rewrites the node stream into canonical `.evt` order: a leading
+    /// comment run (the file header) stays at the very front, then `import`
+    /// declarations, then `event`, `channel`, and `subscription`
+    /// declarations — each kind grouped in that order, source order kept
+    /// within a kind.
+    ///
+    /// Items are contiguous node ranges split at brace-depth 0 on the four
+    /// top-level keywords; a depth-0 own-line comment run whose next token
+    /// is a declaration begins that declaration's item, so its doc block
+    /// travels with it. Junk items (parse-error regions) rank last and keep
+    /// their relative order (the `.ddd` search-member reorder precedent).
+    fn hoist_evt_items(&mut self) {
+        fn rank(token: &Token<'_>) -> usize {
+            match token {
+                Token::Import => 0,
+                Token::Event => 1,
+                Token::Channel => 2,
+                Token::Subscription => 3,
+                _ => usize::MAX,
+            }
+        }
+
+        // The header is the comment run before the first token.
+        let header_end = self
+            .nodes
+            .iter()
+            .position(|node| matches!(node, Node::Token(..)))
+            .unwrap_or(self.nodes.len());
+
+        let mut items: Vec<(usize, usize, usize)> = Vec::new(); // (rank, start, end)
+        let mut depth = 0usize;
+        for (index, node) in self.nodes.iter().enumerate().skip(header_end) {
+            let (starts_item, rank) = match node {
+                Node::Token(token, _) => (depth == 0 && rank(token) != usize::MAX, rank(token)),
+                Node::Comment { own_line, .. } => {
+                    // A depth-0 own-line comment whose next token is a
+                    // top-level declaration begins that declaration's item.
+                    let leads_decl = *own_line
+                        && depth == 0
+                        && self.nodes[index..].iter().find_map(|node| match node {
+                            Node::Token(token, _) => Some(rank(token) != usize::MAX),
+                            Node::Comment { .. } => None,
+                        }) == Some(true);
+                    let rank = if leads_decl {
+                        self.nodes[index..]
+                            .iter()
+                            .find_map(|node| match node {
+                                Node::Token(token, _) => Some(rank(token)),
+                                _ => None,
+                            })
+                            .unwrap_or(usize::MAX)
+                    } else {
+                        usize::MAX
+                    };
+                    (leads_decl, rank)
+                }
+            };
+            if starts_item || items.is_empty() {
+                items.push((rank, index, index));
+            }
+            items.last_mut().unwrap().2 = index + 1;
+            if let Node::Token(token, _) = node {
+                match token {
+                    Token::LBrace => depth += 1,
+                    Token::RBrace => depth = depth.saturating_sub(1),
+                    _ => {}
+                }
+            }
+        }
+        if items.len() < 2 {
+            return;
+        }
+        // Stable: source order survives within a rank (junk included).
+        items.sort_by_key(|(rank, _, _)| *rank);
+        let mut reordered: Vec<Node<'src>> = self.nodes[..header_end].to_vec();
+        for (_, start, end) in &items {
+            reordered.extend(self.nodes[*start..*end].iter().cloned());
+        }
+        self.nodes = reordered;
+    }
+
     fn scan_package(&mut self) {
         self.begin_top_decl();
         self.advance();
@@ -2029,6 +2280,36 @@ impl<'src> Formatter<'src> {
         self.scan_body(BodyKind::DddApplication);
     }
 
+    /// Consumes and emits one `event <name> ("version" string)? { ... }`
+    /// declaration of an `.evt` file.
+    fn scan_evt_event(&mut self) {
+        self.begin_top_decl();
+        self.advance();
+        self.take_name();
+        if self.take_if(|token| matches!(token, Token::Version)) {
+            self.take_if(|token| matches!(token, Token::Str(_)));
+        }
+        self.scan_body(BodyKind::EvtEvent);
+    }
+
+    /// Consumes and emits one `channel <name> { ... }` declaration of an
+    /// `.evt` file.
+    fn scan_evt_channel(&mut self) {
+        self.begin_top_decl();
+        self.advance();
+        self.take_name();
+        self.scan_body(BodyKind::EvtChannel);
+    }
+
+    /// Consumes and emits one `subscription <name> { ... }` declaration of
+    /// an `.evt` file.
+    fn scan_evt_subscription(&mut self) {
+        self.begin_top_decl();
+        self.advance();
+        self.take_name();
+        self.scan_body(BodyKind::EvtSubscription);
+    }
+
     /// Unrecognized top-level tokens of a `.ddd` file: emit them on one
     /// line, stopping at the next `import` keyword or the contextual
     /// `application` keyword (mirrors the parser's file-level recovery).
@@ -2037,6 +2318,27 @@ impl<'src> Formatter<'src> {
         loop {
             match self.peek_tok() {
                 Some(token) if !matches!(token, Token::Import | Token::Ident("application")) => {
+                    self.advance()
+                }
+                _ => break,
+            }
+        }
+        self.flush_line();
+    }
+
+    /// Unrecognized top-level tokens of an `.evt` file: emit them on one
+    /// line, stopping at the next `import`/`event`/`channel`/`subscription`
+    /// keyword (mirrors the parser's file-level recovery).
+    fn scan_top_junk_evt(&mut self) {
+        self.begin_top_decl();
+        loop {
+            match self.peek_tok() {
+                Some(token)
+                    if !matches!(
+                        token,
+                        Token::Import | Token::Event | Token::Channel | Token::Subscription
+                    ) =>
+                {
                     self.advance()
                 }
                 _ => break,

@@ -19,6 +19,8 @@ use crate::ast::Span;
 /// `abstract`, `scaffold`, `auditable`, `optimisticLocking`, `nonPersistent`,
 /// `cache`, `findById`, `findAll`, `save`, `delete`): they are special only in
 /// the grammar positions the `.ddd` parser gives them, never at the lex level.
+/// Likewise the `.evt` subscription words `events` and `consumer` are
+/// contextual (special only inside a subscription body), not keywords.
 #[derive(Debug, Clone, PartialEq, Eq, Logos)]
 pub enum Token<'src> {
     #[token("package")]
@@ -95,6 +97,14 @@ pub enum Token<'src> {
     Purpose,
     #[token("cedar")]
     Cedar,
+    #[token("event")]
+    Event,
+    #[token("channel")]
+    Channel,
+    #[token("publishes")]
+    Publishes,
+    #[token("subscription")]
+    Subscription,
     #[token("import")]
     Import,
 
@@ -210,6 +220,10 @@ impl Token<'_> {
             Token::Delegation => "delegation",
             Token::Purpose => "purpose",
             Token::Cedar => "cedar",
+            Token::Event => "event",
+            Token::Channel => "channel",
+            Token::Publishes => "publishes",
+            Token::Subscription => "subscription",
             Token::Import => "import",
             _ => return None,
         })
@@ -464,6 +478,41 @@ mod tests {
         // Spans still cover the raw text including the caret.
         assert_eq!(tokens[0].1, (0..7).into());
         assert_eq!(tokens[4].1, (25..36).into());
+    }
+
+    #[test]
+    fn evt_keywords_lex_as_keywords() {
+        assert_eq!(
+            kinds("event channel publishes subscription"),
+            vec![
+                Token::Event,
+                Token::Channel,
+                Token::Publishes,
+                Token::Subscription,
+            ]
+        );
+    }
+
+    #[test]
+    fn evt_keywords_escape_like_any_keyword() {
+        let tokens = lex("^event ^channel ^publishes ^subscription").unwrap();
+        assert_eq!(tokens[0].0, Token::IdentEscaped("event"));
+        assert_eq!(tokens[1].0, Token::IdentEscaped("channel"));
+        assert_eq!(tokens[2].0, Token::IdentEscaped("publishes"));
+        assert_eq!(tokens[3].0, Token::IdentEscaped("subscription"));
+        // Spans still cover the raw text including the caret.
+        assert_eq!(tokens[0].1, (0..6).into());
+        assert_eq!(tokens[3].1, (27..40).into());
+    }
+
+    #[test]
+    fn evt_subscription_words_are_contextual_idents() {
+        // `events` and `consumer` are special only inside a subscription
+        // body; at the lex level they are ordinary identifiers.
+        assert_eq!(
+            kinds("events consumer"),
+            vec![Token::Ident("events"), Token::Ident("consumer")]
+        );
     }
 
     #[test]

@@ -1,0 +1,17 @@
+// Event contracts for the sample order flow.
+event OrderPlaced version "1.0.0" {
+    orderId: String;
+    total: int;
+}
+
+event OrderCancelled {}
+
+channel orders {
+    publishes OrderPlaced;
+    publishes OrderCancelled;
+}
+
+subscription billing {
+    events [ OrderPlaced OrderCancelled ]
+    consumer billing_service
+}

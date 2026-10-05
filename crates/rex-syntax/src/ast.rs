@@ -7,7 +7,9 @@
 //! The `.ddd` design DSL reuses the shared node types ([`Name`],
 //! [`QualifiedName`], [`TypeRef`], [`Multiplicity`], [`ImportDecl`]) and adds
 //! the `Ddd`-prefixed declarations at the bottom of this file, mirroring the
-//! `rex_ir::ddd` wire artifact field for field.
+//! `rex_ir::ddd` wire artifact field for field. The `.evt` event-contract
+//! DSL (bottom section) reuses the same shared node types and mirrors
+//! `rex_ir::events`.
 
 use chumsky::span::SimpleSpan;
 
@@ -1246,5 +1248,94 @@ pub struct DddPagination {
     /// Whether `cursor` pagination was declared.
     pub cursor: bool,
     /// Span of the whole block, `pagination` keyword included.
+    pub span: Span,
+}
+
+// --- .evt event-contract DSL -------------------------------------------------
+
+/// The root node of a parsed `.evt` source: `import` declarations followed by
+/// `event`, `channel`, and `subscription` declarations. Imports must precede
+/// the first declaration (a later `import` is a syntax error); the three
+/// declaration kinds may be interleaved and are collected into per-kind
+/// lists — the same fold the `.mox` `actors` block makes. An empty import or
+/// declaration list is legal, and duplicate imports are a driver concern,
+/// not a syntax error.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvtFile {
+    /// The `import` declarations in source order.
+    pub imports: Vec<ImportDecl>,
+    /// Declared events, in source order.
+    pub events: Vec<EventDecl>,
+    /// Declared channels, in source order.
+    pub channels: Vec<ChannelDecl>,
+    /// Declared subscriptions, in source order.
+    pub subscriptions: Vec<SubscriptionDecl>,
+}
+
+/// An `event <name> ("version" string)? { ... }` declaration: a named event
+/// contract with its typed payload fields. Slice 1 keeps fields plain — no
+/// constraints, facets, `readonly`/`id` modifiers, or multiplicity
+/// annotations; the grammar deliberately excludes `when` filters, delivery
+/// policy, webhooks, and CloudEvents attributes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EventDecl {
+    /// The event name.
+    pub name: Name,
+    /// Pinned event version from the `version` clause, if present.
+    pub version: Option<String>,
+    /// Payload fields in source order.
+    pub fields: Vec<EventFieldDecl>,
+    /// Span of the whole declaration, `event` keyword included.
+    pub span: Span,
+}
+
+/// One `name: type_ref;` payload field of an [`EventDecl`]. Deliberately
+/// plain (slice 1): a name, a type, nothing else.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EventFieldDecl {
+    /// The field name.
+    pub name: Name,
+    /// The field's type.
+    pub ty: TypeRef,
+    /// Span of the whole field, `;` included.
+    pub span: Span,
+}
+
+/// A `channel <name> { ... }` declaration: a named channel with the events
+/// published on it. Slice 1 has no delivery policy or webhook targets.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChannelDecl {
+    /// The channel name.
+    pub name: Name,
+    /// `publishes` entries in source order.
+    pub publishes: Vec<PublishesDecl>,
+    /// Span of the whole declaration, `channel` keyword included.
+    pub span: Span,
+}
+
+/// One `publishes <event>;` entry of a [`ChannelDecl`]: channel membership.
+/// The referenced event is resolved against the file's (or an imported
+/// domain's) event declarations by the driver.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PublishesDecl {
+    /// The published event's name.
+    pub event: Name,
+    /// Span of the whole entry, `;` included.
+    pub span: Span,
+}
+
+/// A `subscription <name> { events [...] consumer <name> }` declaration: a
+/// named subscription to a set of events, delivered to one consumer. Slice 1
+/// has no `when` filters or delivery policy.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubscriptionDecl {
+    /// The subscription name.
+    pub name: Name,
+    /// The subscribed event names, in source order.
+    pub events: Vec<Name>,
+    /// The consumer receiving the events. Recovered as an empty name when
+    /// the source omitted it (a reported syntax error).
+    pub consumer: Name,
+    /// Span of the whole declaration, `subscription` keyword included.
     pub span: Span,
 }
