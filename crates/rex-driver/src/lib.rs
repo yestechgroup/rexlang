@@ -17,7 +17,7 @@
 //!
 //! ```
 //! let source = "package demo\n\nclass Book { String title }";
-//! let compilation = rex_driver::compile_str("book.mox", source);
+//! let compilation = rex_driver::compile_str("book.mox", source, &rex_driver::DomainImports::default());
 //! assert!(compilation.diagnostics.is_empty());
 //! let model = compilation.model.unwrap();
 //! assert_eq!(model.packages[0].classes[0].name, "Book");
@@ -40,8 +40,6 @@ pub use navigation::{
 
 /// Byte-offset span into the source text.
 pub use rex_syntax::Span;
-
-use std::sync::OnceLock;
 
 use salsa::Database as Db;
 
@@ -95,15 +93,17 @@ pub fn parse_query(db: &dyn Db, file: SourceFile) -> ParseOutput {
 /// wins).
 ///
 /// ```
-/// use rex_driver::{SchemaImports, SigilImports, compile_files_with_imports};
+/// use rex_driver::{DomainImports, SchemaImports, SigilImports, compile_files};
 ///
-/// let imports = SchemaImports::new()
-///     .provide("demo.mox", "schemas/todo_item.json", r#"{"title": "Todo item"}"#);
-/// let compilation = compile_files_with_imports(
+/// let imports = DomainImports {
+///     schemas: SchemaImports::new()
+///         .provide("demo.mox", "schemas/todo_item.json", r#"{"title": "Todo item"}"#),
+///     sigil: SigilImports::new(),
+/// };
+/// let compilation = compile_files(
 ///     &[("demo.mox".to_string(),
 ///        "package demo\n\nimport schema \"schemas/todo_item.json\" as TodoItem\n\nclass C { refers TodoItem t }\n".to_string())],
 ///     &imports,
-///     &SigilImports::new(),
 /// );
 /// assert!(compilation.diagnostics.is_empty());
 /// ```
@@ -190,18 +190,20 @@ impl SchemaImports {
 /// wins).
 ///
 /// ```
-/// use rex_driver::{SigilImports, compile_str_with_imports};
+/// use rex_driver::{DomainImports, SigilImports, compile_str};
 ///
 /// let sigil = SigilImports::new().provide(
 ///     "demo.mox",
 ///     "oracle/trade.rosetta",
 ///     "namespace oracle.basic\n\ntype Trade:\n    id string (1..1)\n",
 /// );
-/// let compilation = compile_str_with_imports(
+/// let compilation = compile_str(
 ///     "demo.mox",
 ///     "package demo\n\nimport sigil \"oracle/trade.rosetta\"\n\nclass Book { refers oracle.basic.Trade about }\n",
-///     &rex_driver::SchemaImports::new(),
-///     &sigil,
+///     &DomainImports {
+///         schemas: rex_driver::SchemaImports::new(),
+///         sigil,
+///     },
 /// );
 /// assert!(compilation.diagnostics.is_empty());
 /// let model = compilation.model.unwrap();
@@ -288,28 +290,29 @@ pub struct Compiled {
 }
 
 /// Compiles a [`SourceFile`] to the Core IR (memoized by salsa):
-/// parse → resolve/validate → lower.
+/// parse → resolve/validate → lower. The tracked surface compiles with an
+/// empty import bundle — every import declaration is a not-provided error;
+/// the one-shot [`compile_str`] carries caller-provided content.
 #[salsa::tracked]
 pub fn compile(db: &dyn Db, file: SourceFile) -> Compiled {
-    compile_file(db, file, None, None)
+    compile_file(db, file, &DomainImports::default())
 }
 
-/// The body of [`compile`], parameterized over the provided import-schema
-/// and import-sigil content (the tracked query cannot take the non-input
-/// `SchemaImports`/`SigilImports`).
-fn compile_file(
-    db: &dyn Db,
-    file: SourceFile,
-    schema_imports: Option<&SchemaImports>,
-    sigil_imports: Option<&SigilImports>,
-) -> Compiled {
+/// The body of [`compile`], parameterized over the provided import content.
+///
+/// Imports enter the salsa layer through this one borrowed bundle: the
+/// tracked queries compile with an empty bundle (their only import shape),
+/// and the one-shot entry points own a caller-provided bundle on the stack
+/// and pass it straight through. The next import kind joins
+/// [`DomainImports`] — no signature here changes.
+fn compile_file(db: &dyn Db, file: SourceFile, imports: &DomainImports) -> Compiled {
     let source = file.text(db);
     let parsed = parse_query(db, file);
     let mut diagnostics = parsed.diagnostics;
     let lowered = parsed
         .ast
         .as_ref()
-        .map(|ast| lower::compile(&file.path(db), &source, ast, schema_imports, sigil_imports));
+        .map(|ast| lower::compile(&file.path(db), &source, ast, imports));
     let sigil_diagnostics = lowered
         .as_ref()
         .map(|(_, _, sigil)| sigil.clone())
@@ -447,44 +450,58 @@ pub fn compile_actors(
     actor: SourceFile,
     domains: Vec<SourceFile>,
 ) -> ActorCompilation {
-    compile_actors_with(db, actor, domains, None, None)
+    compile_actors_with(db, actor, domains, &DomainImports::default())
 }
 
-/// The body of [`compile_actors`], parameterized over the provided
-/// import content for the domain files (the tracked query cannot take the
-/// non-input import maps).
-fn compile_actors_with(
-    db: &dyn Db,
-    actor: SourceFile,
-    domains: Vec<SourceFile>,
-    schema_imports: Option<&SchemaImports>,
-    sigil_imports: Option<&SigilImports>,
-) -> ActorCompilation {
-    let actor_path = actor.path(db);
-    let actor_source = actor.text(db);
-    let parsed = parse_actors_query(db, actor);
+/// The domain lowering shared by the `.actor` and `.ddd` pipelines: resolve
+/// the origin file's `import` declarations against the provided domain
+/// files, lower every named domain against the **union namespace of all
+/// imports** (the same rule multi-file `.mox` compiles follow), and assemble
+/// the per-domain results the actor/design tails consume.
+struct LoweredDomains {
+    /// One unit per imported domain (imports in first-appearance order).
+    domain_units: Vec<lower::DomainUnit>,
+    /// The union model of all imported domains — only meaningful when every
+    /// domain lowered successfully. The first sigil-declaring domain carries
+    /// the compilation's synthetic packages. Cedar class lookup and `.ddd`
+    /// design resolution consume this instead of recompiling the domains
+    /// standalone (which cannot resolve cross-package references).
+    domains_model: Option<rex_ir::Model>,
+    /// Sigil content diagnostics keyed by rosetta path (rendered against
+    /// the retained rosetta texts); each caller appends them after its own
+    /// diagnostics, following the domain ones.
+    sigil_diagnostics: Vec<(String, Diagnostic)>,
+}
 
-    // Resolve imports to provided domains, deduplicated by import path, in
-    // first-appearance order. Only imported domains are compiled; extras
-    // are ignored (their diagnostics must not leak).
+/// The body shared by [`compile_actors_with`] and [`compile_ddd_with`]:
+/// resolve `imports` against `domains` (deduplicated by import path, in
+/// first-appearance order; only imported domains are compiled — extras are
+/// ignored so their diagnostics do not leak), lower every named domain
+/// against the shared union namespace, and collect the results.
+///
+/// A domain with errors yields no model while the remaining domains keep
+/// resolving, so the tails can still bind capabilities and resolve designs
+/// against the surviving domains.
+fn lower_domains(
+    db: &dyn Db,
+    origin_path: &str,
+    imports: &[rex_syntax::ImportDecl],
+    domains: &[SourceFile],
+    provided: &DomainImports,
+) -> LoweredDomains {
     let mut lookups: Vec<(String, SourceFile)> = Vec::new();
-    if let Some(ast) = &parsed.ast {
-        for import in &ast.imports {
-            if lookups.iter().any(|(path, _)| *path == import.path) {
-                continue;
-            }
-            if let Some(domain) = domains
-                .iter()
-                .find(|file| import_matches(&import.path, &actor_path, &file.path(db)))
-            {
-                lookups.push((import.path.clone(), *domain));
-            }
+    for import in imports {
+        if lookups.iter().any(|(path, _)| *path == import.path) {
+            continue;
+        }
+        if let Some(domain) = domains
+            .iter()
+            .find(|file| import_matches(&import.path, origin_path, &file.path(db)))
+        {
+            lookups.push((import.path.clone(), *domain));
         }
     }
 
-    // Lower every imported domain against the shared union namespace,
-    // keeping the results per file: a domain with errors yields no model
-    // while the remaining domains keep resolving.
     let mut paths: Vec<String> = Vec::new();
     let mut sources: Vec<String> = Vec::new();
     let mut parse_outputs: Vec<ParseOutput> = Vec::new();
@@ -503,31 +520,13 @@ fn compile_actors_with(
             parse_diagnostics: &parse_outputs[index].diagnostics,
         })
         .collect();
-    let compilations = lower::compile_union_per_file(&units, schema_imports, sigil_imports);
+    let compilations = lower::compile_union_per_file(&units, provided);
 
-    // Sigil content diagnostics are keyed by rosetta path (rendered against
-    // the retained rosetta texts); they join the actor file's diagnostics
-    // after the domain ones.
     let sigil_diagnostics: Vec<(String, Diagnostic)> = compilations
         .iter()
         .flat_map(|compilation| compilation.sigil_diagnostics.iter().cloned())
         .collect();
 
-    let domain_units: Vec<lower::DomainUnit<'_>> = lookups
-        .iter()
-        .enumerate()
-        .map(|(index, (path, _))| lower::DomainUnit {
-            path,
-            source: &sources[index],
-            model: compilations[index].model.clone(),
-            ast: parse_outputs[index].ast.as_ref(),
-            diagnostics: &compilations[index].diagnostics,
-        })
-        .collect();
-
-    // The union model of all imported domains, for Cedar class lookup —
-    // only meaningful when every domain lowered successfully. The first
-    // sigil-declaring domain carries the compilation's synthetic packages.
     let domains_model = if compilations
         .iter()
         .all(|compilation| compilation.model.is_some())
@@ -543,18 +542,64 @@ fn compile_actors_with(
         None
     };
 
+    let domain_units: Vec<lower::DomainUnit> = lookups
+        .into_iter()
+        .zip(sources)
+        .zip(parse_outputs)
+        .zip(compilations)
+        .map(
+            |((((path, _), source), parse), compilation)| lower::DomainUnit {
+                path,
+                source,
+                model: compilation.model,
+                ast: parse.ast,
+                diagnostics: compilation.diagnostics,
+            },
+        )
+        .collect();
+
+    LoweredDomains {
+        domain_units,
+        domains_model,
+        sigil_diagnostics,
+    }
+}
+
+/// The body of [`compile_actors`], parameterized over the provided
+/// import content for the domain files (see [`compile_file`] for the shape).
+fn compile_actors_with(
+    db: &dyn Db,
+    actor: SourceFile,
+    domains: Vec<SourceFile>,
+    imports: &DomainImports,
+) -> ActorCompilation {
+    let actor_path = actor.path(db);
+    let actor_source = actor.text(db);
+    let parsed = parse_actors_query(db, actor);
+    let domains = lower_domains(
+        db,
+        &actor_path,
+        parsed
+            .ast
+            .as_ref()
+            .map(|ast| ast.imports.as_slice())
+            .unwrap_or_default(),
+        &domains,
+        imports,
+    );
+
     let (model, diagnostics) = lower::compile_actor_file(
         &actor_path,
         &actor_source,
         parsed.ast.as_ref(),
         &parsed.diagnostics,
-        &domain_units,
+        &domains.domain_units,
     );
     let mut diagnostics = diagnostics;
-    diagnostics.extend(sigil_diagnostics);
+    diagnostics.extend(domains.sigil_diagnostics);
     ActorCompilation {
         model,
-        domains_model,
+        domains_model: domains.domains_model,
         diagnostics,
     }
 }
@@ -566,10 +611,10 @@ fn compile_actors_with(
 /// Diagnostics come from every file involved, so each is tagged with its
 /// path; group or render them per file (see [`render`](crate::render)).
 ///
-/// `Eq` is deliberately not derived: the artifact's search fields carry an
-/// `f32` boost, so only [`PartialEq`] equality is available (mirroring
-/// [`rex_ir::ddd::DddModel`]).
-#[derive(Debug, Clone, PartialEq)]
+/// Like every artifact type, [`rex_ir::ddd::DddModel`] derives `Eq` (the
+/// rex-ir wire-contract equality policy, rule 14) — and so does this
+/// compilation result.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DddCompilation {
     /// The design artifact, or `None` when any error-severity diagnostic
     /// was produced in any file. Warnings do not block lowering.
@@ -610,17 +655,16 @@ pub(crate) fn compile_multi(
     first: SourceFile,
     rest: Vec<SourceFile>,
 ) -> MultiCompilation {
-    compile_multi_files(db, first, rest, None, None)
+    compile_multi_files(db, first, rest, &DomainImports::default())
 }
 
 /// The body of [`compile_multi`], parameterized over the provided
-/// import-schema and import-sigil content.
+/// import content (see [`compile_file`] for the shape).
 fn compile_multi_files(
     db: &dyn Db,
     first: SourceFile,
     rest: Vec<SourceFile>,
-    schema_imports: Option<&SchemaImports>,
-    sigil_imports: Option<&SigilImports>,
+    imports: &DomainImports,
 ) -> MultiCompilation {
     let mut files: Vec<SourceFile> = vec![first];
     files.extend(rest);
@@ -642,8 +686,7 @@ fn compile_multi_files(
             parse_diagnostics: &parse_outputs[index].diagnostics,
         })
         .collect();
-    let (model, diagnostics, sigil_diagnostics) =
-        lower::compile_multi(&units, schema_imports, sigil_imports);
+    let (model, diagnostics, sigil_diagnostics) = lower::compile_multi(&units, imports);
     MultiCompilation {
         model,
         diagnostics,
@@ -652,6 +695,11 @@ fn compile_multi_files(
 }
 
 /// Compiles multiple in-memory sources — one package per file — in one call.
+///
+/// The files' `import schema` and `import sigil` declarations resolve
+/// through `imports`: every declared import must have an entry for its
+/// `(mox path, import path)` pair or the compilation errors. The empty
+/// bundle ([`DomainImports::default`]) is the no-import compilation.
 ///
 /// ```
 /// let files = [
@@ -663,24 +711,11 @@ fn compile_multi_files(
 ///     .enumerate()
 ///     .map(|(index, source)| (format!("{index}.mox"), source))
 ///     .collect();
-/// let compilation = rex_driver::compile_files(&paths);
+/// let compilation = rex_driver::compile_files(&paths, &rex_driver::DomainImports::default());
 /// assert!(compilation.diagnostics.is_empty());
 /// assert_eq!(compilation.model.unwrap().packages.len(), 2);
 /// ```
-pub fn compile_files(files: &[(String, String)]) -> MultiCompilation {
-    compile_files_with_imports(files, &SchemaImports::new(), &SigilImports::new())
-}
-
-/// Like [`compile_files`], but the JSON content of the files'
-/// `import schema` declarations is provided through [`SchemaImports`], and
-/// the rosetta content of their `import sigil` declarations through
-/// [`SigilImports`]: every declared import must have an entry for its
-/// `(mox path, import path)` pair or the compilation errors.
-pub fn compile_files_with_imports(
-    files: &[(String, String)],
-    schema_imports: &SchemaImports,
-    sigil_imports: &SigilImports,
-) -> MultiCompilation {
+pub fn compile_files(files: &[(String, String)], imports: &DomainImports) -> MultiCompilation {
     let db = Database::new();
     let sources: Vec<SourceFile> = files
         .iter()
@@ -689,13 +724,7 @@ pub fn compile_files_with_imports(
     let Some(first) = sources.first().copied() else {
         return MultiCompilation::default();
     };
-    compile_multi_files(
-        &db,
-        first,
-        sources[1..].to_vec(),
-        Some(schema_imports),
-        Some(sigil_imports),
-    )
+    compile_multi_files(&db, first, sources[1..].to_vec(), imports)
 }
 
 /// The salsa database for the rexlang driver.
@@ -738,27 +767,19 @@ pub struct Compilation {
 
 /// Compiles in-memory source text in one call.
 ///
+/// The source's `import schema` and `import sigil` declarations resolve
+/// through `imports`. The empty bundle ([`DomainImports::default`]) is the
+/// no-import compilation.
+///
 /// ```
-/// let compilation = rex_driver::compile_str("m.mox", "package demo");
+/// let compilation =
+///     rex_driver::compile_str("m.mox", "package demo", &rex_driver::DomainImports::default());
 /// assert!(compilation.model.is_some());
 /// ```
-pub fn compile_str(path: &str, source: &str) -> Compilation {
-    compile_str_with_imports(path, source, &SchemaImports::new(), &SigilImports::new())
-}
-
-/// Like [`compile_str`], but the JSON content of the source's
-/// `import schema` declarations is provided through [`SchemaImports`], and
-/// the rosetta content of its `import sigil` declarations through
-/// [`SigilImports`].
-pub fn compile_str_with_imports(
-    path: &str,
-    source: &str,
-    schema_imports: &SchemaImports,
-    sigil_imports: &SigilImports,
-) -> Compilation {
+pub fn compile_str(path: &str, source: &str, imports: &DomainImports) -> Compilation {
     let db = Database::new();
     let file = SourceFile::new(&db, path.to_string(), source.to_string());
-    let compiled = compile_file(&db, file, Some(schema_imports), Some(sigil_imports));
+    let compiled = compile_file(&db, file, imports);
     Compilation {
         model: compiled.model,
         diagnostics: compiled.diagnostics,
@@ -769,30 +790,18 @@ pub fn compile_str_with_imports(
 /// The import content provided to a compilation: the JSON of `import
 /// schema` declarations and the rosetta of `import sigil` declarations,
 /// each keyed by (declaring file path, import path as written). The driver
-/// stays filesystem-free — hosts read the files and thread the maps
-/// through.
+/// stays filesystem-free — hosts read the files and thread the bundle
+/// through. Every public compile entry point takes one.
 ///
-/// An empty bundle (see [`DomainImports::empty`]) is what the no-import
-/// entry points use: a declaration without a provider entry is the
+/// The empty bundle ([`DomainImports::default`]) is the no-import
+/// compilation: a declaration without a provider entry is the
 /// ``imported ... '<path>' was not provided`` error.
-#[derive(Debug, Clone, Copy)]
-pub struct DomainImports<'a> {
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DomainImports {
     /// The `import schema` content of the compilation's files.
-    pub schemas: &'a SchemaImports,
+    pub schemas: SchemaImports,
     /// The `import sigil` content of the compilation's files.
-    pub sigil: &'a SigilImports,
-}
-
-impl DomainImports<'static> {
-    /// The empty bundle: every import declaration is a not-provided error.
-    pub fn empty() -> Self {
-        static SCHEMAS: OnceLock<SchemaImports> = OnceLock::new();
-        static SIGIL: OnceLock<SigilImports> = OnceLock::new();
-        DomainImports {
-            schemas: SCHEMAS.get_or_init(SchemaImports::new),
-            sigil: SIGIL.get_or_init(SigilImports::new),
-        }
-    }
+    pub sigil: SigilImports,
 }
 
 /// Compiles an `.actor` file against its imported domain models in one call.
@@ -806,8 +815,12 @@ impl DomainImports<'static> {
 ///     "package support\n\nclass Ticket { String title }".to_string(),
 /// )];
 /// let source = "import \"support.mox\"\n\nactors Ops {\n    actor Agent\n}";
-/// let compilation =
-///     rex_driver::compile_actors_str("ops.actor", source, &domains, &rex_driver::DomainImports::empty());
+/// let compilation = rex_driver::compile_actors_str(
+///     "ops.actor",
+///     source,
+///     &domains,
+///     &rex_driver::DomainImports::default(),
+/// );
 /// assert!(compilation.diagnostics.is_empty());
 /// assert_eq!(compilation.model.unwrap().blocks.len(), 1);
 /// ```
@@ -815,7 +828,7 @@ pub fn compile_actors_str(
     actor_path: &str,
     actor_source: &str,
     domains: &[(String, String)],
-    imports: &DomainImports<'_>,
+    imports: &DomainImports,
 ) -> ActorCompilation {
     let db = Database::new();
     let actor = SourceFile::new(&db, actor_path.to_string(), actor_source.to_string());
@@ -831,13 +844,7 @@ pub fn compile_actors_str(
         })
         .map(|(path, source)| SourceFile::new(&db, path.clone(), source.clone()))
         .collect();
-    compile_actors_with(
-        &db,
-        actor,
-        files,
-        Some(imports.schemas),
-        Some(imports.sigil),
-    )
+    compile_actors_with(&db, actor, files, imports)
 }
 
 /// Compiles a `.ddd` design file against its imported domain models to the
@@ -849,117 +856,47 @@ pub fn compile_actors_str(
 /// See [`compile_ddd_str`] for the normative contract.
 #[salsa::tracked]
 pub fn compile_ddd(db: &dyn Db, design: SourceFile, domains: Vec<SourceFile>) -> DddCompilation {
-    compile_ddd_with(db, design, domains, None, None, None)
+    compile_ddd_with(db, design, domains, None, &DomainImports::default())
 }
 
 /// The body of [`compile_ddd`], parameterized over the actor model the
 /// `_with_actors` entry point validates capabilities against and the
-/// provided import content for the domain files (the tracked query cannot
-/// take the non-input `ActorModel` or import maps).
+/// provided import content for the domain files (see [`compile_file`] for
+/// the import shape).
 fn compile_ddd_with(
     db: &dyn Db,
     design: SourceFile,
     domains: Vec<SourceFile>,
     actors: Option<&rex_ir::ActorModel>,
-    schema_imports: Option<&SchemaImports>,
-    sigil_imports: Option<&SigilImports>,
+    imports: &DomainImports,
 ) -> DddCompilation {
     let design_path = design.path(db);
     let parsed = parse_ddd_query(db, design);
-
-    // Resolve imports to provided domains, deduplicated by import path, in
-    // first-appearance order. Only imported domains are compiled; extras
-    // are ignored (their diagnostics must not leak).
-    let mut lookups: Vec<(String, SourceFile)> = Vec::new();
-    if let Some(ast) = &parsed.ast {
-        for import in &ast.imports {
-            if lookups.iter().any(|(path, _)| *path == import.path) {
-                continue;
-            }
-            if let Some(domain) = domains
-                .iter()
-                .find(|file| import_matches(&import.path, &design_path, &file.path(db)))
-            {
-                lookups.push((import.path.clone(), *domain));
-            }
-        }
-    }
-
-    // Lower every imported domain against the shared union namespace,
-    // keeping the results per file: a domain with errors yields no model
-    // while the remaining domains keep resolving.
-    let mut paths: Vec<String> = Vec::new();
-    let mut sources: Vec<String> = Vec::new();
-    let mut parse_outputs: Vec<ParseOutput> = Vec::new();
-    for (_, domain) in &lookups {
-        paths.push(domain.path(db));
-        sources.push(domain.text(db));
-        parse_outputs.push(parse_query(db, *domain));
-    }
-    let units: Vec<lower::MultiFile<'_>> = lookups
-        .iter()
-        .enumerate()
-        .map(|(index, _)| lower::MultiFile {
-            path: &paths[index],
-            source: &sources[index],
-            ast: parse_outputs[index].ast.as_ref(),
-            parse_diagnostics: &parse_outputs[index].diagnostics,
-        })
-        .collect();
-    let compilations = lower::compile_union_per_file(&units, schema_imports, sigil_imports);
-
-    // Sigil content diagnostics are keyed by rosetta path (rendered against
-    // the retained rosetta texts); they join the design's diagnostics after
-    // the domain ones.
-    let sigil_diagnostics: Vec<(String, Diagnostic)> = compilations
-        .iter()
-        .flat_map(|compilation| compilation.sigil_diagnostics.iter().cloned())
-        .collect();
-
-    let domain_units: Vec<lower::DomainUnit<'_>> = lookups
-        .iter()
-        .enumerate()
-        .map(|(index, (path, _))| lower::DomainUnit {
-            path,
-            source: &sources[index],
-            model: compilations[index].model.clone(),
-            ast: parse_outputs[index].ast.as_ref(),
-            diagnostics: &compilations[index].diagnostics,
-        })
-        .collect();
-
-    // The union model of all imported domains, for consumers that need the
-    // resolved domain — only meaningful when every domain lowered
-    // successfully. The first sigil-declaring domain carries the
-    // compilation's synthetic packages.
-    let domains_model = if compilations
-        .iter()
-        .all(|compilation| compilation.model.is_some())
-    {
-        let mut union = rex_ir::Model::new();
-        for compilation in &compilations {
-            if let Some(model) = &compilation.model {
-                union.packages.extend(model.packages.clone());
-            }
-        }
-        Some(union)
-    } else {
-        None
-    };
+    let domains = lower_domains(
+        db,
+        &design_path,
+        parsed
+            .ast
+            .as_ref()
+            .map(|ast| ast.imports.as_slice())
+            .unwrap_or_default(),
+        &domains,
+        imports,
+    );
 
     let (model, diagnostics) = ddd::compile_ddd_file(
         &design_path,
         &design.text(db),
         parsed.ast.as_ref(),
         &parsed.diagnostics,
-        &domain_units,
+        &domains.domain_units,
         actors,
     );
     let mut diagnostics = diagnostics;
-    diagnostics.extend(sigil_diagnostics);
+    diagnostics.extend(domains.sigil_diagnostics);
     DddCompilation {
         model,
-        domains_model,
+        domains_model: domains.domains_model,
         diagnostics,
     }
 }
@@ -999,7 +936,7 @@ fn compile_ddd_with(
 ///     "library.ddd",
 ///     source,
 ///     &domains,
-///     &rex_driver::DomainImports::empty(),
+///     &rex_driver::DomainImports::default(),
 /// );
 /// assert!(compilation.diagnostics.is_empty());
 /// assert_eq!(compilation.model.unwrap().modules.len(), 1);
@@ -1104,7 +1041,7 @@ pub fn compile_ddd_str(
     path: &str,
     source: &str,
     domains: &[(String, String)],
-    imports: &DomainImports<'_>,
+    imports: &DomainImports,
 ) -> DddCompilation {
     compile_ddd_str_inner(path, source, domains, None, imports)
 }
@@ -1119,7 +1056,7 @@ pub fn compile_ddd_str_with_actors(
     path: &str,
     source: &str,
     domains: &[(String, String)],
-    imports: &DomainImports<'_>,
+    imports: &DomainImports,
     actors: &rex_ir::ActorModel,
 ) -> DddCompilation {
     compile_ddd_str_inner(path, source, domains, Some(actors), imports)
@@ -1131,7 +1068,7 @@ fn compile_ddd_str_inner(
     source: &str,
     domains: &[(String, String)],
     actors: Option<&rex_ir::ActorModel>,
-    imports: &DomainImports<'_>,
+    imports: &DomainImports,
 ) -> DddCompilation {
     let db = Database::new();
     let design = SourceFile::new(&db, path.to_string(), source.to_string());
@@ -1147,12 +1084,5 @@ fn compile_ddd_str_inner(
         })
         .map(|(path, source)| SourceFile::new(&db, path.clone(), source.clone()))
         .collect();
-    compile_ddd_with(
-        &db,
-        design,
-        files,
-        actors,
-        Some(imports.schemas),
-        Some(imports.sigil),
-    )
+    compile_ddd_with(&db, design, files, actors, imports)
 }

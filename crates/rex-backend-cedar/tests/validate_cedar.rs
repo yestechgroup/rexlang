@@ -27,7 +27,11 @@ fn workspace_root() -> &'static Path {
 fn actors_model() -> rex_ir::Model {
     let path = workspace_root().join(MODEL_RELATIVE_PATH);
     let source = std::fs::read_to_string(&path).expect("read conformance model");
-    let compilation = compile_str(path.to_str().expect("utf-8 path"), &source);
+    let compilation = compile_str(
+        path.to_str().expect("utf-8 path"),
+        &source,
+        &rex_driver::DomainImports::default(),
+    );
     assert!(
         compilation.diagnostics.is_empty(),
         "conformance model must compile cleanly: {:?}",

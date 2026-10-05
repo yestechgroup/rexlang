@@ -24,7 +24,11 @@ class Person {
 "#;
 
 fn person_model() -> rex_ir::Model {
-    let compilation = compile_str("modifiers.mox", MODEL);
+    let compilation = compile_str(
+        "modifiers.mox",
+        MODEL,
+        &rex_driver::DomainImports::default(),
+    );
     assert!(
         compilation.diagnostics.is_empty(),
         "model must compile cleanly: {:?}",
@@ -102,7 +106,7 @@ fn api_profile_documents_modifiers_in_the_class_comment() {
 #[test]
 fn unmodified_classes_have_no_modifier_notes() {
     let source = "package demo\n\nclass Plain {\n    String name\n}\n";
-    let compilation = compile_str("plain.mox", source);
+    let compilation = compile_str("plain.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.diagnostics.is_empty());
     let model = compilation.model.unwrap();
     let files = generate(&model, Profile::Wire).expect("generate");

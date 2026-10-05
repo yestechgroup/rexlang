@@ -10,7 +10,7 @@ fn compile(files: &[(&str, &str)]) -> MultiCompilation {
         .iter()
         .map(|(path, source)| (path.to_string(), source.to_string()))
         .collect();
-    compile_files(&files)
+    compile_files(&files, &rex_driver::DomainImports::default())
 }
 
 /// The diagnostics whose message contains `needle`, paired with their file
@@ -272,7 +272,7 @@ class P {
 }
 ";
     let (files, dir) = foreign_types_fixture("types", source_b);
-    let compilation = compile_files(&files);
+    let compilation = compile_files(&files, &rex_driver::DomainImports::default());
     assert!(
         compilation.diagnostics.is_empty(),
         "unexpected diagnostics: {:?}",
@@ -318,7 +318,7 @@ fn foreign_vocabulary_constraint_families_are_checked_across_packages() {
     // constraint is a family mismatch naming the key facet.
     let source_b = "package b\n\nclass P { a.Currency ccy { minimum 0 } }";
     let (files, dir) = foreign_types_fixture("family", source_b);
-    let compilation = compile_files(&files);
+    let compilation = compile_files(&files, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors must block the model");
     let (path, diagnostic) = single(&compilation, "'minimum' requires a numeric attribute");
     assert!(

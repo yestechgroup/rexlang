@@ -53,7 +53,7 @@ lambda_expr := NAME "=>" expr
 coalesce    := logic_or ("?:" logic_or)*                -- left-associative
 logic_or    := logic_and ("||" logic_and)*
 logic_and   := comparison ("&&" comparison)*
-comparison  := additive cmp_op additive)*               -- left-associative chain
+comparison  := additive (cmp_op additive)*               -- left-associative chain
 cmp_op      := "==" | "=" | "!=" | "<" | "<=" | ">" | ">="
 additive    := multiplicative (("+" | "-") multiplicative)*
 multiplicative := unary (("*" | "/") unary)*

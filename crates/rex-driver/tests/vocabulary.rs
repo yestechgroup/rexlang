@@ -89,7 +89,7 @@ fn lockfile_for() -> String {
 #[test]
 fn vocabulary_model_compiles_with_entries_and_resolved_types() {
     let (path, _dir) = setup("happy", MODEL, true, Some(&lockfile_for()));
-    let compilation = compile_str(&path, MODEL);
+    let compilation = compile_str(&path, MODEL, &rex_driver::DomainImports::default());
     assert!(
         compilation.diagnostics.is_empty(),
         "unexpected diagnostics: {:?}",
@@ -128,7 +128,7 @@ fn vocabulary_model_compiles_with_entries_and_resolved_types() {
 fn missing_snapshot_is_an_error_with_fetch_help() {
     let (path, dir) = setup("missing-snapshot", MODEL, true, Some(&lockfile_for()));
     std::fs::remove_file(dir.join("vocab/iso-4217@2024-01-01.json")).expect("remove snapshot");
-    let compilation = compile_str(&path, MODEL);
+    let compilation = compile_str(&path, MODEL, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors block lowering");
     let missing: Vec<_> = compilation
         .diagnostics
@@ -159,7 +159,7 @@ fn digest_mismatch_is_an_error() {
     });
     let lock = serde_json::to_string(&lockfile).expect("lockfile");
     let (path, _dir) = setup("digest-mismatch", MODEL, true, Some(&lock));
-    let compilation = compile_str(&path, MODEL);
+    let compilation = compile_str(&path, MODEL, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors block lowering");
     let mismatch: Vec<_> = compilation
         .diagnostics
@@ -178,7 +178,7 @@ fn digest_mismatch_is_an_error() {
 #[test]
 fn missing_lockfile_warns_but_compiles() {
     let (path, _dir) = setup("no-lockfile", MODEL, true, None);
-    let compilation = compile_str(&path, MODEL);
+    let compilation = compile_str(&path, MODEL, &rex_driver::DomainImports::default());
     assert!(
         compilation.model.is_some(),
         "warnings must not block lowering: {:?}",
@@ -221,7 +221,7 @@ fn facet_type_must_be_primitive() {
         }
     "#;
     let (path, _dir) = setup("facet-class", source, true, Some(&lockfile_for()));
-    let compilation = compile_str(&path, source);
+    let compilation = compile_str(&path, source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors block lowering");
     let facet_errors: Vec<_> = compilation
         .diagnostics
@@ -253,7 +253,7 @@ fn missing_key_is_an_error() {
         }
     "#;
     let (path, _dir) = setup("missing-key", source, true, Some(&lockfile_for()));
-    let compilation = compile_str(&path, source);
+    let compilation = compile_str(&path, source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors block lowering");
     let key_errors: Vec<_> = compilation
         .diagnostics
@@ -272,7 +272,11 @@ fn missing_key_is_an_error() {
 #[test]
 fn unresolvable_version_suggests_pin_or_fetch() {
     let (path, _dir) = setup("no-version", MODEL_NO_VERSION, false, None);
-    let compilation = compile_str(&path, MODEL_NO_VERSION);
+    let compilation = compile_str(
+        &path,
+        MODEL_NO_VERSION,
+        &rex_driver::DomainImports::default(),
+    );
     assert!(compilation.model.is_none(), "errors block lowering");
     let version_errors: Vec<_> = compilation
         .diagnostics
@@ -293,7 +297,11 @@ fn unresolvable_version_suggests_pin_or_fetch() {
 #[test]
 fn unique_snapshot_resolves_version_from_filename() {
     let (path, _dir) = setup("glob-unique", MODEL_NO_VERSION, true, None);
-    let compilation = compile_str(&path, MODEL_NO_VERSION);
+    let compilation = compile_str(
+        &path,
+        MODEL_NO_VERSION,
+        &rex_driver::DomainImports::default(),
+    );
     assert!(
         compilation.model.is_some(),
         "unexpected diagnostics: {:?}",
@@ -311,7 +319,11 @@ fn ambiguous_snapshots_are_an_error() {
     let (path, dir) = setup("glob-ambiguous", MODEL_NO_VERSION, true, None);
     let vocab_dir = dir.join("vocab");
     std::fs::write(vocab_dir.join("iso-4217@2025-06-01.json"), SNAPSHOT).expect("second snapshot");
-    let compilation = compile_str(&path, MODEL_NO_VERSION);
+    let compilation = compile_str(
+        &path,
+        MODEL_NO_VERSION,
+        &rex_driver::DomainImports::default(),
+    );
     assert!(compilation.model.is_none(), "errors block lowering");
     let ambiguous: Vec<_> = compilation
         .diagnostics
@@ -343,7 +355,7 @@ fn vocabulary_default_must_be_an_entry_key() {
         }
     "#;
     let (path, _dir) = setup("bad-default", source, true, Some(&lockfile_for()));
-    let compilation = compile_str(&path, source);
+    let compilation = compile_str(&path, source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors block lowering");
     let default_errors: Vec<_> = compilation
         .diagnostics
@@ -375,7 +387,7 @@ fn vocabulary_in_relation_position_uses_the_not_a_class_diagnostic() {
         }
     "#;
     let (path, _dir) = setup("relation-position", source, true, Some(&lockfile_for()));
-    let compilation = compile_str(&path, source);
+    let compilation = compile_str(&path, source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors block lowering");
     assert!(
         compilation
@@ -403,7 +415,7 @@ fn string_default_on_vocabulary_attribute_stays_accepted() {
         }
     "#;
     let (path, _dir) = setup("string-default", source, true, Some(&lockfile_for()));
-    let compilation = compile_str(&path, source);
+    let compilation = compile_str(&path, source, &rex_driver::DomainImports::default());
     assert!(
         compilation.diagnostics.is_empty(),
         "a string default names an entry key and stays accepted: {:?}",
@@ -432,7 +444,7 @@ fn int_default_on_vocabulary_attribute_is_rejected() {
         }
     "#;
     let (path, _dir) = setup("int-default", source, true, Some(&lockfile_for()));
-    let compilation = compile_str(&path, source);
+    let compilation = compile_str(&path, source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors block lowering");
     let diagnostic = compilation
         .diagnostics
@@ -458,7 +470,7 @@ fn boolean_default_on_vocabulary_attribute_is_rejected() {
         }
     "#;
     let (path, _dir) = setup("bool-default", source, true, Some(&lockfile_for()));
-    let compilation = compile_str(&path, source);
+    let compilation = compile_str(&path, source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors block lowering");
     assert!(
         compilation
@@ -480,7 +492,7 @@ fn unknown_type_diagnostic_is_unchanged() {
         }
     "#;
     let (path, _dir) = setup("unknown-type", source, false, None);
-    let compilation = compile_str(&path, source);
+    let compilation = compile_str(&path, source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none());
     assert!(
         compilation

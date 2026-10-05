@@ -60,6 +60,7 @@ pub fn compile_example(name: &str) -> rex_ir::Model {
     let compilation = rex_driver::compile_str(
         path.to_str().expect("utf-8 example path"),
         &example_source(name),
+        &rex_driver::DomainImports::default(),
     );
     assert!(
         compilation.diagnostics.is_empty(),

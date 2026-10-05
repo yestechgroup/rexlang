@@ -18,9 +18,9 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use rex_ir::ddd::{
-    Application, BuiltinRepositoryOp, DddModel, Delegation, Design, DesignFlags, DocumentField,
-    Module, Pagination, RankingStrategy, Repository, RepositoryOperation, SearchDef, SearchField,
-    SearchFilter, SearchSort, Service, ServiceOperation, Stereotype,
+    Application, Boost, BuiltinRepositoryOp, DddModel, Delegation, Design, DesignFlags,
+    DocumentField, Module, Pagination, RankingStrategy, Repository, RepositoryOperation, SearchDef,
+    SearchField, SearchFilter, SearchSort, Service, ServiceOperation, Stereotype,
 };
 use rex_syntax::ast as dsl;
 use rex_syntax::Span;
@@ -106,7 +106,7 @@ pub(crate) fn compile_ddd_file(
     design_source: &str,
     ast: Option<&dsl::DddFile>,
     parse_diagnostics: &[Diagnostic],
-    domains: &[DomainUnit<'_>],
+    domains: &[DomainUnit],
     actors: Option<&rex_ir::ActorModel>,
 ) -> (Option<DddModel>, Vec<(String, Diagnostic)>) {
     let mut diags: Vec<(String, Diagnostic)> = parse_diagnostics
@@ -131,8 +131,8 @@ pub(crate) fn compile_ddd_file(
 
     // Domain diagnostics propagate under their own file, in import order.
     for unit in domains {
-        for diagnostic in unit.diagnostics {
-            diags.push((unit.path.to_string(), diagnostic.clone()));
+        for diagnostic in &unit.diagnostics {
+            diags.push((unit.path.clone(), diagnostic.clone()));
         }
     }
 
@@ -634,7 +634,7 @@ pub(crate) fn compile_ddd_file(
                         ));
                     }
                     let mut field_out = SearchField::new(field.property.full_name());
-                    field_out.boost = field.boost.map(|boost| boost as f32);
+                    field_out.boost = field.boost.map(|boost| Boost::new(boost as f32));
                     field_out.analyzer = field.analyzer.clone();
                     search_out.text.push(field_out);
                 }
@@ -931,18 +931,13 @@ pub(crate) fn compile_ddd_file(
             }
         } else if let Some((_, entry)) = repositories.iter().find(|(name, _)| *name == target) {
             if entry.module != check.module {
-                local.push(
-                    Diagnostic::error(
-                        "interaction between a Service in one Module and a Repository in \
-                         another Module is not allowed; go via a Service",
-                        Some(check.delegation.span),
-                    )
-                    .with_help(format!(
-                        "the service runs in module '{}' and repository '{target}' lives in \
-                         module '{}'",
-                        check.module, entry.module
-                    )),
-                );
+                local.push(module_coupling_diagnostic(
+                    "Repository",
+                    &target,
+                    check.delegation.span,
+                    &check.module,
+                    &entry.module,
+                ));
             }
             if !entry.ops.iter().any(|op| op == operation) {
                 local.push(Diagnostic::error(
@@ -954,18 +949,13 @@ pub(crate) fn compile_ddd_file(
             // A search projection exposes exactly one virtual operation,
             // `search`; coupling follows the repository rule.
             if entry.module != check.module {
-                local.push(
-                    Diagnostic::error(
-                        "interaction between a Service in one Module and a Search in \
-                         another Module is not allowed; go via a Service",
-                        Some(check.delegation.span),
-                    )
-                    .with_help(format!(
-                        "the service runs in module '{}' and search '{target}' lives in \
-                         module '{}'",
-                        check.module, entry.module
-                    )),
-                );
+                local.push(module_coupling_diagnostic(
+                    "Search",
+                    &target,
+                    check.delegation.span,
+                    &check.module,
+                    &entry.module,
+                ));
             }
             if operation != "search" {
                 local.push(Diagnostic::error(
@@ -1028,7 +1018,7 @@ pub(crate) fn compile_ddd_file(
 
 /// `true` when every imported domain lowered successfully (vacuously true
 /// for an empty import set).
-fn all_domains_lowered(domains: &[DomainUnit<'_>]) -> bool {
+fn all_domains_lowered(domains: &[DomainUnit]) -> bool {
     domains.iter().all(|unit| unit.model.is_some())
 }
 
@@ -1060,6 +1050,31 @@ fn stereotype_label(stereotype: dsl::DddStereotype) -> &'static str {
         dsl::DddStereotype::Value => "value",
         dsl::DddStereotype::Dto => "dto",
     }
+}
+
+/// The rule-8 module-coupling error shared by the repository and search
+/// delegation branches: a Service may not reach another Module's
+/// repository/search directly. `target_kind` is the capitalized kind noun
+/// (`"Repository"`/`"Search"`); the help text lowercases it.
+fn module_coupling_diagnostic(
+    target_kind: &str,
+    target: &str,
+    span: Span,
+    service_module: &str,
+    target_module: &str,
+) -> Diagnostic {
+    Diagnostic::error(
+        format!(
+            "interaction between a Service in one Module and a {target_kind} in \
+             another Module is not allowed; go via a Service"
+        ),
+        Some(span),
+    )
+    .with_help(format!(
+        "the service runs in module '{service_module}' and {} '{target}' lives in \
+         module '{target_module}'",
+        target_kind.to_ascii_lowercase()
+    ))
 }
 
 /// The wire design flags of a parsed design.

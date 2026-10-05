@@ -93,10 +93,9 @@ import content arrive as text:
 
 ```rust
 // .mox (multi-package): import content provided by the host
-let compilation = rex_driver::compile_files_with_imports(
+let compilation = rex_driver::compile_files(
     &sources,                                   // (path, source) pairs
-    &schema_imports,                            // SchemaImports: import schema JSON
-    &sigil_imports,                             // SigilImports: import sigil rosetta
+    &imports,                                   // DomainImports: schema JSON + sigil rosetta
 );
 // .actor — policy artifact + union domain model; imports bundle for the domains
 let actor = rex_driver::compile_actors_str("policy.actor", &source, &domains, &imports);
@@ -112,7 +111,8 @@ rosetta path); `rex_driver::render(path, source, &diagnostics)` produces
 ariadne output, and every diagnostic span is a byte offset into its file.
 Hosts read `import schema` JSON, `import sigil` rosetta, and imported
 domains from disk themselves — relative to the declaring file — and thread
-them through `SchemaImports`/`SigilImports`/`DomainImports`.
+them through one `DomainImports` bundle on every compile entry point (the
+empty `DomainImports::default()` is the no-import compilation).
 
 Normative contracts: the language in [docs/LANGUAGE.md](docs/LANGUAGE.md),
 the design layer in [docs/DDD.md](docs/DDD.md), interaction flows in

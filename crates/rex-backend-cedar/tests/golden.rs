@@ -34,7 +34,11 @@ fn fixture_path(relative: &str) -> PathBuf {
 fn actors_model() -> rex_ir::Model {
     let path = fixture_path(MODEL_RELATIVE_PATH);
     let source = std::fs::read_to_string(&path).expect("read conformance model");
-    let compilation = compile_str(path.to_str().expect("utf-8 path"), &source);
+    let compilation = compile_str(
+        path.to_str().expect("utf-8 path"),
+        &source,
+        &rex_driver::DomainImports::default(),
+    );
     assert!(
         compilation.diagnostics.is_empty(),
         "conformance model must compile cleanly: {:?}",
@@ -80,7 +84,11 @@ fn conformance_cedar_output_matches_golden() {
 #[test]
 fn actorless_model_generates_nothing() {
     let source = "package demo\n\nclass Book { String title }\n";
-    let compilation = compile_str("bookless.mox", source);
+    let compilation = compile_str(
+        "bookless.mox",
+        source,
+        &rex_driver::DomainImports::default(),
+    );
     assert!(compilation.diagnostics.is_empty());
     let model = compilation.model.expect("model lowered");
     let files = generate_for_model(&model).expect("generate");

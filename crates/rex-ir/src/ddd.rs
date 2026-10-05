@@ -31,6 +31,11 @@
 //!   (adjacent tagging: `{"type": "class", "value": {...}}`) and
 //!   [`crate::OperationParam`] (`{"name": ..., "type": ...}`); there are no
 //!   parallel wire-level signature types.
+//! - **Equality policy.** Like every artifact root, [`DddModel`] derives
+//!   [`Eq`] (wire contract rule 14): the one floating-point field in any
+//!   artifact — [`SearchField::boost`] — is wrapped in the ordered
+//!   [`Boost`] newtype, transparent on the wire and total in equality,
+//!   hashing, and ordering.
 //!
 //! [`Design::class`] names the referenced `.mox` class (unqualified or
 //! package-qualified at this layer); resolution against the domain
@@ -47,6 +52,9 @@
 //! hard to author.
 //!
 //! [rexlang]: https://github.com/anton-makes/rexlang
+
+use std::cmp::Ordering;
+use std::hash::{Hash, Hasher};
 
 use serde::{Deserialize, Serialize};
 
@@ -67,10 +75,11 @@ pub const DDD_MODEL_FORMAT_VERSION: u32 = 1;
 /// See the [wire format contract](crate#wire-format-contract) and the
 /// [module docs](self).
 ///
-/// `Eq` is deliberately not derived: [`Module`]'s search fields carry an
-/// `f32` boost, so only [`PartialEq`] equality is available (value equality
-/// is unaffected).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Every artifact type derives [`Eq`] (wire contract rule 14): this one's
+/// only floating-point field — [`SearchField::boost`] — is wrapped in the
+/// ordered [`Boost`] newtype, so value equality, hashing, and ordering are
+/// total and deterministic.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DddModel {
     /// Artifact format version. Always [`DDD_MODEL_FORMAT_VERSION`] for
@@ -168,7 +177,7 @@ impl Application {
 
 /// A module of the application: a cohesive slice of services, designed
 /// classes, and search definitions.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Module {
     /// Module name.
@@ -481,7 +490,7 @@ pub enum BuiltinRepositoryOp {
 /// `.mox` class (unqualified or package-qualified at this layer);
 /// resolution against the domain [`crate::Model`] is a driver/consumer
 /// concern, never a wire concern.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchDef {
     /// Search name, unique within its module (not validated at the wire
@@ -601,7 +610,7 @@ impl SearchDef {
 
 /// A full-text field of a [`SearchDef`]: the indexed prose of one entity
 /// property, optionally weighted and analyzed.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchField {
     /// The entity property whose text is indexed.
@@ -609,7 +618,7 @@ pub struct SearchField {
     /// Relevance boost multiplier for matches in this field; `None` uses
     /// the consumer's default weight.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub boost: Option<f32>,
+    pub boost: Option<Boost>,
     /// Analyzer override for this field; `None` uses the search's default
     /// ([`SearchDef::analyzer`], else the consumer's default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -627,8 +636,8 @@ impl SearchField {
     }
 
     /// Chainable setter for the relevance boost.
-    pub fn with_boost(mut self, boost: f32) -> Self {
-        self.boost = Some(boost);
+    pub fn with_boost(mut self, boost: impl Into<Boost>) -> Self {
+        self.boost = Some(boost.into());
         self
     }
 
@@ -636,6 +645,91 @@ impl SearchField {
     pub fn with_analyzer(mut self, analyzer: impl Into<String>) -> Self {
         self.analyzer = Some(analyzer.into());
         self
+    }
+}
+
+/// The relevance-boost weight of a [`SearchField`] (`boost <n>` in the
+/// source): an ordered, equality-preserving wrapper around `f32`, so the
+/// artifact chain derives [`Eq`] end to end (wire contract rule 14).
+///
+/// # Wire layout
+///
+/// `#[serde(transparent)]`: a `Boost` serializes and deserializes exactly
+/// as the bare JSON number it wraps — artifacts are byte-identical to the
+/// raw-`f32` encoding.
+///
+/// # Equality and hashing
+///
+/// [`PartialEq`]/[`Eq`] follow `f32::total_cmp` semantics: equality is
+/// bit-pattern equality, which makes it reflexive even for `NaN` (a `NaN`
+/// equals only another `NaN` with the same bit pattern) and distinguishes
+/// `-0.0` from `0.0` (both deliberate). [`Hash`] hashes the raw bit
+/// pattern, consistent with that equality.
+///
+/// # Ordering
+///
+/// [`Ord`]/[`PartialOrd`] are `f32::total_cmp`: a genuine total order
+/// (`-0.0 < 0.0`, every `NaN` above [`f32::INFINITY`]), so boosts can be
+/// sorted and compared like any other key.
+///
+/// # Where `NaN`/`-0.0` can come from
+///
+/// The `.ddd` grammar accepts only integer boosts (`boost 3`) and JSON
+/// cannot encode `NaN`, so neither source nor wire artifacts produce one
+/// today; the `NaN`/`-0.0` behavior above is the type's deliberate
+/// contract for programmatic construction and any future float-tolerant
+/// syntax, not dead-letter handling.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Boost(f32);
+
+impl Boost {
+    /// Wraps a raw `f32` weight.
+    pub fn new(value: f32) -> Self {
+        Self(value)
+    }
+
+    /// The raw `f32` weight.
+    pub fn value(self) -> f32 {
+        self.0
+    }
+}
+
+impl From<f32> for Boost {
+    fn from(value: f32) -> Self {
+        Self(value)
+    }
+}
+
+impl From<Boost> for f32 {
+    fn from(value: Boost) -> Self {
+        value.0
+    }
+}
+
+impl PartialEq for Boost {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.total_cmp(&other.0) == Ordering::Equal
+    }
+}
+
+impl Eq for Boost {}
+
+impl Hash for Boost {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.to_bits().hash(state);
+    }
+}
+
+impl Ord for Boost {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.total_cmp(&other.0)
+    }
+}
+
+impl PartialOrd for Boost {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -1128,6 +1222,84 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&module).expect("serialize"),
             r#"{"name":"catalogue","services":[{"name":"LoanService"}],"designs":[{"class":"Money","stereotype":"value"}]}"#
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Boost: the ordered float newtype (wire contract rule 14)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn boost_serializes_as_the_bare_f32_and_round_trips() {
+        for value in [2.5f32, 1.0, 0.1, 3.402_823_5e38, -0.0] {
+            let json = serde_json::to_string(&Boost::new(value)).expect("serialize");
+            assert_eq!(
+                json,
+                serde_json::to_string(&value).expect("plain f32"),
+                "transparent layout: {json}"
+            );
+            let back: Boost = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(back, Boost::new(value));
+            assert_eq!(back.value(), value);
+        }
+    }
+
+    #[test]
+    fn boost_equality_is_bit_pattern_equality() {
+        // Reflexive even for NaN; a NaN equals only its own bit pattern.
+        assert_eq!(Boost::new(f32::NAN), Boost::new(f32::NAN));
+        assert_ne!(
+            Boost::new(f32::NAN),
+            Boost::new(f32::from_bits(f32::NAN.to_bits() + 1))
+        );
+        assert_eq!(Boost::new(2.5), Boost::new(2.5));
+        assert_ne!(Boost::new(2.5), Boost::new(2.75));
+        // Intended: -0.0 is its own value, distinct from 0.0.
+        assert_ne!(Boost::new(-0.0), Boost::new(0.0));
+    }
+
+    #[test]
+    fn boost_hash_is_consistent_with_equality() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        fn hash_of(value: f32) -> u64 {
+            let mut hasher = DefaultHasher::new();
+            Boost::new(value).hash(&mut hasher);
+            hasher.finish()
+        }
+        assert_eq!(hash_of(2.5), hash_of(2.5));
+        assert_ne!(hash_of(-0.0), hash_of(0.0));
+        assert_ne!(
+            hash_of(f32::NAN),
+            hash_of(f32::from_bits(f32::NAN.to_bits() + 1))
+        );
+    }
+
+    #[test]
+    fn boost_orders_like_total_cmp() {
+        let mut values = [
+            Boost::new(2.5),
+            Boost::new(f32::NAN),
+            Boost::new(0.0),
+            Boost::new(f32::NEG_INFINITY),
+            Boost::new(-0.0),
+            Boost::new(f32::INFINITY),
+            Boost::new(-1.0),
+        ];
+        values.sort();
+        // Bit patterns, because -0.0 == 0.0 under plain f32 equality.
+        let bits: Vec<u32> = values.iter().map(|boost| boost.value().to_bits()).collect();
+        assert_eq!(
+            bits,
+            vec![
+                f32::NEG_INFINITY.to_bits(),
+                (-1.0f32).to_bits(),
+                (-0.0f32).to_bits(),
+                0.0f32.to_bits(),
+                2.5f32.to_bits(),
+                f32::INFINITY.to_bits(),
+                f32::NAN.to_bits(),
+            ]
         );
     }
 }

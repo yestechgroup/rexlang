@@ -500,7 +500,7 @@ fn is_identifier(text: &str) -> bool {
 pub(crate) fn collect_schema_imports(
     file_path: &str,
     ast: &mox::Model,
-    provided: Option<&crate::SchemaImports>,
+    provided: &crate::SchemaImports,
     declared: &HashMap<String, TopKind>,
     diags: &mut Vec<Diagnostic>,
 ) -> Vec<SchemaImport> {
@@ -571,7 +571,7 @@ pub(crate) fn collect_schema_imports(
             );
             continue;
         }
-        match provided.and_then(|schema| schema.get(file_path, &decl.path)) {
+        match provided.get(file_path, &decl.path) {
             None => {
                 diags.push(
                     Diagnostic::error(
@@ -928,8 +928,7 @@ pub(crate) type MultiOutcome = (
 /// each file's diagnostics contiguous and in input order.
 pub(crate) fn compile_multi(
     files: &[MultiFile<'_>],
-    schema_imports: Option<&crate::SchemaImports>,
-    sigil_imports: Option<&crate::SigilImports>,
+    imports: &crate::DomainImports,
 ) -> MultiOutcome {
     // Per-file diagnostic buckets keep each file's diagnostics contiguous;
     // the cross-file passes append their (already tagged) diagnostics after.
@@ -1003,12 +1002,17 @@ pub(crate) fn compile_multi(
         }
         // Validate and register the file's `import schema` declarations:
         // each joins the namespace as a nominal class (alias or file stem).
-        let imports =
-            collect_schema_imports(file.path, ast, schema_imports, &kinds, &mut buckets[index]);
-        for import in &imports {
+        let file_schemas = collect_schema_imports(
+            file.path,
+            ast,
+            &imports.schemas,
+            &kinds,
+            &mut buckets[index],
+        );
+        for import in &file_schemas {
             kinds.insert(import.name.clone(), TopKind::Class);
         }
-        file_imports[index] = imports;
+        file_imports[index] = file_schemas;
         file_package[index] = Some(packages.len());
         packages.push(DomainPackage { name, kinds });
     }
@@ -1027,7 +1031,7 @@ pub(crate) fn compile_multi(
         .iter()
         .map(|(name, path)| (name.as_str(), *path))
         .collect();
-    let sigil = crate::sigil::compile_sigil_imports(&sigil_files, &declared_refs, sigil_imports);
+    let sigil = crate::sigil::compile_sigil_imports(&sigil_files, &declared_refs, &imports.sigil);
     packages.extend(sigil.namespaces);
 
     // Qualified constraint prep maps across all files, so enum closure
@@ -1246,7 +1250,11 @@ pub(crate) fn compile_multi(
         diags.extend(buckets[index].drain(..).map(|d| (file.path.to_string(), d)));
     }
     diags.extend(tagged);
-    let sigil_diagnostics = sigil.diagnostics;
+    let sigil_diagnostics: Vec<(String, Diagnostic)> = sigil
+        .diagnostics
+        .into_iter()
+        .map(|(origin, diagnostic)| (origin.tag().to_string(), diagnostic))
+        .collect();
     let blocked = diags.iter().any(|(_, diagnostic)| diagnostic.is_error())
         || sigil_diagnostics
             .iter()
@@ -1258,16 +1266,15 @@ pub(crate) fn compile_multi(
 /// The per-file outcome of [`compile_union_per_file`].
 pub(crate) struct PerFileCompilation {
     /// The file's own package — plus, on the first file declaring an
-    /// `import sigil`, the compilation's synthetic sigil packages — or
-    /// `None` when any error-severity diagnostic was produced for this
-    /// file.
+    /// `import sigil`, the outcome's synthetic packages — or `None` when
+    /// any error-severity diagnostic was produced for this file or one of
+    /// its sigil dependencies failed.
     pub model: Option<ir::Model>,
     /// All diagnostics for this file, untagged (the caller knows the file).
     pub diagnostics: Vec<Diagnostic>,
-    /// Sigil parse/resolution/lowering diagnostics, each tagged with its
-    /// rosetta key path (rendered against the retained rosetta texts, not
-    /// the domain's). Collected on the first sigil-declaring file; their
-    /// errors block every sigil-declaring file's model.
+    /// Sigil content diagnostics, each tagged with its rosetta key path
+    /// (rendered against the retained rosetta texts, not the domain's).
+    /// Collected on the first sigil-declaring file.
     pub sigil_diagnostics: Vec<(String, Diagnostic)>,
 }
 
@@ -1286,19 +1293,21 @@ pub(crate) struct PerFileCompilation {
 /// Unlike [`compile_multi`] there is deliberately no all-or-nothing model:
 /// callers assemble what they need from the per-file results.
 ///
-/// `import schema` declarations resolve through `schema_imports`; `import
-/// sigil` declarations resolve through `sigil_imports`. A declaration
+/// `import schema` declarations resolve through `imports.schemas`; `import
+/// sigil` declarations resolve through `imports.sigil`. A declaration
 /// without a provider entry errors on the declaring file (which blocks its
-/// model). Sigil content errors are keyed by rosetta path: they collect in
+/// model). Sigil blocking is per namespace: a namespace whose rosetta
+/// content produced errors drops its synthetic package, and a file loses
+/// its model only when one of its own imports failed outright (the rosetta
+/// file failed to parse) or targets a failed namespace — a file whose
+/// imports all succeeded keeps its model even when other namespaces failed.
+/// Content diagnostics are keyed by rosetta path: they collect in
 /// [`PerFileCompilation::sigil_diagnostics`] on the first sigil-declaring
-/// file and block every sigil-declaring file's model, while the synthetic
-/// packages join the compilation only when the sigil content lowered
-/// cleanly — carried by the first declaring file's model (the same
-/// first-declared ownership the package declarations follow).
+/// file, whose model carries the synthetic packages (the same first-declared
+/// ownership the package declarations follow).
 pub(crate) fn compile_union_per_file(
     files: &[MultiFile<'_>],
-    schema_imports: Option<&crate::SchemaImports>,
-    sigil_imports: Option<&crate::SigilImports>,
+    imports: &crate::DomainImports,
 ) -> Vec<PerFileCompilation> {
     // Per-file diagnostic buckets keep each file's diagnostics in its own
     // result; cross-file passes route their (already tagged) diagnostics to
@@ -1371,21 +1380,27 @@ pub(crate) fn compile_union_per_file(
         }
         // Validate and register the file's `import schema` declarations:
         // each joins the namespace as a nominal class (alias or file stem).
-        let imports =
-            collect_schema_imports(file.path, ast, schema_imports, &kinds, &mut buckets[index]);
-        for import in &imports {
+        let file_schemas = collect_schema_imports(
+            file.path,
+            ast,
+            &imports.schemas,
+            &kinds,
+            &mut buckets[index],
+        );
+        for import in &file_schemas {
             kinds.insert(import.name.clone(), TopKind::Class);
         }
-        file_imports[index] = imports;
+        file_imports[index] = file_schemas;
         file_package[index] = Some(packages.len());
         packages.push(DomainPackage { name, kinds });
     }
 
-    // Sigil imports lower into synthetic packages shared by the whole
-    // compilation. Import-level errors (a declaration without a provider
-    // entry) carry the declaring file's path: they route to its bucket and
-    // block its model. Content errors (rosetta-keyed) collect for the
-    // caller and block every sigil-declaring file.
+    // Sigil imports lower into a structured outcome that carries everything
+    // the assembly below needs. Import-level diagnostics route to their
+    // declaring file's bucket (where the severity blocks that file's model);
+    // content diagnostics stay rosetta-keyed; the successful namespaces join
+    // the union resolution namespace; and per-file blocking asks the outcome
+    // which files depend on failed content.
     let union_sigil_files: Vec<(&str, &mox::Model)> = files
         .iter()
         .enumerate()
@@ -1400,28 +1415,34 @@ pub(crate) fn compile_union_per_file(
         .iter()
         .map(|(name, kind)| (name.as_str(), kind.as_str()))
         .collect();
-    let union_sigil = crate::sigil::compile_sigil_imports(
+    let mut outcome = crate::sigil::compile_sigil_imports(
         &union_sigil_files,
         &union_declared_refs,
-        sigil_imports,
+        &imports.sigil,
     );
     let mut union_sigil_diagnostics: Vec<(String, Diagnostic)> = Vec::new();
-    let mut union_sigil_failed = false;
-    for (tag, diagnostic) in union_sigil.diagnostics {
-        if let Some(index) = files.iter().position(|file| file.path == tag) {
-            buckets[index].push(diagnostic);
-        } else {
-            union_sigil_failed |= diagnostic.is_error();
-            union_sigil_diagnostics.push((tag, diagnostic));
+    for (origin, diagnostic) in std::mem::take(&mut outcome.diagnostics) {
+        match origin {
+            crate::sigil::DiagnosticOrigin::DeclaringFile { path } => {
+                // The declaring path is always one of the compilation's
+                // files; the fallback keeps the diagnostic visible if a
+                // future origin ever is not.
+                match files.iter().position(|file| file.path == path) {
+                    Some(index) => buckets[index].push(diagnostic),
+                    None => union_sigil_diagnostics.push((path, diagnostic)),
+                }
+            }
+            crate::sigil::DiagnosticOrigin::Content { path } => {
+                union_sigil_diagnostics.push((path, diagnostic))
+            }
         }
     }
-    let union_sigil_owner = union_sigil_files.first().map(|(path, _)| *path);
-    if !union_sigil_failed {
-        // The synthetic namespaces join the union resolution namespace so
-        // every file's declarations (and the actor/ddd pipelines' own
-        // resolution passes) see the imported types.
-        packages.extend(union_sigil.namespaces);
-    }
+    // The successfully lowered namespaces join the union resolution
+    // namespace so every file's declarations (and the actor/ddd pipelines'
+    // own resolution passes) see the imported types. Failed namespaces stay
+    // out: a reference into one errors on the referencing file, whose model
+    // the dependency-based blocking below drops anyway.
+    packages.extend(std::mem::take(&mut outcome.namespaces));
 
     // Qualified constraint prep maps across all files, so enum closure
     // checks and vocabulary key-facet family checks work for cross-package
@@ -1659,20 +1680,20 @@ pub(crate) fn compile_union_per_file(
     }
 
     // Assemble one single-package model per file, dropped when that file
-    // produced any error. The first sigil-declaring file additionally
-    // carries the synthetic packages, and every sigil-declaring file drops
-    // its model when the sigil content failed.
-    let union_sigil_owner_index =
-        union_sigil_owner.and_then(|owner| files.iter().position(|file| file.path == owner));
+    // produced any error or its own sigil dependencies failed (an import
+    // whose rosetta file failed to parse, or whose namespace failed). The
+    // first sigil-declaring file additionally carries the synthetic
+    // packages the outcome owns.
+    let union_sigil_owner_index = outcome
+        .owner
+        .as_ref()
+        .and_then(|owner| files.iter().position(|file| file.path == *owner));
     files
         .iter()
         .enumerate()
         .map(|(index, _file)| {
             let blocked = buckets[index].iter().any(Diagnostic::is_error)
-                || (union_sigil_failed
-                    && union_sigil_files
-                        .iter()
-                        .any(|(path, _)| *path == files[index].path));
+                || outcome.blocks(files[index].path);
             let model = (!blocked).then(|| {
                 let package_index = file_package[index].expect("lowered files declare a package");
                 let package_name = packages[package_index].name.clone();
@@ -1684,7 +1705,7 @@ pub(crate) fn compile_union_per_file(
                 let mut model = ir::Model::new();
                 model.packages.push(package);
                 if Some(index) == union_sigil_owner_index {
-                    model.packages.extend(union_sigil.packages.iter().cloned());
+                    model.packages.extend(outcome.packages.iter().cloned());
                 }
                 model
             });
@@ -1723,8 +1744,7 @@ pub(crate) fn compile(
     path: &str,
     source: &str,
     model: &mox::Model,
-    schema_imports: Option<&crate::SchemaImports>,
-    sigil_imports: Option<&crate::SigilImports>,
+    imports: &crate::DomainImports,
 ) -> (
     Option<ir::Model>,
     Vec<Diagnostic>,
@@ -1782,8 +1802,8 @@ pub(crate) fn compile(
 
     // Validate and register the file's `import schema` declarations: each
     // joins the namespace as a nominal class (alias or file stem).
-    let imports = collect_schema_imports(path, model, schema_imports, &kinds, &mut diags);
-    for import in &imports {
+    let imported = collect_schema_imports(path, model, &imports.schemas, &kinds, &mut diags);
+    for import in &imported {
         kinds.insert(import.name.clone(), TopKind::Class);
     }
 
@@ -1794,7 +1814,7 @@ pub(crate) fn compile(
     let sigil = crate::sigil::compile_sigil_imports(
         &[(path, model)],
         &[(package.as_str(), path)],
-        sigil_imports,
+        &imports.sigil,
     );
 
     // Lower vocabulary declarations first (in source order): their entry
@@ -1919,7 +1939,7 @@ pub(crate) fn compile(
     }
     // Imported schemas join their package as nominal classes, after the
     // declared ones, in import-declaration order.
-    for import in &imports {
+    for import in &imported {
         out.classes.push(import_class_def(import));
     }
     for record in actors {
@@ -1952,7 +1972,11 @@ pub(crate) fn compile(
             .iter()
             .any(|(_, diagnostic)| diagnostic.is_error());
     let model = (!blocked).then_some(model);
-    let sigil_diagnostics = sigil.diagnostics;
+    let sigil_diagnostics: Vec<(String, Diagnostic)> = sigil
+        .diagnostics
+        .into_iter()
+        .map(|(origin, diagnostic)| (origin.tag().to_string(), diagnostic))
+        .collect();
     (model, diags, sigil_diagnostics)
 }
 
@@ -4409,93 +4433,68 @@ fn validate_actor_delegations_union(
     }
 }
 
-/// One imported domain model handed to [`compile_actor_file`]: its lowered
-/// model (when error-free), its AST, and its own diagnostics.
-pub(crate) struct DomainUnit<'a> {
+/// One imported domain model handed to [`compile_actor_file`] and
+/// [`crate::ddd::compile_ddd_file`]: its lowered model (when error-free),
+/// its AST, and its own diagnostics.
+pub(crate) struct DomainUnit {
     /// The path the actor file's import named (and the file was provided
     /// under); tags the unit's diagnostics and spans.
-    pub path: &'a str,
+    pub path: String,
     /// The domain's full source text (condition and body slicing).
-    pub source: &'a str,
+    pub source: String,
     /// The lowered domain model, `None` when the domain has errors (its
     /// blocks then stay out of the union).
     pub model: Option<ir::Model>,
     /// The domain's parsed AST.
-    pub ast: Option<&'a mox::Model>,
+    pub ast: Option<mox::Model>,
     /// The domain's own compile diagnostics (tagged with `path` here).
-    pub diagnostics: &'a [Diagnostic],
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 /// Builds the combined type namespace of the error-free domains (in
-/// first-appearance order): each domain's declared top-level types plus its
-/// `import schema` nominal classes. This is the shared namespace the
-/// `.actor` and `.ddd` pipelines resolve their references against.
-pub(crate) fn domain_namespaces(domains: &[DomainUnit<'_>]) -> Vec<DomainPackage> {
+/// first-appearance order): each domain's lowered model is the single
+/// source of truth — its declared top-level types, its `import schema`
+/// nominal classes, and the synthetic sigil packages it carries are all
+/// already lowered into it. This is the shared namespace the `.actor` and
+/// `.ddd` pipelines resolve their references against. A domain that failed
+/// to lower (its model is absent) contributes no namespaces.
+pub(crate) fn domain_namespaces(domains: &[DomainUnit]) -> Vec<DomainPackage> {
     domains
         .iter()
         .filter_map(|unit| {
             let model = unit.model.as_ref()?;
-            let ast = unit.ast?;
-            let mut kinds: HashMap<String, TopKind> = HashMap::new();
-            for decl in &ast.declarations {
-                let kind = match decl {
-                    mox::Decl::Class(_) => TopKind::Class,
-                    mox::Decl::Interface(_) => TopKind::Interface,
-                    mox::Decl::Enum(_) => TopKind::Enum,
-                    mox::Decl::Datatype(_) => TopKind::Datatype,
-                    mox::Decl::Vocabulary(_) => TopKind::Vocabulary,
-                    mox::Decl::Actors(_) => TopKind::Actors,
-                    mox::Decl::Annotation(_) => continue,
-                    // `import schema` joins the namespace as a nominal
-                    // class; `import sigil` content arrives through the
-                    // model's synthetic packages below.
-                    mox::Decl::ImportSchema(decl) if decl.kind == mox::ImportKind::Schema => {
-                        kinds.entry(imported_name(decl)).or_insert(TopKind::Class);
-                        continue;
-                    }
-                    mox::Decl::ImportSchema(_) => continue,
-                };
-                let name = decl
-                    .name()
-                    .map(|name| name.text.clone())
-                    .unwrap_or_default();
-                kinds.entry(name).or_insert(kind);
-            }
-            let own_package = model.packages[0].name.clone();
-            let package = DomainPackage {
-                name: own_package.clone(),
-                kinds,
-            };
-            let mut package_kinds: Vec<(String, HashMap<String, TopKind>)> = Vec::new();
-            // The synthetic sigil packages the unit carries (every model
-            // package beyond the file's own) join the namespace too, so
-            // capability targets and `when`/design resolution see the
-            // imported rosetta types.
-            for synthetic in model.packages.iter().skip(1) {
-                if synthetic.name == package.name {
+            let mut packages_out: Vec<DomainPackage> = Vec::new();
+            for (index, package) in model.packages.iter().enumerate() {
+                // A synthetic package named like the file's own package
+                // stays out (defensive: sigil namespaces colliding with
+                // declared packages error at lowering, so an error-free
+                // model cannot carry one).
+                if index > 0 && package.name == model.packages[0].name {
                     continue;
                 }
                 let mut kinds: HashMap<String, TopKind> = HashMap::new();
-                for class in &synthetic.classes {
+                for class in &package.classes {
                     kinds.insert(class.name.clone(), TopKind::Class);
                 }
-                for interface in &synthetic.interfaces {
+                for interface in &package.interfaces {
                     kinds.insert(interface.name.clone(), TopKind::Interface);
                 }
-                for enum_ in &synthetic.enums {
+                for enum_ in &package.enums {
                     kinds.insert(enum_.name.clone(), TopKind::Enum);
                 }
-                for datatype in &synthetic.datatypes {
+                for datatype in &package.datatypes {
                     kinds.insert(datatype.name.clone(), TopKind::Datatype);
                 }
-                for vocabulary in &synthetic.vocabularies {
+                for vocabulary in &package.vocabularies {
                     kinds.insert(vocabulary.name.clone(), TopKind::Vocabulary);
                 }
-                package_kinds.push((synthetic.name.clone(), kinds));
-            }
-            let mut packages_out = vec![package];
-            for (name, kinds) in package_kinds {
-                packages_out.push(DomainPackage { name, kinds });
+                for actors in &package.actors {
+                    kinds.insert(actors.name.clone(), TopKind::Actors);
+                }
+                packages_out.push(DomainPackage {
+                    name: package.name.clone(),
+                    kinds,
+                });
             }
             Some(packages_out)
         })
@@ -4526,7 +4525,7 @@ pub(crate) fn compile_actor_file(
     actor_source: &str,
     actor_ast: Option<&mox::ActorFile>,
     actor_diagnostics: &[Diagnostic],
-    domains: &[DomainUnit<'_>],
+    domains: &[DomainUnit],
 ) -> (Option<ir::ActorModel>, Vec<(String, Diagnostic)>) {
     let mut diags: Vec<(String, Diagnostic)> = Vec::new();
     for diagnostic in actor_diagnostics {
@@ -4551,8 +4550,8 @@ pub(crate) fn compile_actor_file(
 
     // Domain diagnostics propagate under their own file, in import order.
     for unit in domains {
-        for diagnostic in unit.diagnostics {
-            diags.push((unit.path.to_string(), diagnostic.clone()));
+        for diagnostic in &unit.diagnostics {
+            diags.push((unit.path.clone(), diagnostic.clone()));
         }
     }
 
@@ -4588,10 +4587,10 @@ pub(crate) fn compile_actor_file(
             if unit.model.is_none() {
                 continue;
             }
-            if let Some(ast) = unit.ast {
+            if let Some(ast) = &unit.ast {
                 for decl in &ast.declarations {
                     if let mox::Decl::Actors(decl) = decl {
-                        lower_block(decl, unit.source, unit.path);
+                        lower_block(decl, &unit.source, &unit.path);
                     }
                 }
             }

@@ -78,7 +78,7 @@ fn compile(source: &str, domains: &[(&str, &str)]) -> DddCompilation {
         "design.ddd",
         source,
         &domains,
-        &rex_driver::DomainImports::empty(),
+        &rex_driver::DomainImports::default(),
     )
 }
 
@@ -817,7 +817,7 @@ fn capabilities_must_exist_in_the_actor_model() {
         "design.ddd",
         source,
         &domains,
-        &rex_driver::DomainImports::empty(),
+        &rex_driver::DomainImports::default(),
         &actors_with(&["BorrowBooks"]),
     );
     let diagnostic = single(
@@ -853,7 +853,7 @@ fn declared_capabilities_are_accepted_by_the_actors_variant() {
         "design.ddd",
         source,
         &domains,
-        &rex_driver::DomainImports::empty(),
+        &rex_driver::DomainImports::default(),
         &actors_with(&["Declared"]),
     );
     assert_clean(&compilation);
@@ -875,7 +875,7 @@ fn capabilities_against_an_empty_actor_model_list_nothing() {
         "design.ddd",
         source,
         &domains,
-        &rex_driver::DomainImports::empty(),
+        &rex_driver::DomainImports::default(),
         &ActorModel::new(),
     );
     let diagnostic = single(&compilation, "unknown capability 'Anything'");
@@ -1057,7 +1057,7 @@ fn search_lowers_with_all_members() {
     assert_eq!(search.entity, "Movie");
     assert_eq!(search.text.len(), 2);
     assert_eq!(search.text[0].property, "title");
-    assert_eq!(search.text[0].boost, Some(3.0));
+    assert_eq!(search.text[0].boost, Some(3.0.into()));
     assert_eq!(search.text[1].analyzer.as_deref(), Some("english"));
     assert_eq!(search.filters[0].property, "genre");
     assert_eq!(search.sort[0].property, "synopsis");
@@ -1458,7 +1458,7 @@ fn search_capabilities_validate_against_the_actor_model() {
         "design.ddd",
         source,
         &[("search.mox".to_string(), SEARCH_DOMAIN.to_string())],
-        &rex_driver::DomainImports::empty(),
+        &rex_driver::DomainImports::default(),
         &actors_with(&["SearchMovies"]),
     );
     assert_clean(&compilation);
@@ -1468,7 +1468,7 @@ fn search_capabilities_validate_against_the_actor_model() {
         "design.ddd",
         source,
         &[("search.mox".to_string(), SEARCH_DOMAIN.to_string())],
-        &rex_driver::DomainImports::empty(),
+        &rex_driver::DomainImports::default(),
         &actors,
     );
     single(

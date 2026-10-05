@@ -5,6 +5,17 @@ resolved **Core IR** artifact, from which backends generate Rust models, JSON
 Schemas, and canonical instance JSON. This document is the normative language
 reference; crate docs cover implementation.
 
+**Grammar authority.** The normative EBNF for every rexlang surface lives
+exactly once, in the parser module docs
+(`crates/rex-syntax/src/parser.rs`, rendered as
+[`rex_syntax::parser`](https://docs.rs/rex-syntax/latest/rex_syntax/parser/) —
+sections: *`.mox` model sources*, *the shared `actors_block`*, *`.actor`
+policy files*, *`.ddd` design sources*). The sections below link to it
+instead of restating the grammar; when this page and the parser disagree,
+the parser wins. The `.ifml` surface's authority is its Pest grammar file
+(`crates/rex-ifml/src/grammar/ifml.pest`, see [docs/IFML.md](IFML.md)); the
+expression language is normative in [`docs/EXPRESSIONS.md`](EXPRESSIONS.md).
+
 [Eclipse Xcore]: https://eclipse.dev/Xtext/documentation/305_xbase.html
 
 ## Lexical rules
@@ -14,41 +25,36 @@ reference; crate docs cover implementation.
 - **Doc comments**: `///` line comments and `/** ... */` block comments on
   their own lines directly above the `package` declaration, a declaration,
   feature, or enum literal become that element's **description**. Contiguous
-  `///` lines join into one description; a blank line or an intervening
+  `///` lines join into one description separated by newlines (markdown
+  source stays line-shaped); a blank line or an intervening
   non-doc comment detaches the run. Descriptions are carried in the IR and
   surface as `description` keywords in generated JSON Schema and as doc
   comments in generated code (the package description is carried in the IR
-  only).
+  only). The `.ddd` surface joins doc runs identically (see `docs/DDD.md`).
 - **Strings**: double-quoted with `\"` and `\\` escapes.
 - **Integers**: decimal, optional leading `-`.
 - **Identifiers**: `[A-Za-z_][A-Za-z0-9_]*`. Any keyword can be escaped with a
   leading `^` (`^class` is an identifier).
 - **Keywords**: `package annotation as class extends interface enum type wraps
-  opaque contains refers container opposite op derived vocabulary from version
-- **Keywords**: `package annotation as class extends interface enum type wraps
-  opaque contains refers container opposite op derived vocabulary from version
-  key facet actors actor agent capability grant permit forbid when obligation
-  on never_both delegation purpose cedar import`. Contextual words usable as
-  plain identifiers: `id readonly get set String int ... date` — among them
-  `schema`, which is special only directly after an `import` keyword of a
-  `.mox` file (see [Importing JSON Schema types](#importing-json-schema-types)),
+  opaque contains refers container opposite op derived true false vocabulary
+  from version key facet actors actor agent capability grant permit forbid
+  when obligation on never_both delegation purpose cedar import`. Contextual
+  words usable as plain identifiers: `id readonly get set String int ... date`
+  — among them `schema`, which is special only directly after an `import`
+  keyword of a `.mox` file (see
+  [Importing JSON Schema types](#importing-json-schema-types)),
   and `sigil`, special in the same position (see
   [Importing Rune models](#importing-rune-models)), and `to`, which is
   special only on a delegation's `to` line.
 
 ## Model structure
 
-A file holds one package and any number of declarations:
-
-```
-model        := package_decl (annotation_decl | import_decl | class_decl | interface_decl
-              | enum_decl | type_decl | vocabulary_decl | actors_decl)*
-package_decl := doc? "package" qualified_name
-annotation_decl := "annotation" string ("as" name)?
-import_decl  := import_schema_decl | import_sigil_decl
-import_schema_decl := "import" "schema" string ("as" name)?
-import_sigil_decl := "import" "sigil" string
-```
+A file holds one package and any number of declarations. The full EBNF —
+`model`, `package_decl`, `annotation_decl`, `import_schema_decl`,
+`import_sigil_decl`, and every declaration form below — lives in the parser
+module docs under [*`.mox` model
+sources*](https://docs.rs/rex-syntax/latest/rex_syntax/parser/index.html);
+the sections that follow keep the language-level rules.
 
 `doc` marks the optional doc-comment run described under Lexical rules; it
 becomes the package's `description` in the Core IR.
@@ -64,7 +70,8 @@ bodies.
 ### Inline actors blocks
 
 A `.mox` model may declare `actors` blocks alongside its classes, enums, and
-vocabularies — the `actors_block` grammar is identical to the one in
+vocabularies — the block grammar is the shared `actors_block` production of
+the parser module docs, identical to the one in
 [.actor files](#actor-policy-files-actor) (`actor`/`agent` with `extends`,
 `capability <name> on <type_ref>`, `purpose`, `grant` with `permit`/`forbid`
 entries, `when` conditions, obligations, `cedar` bodies, `delegation`,
@@ -130,11 +137,9 @@ and cross-package opposites are errors.
 
 ### Importing JSON Schema types
 
-A `.mox` package can import JSON Schema types into its namespace:
-
-```
-import_schema_decl := "import" "schema" string ("as" name)?
-```
+A `.mox` package can import JSON Schema types into its namespace — the
+`import_schema_decl` production of the grammar authority
+(`import schema "<path>" (as <name>)?`):
 
 ```mox
 package nz.example.todos
@@ -196,11 +201,8 @@ one per line, no blank lines between them (the `.actor` import rule).
 ### Importing Rune models
 
 A `.mox` package can import a Rune DSL (`.rosetta`) file, whose namespaces
-lower into synthetic rexlang packages:
-
-```
-import_sigil_decl := "import" "sigil" string
-```
+lower into synthetic rexlang packages — the `import_sigil_decl` production
+of the grammar authority (`import sigil "<path>"`, no alias):
 
 ```mox
 package nz.example.trading
@@ -275,37 +277,24 @@ missing file is a clean CLI error naming the resolved path).
 arrives as text. Embedded callers (tests, language servers) pass content
 through `rex_driver::SigilImports`, keyed by the *(mox file path, import
 path)* pair exactly as named — additional entries for the same mox path
-are the candidate files described above. `compile_str` and `compile_files`
-provide nothing, so a model with `import sigil` declarations compiled
-through them errors with ``imported sigil '<path>' was not provided``;
-use `compile_str_with_imports`/`compile_files_with_imports`. The
-`.actor`/`.ddd` entry points take both maps as one
-`rex_driver::DomainImports` bundle (the `.actor`/`.ddd` file's domains'
-import content is keyed by each domain's path).
+are the candidate files described above. Every compile entry point takes
+one `rex_driver::DomainImports` bundle holding the `SchemaImports` and
+`SigilImports` maps; the empty `DomainImports::default()` provides
+nothing, so a model with `import sigil` declarations compiled through it
+errors with ``imported sigil '<path>' was not provided``. (For the
+`.actor`/`.ddd` entry points the bundle carries the `.actor`/`.ddd`
+file's domains' import content, keyed by each domain's path.)
 
 `rexlang fmt` canonicalizes both import kinds into a section directly
 after the `package` declaration, before every other declaration.
 
 ### Classes and features
 
-```
-class_decl  := "class" name ("extends" type_ref ("," type_ref)*)? "{" feature* "}"
-feature     := modifier* ( attribute | containment | reference | container
-                         | op_decl | derived_decl )
-modifier    := "id" | "readonly"
-attribute   := type_ref multiplicity? name ("=" default)? constraint_block?
-containment := "contains" type_ref multiplicity? name ("opposite" name)?
-reference   := "refers" type_ref multiplicity? name ("opposite" name)?
-container   := "container" type_ref name ("opposite" name)?
-op_decl     := "op" type_ref name "(" params? ")" op_body?
-derived_decl:= "derived" type_ref multiplicity? name op_body?
-op_body     := "{" target_body+ "}" | "{" raw "}"
-target_body := name "{" raw "}"
-multiplicity:= "[" (int (".." (int | "*"))?)? "]"
-constraint_block := "{" (constraint_keyword (string | int)?)* "}"
-constraint_keyword := "pattern" | "minLength" | "maxLength" | "minimum"
-                    | "maximum" | "unique"
-```
+The declaration forms — `class_decl` and the six feature kinds with their
+modifiers, multiplicities, defaults, op bodies, and constraint blocks — are
+normative in the parser module docs under [*`.mox` model
+sources*](https://docs.rs/rex-syntax/latest/rex_syntax/parser/index.html);
+what follows is what they mean.
 
 - **`contains`** — by-value ownership (Ecore containment). The child's
   container back-pointer is its `opposite`.
@@ -384,23 +373,21 @@ queries take dates as parameters or attributes. The date facet type
 
 ### Enums, datatypes, interfaces, vocabularies
 
-```
-enum_decl    := "enum" name "{" literal+ "}"
-literal      := name ("as" string)? ("=" int)?
-type_decl    := "type" name "wraps" ("opaque" | qualified_name)? datatype_block?
-datatype_block := "{" ( name string | "format" string )* "}"
-binding_block:= "{" (name string)* "}"
-interface_decl := "interface" name "{" (name string)* "}"
-vocabulary_decl := "vocabulary" name "from" string "{" ( version "string"
-                 | key name | facet type_ref name )* "}"
-```
+The declaration forms — `enum_decl` (with literals), `type_decl` (with the
+datatype block's bindings, `format` entry, and `create`/`convert` bodies),
+`interface_decl`, and `vocabulary_decl` — are normative in the parser module
+docs under [*`.mox` model
+sources*](https://docs.rs/rex-syntax/latest/rex_syntax/parser/index.html).
 
 - **Enums** carry integer values (required) and optional labels: `Mystery as
   "M" = 0`. Backends emit real enums; canonical JSON uses the literal name.
 - **Datatypes** wrap platform types opaquely: `type Date wraps opaque { rust
   "chrono::NaiveDate" ... }`. Bindings are per-target hints, never generated
-  dependencies. A datatype may also declare one **`format`** hint:
-  `type Email wraps String { format "email" }`. `format` is a reserved key
+  dependencies. The block may also declare at most one `create` and one
+  `convert` entry — target-tagged raw bodies of the same shape as `op`
+  bodies, carried on the IR's `DatatypeDef` next to the bindings. A datatype
+  may also declare one **`format`**
+  hint: `type Email wraps String { format "email" }`. `format` is a reserved key
   inside the datatype block: the unescaped key declares the format (never a
   target binding), at most once, and a binding target literally named
   `format` (only writable escaped, `^format "…"`) is an error. The hint
@@ -418,20 +405,11 @@ vocabulary_decl := "vocabulary" name "from" string "{" ( version "string"
 
 Actor policy surfaces can also live in standalone `.actor` files, compiled
 separately from the domain and emitted as their own ActorModel artifact for
-the Cedar backend:
-
-```
-actor_file  := import_decl* actors_block+
-import_decl := "import" string
-actors_block:= "actors" name "{" (actor_decl | agent_decl)* capability*
-                purpose_decl* grant* delegation* never_both* "}"
-actor_decl  := "actor" name ("extends" name)?
-agent_decl  := "agent" name ("extends" name)?
-purpose_decl := "purpose" name
-delegation  := "delegation" name "{" "from" name "to" name
-                purpose_decl? delegation_entry* "}"
-delegation_entry := ("permit" | "forbid") name ("when" expr)? obligation*
-```
+the Cedar backend. The file grammar (`actor_file`, `import_decl`) and the
+shared `actors_block` production it consists of are normative in the parser
+module docs under [*`.actor` policy
+files*](https://docs.rs/rex-syntax/latest/rex_syntax/parser/index.html);
+what follows is what it means.
 
 The `actors` block grammar is identical to the inline `actors` block of a
 `.mox` model. Import paths are resolved **relative to the `.actor` file's

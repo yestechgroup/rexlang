@@ -7,7 +7,7 @@
 //! Additional entries for the same mox path are candidates; the driver
 //! selects the transitive namespace closure the named file needs.
 
-use rex_driver::{compile_files, compile_files_with_imports, compile_str_with_imports, render};
+use rex_driver::{compile_files, compile_str, render};
 use rex_ir::{FeatureKind, TypeRef};
 
 const MOX: &str = "demo.mox";
@@ -26,6 +26,20 @@ fn trade_rosetta() -> String {
 
 fn sigil_imports() -> rex_driver::SigilImports {
     rex_driver::SigilImports::new().provide(MOX, TRADE, trade_rosetta())
+}
+
+/// Compiles `files` with no schema content and the given sigil content.
+fn compile_with_sigil(
+    files: &[(String, String)],
+    sigil: &rex_driver::SigilImports,
+) -> rex_driver::MultiCompilation {
+    compile_files(
+        files,
+        &rex_driver::DomainImports {
+            schemas: rex_driver::SchemaImports::new(),
+            sigil: sigil.clone(),
+        },
+    )
 }
 
 fn mox_with_sigil() -> String {
@@ -65,11 +79,7 @@ fn compile_clean(compilation: &rex_driver::MultiCompilation) -> &rex_ir::Model {
 
 #[test]
 fn data_lowers_to_a_class_with_cardinalities_and_primitive_references() {
-    let compilation = compile_files_with_imports(
-        &[(MOX.to_string(), mox_with_sigil())],
-        &rex_driver::SchemaImports::new(),
-        &sigil_imports(),
-    );
+    let compilation = compile_with_sigil(&[(MOX.to_string(), mox_with_sigil())], &sigil_imports());
     let model = compile_clean(&compilation);
     assert_eq!(model.packages.len(), 2);
     assert_eq!(model.packages[0].name, "demo");
@@ -122,12 +132,11 @@ fn zero_to_many_and_bounded_cardinalities_map_verbatim() {
         "    items string (0..*)\n",
         "    pair string (2..10)\n"
     );
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_sigil(
         &[(
             MOX.to_string(),
             "package demo\n\nimport sigil \"bag.rosetta\"\n\nclass C { String x }\n".to_string(),
         )],
-        &rex_driver::SchemaImports::new(),
         &rex_driver::SigilImports::new().provide(MOX, "bag.rosetta", rosetta),
     );
     let model = compile_clean(&compilation);
@@ -154,12 +163,11 @@ fn choice_lowers_to_an_interface_and_data_extends_it() {
         "type Isin:\n",
         "    value string (1..1)\n"
     );
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_sigil(
         &[(
             MOX.to_string(),
             "package demo\n\nimport sigil \"choice.rosetta\"\n\nclass C { String x }\n".to_string(),
         )],
-        &rex_driver::SchemaImports::new(),
         &rex_driver::SigilImports::new().provide(MOX, "choice.rosetta", rosetta),
     );
     let model = compile_clean(&compilation);
@@ -206,13 +214,12 @@ fn enumeration_lowers_with_synthesized_values_and_display_labels() {
         "    TRADE displayName \"By trade\" <\"Quoted by trade.\">\n",
         "    COUNTER\n"
     );
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_sigil(
         &[(
             MOX.to_string(),
             "package demo\n\nimport sigil \"quoting.rosetta\"\n\nclass C { String x }\n"
                 .to_string(),
         )],
-        &rex_driver::SchemaImports::new(),
         &rex_driver::SigilImports::new().provide(MOX, "quoting.rosetta", rosetta),
     );
     let model = compile_clean(&compilation);
@@ -248,12 +255,11 @@ fn type_alias_lowers_to_a_datatype_wrapping_the_primitive() {
         "typeAlias CurrencyCode: <\"An ISO currency code.\">\n",
         "    string\n"
     );
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_sigil(
         &[(
             MOX.to_string(),
             "package demo\n\nimport sigil \"alias.rosetta\"\n\nclass C { String x }\n".to_string(),
         )],
-        &rex_driver::SchemaImports::new(),
         &rex_driver::SigilImports::new().provide(MOX, "alias.rosetta", rosetta),
     );
     let model = compile_clean(&compilation);
@@ -277,12 +283,11 @@ fn builtin_primitives_map_to_their_rexlang_counterparts() {
         "    d number (1..1)\n",
         "    e date (1..1)\n"
     );
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_sigil(
         &[(
             MOX.to_string(),
             "package demo\n\nimport sigil \"all.rosetta\"\n\nclass C { String x }\n".to_string(),
         )],
-        &rex_driver::SchemaImports::new(),
         &rex_driver::SigilImports::new().provide(MOX, "all.rosetta", rosetta),
     );
     let model = compile_clean(&compilation);
@@ -315,12 +320,11 @@ fn unmapped_builtins_lower_to_opaque_datatypes_only_when_referenced() {
         "    at time (1..1)\n",
         "    regex pattern (0..1)\n"
     );
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_sigil(
         &[(
             MOX.to_string(),
             "package demo\n\nimport sigil \"moment.rosetta\"\n\nclass C { String x }\n".to_string(),
         )],
-        &rex_driver::SchemaImports::new(),
         &rex_driver::SigilImports::new().provide(MOX, "moment.rosetta", rosetta),
     );
     let model = compile_clean(&compilation);
@@ -354,12 +358,11 @@ fn unmapped_builtins_lower_to_opaque_datatypes_only_when_referenced() {
 #[test]
 fn builtin_namespace_is_absent_when_nothing_from_it_is_referenced() {
     let rosetta = "namespace oracle.pure\n\ntype Plain:\n    x int (1..1)\n";
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_sigil(
         &[(
             MOX.to_string(),
             "package demo\n\nimport sigil \"plain.rosetta\"\n\nclass C { String x }\n".to_string(),
         )],
-        &rex_driver::SchemaImports::new(),
         &rex_driver::SigilImports::new().provide(MOX, "plain.rosetta", rosetta),
     );
     let model = compile_clean(&compilation);
@@ -380,12 +383,11 @@ fn references_to_skipped_kinds_are_clean_errors() {
         "type Holder:\n",
         "    thing Bad (1..1)\n"
     );
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_sigil(
         &[(
             MOX.to_string(),
             "package demo\n\nimport sigil \"rules.rosetta\"\n\nclass C { String x }\n".to_string(),
         )],
-        &rex_driver::SchemaImports::new(),
         &rex_driver::SigilImports::new().provide(MOX, "rules.rosetta", rosetta),
     );
     assert!(
@@ -416,12 +418,11 @@ fn the_same_namespace_across_files_merges_into_one_package() {
     let extra = "namespace oracle.extra\n\ntype Extra:\n    x int (1..1)\n";
     // The named file plus a candidate: the namespace import pulls the
     // candidate in transitively.
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_sigil(
         &[(
             MOX.to_string(),
             "package demo\n\nimport sigil \"first.rosetta\"\n\nclass C { String x }\n".to_string(),
         )],
-        &rex_driver::SchemaImports::new(),
         &rex_driver::SigilImports::new()
             .provide(MOX, "first.rosetta", named)
             .provide(MOX, "extra/extra.rosetta", extra),
@@ -445,12 +446,11 @@ fn the_same_namespace_across_files_merges_into_one_package() {
 fn same_namespace_files_without_imports_still_see_each_other() {
     let named = "namespace oracle.sibling\n\ntype Mine:\n    yours Theirs (1..1)\n";
     let sibling = "namespace oracle.sibling\n\ntype Theirs:\n    x int (1..1)\n";
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_sigil(
         &[(
             MOX.to_string(),
             "package demo\n\nimport sigil \"mine.rosetta\"\n\nclass C { String x }\n".to_string(),
         )],
-        &rex_driver::SchemaImports::new(),
         &rex_driver::SigilImports::new()
             .provide(MOX, "mine.rosetta", named)
             .provide(MOX, "theirs.rosetta", sibling),
@@ -468,12 +468,11 @@ fn same_namespace_files_without_imports_still_see_each_other() {
 fn unselected_candidates_never_leak_into_the_artifact() {
     let named = "namespace oracle.only\n\ntype Only:\n    x int (1..1)\n";
     let unrelated = "namespace oracle.other\n\ntype Other:\n    x int (1..1)\n";
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_sigil(
         &[(
             MOX.to_string(),
             "package demo\n\nimport sigil \"only.rosetta\"\n\nclass C { String x }\n".to_string(),
         )],
-        &rex_driver::SchemaImports::new(),
         &rex_driver::SigilImports::new()
             .provide(MOX, "only.rosetta", named)
             .provide(MOX, "other/other.rosetta", unrelated),
@@ -486,12 +485,11 @@ fn unselected_candidates_never_leak_into_the_artifact() {
 #[test]
 fn namespace_collision_with_a_declared_package_is_an_error_naming_both() {
     let rosetta = "namespace demo\n\ntype Clashing:\n    x int (1..1)\n";
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_sigil(
         &[(
             MOX.to_string(),
             "package demo\n\nimport sigil \"clash.rosetta\"\n\nclass C { String x }\n".to_string(),
         )],
-        &rex_driver::SchemaImports::new(),
         &rex_driver::SigilImports::new().provide(MOX, "clash.rosetta", rosetta),
     );
     assert!(compilation.model.is_none());
@@ -515,13 +513,12 @@ fn namespace_collision_with_a_declared_package_is_an_error_naming_both() {
 
 #[test]
 fn a_sigil_parse_error_surfaces_tagged_with_the_rosetta_path() {
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_sigil(
         &[(
             MOX.to_string(),
             "package demo\n\nimport sigil \"oracle/trade.rosetta\"\n\nclass C { String x }\n"
                 .to_string(),
         )],
-        &rex_driver::SchemaImports::new(),
         &rex_driver::SigilImports::new().provide(
             MOX,
             TRADE,
@@ -546,13 +543,12 @@ fn a_sigil_parse_error_surfaces_tagged_with_the_rosetta_path() {
 
 #[test]
 fn a_sigil_resolution_error_surfaces_tagged_with_the_rosetta_path() {
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_sigil(
         &[(
             MOX.to_string(),
             "package demo\n\nimport sigil \"oracle/trade.rosetta\"\n\nclass C { String x }\n"
                 .to_string(),
         )],
-        &rex_driver::SchemaImports::new(),
         &rex_driver::SigilImports::new().provide(
             MOX,
             TRADE,
@@ -584,12 +580,11 @@ fn an_imported_namespace_no_file_declares_is_an_error() {
         "type Lonely:\n",
         "    other Phantom (1..1)\n"
     );
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_sigil(
         &[(
             MOX.to_string(),
             "package demo\n\nimport sigil \"lonely.rosetta\"\n\nclass C { String x }\n".to_string(),
         )],
-        &rex_driver::SchemaImports::new(),
         &rex_driver::SigilImports::new().provide(MOX, "lonely.rosetta", named),
     );
     assert!(compilation.model.is_none());
@@ -607,12 +602,11 @@ fn an_imported_namespace_no_file_declares_is_an_error() {
 fn unselected_candidates_with_parse_errors_do_not_block_the_model() {
     let named = "namespace oracle.fine\n\ntype Fine:\n    x int (1..1)\n";
     let broken = "namespace oracle.broken\n\ntype Broken:\n    x (1..1)\n";
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_sigil(
         &[(
             MOX.to_string(),
             "package demo\n\nimport sigil \"fine.rosetta\"\n\nclass C { String x }\n".to_string(),
         )],
-        &rex_driver::SchemaImports::new(),
         &rex_driver::SigilImports::new()
             .provide(MOX, "fine.rosetta", named)
             .provide(MOX, "broken/broken.rosetta", broken),
@@ -625,13 +619,12 @@ fn unselected_candidates_with_parse_errors_do_not_block_the_model() {
 
 #[test]
 fn missing_content_is_an_error_with_the_schema_wording() {
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_sigil(
         &[(
             MOX.to_string(),
             "package demo\n\nimport sigil \"oracle/trade.rosetta\"\n\nclass C { String x }\n"
                 .to_string(),
         )],
-        &rex_driver::SchemaImports::new(),
         &rex_driver::SigilImports::new(),
     );
     assert!(compilation.model.is_none());
@@ -652,7 +645,7 @@ fn missing_content_is_an_error_with_the_schema_wording() {
 
 #[test]
 fn content_provided_for_another_file_does_not_satisfy_the_import() {
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_sigil(
         &[
             (MOX.to_string(), mox_with_sigil()),
             (
@@ -660,7 +653,6 @@ fn content_provided_for_another_file_does_not_satisfy_the_import() {
                 "package other\n\nclass Unrelated { String x }\n".to_string(),
             ),
         ],
-        &rex_driver::SchemaImports::new(),
         &rex_driver::SigilImports::new().provide("other.mox", TRADE, trade_rosetta()),
     );
     assert!(
@@ -677,6 +669,7 @@ fn compile_str_and_compile_files_error_without_imports() {
     let compilation = rex_driver::compile_str(
         MOX,
         "package demo\n\nimport sigil \"x.rosetta\"\n\nclass C { String x }\n",
+        &rex_driver::DomainImports::default(),
     );
     assert!(compilation.model.is_none());
     assert!(
@@ -688,10 +681,13 @@ fn compile_str_and_compile_files_error_without_imports() {
         "{:?}",
         compilation.sigil_diagnostics
     );
-    let compilation = compile_files(&[(
-        MOX.to_string(),
-        "package demo\n\nimport sigil \"x.rosetta\"\n\nclass C { String x }\n".to_string(),
-    )]);
+    let compilation = compile_files(
+        &[(
+            MOX.to_string(),
+            "package demo\n\nimport sigil \"x.rosetta\"\n\nclass C { String x }\n".to_string(),
+        )],
+        &rex_driver::DomainImports::default(),
+    );
     assert!(compilation.model.is_none());
     assert!(
         compilation
@@ -717,11 +713,13 @@ fn compile_files_is_unchanged_without_sigil_imports() {
             "package b\n\nclass Shelf { refers a.Book[] links }".to_string(),
         ),
     ];
-    let plain = compile_files(&files);
-    let with = compile_files_with_imports(
+    let plain = compile_files(&files, &rex_driver::DomainImports::default());
+    let with = compile_files(
         &files,
-        &rex_driver::SchemaImports::new(),
-        &rex_driver::SigilImports::new(),
+        &rex_driver::DomainImports {
+            schemas: rex_driver::SchemaImports::new(),
+            sigil: rex_driver::SigilImports::new(),
+        },
     );
     assert_eq!(
         plain
@@ -741,7 +739,7 @@ fn compile_files_is_unchanged_without_sigil_imports() {
 
 #[test]
 fn the_importing_package_resolves_bare_and_qualified_references() {
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_sigil(
         &[(
             MOX.to_string(),
             concat!(
@@ -754,7 +752,6 @@ fn the_importing_package_resolves_bare_and_qualified_references() {
             )
             .to_string(),
         )],
-        &rex_driver::SchemaImports::new(),
         &sigil_imports(),
     );
     let model = compile_clean(&compilation);
@@ -771,7 +768,7 @@ fn the_importing_package_resolves_bare_and_qualified_references() {
 
 #[test]
 fn a_bare_name_collision_with_a_mox_class_is_the_ambiguous_type_error() {
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_sigil(
         &[(
             MOX.to_string(),
             concat!(
@@ -784,7 +781,6 @@ fn a_bare_name_collision_with_a_mox_class_is_the_ambiguous_type_error() {
             )
             .to_string(),
         )],
-        &rex_driver::SchemaImports::new(),
         &sigil_imports(),
     );
     assert!(compilation.model.is_none());
@@ -803,7 +799,7 @@ fn a_bare_name_collision_with_a_mox_class_is_the_ambiguous_type_error() {
 #[test]
 fn cross_package_mox_declarations_resolve_sigil_names_too() {
     let rosetta = "namespace oracle.shared\n\ntype Shared:\n    x int (1..1)\n";
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_sigil(
         &[
             (
                 "a.mox".to_string(),
@@ -815,7 +811,6 @@ fn cross_package_mox_declarations_resolve_sigil_names_too() {
                 "package b\n\nclass Other { refers oracle.shared.Shared s }\n".to_string(),
             ),
         ],
-        &rex_driver::SchemaImports::new(),
         &rex_driver::SigilImports::new().provide("a.mox", "shared.rosetta", rosetta),
     );
     assert!(
@@ -839,7 +834,7 @@ fn namespaces_order_by_first_appearance_across_import_declarations() {
     );
     // `beta` is declared first but its closure pulls `alpha` in; the
     // first-appearance order is by the namespaces the named files declare.
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_sigil(
         &[(
             MOX.to_string(),
             concat!(
@@ -849,7 +844,6 @@ fn namespaces_order_by_first_appearance_across_import_declarations() {
             )
             .to_string(),
         )],
-        &rex_driver::SchemaImports::new(),
         &rex_driver::SigilImports::new()
             .provide(MOX, "beta.rosetta", beta)
             .provide(MOX, "alpha/alpha.rosetta", alpha),
@@ -864,11 +858,13 @@ fn namespaces_order_by_first_appearance_across_import_declarations() {
 
 #[test]
 fn the_single_file_pipeline_switches_to_the_union_scope_with_sigil_namespaces() {
-    let compilation = compile_str_with_imports(
+    let compilation = compile_str(
         MOX,
         &mox_with_sigil(),
-        &rex_driver::SchemaImports::new(),
-        &sigil_imports(),
+        &rex_driver::DomainImports {
+            schemas: rex_driver::SchemaImports::new(),
+            sigil: sigil_imports(),
+        },
     );
     assert!(
         compilation.diagnostics.is_empty() && compilation.sigil_diagnostics.is_empty(),
@@ -911,7 +907,7 @@ fn a_domain_with_a_sigil_import_errors_cleanly_in_the_actor_path() {
         "ops.actor",
         actor,
         &[("demo.mox".to_string(), domain.to_string())],
-        &rex_driver::DomainImports::empty(),
+        &rex_driver::DomainImports::default(),
     );
     assert!(compilation.model.is_none());
     assert!(
@@ -950,8 +946,8 @@ fn actor_pipeline_resolves_sigil_domain_types() {
         &actor_source(),
         &[(MOX.to_string(), mox_with_sigil())],
         &rex_driver::DomainImports {
-            schemas: &rex_driver::SchemaImports::new(),
-            sigil: &sigil_imports(),
+            schemas: rex_driver::SchemaImports::new(),
+            sigil: sigil_imports(),
         },
     );
     assert!(
@@ -1006,8 +1002,8 @@ fn ddd_pipeline_designs_sigil_domain_types() {
         design,
         &[(MOX.to_string(), mox_with_sigil())],
         &rex_driver::DomainImports {
-            schemas: &rex_driver::SchemaImports::new(),
-            sigil: &sigil_imports(),
+            schemas: rex_driver::SchemaImports::new(),
+            sigil: sigil_imports(),
         },
     );
     assert!(
@@ -1033,7 +1029,7 @@ fn missing_sigil_content_blocks_the_actor_domain() {
         "ops.actor",
         &actor_source(),
         &[(MOX.to_string(), mox_with_sigil())],
-        &rex_driver::DomainImports::empty(),
+        &rex_driver::DomainImports::default(),
     );
     assert!(
         compilation
@@ -1048,6 +1044,73 @@ fn missing_sigil_content_blocks_the_actor_domain() {
     );
     assert!(compilation.model.is_none());
     assert!(compilation.domains_model.is_none());
+}
+
+#[test]
+fn actor_pipeline_resolves_declared_schema_and_sigil_names_from_one_domain() {
+    // The model is the single source of the domain's kind registry: one
+    // domain file contributes its declared class (Wrapper), its
+    // `import schema` nominal class (TodoItem), and a synthetic sigil
+    // package (oracle.basic.Trade) — capabilities on all three resolve.
+    let domain = concat!(
+        "package demo\n\n",
+        "import schema \"schemas/todo_item.json\" as TodoItem\n",
+        "import sigil \"oracle/trade.rosetta\"\n\n",
+        "class Wrapper { String x }\n"
+    );
+    let actor = concat!(
+        "import \"demo.mox\"\n\n",
+        "actors Ops {\n",
+        "    actor Agent\n",
+        "    capability TouchWrapper on Wrapper\n",
+        "    capability TouchItem on TodoItem\n",
+        "    capability TouchTrade on Trade\n",
+        "    grant Agent { permit TouchWrapper }\n",
+        "    grant Agent { permit TouchItem }\n",
+        "    grant Agent { permit TouchTrade }\n",
+        "}\n"
+    );
+    let compilation = rex_driver::compile_actors_str(
+        "ops.actor",
+        actor,
+        &[(MOX.to_string(), domain.to_string())],
+        &rex_driver::DomainImports {
+            schemas: rex_driver::SchemaImports::new().provide(
+                MOX,
+                "schemas/todo_item.json",
+                "{\"title\": \"Todo item\"}",
+            ),
+            sigil: sigil_imports(),
+        },
+    );
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        compilation.diagnostics
+    );
+    let model = compilation.model.expect("actor model lowered");
+    let block = &model.blocks[0];
+    assert_eq!(
+        block.capabilities[0].class,
+        TypeRef::Class {
+            package: "demo".to_string(),
+            name: "Wrapper".to_string(),
+        }
+    );
+    assert_eq!(
+        block.capabilities[1].class,
+        TypeRef::Class {
+            package: "demo".to_string(),
+            name: "TodoItem".to_string(),
+        }
+    );
+    assert_eq!(
+        block.capabilities[2].class,
+        TypeRef::Class {
+            package: "oracle.basic".to_string(),
+            name: "Trade".to_string(),
+        }
+    );
 }
 
 #[test]
@@ -1072,8 +1135,8 @@ fn sigil_content_errors_surface_tagged_with_the_rosetta_path() {
         ),
         &[(MOX.to_string(), mox_with_sigil())],
         &rex_driver::DomainImports {
-            schemas: &rex_driver::SchemaImports::new(),
-            sigil: &rex_driver::SigilImports::new().provide(MOX, TRADE, broken),
+            schemas: rex_driver::SchemaImports::new(),
+            sigil: rex_driver::SigilImports::new().provide(MOX, TRADE, broken),
         },
     );
     assert!(
@@ -1086,4 +1149,251 @@ fn sigil_content_errors_surface_tagged_with_the_rosetta_path() {
     );
     assert!(compilation.model.is_none());
     assert!(compilation.domains_model.is_none());
+}
+
+// --- per-namespace blocking -------------------------------------------------------
+
+/// The two-domain actor harness for the blocking tests: `a.mox` and
+/// `b.mox` are compiled through the `.actor` union path, and the actor
+/// file's `capability ... on <target>` must resolve against whatever
+/// domains survived. `target` names the capability's class (a plain alpha
+/// class, or a rosetta class lowered through `a.mox`'s import).
+fn two_domain_actor(
+    target: &str,
+    sigil: &rex_driver::SigilImports,
+) -> rex_driver::ActorCompilation {
+    let domain_a = concat!(
+        "package alpha\n\n",
+        "import sigil \"good.rosetta\"\n\n",
+        "class Wrapper { String x }\n"
+    );
+    let domain_b = concat!(
+        "package beta\n\n",
+        "import sigil \"bad.rosetta\"\n\n",
+        "class Other { String x }\n"
+    );
+    let actor = format!(
+        concat!(
+            "import \"a.mox\"\n",
+            "import \"b.mox\"\n\n",
+            "actors Ops {{\n",
+            "    actor Agent\n",
+            "    capability Touch on {target}\n",
+            "    grant Agent {{ permit Touch }}\n",
+            "}}\n"
+        ),
+        target = target
+    );
+    rex_driver::compile_actors_str(
+        "ops.actor",
+        &actor,
+        &[
+            ("a.mox".to_string(), domain_a.to_string()),
+            ("b.mox".to_string(), domain_b.to_string()),
+        ],
+        &rex_driver::DomainImports {
+            schemas: rex_driver::SchemaImports::new(),
+            sigil: sigil.clone(),
+        },
+    )
+}
+
+fn good_rosetta() -> &'static str {
+    "namespace oracle.good\n\ntype Fine:\n    x int (1..1)\n"
+}
+
+/// The only error must be the failing namespace's, keyed by its rosetta
+/// path: no fallout in the surviving domain (`a.mox`) or the actor file
+/// (`capability on <target>` resolved, so the model survived), and the
+/// declaring domain's own model dropped (the domain union is incomplete).
+fn assert_only_the_rosetta_error_remains(
+    compilation: &rex_driver::ActorCompilation,
+    key: &str,
+    needle: &str,
+) {
+    assert!(
+        compilation.model.is_some(),
+        "the actor artifact depends on nothing that failed: {:?}",
+        compilation.diagnostics
+    );
+    assert!(
+        compilation.domains_model.is_none(),
+        "the declaring domain's model must have dropped"
+    );
+    let errors: Vec<&(String, rex_driver::Diagnostic)> = compilation
+        .diagnostics
+        .iter()
+        .filter(|(_, diagnostic)| diagnostic.is_error())
+        .collect();
+    assert_eq!(errors.len(), 1, "{:?}", compilation.diagnostics);
+    assert_eq!(errors[0].0, key, "keyed by the rosetta path");
+    assert!(
+        errors[0].1.message.contains(needle),
+        "{:?}",
+        errors[0].1.message
+    );
+    assert!(
+        compilation
+            .diagnostics
+            .iter()
+            .all(|(path, _)| path != "a.mox" && path != "ops.actor"),
+        "no fallout in the surviving domain or the actor file: {:?}",
+        compilation.diagnostics
+    );
+}
+
+#[test]
+fn a_failing_rosetta_namespace_blocks_only_its_declaring_file() {
+    // beta's rosetta fails resolution; alpha's namespace lowers cleanly.
+    // The capability targets alpha's own class: alpha's model must have
+    // survived (under the old coarse blocking it dropped too, and the
+    // capability resolution would add a second error).
+    let compilation = two_domain_actor(
+        "Wrapper",
+        &rex_driver::SigilImports::new()
+            .provide("a.mox", "good.rosetta", good_rosetta())
+            .provide(
+                "b.mox",
+                "bad.rosetta",
+                "namespace oracle.bad\n\ntype Broken:\n    who NoSuchType (1..1)\n",
+            ),
+    );
+    assert_only_the_rosetta_error_remains(&compilation, "bad.rosetta", "NoSuchType");
+}
+
+#[test]
+fn the_surviving_domains_synthetic_packages_stay_resolvable() {
+    // As above, but the capability targets the rosetta class itself: the
+    // successful namespace's synthetic package must have joined the union
+    // namespace through the surviving domain's model.
+    let compilation = two_domain_actor(
+        "Fine",
+        &rex_driver::SigilImports::new()
+            .provide("a.mox", "good.rosetta", good_rosetta())
+            .provide(
+                "b.mox",
+                "bad.rosetta",
+                "namespace oracle.bad\n\ntype Broken:\n    who NoSuchType (1..1)\n",
+            ),
+    );
+    assert_only_the_rosetta_error_remains(&compilation, "bad.rosetta", "NoSuchType");
+}
+
+#[test]
+fn an_unparseable_rosetta_file_blocks_only_its_declaring_file() {
+    // A parse failure names no namespace: only beta's model drops.
+    let compilation = two_domain_actor(
+        "Wrapper",
+        &rex_driver::SigilImports::new()
+            .provide("a.mox", "good.rosetta", good_rosetta())
+            .provide(
+                "b.mox",
+                "bad.rosetta",
+                "namespace oracle.bad\n\ntype Broken:\n    who (1..1)\n",
+            ),
+    );
+    assert_only_the_rosetta_error_remains(&compilation, "bad.rosetta", "expected");
+}
+
+#[test]
+fn a_domain_without_sigil_imports_survives_another_domains_sigil_failure() {
+    // alpha declares no sigil import at all; beta's rosetta fails. alpha's
+    // model must survive (the old coarse blocking dropped every domain).
+    let domain_a = "package alpha\n\nclass Wrapper { String x }\n".to_string();
+    let domain_b = concat!(
+        "package beta\n\n",
+        "import sigil \"bad.rosetta\"\n\n",
+        "class Other { String x }\n"
+    )
+    .to_string();
+    let actor = concat!(
+        "import \"a.mox\"\n",
+        "import \"b.mox\"\n\n",
+        "actors Ops {\n",
+        "    actor Agent\n",
+        "    capability Touch on Wrapper\n",
+        "    grant Agent { permit Touch }\n",
+        "}\n"
+    );
+    let compilation = rex_driver::compile_actors_str(
+        "ops.actor",
+        actor,
+        &[
+            ("a.mox".to_string(), domain_a),
+            ("b.mox".to_string(), domain_b),
+        ],
+        &rex_driver::DomainImports {
+            schemas: rex_driver::SchemaImports::new(),
+            sigil: rex_driver::SigilImports::new().provide(
+                "b.mox",
+                "bad.rosetta",
+                "namespace oracle.bad\n\ntype Broken:\n    who NoSuchType (1..1)\n",
+            ),
+        },
+    );
+    assert_only_the_rosetta_error_remains(&compilation, "bad.rosetta", "NoSuchType");
+}
+
+#[test]
+fn references_into_a_failed_namespace_error_on_the_referencing_file() {
+    // The failed namespace's names stay out of the union resolution
+    // namespace: beta's reference to its own (failed) rosetta type errors
+    // on beta, while alpha and the actor file stay clean.
+    let domain_a = concat!(
+        "package alpha\n\n",
+        "import sigil \"good.rosetta\"\n\n",
+        "class Wrapper { String x }\n"
+    )
+    .to_string();
+    let domain_b = concat!(
+        "package beta\n\n",
+        "import sigil \"bad.rosetta\"\n\n",
+        "class Other { refers oracle.bad.Broken x }\n"
+    )
+    .to_string();
+    let actor = concat!(
+        "import \"a.mox\"\n",
+        "import \"b.mox\"\n\n",
+        "actors Ops {\n",
+        "    actor Agent\n",
+        "    capability Touch on Wrapper\n",
+        "    grant Agent { permit Touch }\n",
+        "}\n"
+    );
+    let compilation = rex_driver::compile_actors_str(
+        "ops.actor",
+        actor,
+        &[
+            ("a.mox".to_string(), domain_a),
+            ("b.mox".to_string(), domain_b),
+        ],
+        &rex_driver::DomainImports {
+            schemas: rex_driver::SchemaImports::new(),
+            sigil: rex_driver::SigilImports::new()
+                .provide("a.mox", "good.rosetta", good_rosetta())
+                .provide(
+                    "b.mox",
+                    "bad.rosetta",
+                    "namespace oracle.bad\n\ntype Broken:\n    who NoSuchType (1..1)\n",
+                ),
+        },
+    );
+    assert!(compilation.model.is_none());
+    // beta's own reference error, tagged with its file; the sigil content
+    // error, keyed by the rosetta path; nothing else.
+    assert!(compilation.diagnostics.iter().any(|(path, diagnostic)| {
+        path == "b.mox"
+            && diagnostic.is_error()
+            && diagnostic
+                .message
+                .contains("unknown type 'oracle.bad.Broken'")
+    }));
+    assert!(compilation
+        .diagnostics
+        .iter()
+        .any(|(path, _)| path == "bad.rosetta"));
+    assert!(compilation
+        .diagnostics
+        .iter()
+        .all(|(path, _)| path != "a.mox" && path != "ops.actor"));
 }

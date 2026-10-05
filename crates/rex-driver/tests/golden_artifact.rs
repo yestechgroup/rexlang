@@ -53,7 +53,8 @@ const MODELS: &[(&str, &str)] = &[
 /// The one conformance model with `import schema` declarations. The driver
 /// is filesystem-free, so its harness resolves each import path relative to
 /// the model directory (exactly like the CLI does), reads the sibling JSON
-/// fixture, and passes the content through `compile_str_with_imports`.
+/// fixture, and passes the content through the `DomainImports` bundle on
+/// `compile_str`.
 /// Every other model keeps compiling with plain `compile_str`.
 fn compile_conformance_model(relative_path: &str) -> rex_ir::Model {
     // Absolute path: the driver reads `vocab/` and `model.lock` relative to
@@ -75,7 +76,7 @@ fn compile_conformance_model(relative_path: &str) -> rex_ir::Model {
         .map(|imports| imports.collect::<Vec<_>>())
         .unwrap_or_default();
     if imports.is_empty() {
-        let compilation = compile_str(path, &source);
+        let compilation = compile_str(path, &source, &rex_driver::DomainImports::default());
         assert!(
             compilation.diagnostics.is_empty(),
             "conformance model {relative_path} must compile cleanly: {:?}",
@@ -91,11 +92,13 @@ fn compile_conformance_model(relative_path: &str) -> rex_ir::Model {
             .unwrap_or_else(|error| panic!("read imported schema {}: {error}", resolved.display()));
         schema_imports = schema_imports.provide(path, import.path.clone(), json);
     }
-    let compilation = rex_driver::compile_str_with_imports(
+    let compilation = rex_driver::compile_str(
         path,
         &source,
-        &schema_imports,
-        &rex_driver::SigilImports::new(),
+        &rex_driver::DomainImports {
+            schemas: schema_imports,
+            sigil: rex_driver::SigilImports::new(),
+        },
     );
     assert!(
         compilation.diagnostics.is_empty(),
@@ -131,7 +134,7 @@ fn compile_conformance_actor_file(relative_path: &str) -> rex_ir::ActorModel {
         absolute.to_str().expect("utf-8 path"),
         &source,
         &domains,
-        &rex_driver::DomainImports::empty(),
+        &rex_driver::DomainImports::default(),
     );
     assert!(
         compilation.diagnostics.is_empty(),

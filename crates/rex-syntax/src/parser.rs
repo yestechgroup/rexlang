@@ -9,6 +9,235 @@
 //!
 //! Both junk parsers always consume at least one token, which guarantees
 //! forward progress (and therefore termination).
+//!
+//! # The normative grammar
+//!
+//! This module is the **grammar authority** for the three chumsky surfaces:
+//! the EBNF below is derived from the parsers in this file, and the docs
+//! (`docs/LANGUAGE.md`, `docs/DDD.md`) link here instead of restating it.
+//! When any prose and this EBNF disagree, the parsers in this file win;
+//! change both in the same commit. The grammar of the fourth surface,
+//! `.ifml`, is normatively defined by its Pest grammar file
+//! (`crates/rex-ifml/src/grammar/ifml.pest`), which is machine-checked at
+//! build time — it is not duplicated here.
+//!
+//! The unit tests at the bottom of this file spot-check the EBNF against the
+//! lexer and the `.ddd` keyword tables (every real keyword must appear as a
+//! terminal, every terminal must be a known keyword or contextual word), so
+//! adding or renaming a keyword without updating the grammar fails a test.
+//! Structural drift (a changed repetition or optionality) is *not* caught
+//! mechanically; keep this block in the parser's change.
+//!
+//! Notation shared by all three surfaces:
+//!
+//! * Terminals are quoted (`"class"`); everything else is a metavariable.
+//!   `name` is an identifier ([`Token::Ident`], or an escaped keyword,
+//!   [`Token::IdentEscaped`]); `qualified_name` is `name ("." segment)*`
+//!   where a *segment* may exceptionally be any keyword token — keywords
+//!   introduce constructs only in statement position, never inside a dotted
+//!   reference. `type_ref` is a `qualified_name`; `string` and `int` are the
+//!   string and integer literals.
+//! * Real keywords are fixed lexer tokens, escapable with `^` — the list is
+//!   the [`Token`] enum. *Contextual* words are ordinary identifiers that are
+//!   special only in the grammar position noted: `id`/`readonly`
+//!   (feature modifiers), `schema`/`sigil` (only directly after `import`),
+//!   `to` (delegation line), `create`/`convert`/`format` (datatype blocks),
+//!   the constraint keywords, and every `.ddd` word — the `.ddd` word tables
+//!   in `crate::ddd` are that surface's keyword authority and are not
+//!   restated here.
+//! * Doc comments (`///`, `/** ... */`) attach to the element whose first
+//!   line they end on, by position. They are not part of any production.
+//! * `raw_body` is a balanced `{ ... }` scan whose contents are deliberately
+//!   not parsed; `raw_parens` is the same over `(...)`. Both yield a span the
+//!   driver slices (op bodies, `when` conditions, document expressions).
+//! * `multiplicity` is `"[" (int (".." (int | "*"))?)? "]"`: `[]` is
+//!   unbounded, `[n]` exact, `[n..m]` and `[n..*]` ranges.
+//! * Expressions (`when` conditions, `expr` op bodies, `.ddd` document
+//!   entries) are captured raw here and parsed/typed later by rex-expr; the
+//!   expression grammar is normative in `docs/EXPRESSIONS.md` and is not
+//!   duplicated below.
+//!
+//! ## `.mox` model sources ([`parse`])
+//!
+//! ```text
+//! model            := item*
+//! item             := package_decl | annotation_decl | import_schema_decl
+//!                   | import_sigil_decl | class_decl | interface_decl
+//!                   | enum_decl | datatype_decl | vocabulary_decl
+//!                   | actors_block
+//! package_decl     := "package" qualified_name
+//! annotation_decl  := "annotation" string ("as" name)?
+//! import_schema_decl := "import" "schema" string ("as" name)?
+//! import_sigil_decl  := "import" "sigil" string
+//! class_decl       := "class" name ("extends" type_ref ("," type_ref)*)?
+//!                     "{" feature* "}"
+//! feature          := modifier* ( containment | reference | container
+//!                               | op_decl | derived_decl | attribute )
+//! modifier         := "id" | "readonly"
+//! containment      := "contains" type_ref multiplicity? name
+//!                     ("opposite" name)?
+//! reference        := "refers" type_ref multiplicity? name
+//!                     ("opposite" name)?
+//! container        := "container" type_ref name ("opposite" name)?
+//! op_decl          := "op" type_ref name "(" params? ")" op_body?
+//! derived_decl     := "derived" type_ref multiplicity? name op_body?
+//! attribute        := type_ref multiplicity? name ("=" default)?
+//!                     constraint_block?
+//! params           := param ("," param)*
+//! param            := type_ref name
+//! default          := string | int | "true" | "false" | name
+//! op_body          := "{" target_body+ "}" | raw_body
+//! target_body      := name raw_body
+//! constraint_block := "{" constraint_entry* "}"
+//! constraint_entry := constraint_keyword (string | int) | "unique"
+//! constraint_keyword := "pattern" | "minLength" | "maxLength"
+//!                     | "minimum" | "maximum"
+//! enum_decl        := "enum" name "{" literal+ "}"
+//! literal          := name ("as" string)? ("=" int)?
+//! datatype_decl    := "type" name "wraps" ("opaque" | qualified_name)?
+//!                     datatype_block?
+//! datatype_block   := "{" datatype_entry* "}"
+//! datatype_entry   := binding_entry | "format" string
+//!                   | "create" target_bodies | "convert" target_bodies
+//! binding_entry    := name string
+//! interface_decl   := "interface" name "{" binding_entry* "}"
+//! vocabulary_decl  := "vocabulary" name "from" string "{" vocab_item* "}"
+//! vocab_item       := "version" string | "key" name | "facet" type_ref name
+//! ```
+//!
+//! Grammar-position notes the AST or driver enforces (a violated note is a
+//! reported error, not a silent acceptance):
+//!
+//! * At most one `package` declaration is kept — the first; any later one is
+//!   dropped silently. `annotation` declarations are top-level only.
+//! * An `import schema` is committed once `"schema"` matched: a missing path
+//!   or a missing name after `as` is an error (recovered, so the model
+//!   parses on). `import sigil` likewise, and a present `as` clause is an
+//!   error — a whole namespace set is imported, never one type.
+//! * `op_body`'s bare `raw_body` alternative parses but is rejected by the
+//!   driver; a `derived` body must be a single `expr` target body (the
+//!   neutral expression language, `docs/EXPRESSIONS.md`).
+//! * Constraint keywords each at most once per block; `unique` takes no
+//!   value (a literal after it is an error) and is the collection-level
+//!   constraint.
+//! * In a `datatype_block`, `format`, `create`, and `convert` each appear at
+//!   most once, and a binding target literally named `format` is an error —
+//!   the unescaped key declares the format (only writable escaped,
+//!   `^format`).
+//!
+//! ## The shared `actors_block`
+//!
+//! One grammar, two homes: the inline `.mox` declaration (as an `item`
+//! above) and the standalone `.actor` file.
+//!
+//! ```text
+//! actors_block    := "actors" name "{" actors_item* "}"
+//! actors_item     := actor_decl | capability_decl | purpose_decl
+//!                  | grant_decl | delegation_decl | never_both_decl
+//! actor_decl      := ("actor" | "agent") name ("extends" name)?
+//! capability_decl := "capability" name "on" type_ref
+//! purpose_decl    := "purpose" name
+//! grant_decl      := "grant" name "{" grant_entry* "}"
+//! grant_entry     := effect_entry | cedar_entry
+//! effect_entry    := ("permit" | "forbid") name ("when" raw_parens)?
+//!                    obligation*
+//! obligation      := "obligation" name
+//! cedar_entry     := "cedar" raw_body
+//! delegation_decl := "delegation" name "{" "from" name "to" name
+//!                     ("purpose" name)? delegation_entry* "}"
+//! delegation_entry := effect_entry
+//! never_both_decl := "never_both" "{" name "," name ("," name)* "}"
+//! ```
+//!
+//! * The body items may be interleaved in any order; the AST folds them into
+//!   per-kind lists.
+//! * The delegation shape above is the only *valid* one; the parser accepts
+//!   any item order and reports misplaced/duplicate `from`/`to`/`purpose`
+//!   lines and `cedar` entries (not allowed inside a delegation) as errors.
+//! * `never_both` requires at least two capability names (an error,
+//!   recovered).
+//! * `when` conditions are `raw_parens` spans: the driver slices the
+//!   condition text and type-checks it against the capability's class via
+//!   rex-expr.
+//!
+//! ## `.actor` policy files ([`parse_actors`])
+//!
+//! ```text
+//! actor_file  := actor_file_item*
+//! actor_file_item := import_decl | actors_block
+//! import_decl := "import" string
+//! ```
+//!
+//! * An empty file is legal; duplicate imports are a driver concern, not a
+//!   syntax error. An `import` after an `actors` block is an error
+//!   (recovered): imports must precede every block.
+//! * Unlike the `.ddd` import (below), an `.actor` import takes no trailing
+//!   `;`.
+//!
+//! ## `.ddd` design sources ([`parse_ddd`])
+//!
+//! ```text
+//! ddd_file          := ddd_file_item*
+//! ddd_file_item     := ddd_import | application_decl
+//! ddd_import        := "import" string ";"?
+//! application_decl  := "application" name "{" application_item* "}"
+//! application_item  := base_decl | module_decl
+//! base_decl         := "base" qualified_name
+//! module_decl       := "module" name "{" module_member* "}"
+//! module_member     := service_decl | design_decl | search_decl
+//! service_decl      := "service" name "{" service_member* "}"
+//! service_member    := service_op | inject_decl
+//! service_op        := signature capability_clause? ";"
+//!                    | name "=>" qualified_name capability_clause? ";"
+//! inject_decl       := "inject" name ";"
+//! signature         := type_ref multiplicity? name
+//!                      "(" (param ("," param)*)? ")"
+//! param             := type_ref multiplicity? name
+//! capability_clause := "capability" name ("," name)*
+//! design_decl       := "abstract"? stereotype name design_flag*
+//!                      repository_decl?
+//! stereotype        := "entity" | "value" | "dto"
+//! design_flag       := "scaffold" | "auditable" | "optimisticLocking"
+//!                    | "nonPersistent" | "cache"
+//! repository_decl   := "repository" name "{" repository_op* "}"
+//! repository_op     := repository_builtin ";" | signature ";"
+//! repository_builtin := "findById" | "findAll" | "save" | "delete"
+//! search_decl       := "search" name "{" search_member* "}"
+//! search_member     := "entity" qualified_name
+//!                    | "text" "{" search_field* "}"
+//!                    | "filters" "{" qualified_name* "}"
+//!                    | "sort" "{" qualified_name* "}"
+//!                    | "document" "{" document_entry* "}"
+//!                    | "ranking" ("bm25" | "tfIdf" | "exact"
+//!                                | "custom" string)
+//!                    | "analyzer" string
+//!                    | "pagination" "{" pagination_member* "}"
+//!                    | "capability" name
+//! search_field      := qualified_name ("boost" int)? ("analyzer" string)?
+//! document_entry    := name "=" raw_expr ";"
+//! pagination_member := "limit" int | "max" int | "cursor"
+//! ```
+//!
+//! * Every `.ddd` word above is a **contextual identifier** (the `id`/
+//!   `readonly` precedent), escapable with `^`; the tables in `crate::ddd`
+//!   are the keyword authority, and the stereotype/flag/builtin/search-member
+//!   alternatives follow the table orders (the formatter's canonical order).
+//! * Imports must precede the `application` declaration and there is exactly
+//!   one application per file (violations are reported errors); the
+//!   delegated-operation `qualified_name` is `target.operation`, split at its
+//!   last segment (a bare name recovers with an error).
+//! * Declared repository operations take no `capability` clause (the wire
+//!   artifact carries none, so accepting one would silently drop data); a
+//!   delegated op may be named `save` etc. — contextual words.
+//! * `design_flag`s and the single-member search lines (`entity`, `ranking`,
+//!   `analyzer`, `pagination`) are idempotent on repeat — the first
+//!   declaration wins; repeated `text`/`filters`/`sort`/`document` clauses
+//!   merge.
+//! * `base` must be the application's first member; a duplicate or late
+//!   `base` is an error.
+//! * `document_entry`'s `raw_expr` spans balanced `()`/`[]`/`{}` nesting up
+//!   to the terminating `;` (string literals are single tokens), and is
+//!   stored verbatim; parsing/typing it is the driver's job.
 
 use std::iter::once;
 use std::ops::{Range, RangeFrom};
@@ -17,6 +246,7 @@ use chumsky::input::{ExactSizeInput, ValueInput};
 use chumsky::prelude::*;
 
 use crate::ast::*;
+use crate::ddd;
 use crate::lexer::{lex, lex_with_comments, Token};
 
 /// Parser input: a token slice paired with a custom [`chumsky::Input`]
@@ -1526,9 +1756,10 @@ fn attach_docs(model: &mut Model, comments: &[crate::lexer::Comment<'_>], source
     }
 }
 
-/// Attaches doc comments to a `.ddd` file's services (the only documented
-/// declaration kind for M1). The contiguous `///` run is joined into a
-/// single-line description (newlines become spaces).
+/// Attaches doc comments to a `.ddd` file's services and searches. The
+/// contiguous `///` run is joined with newlines into a single description —
+/// the same semantic as the `.mox` doc collection ([`doc_run_above`] is
+/// shared; no re-joining happens here).
 fn attach_ddd_docs(file: &mut DddFile, comments: &[crate::lexer::Comment<'_>], source: &str) {
     let starts = line_starts(source);
     let line_of = |byte: usize| line_of(byte, &starts);
@@ -1537,11 +1768,11 @@ fn attach_ddd_docs(file: &mut DddFile, comments: &[crate::lexer::Comment<'_>], s
         for module in &mut application.modules {
             for service in &mut module.services {
                 let start_line = line_of(service.span.start);
-                service.doc = doc_run_above(&docs, start_line).map(|text| text.replace('\n', " "));
+                service.doc = doc_run_above(&docs, start_line);
             }
             for search in &mut module.searches {
                 let start_line = line_of(search.span.start);
-                search.doc = doc_run_above(&docs, start_line).map(|text| text.replace('\n', " "));
+                search.doc = doc_run_above(&docs, start_line);
             }
         }
     }
@@ -1818,7 +2049,7 @@ fn ddd_service_op<'src>() -> impl Parser<'src, Tokens<'src>, DddServiceOp, MoxEx
 
 /// An `inject <name>;` line of a `service` body.
 fn ddd_inject_decl<'src>() -> impl Parser<'src, Tokens<'src>, Name, MoxExtra<'src>> + Clone {
-    ddd_keyword("inject")
+    ddd_keyword(ddd::INJECT)
         .ignore_then(name())
         .then_ignore(kw(Token::Other(';')))
 }
@@ -1860,7 +2091,7 @@ fn ddd_service_member<'src>(
 /// A `service <name> { ... }` declaration of a `module`. Doc comments (`///`
 /// runs) directly above it become the service description after parsing.
 fn ddd_service_decl<'src>() -> impl Parser<'src, Tokens<'src>, DddService, MoxExtra<'src>> + Clone {
-    ddd_keyword("service")
+    ddd_keyword(ddd::SERVICE)
         .ignore_then(name())
         .then_ignore(kw(Token::LBrace))
         .then(ddd_service_member().repeated().collect::<Vec<_>>())
@@ -1890,28 +2121,27 @@ fn ddd_service_decl<'src>() -> impl Parser<'src, Tokens<'src>, DddService, MoxEx
 /// The `("abstract")? stereotype` head of a design declaration.
 fn ddd_design_head<'src>(
 ) -> impl Parser<'src, Tokens<'src>, (Option<Span>, DddStereotype), MoxExtra<'src>> + Clone {
-    ddd_keyword("abstract").or_not().then(ddd_stereotype())
+    ddd_keyword(ddd::ABSTRACT).or_not().then(ddd_stereotype())
 }
 
+/// The stereotype keyword of a design head: the `choice` alternatives come
+/// from [`ddd::STEREOTYPES`] in the table's order, so the parse order and
+/// the table order (the formatter's dispatch set) agree by construction.
 fn ddd_stereotype<'src>() -> impl Parser<'src, Tokens<'src>, DddStereotype, MoxExtra<'src>> + Clone
 {
-    choice((
-        ddd_keyword("entity").to(DddStereotype::Entity),
-        ddd_keyword("value").to(DddStereotype::Value),
-        ddd_keyword("dto").to(DddStereotype::Dto),
-    ))
+    choice(ddd::STEREOTYPES.map(|(keyword, stereotype)| ddd_keyword(keyword).to(stereotype)))
 }
 
-/// The design flags of a design declaration: any subset of `scaffold`,
-/// `auditable`, `optimisticLocking`, `nonPersistent`, `cache` in any order
-/// (the canonical order is a formatter concern). Repeats are idempotent.
+/// The design flags of a design declaration: any subset of the
+/// [`ddd::DESIGN_FLAGS`] keywords in any order (the canonical order is the
+/// table's, a formatter concern). Repeats are idempotent.
 fn ddd_flags<'src>() -> impl Parser<'src, Tokens<'src>, DddFlags, MoxExtra<'src>> + Clone {
     select! {
-        Token::Ident("scaffold") = e => (DddFlagKind::Scaffold, e.span()),
-        Token::Ident("auditable") = e => (DddFlagKind::Auditable, e.span()),
-        Token::Ident("optimisticLocking") = e => (DddFlagKind::OptimisticLocking, e.span()),
-        Token::Ident("nonPersistent") = e => (DddFlagKind::NonPersistent, e.span()),
-        Token::Ident("cache") = e => (DddFlagKind::Cache, e.span()),
+        // chumsky's `select!` takes a boolean guard expression, so the
+        // lookup runs twice; the `unwrap` is the guard's `Some`.
+        Token::Ident(text) = e if ddd::flag_kind(text).is_some() => {
+            (ddd::flag_kind(text).unwrap(), e.span())
+        }
     }
     .repeated()
     .collect::<Vec<_>>()
@@ -1952,10 +2182,11 @@ fn ddd_design_decl<'src>() -> impl Parser<'src, Tokens<'src>, DddDesign, MoxExtr
 fn ddd_repository_op<'src>(
 ) -> impl Parser<'src, Tokens<'src>, Option<DddRepositoryOp>, MoxExtra<'src>> + Clone {
     let builtin = select! {
-        Token::Ident("findById") = e => (e.span(), DddBuiltinOp::FindById),
-        Token::Ident("findAll") = e => (e.span(), DddBuiltinOp::FindAll),
-        Token::Ident("save") = e => (e.span(), DddBuiltinOp::Save),
-        Token::Ident("delete") = e => (e.span(), DddBuiltinOp::Delete),
+        // chumsky's `select!` takes a boolean guard expression, so the
+        // lookup runs twice; the `unwrap` is the guard's `Some`.
+        Token::Ident(text) = e if ddd::builtin_from_keyword(text).is_some() => {
+            (e.span(), ddd::builtin_from_keyword(text).unwrap())
+        }
     }
     .then_ignore(kw(Token::Other(';')))
     .map_with(|(keyword_span, builtin), e| DddRepositoryOp {
@@ -2003,7 +2234,7 @@ fn junk_ddd_repository_op<'src>() -> impl Parser<'src, Tokens<'src>, (), MoxExtr
 /// A `repository <name> { ... }` block of a design declaration.
 fn ddd_repository_decl<'src>(
 ) -> impl Parser<'src, Tokens<'src>, DddRepository, MoxExtra<'src>> + Clone {
-    ddd_keyword("repository")
+    ddd_keyword(ddd::REPOSITORY)
         .ignore_then(name())
         .then_ignore(kw(Token::LBrace))
         .then(ddd_repository_op().repeated().collect::<Vec<_>>())
@@ -2070,8 +2301,12 @@ fn ddd_document_entry<'src>(
 fn ddd_search_field<'src>(
 ) -> impl Parser<'src, Tokens<'src>, DddSearchField, MoxExtra<'src>> + Clone {
     qname()
-        .then(ddd_keyword("boost").ignore_then(int_lit()).or_not())
-        .then(ddd_keyword("analyzer").ignore_then(string_lit()).or_not())
+        .then(ddd_keyword(ddd::BOOST).ignore_then(int_lit()).or_not())
+        .then(
+            ddd_keyword(ddd::ANALYZER)
+                .ignore_then(string_lit())
+                .or_not(),
+        )
         .map_with(|((property, boost), analyzer), e| DddSearchField {
             property,
             boost,
@@ -2097,13 +2332,13 @@ fn ddd_ranking<'src>() -> impl Parser<'src, Tokens<'src>, DddRanking, MoxExtra<'
 fn ddd_pagination<'src>() -> impl Parser<'src, Tokens<'src>, DddPagination, MoxExtra<'src>> + Clone
 {
     let member = choice((
-        ddd_keyword("limit")
+        ddd_keyword(ddd::LIMIT)
             .ignore_then(int_lit())
             .map(|value| (Some(value), None, false)),
-        ddd_keyword("max")
+        ddd_keyword(ddd::MAX)
             .ignore_then(int_lit())
             .map(|value| (None, Some(value), false)),
-        ddd_keyword("cursor").to((None, None, true)),
+        ddd_keyword(ddd::CURSOR).to((None, None, true)),
     ));
     ddd_keyword("pagination")
         .ignore_then(kw(Token::LBrace))
@@ -2146,70 +2381,89 @@ fn junk_ddd_search_member<'src>() -> impl Parser<'src, Tokens<'src>, (), MoxExtr
         })
 }
 
-/// One member of a `search` body with junk recovery. Repeated `text`,
-/// `filters`, `sort`, and `document` clauses merge into their lists;
-/// `entity`, `ranking`, `analyzer`, and `pagination` are single — a repeat
-/// is idempotent, the first declaration wins (the design-flags precedent).
+/// The leading keyword of a [`ddd::SEARCH_MEMBERS`] row. Only the
+/// `capability` clause — led by the real `capability` token, not an
+/// identifier — has no keyword, and its arm never calls this.
+fn member_keyword(keyword: Option<&'static str>) -> &'static str {
+    keyword.expect("only the `capability` search member lacks a keyword")
+}
+
+/// One member of a `search` body with junk recovery. The alternatives come
+/// from [`ddd::SEARCH_MEMBERS`] in the table's order — the same order the
+/// formatter canonicalizes a search body to — so the parse order and the
+/// canonical order cannot drift apart. Repeated `text`, `filters`, `sort`,
+/// and `document` clauses merge into their lists; `entity`, `ranking`,
+/// `analyzer`, and `pagination` are single — a repeat is idempotent, the
+/// first declaration wins (the design-flags precedent).
 fn ddd_search_member<'src>(
 ) -> impl Parser<'src, Tokens<'src>, Vec<DddSearchMember>, MoxExtra<'src>> + Clone {
-    let entity = ddd_keyword("entity")
-        .ignore_then(qname())
-        .map(|qname| vec![DddSearchMember::Entity(qname)]);
-    let text = ddd_keyword("text")
-        .ignore_then(kw(Token::LBrace))
-        .ignore_then(
-            ddd_search_field()
-                .map(Some)
-                .or(junk_ddd_search_member().to(None))
-                .repeated()
-                .collect::<Vec<_>>(),
-        )
-        .then_ignore(kw(Token::RBrace))
-        .map(|fields| {
-            fields
-                .into_iter()
-                .flatten()
-                .map(DddSearchMember::Text)
-                .collect()
-        });
-    let document = ddd_keyword("document")
-        .ignore_then(kw(Token::LBrace))
-        .ignore_then(
-            ddd_document_entry()
-                .map(Some)
-                .or(junk_ddd_search_member().to(None))
-                .repeated()
-                .collect::<Vec<_>>(),
-        )
-        .then_ignore(kw(Token::RBrace))
-        .map(|entries| {
-            entries
-                .into_iter()
-                .flatten()
-                .map(DddSearchMember::Document)
-                .collect::<Vec<_>>()
-        });
-    let ranking = ddd_ranking().map(|ranking| vec![DddSearchMember::Ranking(ranking)]);
-    let analyzer = ddd_keyword("analyzer")
-        .ignore_then(string_lit())
-        .map(|analyzer| vec![DddSearchMember::Analyzer(analyzer)]);
-    let pagination =
-        ddd_pagination().map(|pagination| vec![DddSearchMember::Pagination(pagination)]);
-    let capability = kw(Token::Capability)
-        .ignore_then(name())
-        .map(|capability| vec![DddSearchMember::Capability(capability)]);
-    choice((
-        entity,
-        text,
-        ddd_search_names("filters", DddSearchMember::Filter),
-        ddd_search_names("sort", DddSearchMember::Sort),
-        document,
-        ranking,
-        analyzer,
-        pagination,
-        capability,
-    ))
-    .or(junk_ddd_search_member().to(Vec::new()))
+    let alternatives: Vec<Boxed<'src, 'src, Tokens<'src>, Vec<DddSearchMember>, MoxExtra<'src>>> =
+        ddd::SEARCH_MEMBERS
+            .iter()
+            .map(|(kind, keyword)| match kind {
+                ddd::SearchMemberKind::Entity => ddd_keyword(member_keyword(*keyword))
+                    .ignore_then(qname())
+                    .map(|qname| vec![DddSearchMember::Entity(qname)])
+                    .boxed(),
+                ddd::SearchMemberKind::Text => ddd_keyword(member_keyword(*keyword))
+                    .ignore_then(kw(Token::LBrace))
+                    .ignore_then(
+                        ddd_search_field()
+                            .map(Some)
+                            .or(junk_ddd_search_member().to(None))
+                            .repeated()
+                            .collect::<Vec<_>>(),
+                    )
+                    .then_ignore(kw(Token::RBrace))
+                    .map(|fields| {
+                        fields
+                            .into_iter()
+                            .flatten()
+                            .map(DddSearchMember::Text)
+                            .collect()
+                    })
+                    .boxed(),
+                ddd::SearchMemberKind::Filters => {
+                    ddd_search_names(member_keyword(*keyword), DddSearchMember::Filter).boxed()
+                }
+                ddd::SearchMemberKind::Sort => {
+                    ddd_search_names(member_keyword(*keyword), DddSearchMember::Sort).boxed()
+                }
+                ddd::SearchMemberKind::Document => ddd_keyword(member_keyword(*keyword))
+                    .ignore_then(kw(Token::LBrace))
+                    .ignore_then(
+                        ddd_document_entry()
+                            .map(Some)
+                            .or(junk_ddd_search_member().to(None))
+                            .repeated()
+                            .collect::<Vec<_>>(),
+                    )
+                    .then_ignore(kw(Token::RBrace))
+                    .map(|entries| {
+                        entries
+                            .into_iter()
+                            .flatten()
+                            .map(DddSearchMember::Document)
+                            .collect::<Vec<_>>()
+                    })
+                    .boxed(),
+                ddd::SearchMemberKind::Ranking => ddd_ranking()
+                    .map(|ranking| vec![DddSearchMember::Ranking(ranking)])
+                    .boxed(),
+                ddd::SearchMemberKind::Analyzer => ddd_keyword(member_keyword(*keyword))
+                    .ignore_then(string_lit())
+                    .map(|analyzer| vec![DddSearchMember::Analyzer(analyzer)])
+                    .boxed(),
+                ddd::SearchMemberKind::Pagination => ddd_pagination()
+                    .map(|pagination| vec![DddSearchMember::Pagination(pagination)])
+                    .boxed(),
+                ddd::SearchMemberKind::Capability => kw(Token::Capability)
+                    .ignore_then(name())
+                    .map(|capability| vec![DddSearchMember::Capability(capability)])
+                    .boxed(),
+            })
+            .collect();
+    choice(alternatives).or(junk_ddd_search_member().to(Vec::new()))
 }
 
 /// The `filters { ... }` / `sort { ... }` bodies: newline-separated
@@ -2234,7 +2488,7 @@ fn ddd_search_names<'src>(
 /// A `search <name> { ... }` projection of a `module`. Doc comments (`///`
 /// runs) directly above it become the search description after parsing.
 fn ddd_search_decl<'src>() -> impl Parser<'src, Tokens<'src>, DddSearch, MoxExtra<'src>> + Clone {
-    ddd_keyword("search")
+    ddd_keyword(ddd::SEARCH)
         .ignore_then(name())
         .then_ignore(kw(Token::LBrace))
         .then(ddd_search_member().repeated().collect::<Vec<_>>())
@@ -2324,7 +2578,7 @@ fn ddd_module_member<'src>(
 
 /// A `module <name> { ... }` declaration of the application.
 fn ddd_module_decl<'src>() -> impl Parser<'src, Tokens<'src>, DddModule, MoxExtra<'src>> + Clone {
-    ddd_keyword("module")
+    ddd_keyword(ddd::MODULE)
         .ignore_then(name())
         .then_ignore(kw(Token::LBrace))
         .then(ddd_module_member().repeated().collect::<Vec<_>>())
@@ -2353,7 +2607,7 @@ fn ddd_module_decl<'src>() -> impl Parser<'src, Tokens<'src>, DddModule, MoxExtr
 
 /// The `base <qualified-name>` member of the application body.
 fn ddd_base_decl<'src>() -> impl Parser<'src, Tokens<'src>, DddBase, MoxExtra<'src>> + Clone {
-    ddd_keyword("base")
+    ddd_keyword(ddd::BASE)
         .ignore_then(qname())
         .map_with(|package, e| DddBase {
             package,
@@ -2398,7 +2652,7 @@ fn ddd_application_item<'src>(
 /// the grammar pins to the first member position) followed by modules.
 fn ddd_application_decl<'src>(
 ) -> impl Parser<'src, Tokens<'src>, DddApplication, MoxExtra<'src>> + Clone {
-    ddd_keyword("application")
+    ddd_keyword(ddd::APPLICATION)
         .ignore_then(name())
         .then_ignore(kw(Token::LBrace))
         .then(ddd_application_item().repeated().collect::<Vec<_>>())
@@ -2457,7 +2711,7 @@ enum DddFileItem {
 /// error for the skipped region.
 fn junk_ddd_file<'src>() -> impl Parser<'src, Tokens<'src>, (), MoxExtra<'src>> + Clone {
     let rest = select! {
-        t if !matches!(t, Token::Import | Token::Ident("application")) => ()
+        t if !matches!(t, Token::Import | Token::Ident(ddd::APPLICATION)) => ()
     };
     any()
         .ignore_then(rest.repeated().ignored())
@@ -2580,5 +2834,245 @@ pub fn parse_ddd(source: &str) -> DddParseResult {
                 span: *error.span(),
             })
             .collect(),
+    }
+}
+
+/// Keeps the normative grammar in this module's docs in sync with the code.
+///
+/// The grammar authority lives as EBNF blocks in the `//!` docs above (see
+/// "The normative grammar"). Full grammar-from-docs validation is out of
+/// scope; these tests are the cheap, honest tripwire: every *keyword
+/// terminal* of the EBNF must be a word the lexer/parser actually knows, and
+/// every keyword the lexer knows must appear in the EBNF — so adding,
+/// renaming, or removing a keyword without updating the grammar fails here.
+/// Structural drift (repetition/optionality changes) is not caught
+/// mechanically.
+#[cfg(test)]
+mod grammar_doc_tests {
+    use crate::ddd;
+    use crate::lexer::lex;
+
+    /// This file's source; the leading `//!` lines are the module docs that
+    /// carry the grammar blocks.
+    const PARSER_SOURCE: &str = include_str!("parser.rs");
+
+    /// The module docs (the leading `//!` line run), comment markers stripped.
+    fn module_docs() -> String {
+        let mut docs = String::new();
+        for line in PARSER_SOURCE.lines() {
+            let Some(rest) = line.strip_prefix("//!") else {
+                break;
+            };
+            docs.push_str(rest.strip_prefix(' ').unwrap_or(rest));
+            docs.push('\n');
+        }
+        docs
+    }
+
+    /// The fenced ```text blocks of the docs: the EBNF grammar blocks.
+    fn grammar_blocks() -> Vec<String> {
+        let mut blocks = Vec::new();
+        let mut current: Option<Vec<String>> = None;
+        for line in module_docs().lines() {
+            match (current.as_mut(), line.trim()) {
+                (None, "```text") => current = Some(Vec::new()),
+                (Some(block), "```") => {
+                    blocks.push(block.join("\n"));
+                    current = None;
+                }
+                (Some(block), line) => block.push(line.to_string()),
+                (None, _) => {}
+            }
+        }
+        assert!(current.is_none(), "unterminated grammar block");
+        blocks
+    }
+
+    /// The quoted EBNF terminals of all grammar blocks that are shaped like
+    /// words (punctuation terminals such as `"{"` are skipped).
+    fn grammar_words() -> Vec<String> {
+        let mut words = Vec::new();
+        for block in grammar_blocks() {
+            for terminal in block.split('"').skip(1).step_by(2) {
+                if !terminal.is_empty()
+                    && terminal
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                {
+                    words.push(terminal.to_string());
+                }
+            }
+        }
+        words
+    }
+
+    /// Contextual words the grammar quotes that are *not* lexer keywords and
+    /// not covered by a table below: feature modifiers, the import sigils,
+    /// the delegation `to`, the datatype block words, `unique`, and the
+    /// parser-only `ranking` values (`crate::ddd` documents them as
+    /// parser-only).
+    const CONTEXTUAL_WORDS: [&str; 15] = [
+        "id", "readonly", "schema", "sigil", "to", "create", "convert", "format", "unique", "bm25",
+        "tfIdf", "exact", "custom", "entity", "value",
+    ];
+
+    /// Every keyword of the lexer. Each entry is checked against the lexer
+    /// itself, so this list and `Token` cannot drift apart silently.
+    const KEYWORDS: [&str; 38] = [
+        "package",
+        "annotation",
+        "as",
+        "class",
+        "extends",
+        "interface",
+        "enum",
+        "type",
+        "wraps",
+        "opaque",
+        "contains",
+        "refers",
+        "container",
+        "opposite",
+        "op",
+        "derived",
+        "true",
+        "false",
+        "vocabulary",
+        "from",
+        "version",
+        "key",
+        "facet",
+        "actors",
+        "actor",
+        "agent",
+        "capability",
+        "grant",
+        "permit",
+        "forbid",
+        "when",
+        "obligation",
+        "on",
+        "never_both",
+        "delegation",
+        "purpose",
+        "cedar",
+        "import",
+    ];
+
+    /// Every word the grammar is allowed to quote as a terminal.
+    fn known_words() -> Vec<&'static str> {
+        let mut words: Vec<&'static str> = KEYWORDS.to_vec();
+        words.extend(CONTEXTUAL_WORDS);
+        words.extend(super::VALUED_CONSTRAINT_KEYWORDS);
+        words.extend([
+            ddd::APPLICATION,
+            ddd::BASE,
+            ddd::MODULE,
+            ddd::SERVICE,
+            ddd::SEARCH,
+            ddd::ABSTRACT,
+            ddd::REPOSITORY,
+            ddd::INJECT,
+            ddd::BOOST,
+            ddd::ANALYZER,
+            ddd::LIMIT,
+            ddd::MAX,
+            ddd::CURSOR,
+        ]);
+        for (keyword, _) in ddd::STEREOTYPES {
+            words.push(keyword);
+        }
+        for (keyword, _) in ddd::DESIGN_FLAGS {
+            words.push(keyword);
+        }
+        for (keyword, _) in ddd::REPOSITORY_BUILTINS {
+            words.push(keyword);
+        }
+        for (kind, keyword) in ddd::SEARCH_MEMBERS {
+            let _ = kind;
+            if let Some(keyword) = keyword {
+                words.push(keyword);
+            }
+        }
+        words
+    }
+
+    /// The grammar blocks exist and every word terminal is a known keyword or
+    /// contextual word — quoting a word the parser would not recognize fails.
+    #[test]
+    fn grammar_terminals_are_known_words() {
+        let blocks = grammar_blocks();
+        assert!(
+            blocks.len() >= 4,
+            "expected the .mox, actors, .actor, and .ddd grammar blocks, found {}",
+            blocks.len()
+        );
+        let known = known_words();
+        for word in grammar_words() {
+            let word = word.as_str();
+            assert!(
+                known.contains(&word),
+                "the grammar quotes `{word}`, which is neither a lexer keyword \
+                 nor a known contextual word — update the grammar or the word \
+                 lists in this test"
+            );
+        }
+    }
+
+    /// Every lexer keyword appears in the grammar — adding or renaming a
+    /// keyword in [`Token`] without updating the grammar fails.
+    #[test]
+    fn every_lexed_keyword_appears_in_the_grammar() {
+        let words = grammar_words();
+        for keyword in KEYWORDS {
+            // The list itself must stay honest: each entry really is a
+            // keyword token of the lexer.
+            let tokens = lex(keyword).unwrap();
+            assert_eq!(
+                tokens.len(),
+                1,
+                "`{keyword}` must be exactly one token to be a keyword"
+            );
+            assert_eq!(
+                tokens[0].0.keyword(),
+                Some(keyword),
+                "`{keyword}` is listed as a keyword but lexes otherwise — \
+                 update KEYWORDS in this test"
+            );
+            assert!(
+                words.iter().any(|word| word == keyword),
+                "the lexer keyword `{keyword}` is missing from the normative \
+                 grammar blocks in this module's docs"
+            );
+        }
+    }
+
+    /// Every `.ddd` table keyword appears in the grammar — extending a
+    /// `crate::ddd` table (the keyword authority #36 single-sourced) without
+    /// updating the grammar fails.
+    #[test]
+    fn every_ddd_table_keyword_appears_in_the_grammar() {
+        let words = grammar_words();
+        let check = |keyword: &'static str| {
+            assert!(
+                words.iter().any(|word| word == keyword),
+                "the .ddd keyword `{keyword}` is missing from the normative \
+                 grammar blocks in this module's docs"
+            );
+        };
+        for (keyword, _) in ddd::STEREOTYPES {
+            check(keyword);
+        }
+        for (keyword, _) in ddd::DESIGN_FLAGS {
+            check(keyword);
+        }
+        for (keyword, _) in ddd::REPOSITORY_BUILTINS {
+            check(keyword);
+        }
+        for (_, keyword) in ddd::SEARCH_MEMBERS {
+            if let Some(keyword) = keyword {
+                check(keyword);
+            }
+        }
     }
 }

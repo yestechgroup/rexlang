@@ -37,7 +37,11 @@ fn compile_fixture() -> rex_ir::Model {
     let path = fixture_dir().join(FIXTURE_NAME);
     let source = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("missing fixture {}: {error}", path.display()));
-    let compilation = rex_driver::compile_str(path.to_str().expect("utf-8 fixture path"), &source);
+    let compilation = rex_driver::compile_str(
+        path.to_str().expect("utf-8 fixture path"),
+        &source,
+        &rex_driver::DomainImports::default(),
+    );
     assert!(
         compilation.diagnostics.is_empty(),
         "the compile-everything fixture must compile with zero diagnostics: {:?}",

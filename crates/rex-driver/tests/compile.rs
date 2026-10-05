@@ -25,7 +25,11 @@ fn feature<'a>(class: &'a ClassDef, name: &str) -> &'a rex_ir::Feature {
 
 #[test]
 fn library_example_compiles_with_zero_diagnostics() {
-    let compilation = compile_str("library.mox", LIBRARY);
+    let compilation = compile_str(
+        "library.mox",
+        LIBRARY,
+        &rex_driver::DomainImports::default(),
+    );
     assert!(
         compilation.diagnostics.is_empty(),
         "expected no diagnostics, got:\n{}",
@@ -187,7 +191,11 @@ fn library_example_compiles_with_zero_diagnostics() {
 
 #[test]
 fn library_ir_round_trips_through_json() {
-    let compilation = compile_str("library.mox", LIBRARY);
+    let compilation = compile_str(
+        "library.mox",
+        LIBRARY,
+        &rex_driver::DomainImports::default(),
+    );
     let model = compilation.model.expect("a model on success");
     let json = model.to_json_pretty().expect("serialize");
     let parsed = rex_ir::Model::from_json(&json).expect("deserialize");
@@ -205,7 +213,7 @@ class Shelf {
     Book book
 }
 "#;
-    let compilation = compile_str("shelf.mox", source);
+    let compilation = compile_str("shelf.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none());
     let error = compilation
         .diagnostics
@@ -238,7 +246,7 @@ class Leaf {
     refers Node parent opposite children
 }
 "#;
-    let compilation = compile_str("tree.mox", source);
+    let compilation = compile_str("tree.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none());
     let message = compilation
         .diagnostics
@@ -269,7 +277,7 @@ class Leaf {
     container Node parent
 }
 "#;
-    let compilation = compile_str("tree.mox", source);
+    let compilation = compile_str("tree.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none());
     assert!(compilation.diagnostics.iter().any(|d| {
         d.message == "opposite mismatch: 'Leaf.parent' does not declare opposite 'Node.children'"
@@ -289,7 +297,7 @@ class Leaf {
     container Node parent opposite children
 }
 "#;
-    let compilation = compile_str("tree.mox", source);
+    let compilation = compile_str("tree.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none());
     assert!(compilation.diagnostics.iter().any(|d| {
         d.message == "opposite mismatch: 'Node.children' declares opposite 'Leaf.nowhere', but class 'Leaf' has no feature 'nowhere'"
@@ -311,7 +319,7 @@ class Library {
 
 class Book { String title }
 "#;
-    let compilation = compile_str("ops.mox", source);
+    let compilation = compile_str("ops.mox", source, &rex_driver::DomainImports::default());
     assert!(
         compilation.diagnostics.is_empty(),
         "unexpected diagnostics:\n{}",
@@ -360,7 +368,11 @@ fn op_target_bodies_lower_verbatim() {
                   }\n\
                   \n\
                   class Book { String title }";
-    let compilation = compile_str("opbodies.mox", source);
+    let compilation = compile_str(
+        "opbodies.mox",
+        source,
+        &rex_driver::DomainImports::default(),
+    );
     assert!(
         compilation.diagnostics.is_empty(),
         "unexpected diagnostics:\n{}",
@@ -387,7 +399,7 @@ class Calc {
     op int compute(int x) { x + 1 }
 }
 "#;
-    let compilation = compile_str("calc.mox", source);
+    let compilation = compile_str("calc.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none());
     assert!(compilation.diagnostics.iter().any(|d| {
         d.message == "operation bodies must be per-target in Tier 1 (e.g. `rust { ... }`)"
@@ -406,7 +418,7 @@ class Calc {
     }
 }
 "#;
-    let compilation = compile_str("kt.mox", source);
+    let compilation = compile_str("kt.mox", source, &rex_driver::DomainImports::default());
     let model = compilation.model.expect("warnings must not block lowering");
     let compute = &model.packages[0].classes[0].operations[0];
     // Unknown targets are carried in the IR (nothing is dropped silently);
@@ -444,7 +456,7 @@ class Calc {
     }
 }
 "#;
-    let compilation = compile_str("dup.mox", source);
+    let compilation = compile_str("dup.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none());
     assert!(
         compilation
@@ -475,7 +487,7 @@ class Book {
     String title
 }
 "#;
-    let compilation = compile_str("expr.mox", source);
+    let compilation = compile_str("expr.mox", source, &rex_driver::DomainImports::default());
     assert!(
         compilation.diagnostics.is_empty(),
         "expr must be a known target: {:?}",
@@ -501,7 +513,11 @@ class Calc {
     }
 }
 "#;
-    let compilation = compile_str("conflict.mox", source);
+    let compilation = compile_str(
+        "conflict.mox",
+        source,
+        &rex_driver::DomainImports::default(),
+    );
     assert!(compilation.model.is_none());
     assert!(
         compilation
@@ -522,7 +538,7 @@ fn datatype_create_convert_lower_to_datatype_def() {
                   \x20   create { rust { Date(it) } }\n\
                   \x20   convert { rust { self.0.clone() } }\n\
                   }";
-    let compilation = compile_str("date.mox", source);
+    let compilation = compile_str("date.mox", source, &rex_driver::DomainImports::default());
     assert!(
         compilation.diagnostics.is_empty(),
         "unexpected diagnostics:\n{}",
@@ -553,7 +569,7 @@ fn datatype_body_unknown_target_warns_and_duplicate_block_is_an_error() {
                   type Date wraps opaque {\n\
                   \x20   create { kotlin { Date(it) } rust { Date(it) } }\n\
                   }";
-    let compilation = compile_str("date.mox", source);
+    let compilation = compile_str("date.mox", source, &rex_driver::DomainImports::default());
     let model = compilation.model.expect("warnings must not block lowering");
     let date = &model.packages[0].datatypes[0];
     assert_eq!(
@@ -571,7 +587,7 @@ fn datatype_body_unknown_target_warns_and_duplicate_block_is_an_error() {
                   type Date wraps opaque {\n\
                   \x20   convert { rust { a } rust { b } }\n\
                   }";
-    let compilation = compile_str("date2.mox", source);
+    let compilation = compile_str("date2.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none());
     assert!(
         compilation
@@ -595,7 +611,7 @@ class Calc {
     derived int total { 42 }
 }
 "#;
-    let compilation = compile_str("calc.mox", source);
+    let compilation = compile_str("calc.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none());
     assert!(compilation.diagnostics.iter().any(|d| d.message
         == "derived bodies must use the neutral expression language: get { expr { ... } }"));
@@ -610,7 +626,7 @@ class Calc {
     derived int total { rust { 42 } }
 }
 "#;
-    let compilation = compile_str("calc2.mox", source);
+    let compilation = compile_str("calc2.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none());
     assert!(compilation.diagnostics.iter().any(|d| d.message
         == "derived bodies must use the neutral expression language: get { expr { ... } }"));
@@ -626,7 +642,7 @@ class Book {
     derived String label { expr { title } }
 }
 "#;
-    let compilation = compile_str("label.mox", source);
+    let compilation = compile_str("label.mox", source, &rex_driver::DomainImports::default());
     assert!(
         compilation.diagnostics.is_empty(),
         "unexpected diagnostics: {:?}",
@@ -651,7 +667,7 @@ enum Color {
     Green
 }
 "#;
-    let compilation = compile_str("color.mox", source);
+    let compilation = compile_str("color.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none());
     assert!(compilation
         .diagnostics
@@ -678,7 +694,7 @@ class Thing {
     int b
 }
 "#;
-    let compilation = compile_str("dupes.mox", source);
+    let compilation = compile_str("dupes.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none());
     let messages: Vec<&str> = compilation
         .diagnostics
@@ -703,7 +719,7 @@ class Box {
     int one
 }
 "#;
-    let compilation = compile_str("box.mox", source);
+    let compilation = compile_str("box.mox", source, &rex_driver::DomainImports::default());
     assert!(
         compilation.diagnostics.is_empty(),
         "unexpected diagnostics:\n{}",
@@ -731,7 +747,11 @@ class Box {
 #[test]
 fn resolution_errors() {
     // Missing package.
-    let compilation = compile_str("x.mox", "class Thing { int a }");
+    let compilation = compile_str(
+        "x.mox",
+        "class Thing { int a }",
+        &rex_driver::DomainImports::default(),
+    );
     assert!(compilation.model.is_none());
     assert!(
         compilation
@@ -742,7 +762,11 @@ fn resolution_errors() {
     );
 
     // Unknown type.
-    let compilation = compile_str("x.mox", "package p\n\nclass C { Mystery f }");
+    let compilation = compile_str(
+        "x.mox",
+        "package p\n\nclass C { Mystery f }",
+        &rex_driver::DomainImports::default(),
+    );
     assert!(compilation
         .diagnostics
         .iter()
@@ -752,6 +776,7 @@ fn resolution_errors() {
     let compilation = compile_str(
         "x.mox",
         "package p\n\nclass C { other.Thing f }\n\nclass Thing { int a }",
+        &rex_driver::DomainImports::default(),
     );
     assert!(compilation
         .diagnostics
@@ -773,7 +798,7 @@ class Thing {
     container String still_wrong
 }
 "#;
-    let compilation = compile_str("thing.mox", source);
+    let compilation = compile_str("thing.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none());
     let messages: Vec<&str> = compilation
         .diagnostics
@@ -801,7 +826,7 @@ class Thing {
     String s = Red
 }
 "#;
-    let compilation = compile_str("thing.mox", source);
+    let compilation = compile_str("thing.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none());
     let messages: Vec<&str> = compilation
         .diagnostics
@@ -811,7 +836,11 @@ class Thing {
     // `Color c = Red` is fine (warning-free); `String s = Red` is not.
     assert!(messages.contains(&"default value 'Red' requires an enum-typed attribute"));
 
-    let compilation = compile_str("thing2.mox", "package demo\n\nclass T { int i = 5 }");
+    let compilation = compile_str(
+        "thing2.mox",
+        "package demo\n\nclass T { int i = 5 }",
+        &rex_driver::DomainImports::default(),
+    );
     let model = compilation.model.expect("int default is fine");
     assert_eq!(
         model.packages[0].classes[0].features[0].default,
@@ -832,7 +861,7 @@ class B extends A {
     int b
 }
 "#;
-    let compilation = compile_str("cycle.mox", source);
+    let compilation = compile_str("cycle.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none());
     assert!(compilation
         .diagnostics
@@ -858,7 +887,11 @@ class Child {
     id container Person parent opposite children
 }
 "#;
-    let compilation = compile_str("modifiers.mox", source);
+    let compilation = compile_str(
+        "modifiers.mox",
+        source,
+        &rex_driver::DomainImports::default(),
+    );
     assert!(
         compilation.diagnostics.is_empty(),
         "unexpected diagnostics:\n{}",
@@ -903,7 +936,7 @@ class Book {
     String title
 }
 "#;
-    let compilation = compile_str("opmods.mox", source);
+    let compilation = compile_str("opmods.mox", source, &rex_driver::DomainImports::default());
     let model = compilation.model.expect("warnings must not block lowering");
     assert_eq!(model.packages[0].classes[0].name, "C");
 
@@ -1007,7 +1040,7 @@ type Date wraps opaque {
     rust \"chrono::NaiveDate\"
 }
 ";
-    let compilation = compile_str("docs.mox", source);
+    let compilation = compile_str("docs.mox", source, &rex_driver::DomainImports::default());
     let model = compilation.model.expect("a model on success");
     assert!(
         compilation.diagnostics.is_empty(),
@@ -1054,7 +1087,11 @@ class Book {
     id String title
 }
 ";
-    let compilation = compile_str("package_doc.mox", source);
+    let compilation = compile_str(
+        "package_doc.mox",
+        source,
+        &rex_driver::DomainImports::default(),
+    );
     let model = compilation.model.expect("a model on success");
     assert!(
         compilation.diagnostics.is_empty(),
@@ -1077,7 +1114,7 @@ package demo
 
 class Book {}
 ";
-    let compilation = compile_str("plain.mox", source);
+    let compilation = compile_str("plain.mox", source, &rex_driver::DomainImports::default());
     let model = compilation.model.expect("a model on success");
     assert!(
         compilation.diagnostics.is_empty(),
@@ -1096,7 +1133,7 @@ package demo
 
 class Book {}
 ";
-    let compilation = compile_str("detached.mox", blank);
+    let compilation = compile_str("detached.mox", blank, &rex_driver::DomainImports::default());
     let model = compilation.model.expect("a model on success");
     assert!(
         compilation.diagnostics.is_empty(),
@@ -1123,7 +1160,11 @@ class Product {
     int stock { minimum 0 maximum 1000 }
 }
 ";
-    let compilation = compile_str("constraints.mox", source);
+    let compilation = compile_str(
+        "constraints.mox",
+        source,
+        &rex_driver::DomainImports::default(),
+    );
     let model = compilation.model.expect("a model on success");
     assert!(
         compilation.diagnostics.is_empty(),
@@ -1149,7 +1190,11 @@ class Product {
 
 #[test]
 fn constraints_on_a_model_without_them_stay_absent() {
-    let compilation = compile_str("library.mox", LIBRARY);
+    let compilation = compile_str(
+        "library.mox",
+        LIBRARY,
+        &rex_driver::DomainImports::default(),
+    );
     let model = compilation.model.expect("a model on success");
     for class in &model.packages[0].classes {
         for feature in &class.features {
@@ -1174,7 +1219,11 @@ type Email wraps String {
 
 type Plain wraps String
 ";
-    let compilation = compile_str("datatype_format.mox", source);
+    let compilation = compile_str(
+        "datatype_format.mox",
+        source,
+        &rex_driver::DomainImports::default(),
+    );
     assert!(
         compilation.diagnostics.is_empty(),
         "{:?}",
@@ -1191,7 +1240,7 @@ type Plain wraps String
 #[test]
 fn pattern_constraints_require_a_string_attribute() {
     let source = "package demo\n\nclass P { int count { pattern \"x\" } }\n";
-    let compilation = compile_str("bad.mox", source);
+    let compilation = compile_str("bad.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors must block the model");
     assert!(compilation
         .diagnostics
@@ -1202,7 +1251,7 @@ fn pattern_constraints_require_a_string_attribute() {
 #[test]
 fn length_constraints_require_a_string_attribute() {
     let source = "package demo\n\nclass P { int count { minLength 2 } }\n";
-    let compilation = compile_str("bad.mox", source);
+    let compilation = compile_str("bad.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.diagnostics.iter().any(|d| d.is_error()
         && d.message
             .contains("'minLength' requires a string attribute")));
@@ -1211,7 +1260,7 @@ fn length_constraints_require_a_string_attribute() {
 #[test]
 fn numeric_constraints_require_a_numeric_attribute() {
     let source = "package demo\n\nclass P { boolean flag { minimum 0 } }\n";
-    let compilation = compile_str("bad.mox", source);
+    let compilation = compile_str("bad.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation
         .diagnostics
         .iter()
@@ -1233,7 +1282,11 @@ class Sensor {
     float ratio { minimum -5 }
 }
 ";
-    let compilation = compile_str("float_bounds.mox", source);
+    let compilation = compile_str(
+        "float_bounds.mox",
+        source,
+        &rex_driver::DomainImports::default(),
+    );
     assert!(
         compilation.diagnostics.is_empty(),
         "float/double admit the numeric family: {:?}",
@@ -1252,7 +1305,7 @@ class Sensor {
 #[test]
 fn numeric_bounds_stay_rejected_on_string_attributes() {
     let source = "package demo\n\nclass P { String name { minimum 0 } }\n";
-    let compilation = compile_str("bad.mox", source);
+    let compilation = compile_str("bad.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors must block the model");
     assert!(compilation
         .diagnostics
@@ -1279,7 +1332,7 @@ class P {
     String solo
 }
 ";
-    let compilation = compile_str("unique.mox", source);
+    let compilation = compile_str("unique.mox", source, &rex_driver::DomainImports::default());
     assert!(
         compilation.diagnostics.is_empty(),
         "unique is type-agnostic on many-valued attributes: {:?}",
@@ -1302,7 +1355,7 @@ class P {
 #[test]
 fn unique_requires_a_many_valued_attribute() {
     let source = "package demo\n\nclass P { String tag { unique } }\n";
-    let compilation = compile_str("bad.mox", source);
+    let compilation = compile_str("bad.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors must block the model");
     assert!(compilation.diagnostics.iter().any(|d| d.is_error()
         && d.message
@@ -1390,7 +1443,7 @@ class P {
 }
 ";
     let (path, dir) = constraints_fixture("ok", source);
-    let compilation = compile_str(&path, source);
+    let compilation = compile_str(&path, source, &rex_driver::DomainImports::default());
     let errors = constraint_errors(&compilation);
     assert!(errors.is_empty(), "unexpected errors: {errors:?}");
     let model = compilation.model.expect("a model on success");
@@ -1427,7 +1480,7 @@ class P {
 #[test]
 fn numeric_constraints_are_rejected_on_datatype_attributes() {
     let source = "package demo\n\ntype Date wraps opaque\n\nclass P { Date day { minimum 0 } }\n";
-    let compilation = compile_str("bad.mox", source);
+    let compilation = compile_str("bad.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors must block the model");
     let errors = constraint_errors(&compilation);
     assert!(
@@ -1462,7 +1515,7 @@ class P {
 }
 ";
     let (path, dir) = constraints_fixture("family", source);
-    let compilation = compile_str(&path, source);
+    let compilation = compile_str(&path, source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors must block the model");
     let errors = constraint_errors(&compilation);
     assert!(
@@ -1496,7 +1549,7 @@ class P {
     Status b { maxLength 2 }
 }
 ";
-    let compilation = compile_str("bad.mox", source);
+    let compilation = compile_str("bad.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors must block the model");
     let errors = constraint_errors(&compilation);
     assert!(
@@ -1524,7 +1577,7 @@ enum Status { Draft = 0 Published = 1 }
 
 class P { Status level { minimum 5 maximum 0 } }
 ";
-    let compilation = compile_str("bad.mox", source);
+    let compilation = compile_str("bad.mox", source, &rex_driver::DomainImports::default());
     let errors = constraint_errors(&compilation);
     assert_eq!(
         errors.len(),
@@ -1537,7 +1590,7 @@ class P { Status level { minimum 5 maximum 0 } }
 #[test]
 fn unordered_constraints_are_rejected() {
     let source = "package demo\n\nclass P { String s { minLength 5 maxLength 2 } int n { minimum 10 maximum 0 } }\n";
-    let compilation = compile_str("bad.mox", source);
+    let compilation = compile_str("bad.mox", source, &rex_driver::DomainImports::default());
     let errors: Vec<String> = compilation
         .diagnostics
         .iter()
@@ -1561,7 +1614,7 @@ fn unordered_constraints_are_rejected() {
 #[test]
 fn negative_length_constraints_are_rejected() {
     let source = "package demo\n\nclass P { String s { minLength -1 } }\n";
-    let compilation = compile_str("bad.mox", source);
+    let compilation = compile_str("bad.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation
         .diagnostics
         .iter()
@@ -1586,7 +1639,7 @@ class Loan {
     }
 }
 "#;
-    let compilation = compile_str("loan.mox", source);
+    let compilation = compile_str("loan.mox", source, &rex_driver::DomainImports::default());
     let model = compilation.model.unwrap_or_else(|| {
         panic!(
             "expected a model:\n{}",
@@ -1618,7 +1671,7 @@ class Book {
     Date copyright
 }
 "#;
-    let compilation = compile_str("book.mox", source);
+    let compilation = compile_str("book.mox", source, &rex_driver::DomainImports::default());
     let model = compilation.model.unwrap_or_else(|| {
         panic!(
             "expected a model:\n{}",
@@ -1644,7 +1697,7 @@ class Loan {
     date effectiveDate = "2026-09-17"
 }
 "#;
-    let compilation = compile_str("loan.mox", source);
+    let compilation = compile_str("loan.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none());
     let messages: Vec<&str> = compilation
         .diagnostics
@@ -1671,7 +1724,7 @@ vocabulary Colors from "test:colors" {
     facet date adopted
 }
 "#;
-    let compilation = compile_str("colors.mox", source);
+    let compilation = compile_str("colors.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none());
     let messages: Vec<&str> = compilation
         .diagnostics

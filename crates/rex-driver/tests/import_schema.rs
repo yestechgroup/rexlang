@@ -4,15 +4,28 @@
 //! and the JSON content is validated even though nothing is lowered from it.
 //!
 //! The driver is filesystem-free: import content arrives through
-//! [`rex_driver::SchemaImports`], keyed by `(mox file path, import path)`.
+//! [`rex_driver::DomainImports`] (`SchemaImports`), keyed by
+//! `(mox file path, import path)`.
 
-use rex_driver::{
-    compile_actors_str, compile_files, compile_files_with_imports, render, SchemaImports,
-    SigilImports,
-};
+use rex_driver::{compile_actors_str, compile_files, render, SchemaImports, SigilImports};
 use rex_ir::{FeatureKind, TypeRef};
 
 const MOX: &str = "demo.mox";
+
+/// Compiles `files` with the given `import schema` content and no sigil
+/// content.
+fn compile_with_schemas(
+    files: &[(String, String)],
+    schemas: &SchemaImports,
+) -> rex_driver::MultiCompilation {
+    compile_files(
+        files,
+        &rex_driver::DomainImports {
+            schemas: schemas.clone(),
+            sigil: SigilImports::new(),
+        },
+    )
+}
 
 fn mox_with_imports() -> String {
     concat!(
@@ -55,11 +68,8 @@ fn compile_clean(compilation: &rex_driver::MultiCompilation) -> &rex_ir::Model {
 
 #[test]
 fn import_with_alias_resolves_as_a_nominal_class() {
-    let compilation = compile_files_with_imports(
-        &[(MOX.to_string(), mox_with_imports())],
-        &valid_imports(),
-        &SigilImports::new(),
-    );
+    let compilation =
+        compile_with_schemas(&[(MOX.to_string(), mox_with_imports())], &valid_imports());
     let model = compile_clean(&compilation);
     let package = &model.packages[0];
 
@@ -105,14 +115,13 @@ fn import_with_alias_resolves_as_a_nominal_class() {
 
 #[test]
 fn import_without_alias_takes_the_file_stem() {
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_schemas(
         &[(
             MOX.to_string(),
             "package demo\n\nimport schema \"deep/dir/my_type.json\"\n\nclass C { refers my_type t }\n"
                 .to_string(),
         )],
         &SchemaImports::new().provide(MOX, "deep/dir/my_type.json", "{}"),
-        &SigilImports::new(),
     );
     let model = compile_clean(&compilation);
     let class = &model.packages[0]
@@ -133,14 +142,13 @@ fn import_without_alias_takes_the_file_stem() {
 
 #[test]
 fn invalid_json_is_an_error_naming_the_path() {
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_schemas(
         &[(
             MOX.to_string(),
             "package demo\n\nimport schema \"broken.json\" as B\n\nclass C { refers B b }\n"
                 .to_string(),
         )],
         &SchemaImports::new().provide(MOX, "broken.json", "{ not json"),
-        &SigilImports::new(),
     );
     assert!(compilation.model.is_none(), "invalid JSON blocks lowering");
     let (_, diagnostic) = compilation
@@ -158,14 +166,13 @@ fn invalid_json_is_an_error_naming_the_path() {
 
 #[test]
 fn missing_content_is_an_error_tagged_with_the_importing_file() {
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_schemas(
         &[(
             MOX.to_string(),
             "package demo\n\nimport schema \"gone.json\" as G\n\nclass C { refers G g }\n"
                 .to_string(),
         )],
         &SchemaImports::new(),
-        &SigilImports::new(),
     );
     assert!(compilation.model.is_none());
     let (path, diagnostic) = compilation
@@ -184,7 +191,7 @@ fn missing_content_is_an_error_tagged_with_the_importing_file() {
 fn content_provided_for_another_file_does_not_satisfy_the_import() {
     // The (mox path, import path) pair is the key: another file's content
     // for the same import path must not leak.
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_schemas(
         &[
             (MOX.to_string(), mox_with_imports()),
             (
@@ -193,7 +200,6 @@ fn content_provided_for_another_file_does_not_satisfy_the_import() {
             ),
         ],
         &SchemaImports::new().provide("other.mox", "schemas/todo_item.json", "{}"),
-        &SigilImports::new(),
     );
     assert!(
         compilation
@@ -209,14 +215,13 @@ fn content_provided_for_another_file_does_not_satisfy_the_import() {
 
 #[test]
 fn alias_colliding_with_a_declared_class_is_an_error_naming_both_sources() {
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_schemas(
         &[(
             MOX.to_string(),
             "package demo\n\nimport schema \"x.json\" as Book\n\nclass Book { String title }\n"
                 .to_string(),
         )],
         &SchemaImports::new().provide(MOX, "x.json", "{}"),
-        &SigilImports::new(),
     );
     assert!(compilation.model.is_none());
     let (_, diagnostic) = compilation
@@ -239,10 +244,9 @@ fn alias_colliding_with_enum_datatype_vocabulary_interface_names_is_an_error() {
         ("interface Book {}", "interface"),
     ] {
         let source = format!("package demo\n\nimport schema \"x.json\" as Book\n\n{decl}\n");
-        let compilation = compile_files_with_imports(
+        let compilation = compile_with_schemas(
             &[(MOX.to_string(), source)],
             &SchemaImports::new().provide(MOX, "x.json", "{}"),
-            &SigilImports::new(),
         );
         assert!(
             compilation.diagnostics.iter().any(|(_, d)| d.is_error()),
@@ -253,7 +257,7 @@ fn alias_colliding_with_enum_datatype_vocabulary_interface_names_is_an_error() {
 
 #[test]
 fn the_same_alias_imported_twice_is_an_error() {
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_schemas(
         &[(
             MOX.to_string(),
             concat!(
@@ -267,7 +271,6 @@ fn the_same_alias_imported_twice_is_an_error() {
         &SchemaImports::new()
             .provide(MOX, "a.json", "{}")
             .provide(MOX, "b.json", "{}"),
-        &SigilImports::new(),
     );
     assert!(compilation.model.is_none());
     let (_, diagnostic) = compilation
@@ -286,7 +289,7 @@ fn the_same_alias_imported_twice_is_an_error() {
 
 #[test]
 fn colliding_stems_are_an_error() {
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_schemas(
         &[(
             MOX.to_string(),
             concat!(
@@ -300,7 +303,6 @@ fn colliding_stems_are_an_error() {
         &SchemaImports::new()
             .provide(MOX, "one/stem.json", "{}")
             .provide(MOX, "two/stem.json", "{}"),
-        &SigilImports::new(),
     );
     assert!(compilation.model.is_none());
     let (_, diagnostic) = compilation
@@ -331,8 +333,8 @@ fn compile_files_is_unchanged_without_imports() {
             "package b\n\nclass Shelf { refers a.Book[] links }".to_string(),
         ),
     ];
-    let plain = compile_files(&files);
-    let with = compile_files_with_imports(&files, &SchemaImports::new(), &SigilImports::new());
+    let plain = compile_files(&files, &rex_driver::DomainImports::default());
+    let with = compile_with_schemas(&files, &SchemaImports::new());
     assert_eq!(
         plain
             .model
@@ -348,14 +350,13 @@ fn compile_files_is_unchanged_without_imports() {
 
 #[test]
 fn schema_remains_usable_as_an_identifier_in_the_driver() {
-    let compilation = compile_files_with_imports(
+    let compilation = compile_with_schemas(
         &[(
             MOX.to_string(),
             "package demo\n\nclass schema { String schema }\n\nclass Other { refers schema[] many }\n"
                 .to_string(),
         )],
         &SchemaImports::new(),
-        &SigilImports::new(),
     );
     let model = compile_clean(&compilation);
     let names: Vec<&str> = model.packages[0]
@@ -393,8 +394,8 @@ fn actor_file_capabilities_resolve_imported_schema_names() {
         actor,
         &[("demo.mox".to_string(), domain.to_string())],
         &rex_driver::DomainImports {
-            schemas: &imports,
-            sigil: &rex_driver::SigilImports::new(),
+            schemas: imports,
+            sigil: SigilImports::new(),
         },
     );
     assert!(

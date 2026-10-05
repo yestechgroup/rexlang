@@ -21,8 +21,11 @@ fn all_canonical_examples_compile_with_zero_diagnostics() {
     for name in EXAMPLES {
         let path = example_path(name);
         let source = example_source(name);
-        let compilation =
-            rex_driver::compile_str(path.to_str().expect("utf-8 example path"), &source);
+        let compilation = rex_driver::compile_str(
+            path.to_str().expect("utf-8 example path"),
+            &source,
+            &rex_driver::DomainImports::default(),
+        );
         assert!(
             compilation.diagnostics.is_empty(),
             "example {name}.mox must compile with zero diagnostics: {:?}",

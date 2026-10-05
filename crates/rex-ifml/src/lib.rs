@@ -12,7 +12,10 @@
 //! # Parsing
 //!
 //! The grammar ([`str`]-level PEG, compiled at build time via `pest_derive`)
-//! is defined in `src/grammar/ifml.pest`; [`parse_ifml`] /
+//! is defined in `src/grammar/ifml.pest`, which is the **normative grammar
+//! authority** for the `.ifml` surface — a machine-checked file, not
+//! duplicated into prose (docs/IFML.md links to it and stays
+//! non-normative). [`parse_ifml`] /
 //! [`parse_ifml_file`] lower a source into a
 //! [`rex_ir::ifml::IfmlModel`] artifact that serializes through the
 //! versioned wire format (`IfmlModel::to_json_pretty` /

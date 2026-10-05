@@ -76,7 +76,7 @@ fn parse_parameter_decl(pair: Pair<Rule>) -> ParameterDecl {
         .and_then(|p| p.into_inner().next())
         .map(|p| match p.as_rule() {
             Rule::string => ValueExpression::String(parse_string(&p)),
-            Rule::number => ValueExpression::Number(parse_number(&p)),
+            Rule::number => ValueExpression::Number(parse_number(&p).into()),
             Rule::boolean => ValueExpression::Bool(p.as_str() == "true"),
             _ => ValueExpression::Identifier(p.as_str().to_string()),
         });
@@ -106,7 +106,7 @@ fn parse_parameter_block(pair: Pair<Rule>) -> Vec<ParameterDecl> {
 fn parse_value_primary(pair: Pair<Rule>) -> ValueExpression {
     match pair.as_rule() {
         Rule::string => ValueExpression::String(parse_string(&pair)),
-        Rule::number => ValueExpression::Number(parse_number(&pair)),
+        Rule::number => ValueExpression::Number(parse_number(&pair).into()),
         Rule::boolean => ValueExpression::Bool(pair.as_str() == "true"),
         Rule::identifier => ValueExpression::Identifier(pair.as_str().to_string()),
         Rule::call_expr => {
@@ -553,7 +553,7 @@ fn parse_expression(pair: Pair<Rule>) -> Expression {
             }
         }
         Rule::string => Expression::StringLit(parse_string(&pair)),
-        Rule::number => Expression::NumLit(parse_number(&pair)),
+        Rule::number => Expression::NumLit(parse_number(&pair).into()),
         Rule::boolean => Expression::BoolLit(pair.as_str() == "true"),
         Rule::identifier => Expression::Ident(pair.as_str().to_string()),
         Rule::call_expr => {
@@ -603,7 +603,7 @@ fn parse_expression(pair: Pair<Rule>) -> Expression {
 fn parse_primary_expression(pair: Pair<Rule>) -> Expression {
     match pair.as_rule() {
         Rule::string => Expression::StringLit(parse_string(&pair)),
-        Rule::number => Expression::NumLit(parse_number(&pair)),
+        Rule::number => Expression::NumLit(parse_number(&pair).into()),
         Rule::boolean => Expression::BoolLit(pair.as_str() == "true"),
         Rule::identifier => Expression::Ident(pair.as_str().to_string()),
         Rule::call_expr => {
@@ -1303,12 +1303,12 @@ fn extract_position_property(properties: &[PropertyAssignment]) -> Option<Positi
     };
     let as_number = |v: &ValueExpression| -> Option<f64> {
         match v {
-            ValueExpression::Number(n) => Some(*n),
+            ValueExpression::Number(n) => Some(n.value()),
             ValueExpression::UnaryOp {
                 op: UnaryOp::Neg,
                 operand,
             } => match operand.as_ref() {
-                ValueExpression::Number(n) => Some(-*n),
+                ValueExpression::Number(n) => Some(-n.value()),
                 _ => None,
             },
             _ => None,
@@ -1321,7 +1321,10 @@ fn extract_position_property(properties: &[PropertyAssignment]) -> Option<Positi
             .and_then(|m| as_number(&m.value))
     };
     match (get("x"), get("y")) {
-        (Some(x), Some(y)) => Some(Position { x, y }),
+        (Some(x), Some(y)) => Some(Position {
+            x: x.into(),
+            y: y.into(),
+        }),
         _ => None,
     }
 }
@@ -2176,7 +2179,13 @@ view "DeleteConfirm" {
         assert!(cl.is_landmark);
         assert_eq!(cl.components.len(), 2);
         assert_eq!(cl.containers.len(), 0);
-        assert_eq!(cl.position, Some(Position { x: 100.0, y: 200.0 }));
+        assert_eq!(
+            cl.position,
+            Some(Position {
+                x: 100.0.into(),
+                y: 200.0.into()
+            })
+        );
 
         let cd = &model.views[1];
         assert_eq!(cd.name, "CustomerDetail");
@@ -2274,12 +2283,24 @@ view "Pos2" {
         assert_eq!(model.views.len(), 2);
 
         let view = &model.views[0];
-        assert_eq!(view.position, Some(Position { x: -12.5, y: 240.0 }));
+        assert_eq!(
+            view.position,
+            Some(Position {
+                x: (-12.5).into(),
+                y: 240.0.into()
+            })
+        );
         assert_eq!(view.properties.len(), 1);
         assert_eq!(view.properties[0].key, "position");
 
         let container = &model.views[1].containers[0];
-        assert_eq!(container.position, Some(Position { x: 30.75, y: -5.0 }));
+        assert_eq!(
+            container.position,
+            Some(Position {
+                x: 30.75.into(),
+                y: (-5.0).into()
+            })
+        );
     }
 
     #[test]
@@ -2309,7 +2330,13 @@ view "Pos" {
 }
 "#;
         let model = parse_ifml(input).unwrap();
-        assert_eq!(model.views[0].position, Some(Position { x: 10.0, y: 20.0 }));
+        assert_eq!(
+            model.views[0].position,
+            Some(Position {
+                x: 10.0.into(),
+                y: 20.0.into()
+            })
+        );
     }
 
     #[test]
@@ -3191,14 +3218,14 @@ module "Pager" {
         );
 
         assert_eq!(params[2].name, "page");
-        assert_eq!(params[2].default, Some(ValueExpression::Number(1.0)));
+        assert_eq!(params[2].default, Some(ValueExpression::Number(1.0.into())));
 
         assert_eq!(params[3].name, "verbose");
         assert_eq!(params[3].default, Some(ValueExpression::Bool(true)));
 
         assert_eq!(
             model.modules[0].input_params[0].default,
-            Some(ValueExpression::Number(0.0))
+            Some(ValueExpression::Number(0.0.into()))
         );
     }
 
@@ -3216,7 +3243,7 @@ view "V" {
         let model = parse_ifml(input).unwrap();
         assert_eq!(
             model.views[0].params[0].default,
-            Some(ValueExpression::Number(-2.0))
+            Some(ValueExpression::Number((-2.0).into()))
         );
     }
 
@@ -3287,7 +3314,7 @@ view "Wizard" {
         assert_eq!(module_use.properties[0].key, "page_size");
         assert_eq!(
             module_use.properties[0].value,
-            ValueExpression::Number(25.0)
+            ValueExpression::Number(25.0.into())
         );
         assert_eq!(module_use.properties[1].key, "compact");
         assert_eq!(module_use.properties[1].value, ValueExpression::Bool(true));
@@ -3886,10 +3913,23 @@ view "Refunds" {
 }
 "#,
         );
-        assert_eq!(
-            json["requires"],
-            serde_json::json!([]),
-            "events without requires carry an empty list (serde default): {json}"
+        assert!(
+            json.get("requires").is_none(),
+            "events without requires omit the key (skip_serializing_if): {json}"
         );
+        let model = parse_ifml(
+            r#"
+view "Refunds" {
+    component "grid" {
+        type: list;
+        data: Refund;
+
+        on click -> stay;
+    }
+}
+"#,
+        )
+        .expect("parse");
+        assert!(model.views[0].components[0].events[0].requires.is_empty());
     }
 }

@@ -52,7 +52,7 @@ docs):
 Minimal artifact: an empty model serializes as exactly `{"formatVersion":1}`.
 
 ```rust
-let compilation = rex_driver::compile_ddd_str("library.ddd", source, &domains);
+let compilation = rex_driver::compile_ddd_str("library.ddd", source, &domains, &rex_driver::DomainImports::default());
 let json = compilation.model.unwrap().to_json_pretty()?; // versioned artifact
 let model = rex_ir::ddd::DddModel::from_json(&json)?;    // version-gated reload
 ```
@@ -77,39 +77,15 @@ let model = rex_ir::ddd::DddModel::from_json(&json)?;    // version-gated reload
 
 ## Grammar
 
-```
-ddd_file      := import_decl* application_decl
-import_decl   := "import" string (";")?
-application   := "application" name "{" base_decl? module* "}"
-base_decl     := "base" qualified_name
-module        := "module" name "{" (service_decl | design_decl | search_decl)* "}"
-service_decl  := "service" name "{" (service_op | inject_decl)* "}"
-service_op    := signature capability_clause? ";"
-               | name "=>" target "." operation capability_clause? ";"
-signature     := type_ref multiplicity? name "(" (param ("," param)*)? ")"
-param         := type_ref multiplicity? name
-capability_clause := "capability" name ("," name)*
-inject_decl   := "inject" name ";"
-design_decl   := "abstract"? stereotype name flag* repository_decl?
-stereotype    := "entity" | "value" | "dto"
-flag          := "scaffold" | "auditable" | "optimisticLocking"
-               | "nonPersistent" | "cache"
-repository_decl  := "repository" name "{" repository_op* "}"
-repository_op := ("findById" | "findAll" | "save" | "delete") ";"
-               | signature ";"
-search_decl   := "search" name "{" search_member* "}"
-search_member := "entity" qualified_name
-               | "text" "{" search_field+ "}"
-               | "filters" "{" qualified_name+ "}"
-               | "sort" "{" qualified_name+ "}"
-               | "document" "{" (name "=" expr ";")* "}"
-               | "ranking" ("bm25" | "tfIdf" | "exact" | "custom" string)
-               | "analyzer" string
-               | "pagination" "{" pagination_member* "}"
-               | capability_clause
-search_field  := qualified_name ("boost" int)? ("analyzer" string)?
-pagination_member := "limit" int | "max" int | "cursor"
-```
+The normative EBNF for the `.ddd` surface lives exactly once, in the parser
+module docs under [*`.ddd` design
+sources*](https://docs.rs/rex-syntax/latest/rex_syntax/parser/index.html)
+(`crates/rex-syntax/src/parser.rs`) — the single authority for `ddd_file`,
+`application_decl`, `module_decl`, `service_decl`, `design_decl`,
+`repository_decl`, and `search_decl`; this page keeps only the
+language-level rules. The `.ddd` keyword tables in
+`crates/rex-syntax/src/ddd.rs` are the keyword authority the parser and the
+formatter share.
 
 Lexical and structural rules:
 
@@ -122,8 +98,9 @@ Lexical and structural rules:
 - `import` declarations must precede the `application` declaration; there
   is exactly one application per file, and `base` must be its first member
   when present.
-- A `///` doc comment run directly above a `service` declaration becomes
-  the service's description in the artifact.
+- A `///` doc comment run directly above a `service` or `search` declaration
+  becomes its description in the artifact. Contiguous `///` lines join with
+  newlines — the same semantic as the `.mox` doc collection (`docs/LANGUAGE.md`).
 - Delegated operations (`name => target.operation`) copy the target's
   signature conceptually and declare none of their own; a delegated op may
   be named `save` (contextual keywords). Declared service operations may

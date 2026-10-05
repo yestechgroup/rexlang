@@ -36,7 +36,7 @@ fn span_of(source: &str, needle: &str) -> std::ops::Range<usize> {
 fn string_default_on_enum_attribute_is_rejected() {
     let source =
         "package demo\n\nenum Color { Red = 0 }\n\nclass Thing {\n    Color c = \"red\"\n}\n";
-    let compilation = compile_str("thing.mox", source);
+    let compilation = compile_str("thing.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors block lowering");
     let diagnostic = diagnostic(
         source,
@@ -50,7 +50,7 @@ fn string_default_on_enum_attribute_is_rejected() {
 #[test]
 fn string_default_on_int_attribute_is_rejected() {
     let source = "package demo\n\nclass Thing {\n    int count = \"many\"\n}\n";
-    let compilation = compile_str("thing.mox", source);
+    let compilation = compile_str("thing.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors block lowering");
     let diagnostic = diagnostic(
         source,
@@ -64,7 +64,7 @@ fn string_default_on_int_attribute_is_rejected() {
 #[test]
 fn string_default_on_boolean_attribute_is_rejected() {
     let source = "package demo\n\nclass Thing {\n    boolean active = \"yes\"\n}\n";
-    let compilation = compile_str("thing.mox", source);
+    let compilation = compile_str("thing.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors block lowering");
     let diagnostic = diagnostic(
         source,
@@ -78,7 +78,7 @@ fn string_default_on_boolean_attribute_is_rejected() {
 #[test]
 fn int_default_on_string_attribute_is_rejected() {
     let source = "package demo\n\nclass Thing {\n    String name = 7\n}\n";
-    let compilation = compile_str("thing.mox", source);
+    let compilation = compile_str("thing.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors block lowering");
     let diagnostic = diagnostic(
         source,
@@ -92,7 +92,7 @@ fn int_default_on_string_attribute_is_rejected() {
 #[test]
 fn int_default_on_boolean_attribute_is_rejected() {
     let source = "package demo\n\nclass Thing {\n    boolean active = 1\n}\n";
-    let compilation = compile_str("thing.mox", source);
+    let compilation = compile_str("thing.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors block lowering");
     let diagnostic = diagnostic(
         source,
@@ -106,7 +106,7 @@ fn int_default_on_boolean_attribute_is_rejected() {
 #[test]
 fn int_default_on_enum_attribute_is_rejected() {
     let source = "package demo\n\nenum Color { Red = 0 }\n\nclass Thing {\n    Color c = 3\n}\n";
-    let compilation = compile_str("thing.mox", source);
+    let compilation = compile_str("thing.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors block lowering");
     let diagnostic = diagnostic(
         source,
@@ -120,7 +120,7 @@ fn int_default_on_enum_attribute_is_rejected() {
 #[test]
 fn boolean_default_on_string_attribute_is_rejected() {
     let source = "package demo\n\nclass Thing {\n    String name = true\n}\n";
-    let compilation = compile_str("thing.mox", source);
+    let compilation = compile_str("thing.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors block lowering");
     let diagnostic = diagnostic(
         source,
@@ -134,7 +134,7 @@ fn boolean_default_on_string_attribute_is_rejected() {
 #[test]
 fn boolean_default_on_int_attribute_is_rejected() {
     let source = "package demo\n\nclass Thing {\n    int count = false\n}\n";
-    let compilation = compile_str("thing.mox", source);
+    let compilation = compile_str("thing.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors block lowering");
     let diagnostic = diagnostic(
         source,
@@ -149,7 +149,7 @@ fn boolean_default_on_int_attribute_is_rejected() {
 fn boolean_default_on_enum_attribute_is_rejected() {
     let source =
         "package demo\n\nenum Color { Red = 0 }\n\nclass Thing {\n    Color c = false\n}\n";
-    let compilation = compile_str("thing.mox", source);
+    let compilation = compile_str("thing.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors block lowering");
     let diagnostic = diagnostic(
         source,
@@ -164,7 +164,7 @@ fn boolean_default_on_enum_attribute_is_rejected() {
 fn int_default_on_datatype_attribute_is_rejected() {
     let source =
         "package demo\n\ntype Money wraps opaque\n\nclass Thing {\n    Money amount = 5\n}\n";
-    let compilation = compile_str("thing.mox", source);
+    let compilation = compile_str("thing.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors block lowering");
     let diagnostic = diagnostic(
         source,
@@ -183,7 +183,7 @@ fn int_default_on_datatype_attribute_is_rejected() {
 fn boolean_default_on_datatype_attribute_is_rejected() {
     let source =
         "package demo\n\ntype Money wraps opaque\n\nclass Thing {\n    Money amount = true\n}\n";
-    let compilation = compile_str("thing.mox", source);
+    let compilation = compile_str("thing.mox", source, &rex_driver::DomainImports::default());
     assert!(compilation.model.is_none(), "errors block lowering");
     let diagnostic = diagnostic(
         source,
@@ -214,7 +214,7 @@ class Thing {
     Money amount = "9.99"
 }
 "#;
-    let compilation = compile_str("thing.mox", source);
+    let compilation = compile_str("thing.mox", source, &rex_driver::DomainImports::default());
     assert!(
         compilation.diagnostics.is_empty(),
         "expected no diagnostics, got:\n{}",

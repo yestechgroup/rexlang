@@ -116,6 +116,18 @@
 //!     byte-identical to earlier output; the converse (an artifact carrying
 //!     `"date"`) requires a reader that knows the tag. Values surface on the
 //!     wire (instance JSON) as ISO-8601 `YYYY-MM-DD` strings.
+//! 14. **Equality policy.** Every artifact root — [`Model`],
+//!     [`ActorModel`], [`ddd::DddModel`], and [`ifml::IfmlModel`] — and
+//!     every type nested inside them derives [`Eq`] (structural value
+//!     equality). The artifacts' only floating-point values are wrapped in
+//!     ordered newtypes: [`ddd::Boost`] (the search-field relevance
+//!     weight) and [`ifml::Float`] (IFML layout coordinates, property
+//!     numbers, and condition literals). Both serialize *transparently* as
+//!     the bare JSON number they wrap — byte-identical to a raw
+//!     `f32`/`f64` — and take `Eq`/`Ord`/`Hash` from `total_cmp`
+//!     semantics: reflexive even for `NaN`, `-0.0` distinguished from
+//!     `0.0`. Wire artifacts therefore compare and hash deterministically,
+//!     and a raw float never appears in a public artifact field.
 //!
 //! [rexlang]: https://github.com/anton-makes/rexlang
 
@@ -2170,5 +2182,23 @@ mod tests {
             .to_json()
             .expect("serialize")
             .contains("\"value\":\"date\""));
+    }
+
+    #[test]
+    fn every_artifact_root_derives_eq() {
+        // Wire contract rule 14: one Eq policy across all four artifacts —
+        // the only floats in any of them are the ordered newtypes, so the
+        // roots (and everything nested in them) can and must derive Eq.
+        fn assert_eq_type<T: Eq>() {}
+        assert_eq_type::<Model>();
+        assert_eq_type::<ActorModel>();
+        assert_eq_type::<ddd::DddModel>();
+        assert_eq_type::<ifml::IfmlModel>();
+        // The ordered-float newtypes themselves carry the full package.
+        assert_eq_type::<ddd::Boost>();
+        assert_eq_type::<ifml::Float>();
+        fn assert_ord_type<T: Ord>() {}
+        assert_ord_type::<ddd::Boost>();
+        assert_ord_type::<ifml::Float>();
     }
 }

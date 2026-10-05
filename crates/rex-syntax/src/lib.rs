@@ -2,6 +2,16 @@
 //! chumsky-based parser, and the spanned AST they produce for `.mox` model
 //! sources, `.actor` actor-policy sources, and `.ddd` design sources.
 //!
+//! # Grammar authority
+//!
+//! The normative EBNF for all three surfaces lives in the [parser module
+//! docs](crate::parser) — the single place the grammar is written down;
+//! `docs/LANGUAGE.md` and `docs/DDD.md` link there instead of restating it.
+//! The `.ifml` surface is parsed by rex-ifml and its grammar authority is
+//! that crate's Pest grammar file (`crates/rex-ifml/src/grammar/ifml.pest`).
+//! For `.ddd` keywords the tables in the crate-internal `ddd` module are the
+//! authority the parser and formatter share.
+//!
 //! Typical use:
 //!
 //! ```
@@ -15,6 +25,7 @@
 //! the shape of [`parse`]; `.ddd` files use [`parse_ddd`] the same way.
 
 pub mod ast;
+pub(crate) mod ddd;
 pub mod fmt;
 pub mod lexer;
 pub mod parser;
