@@ -4452,75 +4452,49 @@ pub(crate) struct DomainUnit {
 }
 
 /// Builds the combined type namespace of the error-free domains (in
-/// first-appearance order): each domain's declared top-level types plus its
-/// `import schema` nominal classes. This is the shared namespace the
-/// `.actor` and `.ddd` pipelines resolve their references against.
+/// first-appearance order): each domain's lowered model is the single
+/// source of truth — its declared top-level types, its `import schema`
+/// nominal classes, and the synthetic sigil packages it carries are all
+/// already lowered into it. This is the shared namespace the `.actor` and
+/// `.ddd` pipelines resolve their references against. A domain that failed
+/// to lower (its model is absent) contributes no namespaces.
 pub(crate) fn domain_namespaces(domains: &[DomainUnit]) -> Vec<DomainPackage> {
     domains
         .iter()
         .filter_map(|unit| {
             let model = unit.model.as_ref()?;
-            let ast = unit.ast.as_ref()?;
-            let mut kinds: HashMap<String, TopKind> = HashMap::new();
-            for decl in &ast.declarations {
-                let kind = match decl {
-                    mox::Decl::Class(_) => TopKind::Class,
-                    mox::Decl::Interface(_) => TopKind::Interface,
-                    mox::Decl::Enum(_) => TopKind::Enum,
-                    mox::Decl::Datatype(_) => TopKind::Datatype,
-                    mox::Decl::Vocabulary(_) => TopKind::Vocabulary,
-                    mox::Decl::Actors(_) => TopKind::Actors,
-                    mox::Decl::Annotation(_) => continue,
-                    // `import schema` joins the namespace as a nominal
-                    // class; `import sigil` content arrives through the
-                    // model's synthetic packages below.
-                    mox::Decl::ImportSchema(decl) if decl.kind == mox::ImportKind::Schema => {
-                        kinds.entry(imported_name(decl)).or_insert(TopKind::Class);
-                        continue;
-                    }
-                    mox::Decl::ImportSchema(_) => continue,
-                };
-                let name = decl
-                    .name()
-                    .map(|name| name.text.clone())
-                    .unwrap_or_default();
-                kinds.entry(name).or_insert(kind);
-            }
-            let own_package = model.packages[0].name.clone();
-            let package = DomainPackage {
-                name: own_package.clone(),
-                kinds,
-            };
-            let mut package_kinds: Vec<(String, HashMap<String, TopKind>)> = Vec::new();
-            // The synthetic sigil packages the unit carries (every model
-            // package beyond the file's own) join the namespace too, so
-            // capability targets and `when`/design resolution see the
-            // imported rosetta types.
-            for synthetic in model.packages.iter().skip(1) {
-                if synthetic.name == package.name {
+            let mut packages_out: Vec<DomainPackage> = Vec::new();
+            for (index, package) in model.packages.iter().enumerate() {
+                // A synthetic package named like the file's own package
+                // stays out (defensive: sigil namespaces colliding with
+                // declared packages error at lowering, so an error-free
+                // model cannot carry one).
+                if index > 0 && package.name == model.packages[0].name {
                     continue;
                 }
                 let mut kinds: HashMap<String, TopKind> = HashMap::new();
-                for class in &synthetic.classes {
+                for class in &package.classes {
                     kinds.insert(class.name.clone(), TopKind::Class);
                 }
-                for interface in &synthetic.interfaces {
+                for interface in &package.interfaces {
                     kinds.insert(interface.name.clone(), TopKind::Interface);
                 }
-                for enum_ in &synthetic.enums {
+                for enum_ in &package.enums {
                     kinds.insert(enum_.name.clone(), TopKind::Enum);
                 }
-                for datatype in &synthetic.datatypes {
+                for datatype in &package.datatypes {
                     kinds.insert(datatype.name.clone(), TopKind::Datatype);
                 }
-                for vocabulary in &synthetic.vocabularies {
+                for vocabulary in &package.vocabularies {
                     kinds.insert(vocabulary.name.clone(), TopKind::Vocabulary);
                 }
-                package_kinds.push((synthetic.name.clone(), kinds));
-            }
-            let mut packages_out = vec![package];
-            for (name, kinds) in package_kinds {
-                packages_out.push(DomainPackage { name, kinds });
+                for actors in &package.actors {
+                    kinds.insert(actors.name.clone(), TopKind::Actors);
+                }
+                packages_out.push(DomainPackage {
+                    name: package.name.clone(),
+                    kinds,
+                });
             }
             Some(packages_out)
         })

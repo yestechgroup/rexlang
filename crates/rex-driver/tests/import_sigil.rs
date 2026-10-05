@@ -1047,6 +1047,73 @@ fn missing_sigil_content_blocks_the_actor_domain() {
 }
 
 #[test]
+fn actor_pipeline_resolves_declared_schema_and_sigil_names_from_one_domain() {
+    // The model is the single source of the domain's kind registry: one
+    // domain file contributes its declared class (Wrapper), its
+    // `import schema` nominal class (TodoItem), and a synthetic sigil
+    // package (oracle.basic.Trade) — capabilities on all three resolve.
+    let domain = concat!(
+        "package demo\n\n",
+        "import schema \"schemas/todo_item.json\" as TodoItem\n",
+        "import sigil \"oracle/trade.rosetta\"\n\n",
+        "class Wrapper { String x }\n"
+    );
+    let actor = concat!(
+        "import \"demo.mox\"\n\n",
+        "actors Ops {\n",
+        "    actor Agent\n",
+        "    capability TouchWrapper on Wrapper\n",
+        "    capability TouchItem on TodoItem\n",
+        "    capability TouchTrade on Trade\n",
+        "    grant Agent { permit TouchWrapper }\n",
+        "    grant Agent { permit TouchItem }\n",
+        "    grant Agent { permit TouchTrade }\n",
+        "}\n"
+    );
+    let compilation = rex_driver::compile_actors_str(
+        "ops.actor",
+        actor,
+        &[(MOX.to_string(), domain.to_string())],
+        &rex_driver::DomainImports {
+            schemas: rex_driver::SchemaImports::new().provide(
+                MOX,
+                "schemas/todo_item.json",
+                "{\"title\": \"Todo item\"}",
+            ),
+            sigil: sigil_imports(),
+        },
+    );
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        compilation.diagnostics
+    );
+    let model = compilation.model.expect("actor model lowered");
+    let block = &model.blocks[0];
+    assert_eq!(
+        block.capabilities[0].class,
+        TypeRef::Class {
+            package: "demo".to_string(),
+            name: "Wrapper".to_string(),
+        }
+    );
+    assert_eq!(
+        block.capabilities[1].class,
+        TypeRef::Class {
+            package: "demo".to_string(),
+            name: "TodoItem".to_string(),
+        }
+    );
+    assert_eq!(
+        block.capabilities[2].class,
+        TypeRef::Class {
+            package: "oracle.basic".to_string(),
+            name: "Trade".to_string(),
+        }
+    );
+}
+
+#[test]
 fn sigil_content_errors_surface_tagged_with_the_rosetta_path() {
     // A rosetta attribute typed by an unknown name fails resolution; the
     // diagnostic is keyed by the rosetta path and blocks the artifact.
