@@ -27,11 +27,11 @@ cargo test --workspace                          # full suite (~600 tests)
 cargo test -p rex-driver --test navigation      # one test suite
 cargo clippy --workspace --all-targets          # must be ZERO warnings
 cargo fmt --all                                 # rustfmt
-cargo run -p rex-cli -- fmt --check tests/conformance/models/*.mox tests/conformance/models/*.actor   # fixture format gate (.ddd gate: tests/conformance/ddd/*.ddd; sigil gate: tests/conformance/sigil/*.mox)
+cargo run -p rex-cli -- fmt --check tests/conformance/models/*.mox tests/conformance/models/*.actor   # fixture format gate (.ddd gate: tests/conformance/ddd/*.ddd; sigil gate: tests/conformance/sigil/*.mox; .evt gate: tests/conformance/events/*.evt)
 REX_UPDATE_FIXTURES=1 cargo test --workspace    # regenerate golden files
 ```
 
-CI (`.github/workflows/ci.yml`) runs build, tests, `clippy -- -D warnings`, then **both** format gates: `cargo fmt --all -- --check` **and** `rexlang fmt --check` on the canonical fixtures (`.mox`, `.actor`, and `.ddd`, plus the sigil fixture's `.mox`). A warning anywhere is a failure.
+CI (`.github/workflows/ci.yml`) runs build, tests, `clippy -- -D warnings`, then **both** format gates: `cargo fmt --all -- --check` **and** `rexlang fmt --check` on the canonical fixtures (`.mox`, `.actor`, `.ddd`, and `.evt`, plus the sigil fixture's `.mox`). A warning anywhere is a failure.
 
 ## Testing quirks
 
@@ -49,7 +49,8 @@ CI (`.github/workflows/ci.yml`) runs build, tests, `clippy -- -D warnings`, then
 - `id`/`readonly` are contextual identifiers, not keywords — they remain usable as feature names. Actor words (`actors actor agent capability grant permit forbid when obligation on never_both delegation purpose cedar import`) ARE real keywords, escapable with `^`. `schema`/`sigil` are contextual (only after `import`); `to` is contextual on delegation lines.
 - `when` conditions are **fully type-checked** against the capability's class (single-file and `.actor` compiles) via rex-expr; the Cedar backend separately rejects constructs it cannot map at generate time (errors name the capability). Multiple obligations on one grant entry serialize as ONE Cedar annotation with comma-joined values (Cedar rejects duplicate annotation keys).
 - `cedar-policy` is a **dev-dependency of rex-backend-cedar only** — the backend never links Cedar. It enables serde_json's `preserve_order`, which unifies workspace-wide and flips `serde_json::Map` to insertion order; emitters must canonicalize key order themselves (see the jsonschema backend's `canonical_key_order`) or goldens drift.
-- `rexlang fmt` dispatches by file extension (`.mox` vs `.actor` vs `.ddd` formatters); stdin is treated as `.mox`.
+- `rexlang fmt` dispatches by file extension (`.mox` vs `.actor` vs `.ddd` vs `.evt` formatters); stdin is treated as `.mox`.
+- `.evt` conformance fixtures live in `tests/conformance/events/` (that's what the CI fmt gate covers); `tests/conformance/models/events.evt` is the deliberately **non-canonical** source that `tests/conformance/fmt/events.fmt.evt` golden-compares the formatter against — don't cite it as a canonical model or "fix" its spacing.
 - `.actor` import resolution lives in the CLI (paths relative to the `.actor` file, read from disk); the driver receives texts only and stays filesystem-free (`compile_actors_str`). Import-path strings must match provided domain paths exactly.
 - `.mox` `import schema "<path>" as <Alias>` registers a **nominal, feature-less class** (alias, else the file stem) in the package namespace — JSON content is validated but never lowered into features (v1 is opaque). `schema` is a contextual keyword (only after `import`); the driver stays filesystem-free via the `DomainImports` bundle every compile entry point takes (`SchemaImports`/`SigilImports` inside, keyed `(mox path, import path)`) — the CLI resolves paths relative to the `.mox` file, `DomainImports::default()` provides nothing (→ `imported schema '<path>' was not provided`). `rexlang fmt` hoists the declarations into a section directly after `package`.
 - `rust` op bodies are emitted **verbatim** into the generated method; an `expr` body is parsed/typed/lowered at generate time (generate-time errors name the operation). No `rust` body ⇒ no generated method.
