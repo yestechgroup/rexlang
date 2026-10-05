@@ -19,6 +19,13 @@
 //!
 //! The wire-format contract itself is normative in the `rex-ir` crate docs;
 //! `docs/BACKENDS.md` is the backend-author guide.
+//!
+//! Classification is **shape-sniffing**, not self-declared: no artifact kind
+//! except instances carries a root `$type` discriminator. The precedence is
+//! documented on [`check`], and
+//! [`tests::classification_table_over_all_artifact_kinds`] pins it for every
+//! kind — including the two shapes an [`rex_ir::ifml::IfmlModel`] artifact
+//! collides with (IFML is deliberately not a classified kind; see the table).
 
 use std::collections::BTreeSet;
 
@@ -57,6 +64,35 @@ pub fn check_str(path: &str, text: &str) -> Result<ArtifactKind, Vec<String>> {
 }
 
 /// Validates one artifact document without path prefixing.
+///
+/// Classification precedence — the first matching rule wins:
+///
+/// 1. **`$type` (instances).** A root `$type` selects the instance path:
+///    `rex.instance` validates as an [`ArtifactKind::Instance`]; any other
+///    string is rejected (IR/actor/DDD artifacts carry no root `$type`).
+/// 2. **`packages`/`rexVersion` → IR artifact.** A [`rex_ir::Model`] always
+///    emits `packages` (and stamps `rexVersion` provenance), so either key
+///    claims the document for [`ArtifactKind::IrModel`].
+/// 3. **`application`/`modules` → DDD design.** A `formatVersion`-bearing
+///    root without `blocks` that carries an `application` object or a
+///    `modules` array validates as a [`ArtifactKind::DddModel`]. This check
+///    runs *before* the actor fallback: those keys exist on no other
+///    artifact, so design-shaped documents must be reported as designs even
+///    when malformed (the tightened-fallback regression).
+/// 4. **`blocks` or exactly `{"formatVersion": N}` → actor artifact.** The
+///    canonical block-less [`rex_ir::ActorModel`] is exactly the version
+///    marker, and the marker alone can only be an ActorModel (a Model always
+///    emits `packages`; a DddModel always carries the design keys), so the
+///    minimal-empty document falls here.
+/// 5. **Anything else** is rejected as `unrecognized artifact`.
+///
+/// Known limitation: [`rex_ir::ifml::IfmlModel`] is *not* a classified kind.
+/// Its shape-sniffed classification is ambiguous — an empty IFML model
+/// serializes as exactly `{"formatVersion":1}` (rule 4), and a module-bearing
+/// one carries `modules` (rule 3); only a view-bearing one is unrecognized.
+/// A root `$type` discriminator on all artifact kinds would resolve this, at
+/// the cost of a wire-format change (golden churn, version bump) — see the
+/// classification table test for the pinned behavior.
 pub fn check(text: &str) -> Result<ArtifactKind, Vec<String>> {
     let value: Value = match serde_json::from_str(text) {
         Ok(value) => value,
@@ -525,6 +561,148 @@ fn quoted_list(keys: &[&String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One row of the classification table: a document and the outcome
+    /// `check` must produce. `Err` rows carry a fragment every error line
+    /// must contain (the kind whose check claimed the document).
+    struct ClassificationCase {
+        name: &'static str,
+        json: String,
+        expected: Result<ArtifactKind, &'static str>,
+    }
+
+    #[test]
+    fn classification_table_over_all_artifact_kinds() {
+        // Round-trip rows serialize the real struct kinds (rex_ir types),
+        // so the table pins the classification of actual emitter output,
+        // not hand-written approximations.
+        let block_less_actor = rex_ir::ActorModel::new();
+        let block_less_actor_json =
+            serde_json::to_string(&block_less_actor).expect("serialize ActorModel");
+        let empty_ifml = rex_ir::ifml::IfmlModel::default();
+        let empty_ifml_json = serde_json::to_string(&empty_ifml).expect("serialize IfmlModel");
+
+        let cases = vec![
+            ClassificationCase {
+                name: "domain IR artifact (serialized rex_ir::Model)",
+                json: serde_json::to_string(&rex_ir::Model::new()).expect("serialize Model"),
+                expected: Ok(ArtifactKind::IrModel),
+            },
+            ClassificationCase {
+                name: "actor-policy artifact with a block (serialized ActorModel)",
+                json: serde_json::to_string(
+                    &rex_ir::ActorModel::new().block(rex_ir::ActorsDef::new("Support")),
+                )
+                .expect("serialize ActorModel"),
+                expected: Ok(ArtifactKind::ActorModel),
+            },
+            ClassificationCase {
+                name: "minimal-empty artifact is the block-less ActorModel",
+                json: block_less_actor_json.clone(),
+                expected: Ok(ArtifactKind::ActorModel),
+            },
+            ClassificationCase {
+                name: "DDD design artifact (serialized DddModel)",
+                json: serde_json::to_string(
+                    &rex_ir::ddd::DddModel::new()
+                        .application(rex_ir::ddd::Application::new("Library"))
+                        .module(rex_ir::ddd::Module::new("core")),
+                )
+                .expect("serialize DddModel"),
+                expected: Ok(ArtifactKind::DddModel),
+            },
+            // Misclassification guard: a malformed design-shaped document
+            // must be reported by the DddModel check, never fall through to
+            // the actor fallback (whose "missing formatVersion"-style errors
+            // would misattribute the artifact kind).
+            ClassificationCase {
+                name: "malformed design shape is reported as a DddModel, not an ActorModel",
+                json: r#"{"formatVersion": 1, "application": {"name": "X"}, "modules": [{"oops": true}]}"#
+                    .to_string(),
+                expected: Err("modules[0]"),
+            },
+            ClassificationCase {
+                name: "unknown root shape is unrecognized",
+                json: r#"{"formatVersion": 1, "nobodyKnowsMe": true}"#.to_string(),
+                expected: Err("unrecognized artifact"),
+            },
+            // IfmlModel is not a classified kind; the two shape collisions
+            // and the one clean miss are pinned here so any future $type
+            // discriminator must update them consciously.
+            ClassificationCase {
+                name: "empty IFML artifact serializes as the same minimal-empty bytes",
+                json: {
+                    assert_eq!(
+                        empty_ifml_json, block_less_actor_json,
+                        "an empty IfmlModel and an empty ActorModel are \
+                         byte-identical on the wire"
+                    );
+                    empty_ifml_json.clone()
+                },
+                expected: Ok(ArtifactKind::ActorModel),
+            },
+            ClassificationCase {
+                name: "module-bearing IFML artifact shape-matches the DDD design keys",
+                json: serde_json::to_string(&rex_ir::ifml::IfmlModel {
+                    modules: vec![rex_ir::ifml::ModuleDeclaration {
+                        name: "Pagination".to_string(),
+                        input_params: Vec::new(),
+                        output_params: Vec::new(),
+                        properties: Vec::new(),
+                        containers: Vec::new(),
+                        components: Vec::new(),
+                        events: Vec::new(),
+                    }],
+                    ..rex_ir::ifml::IfmlModel::default()
+                })
+                .expect("serialize IfmlModel"),
+                expected: Ok(ArtifactKind::DddModel),
+            },
+            ClassificationCase {
+                name: "view-bearing IFML artifact has no recognized root shape",
+                json: serde_json::to_string(&rex_ir::ifml::IfmlModel {
+                    views: vec![rex_ir::ifml::ViewDeclaration {
+                        name: "Home".to_string(),
+                        label: None,
+                        is_landmark: false,
+                        is_xor: false,
+                        is_modal: false,
+                        params: Vec::new(),
+                        properties: Vec::new(),
+                        containers: Vec::new(),
+                        components: Vec::new(),
+                        events: Vec::new(),
+                        module_uses: Vec::new(),
+                        roles: Vec::new(),
+                        requires: Vec::new(),
+                        condition: None,
+                        position: None,
+                    }],
+                    ..rex_ir::ifml::IfmlModel::default()
+                })
+                .expect("serialize IfmlModel"),
+                expected: Err("unrecognized artifact"),
+            },
+        ];
+
+        for case in &cases {
+            match (&case.expected, check(&case.json)) {
+                (Ok(kind), Ok(found)) => assert_eq!(
+                    found, *kind,
+                    "{}: classified as {found:?}, expected {kind:?}",
+                    case.name
+                ),
+                (Err(fragment), Err(errors)) => assert!(
+                    errors.iter().any(|error| error.contains(fragment)),
+                    "{}: errors {errors:?} must mention {fragment:?}",
+                    case.name
+                ),
+                (expected, found) => {
+                    panic!("{}: expected {expected:?}, found {found:?}", case.name)
+                }
+            }
+        }
+    }
 
     #[test]
     fn bare_format_version_classifies_as_block_less_actor_model() {

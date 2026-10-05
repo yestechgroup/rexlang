@@ -3886,10 +3886,23 @@ view "Refunds" {
 }
 "#,
         );
-        assert_eq!(
-            json["requires"],
-            serde_json::json!([]),
-            "events without requires carry an empty list (serde default): {json}"
+        assert!(
+            json.get("requires").is_none(),
+            "events without requires omit the key (skip_serializing_if): {json}"
         );
+        let model = parse_ifml(
+            r#"
+view "Refunds" {
+    component "grid" {
+        type: list;
+        data: Refund;
+
+        on click -> stay;
+    }
+}
+"#,
+        )
+        .expect("parse");
+        assert!(model.views[0].components[0].events[0].requires.is_empty());
     }
 }

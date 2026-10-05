@@ -1527,9 +1527,10 @@ fn attach_docs(model: &mut Model, comments: &[crate::lexer::Comment<'_>], source
     }
 }
 
-/// Attaches doc comments to a `.ddd` file's services (the only documented
-/// declaration kind for M1). The contiguous `///` run is joined into a
-/// single-line description (newlines become spaces).
+/// Attaches doc comments to a `.ddd` file's services and searches. The
+/// contiguous `///` run is joined with newlines into a single description —
+/// the same semantic as the `.mox` doc collection ([`doc_run_above`] is
+/// shared; no re-joining happens here).
 fn attach_ddd_docs(file: &mut DddFile, comments: &[crate::lexer::Comment<'_>], source: &str) {
     let starts = line_starts(source);
     let line_of = |byte: usize| line_of(byte, &starts);
@@ -1538,11 +1539,11 @@ fn attach_ddd_docs(file: &mut DddFile, comments: &[crate::lexer::Comment<'_>], s
         for module in &mut application.modules {
             for service in &mut module.services {
                 let start_line = line_of(service.span.start);
-                service.doc = doc_run_above(&docs, start_line).map(|text| text.replace('\n', " "));
+                service.doc = doc_run_above(&docs, start_line);
             }
             for search in &mut module.searches {
                 let start_line = line_of(search.span.start);
-                search.doc = doc_run_above(&docs, start_line).map(|text| text.replace('\n', " "));
+                search.doc = doc_run_above(&docs, start_line);
             }
         }
     }

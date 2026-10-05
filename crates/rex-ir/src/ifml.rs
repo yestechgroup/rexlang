@@ -25,6 +25,14 @@
 //! (serialized as bare `{"type": ...}`), and tuple payloads alike — no
 //! untagged interaction exists in this surface.
 //!
+//! Write-side discipline (the [`crate::ActorModel`]/[`crate::ddd::DddModel`]
+//! rule): every struct `Vec` field is `#[serde(default,
+//! skip_serializing_if = "Vec::is_empty")]` — absent on read means empty, and
+//! empty vecs are omitted on write, so an empty model serializes as exactly
+//! `{"formatVersion":1}`. Enum payload vecs (`Array`, `Call`) are exempt:
+//! an empty payload array is a meaningful value there (`today()`), not an
+//! absent record field.
+//!
 //! [rexlang]: https://github.com/anton-makes/rexlang
 
 use serde::{Deserialize, Serialize};
@@ -64,17 +72,23 @@ pub struct ViewDeclaration {
     pub is_landmark: bool,
     pub is_xor: bool,
     pub is_modal: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub params: Vec<ParameterDecl>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub properties: Vec<PropertyAssignment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub containers: Vec<ContainerDeclaration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub components: Vec<ComponentDeclaration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<EventHandler>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub module_uses: Vec<ModuleUse>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub roles: Vec<String>,
     /// Capability requirements declared as `requires: [CapA, CapB];` on a
     /// view. Extracted from the property bag; empty when absent.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires: Vec<String>,
     pub condition: Option<Expression>,
     pub position: Option<Position>,
@@ -100,14 +114,19 @@ pub struct ContainerDeclaration {
     /// form one exclusive group.
     #[serde(default)]
     pub is_xor: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub params: Vec<ParameterDecl>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub properties: Vec<PropertyAssignment>,
     /// Containers declared inside this container (the grammar allows
     /// nesting to any depth).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub containers: Vec<ContainerDeclaration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub components: Vec<ComponentDeclaration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<EventHandler>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub module_uses: Vec<ModuleUse>,
     pub condition: Option<Expression>,
     pub position: Option<Position>,
@@ -177,7 +196,9 @@ pub struct ComponentDeclaration {
     pub name: String,
     pub component_type: Option<ComponentType>,
     pub spec: Option<ComponentSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub properties: Vec<PropertyAssignment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<EventHandler>,
     pub condition: Option<Expression>,
 }
@@ -193,6 +214,7 @@ pub enum ComponentSpec {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TableSpec {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub columns: Vec<ColumnDef>,
     pub pagination: bool,
 }
@@ -225,6 +247,7 @@ pub struct PropertyRef {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FormSpec {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<FieldDef>,
 }
 
@@ -234,9 +257,11 @@ pub struct FieldDef {
     pub name: String,
     pub input: InputFieldType,
     pub required: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub validations: Vec<Expression>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub values: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub messages: Vec<String>,
 }
 
@@ -247,7 +272,7 @@ pub struct FieldDef {
 pub struct ModuleUse {
     pub module: String,
     pub alias: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub properties: Vec<PropertyAssignment>,
 }
 
@@ -298,6 +323,7 @@ impl From<&str> for InputFieldType {
 pub struct ChartSpec {
     pub kind: ChartKind,
     pub label_field: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub value_fields: Vec<String>,
 }
 
@@ -357,10 +383,11 @@ pub enum ValueExpression {
 #[serde(rename_all = "camelCase")]
 pub struct EventHandler {
     pub event_type: EventType,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub params: Vec<String>,
     /// Capability requirements declared as `requires: [CapA, CapB];` between
     /// the event param and the if-condition; empty when unguarded.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires: Vec<String>,
     pub condition: Option<Expression>,
     pub action: EventAction,
@@ -422,7 +449,9 @@ pub enum EventAction {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActionBody {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub properties: Vec<PropertyAssignment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub handlers: Vec<EventHandler>,
 }
 
@@ -438,6 +467,7 @@ pub struct ParameterDecl {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParameterBinding {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pairs: Vec<(String, Expression)>,
 }
 
@@ -559,7 +589,9 @@ pub fn render_expression(expr: &Expression) -> String {
 #[serde(rename_all = "camelCase")]
 pub struct ActionDeclaration {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub properties: Vec<PropertyAssignment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<EventHandler>,
 }
 
@@ -567,11 +599,17 @@ pub struct ActionDeclaration {
 #[serde(rename_all = "camelCase")]
 pub struct ModuleDeclaration {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub input_params: Vec<ParameterDecl>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub output_params: Vec<ParameterDecl>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub properties: Vec<PropertyAssignment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub containers: Vec<ContainerDeclaration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub components: Vec<ComponentDeclaration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<EventHandler>,
 }
 
@@ -582,6 +620,7 @@ pub struct ModuleDeclaration {
 #[serde(rename_all = "camelCase")]
 pub struct ActorDeclaration {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub properties: Vec<PropertyAssignment>,
 }
 
@@ -596,20 +635,20 @@ pub struct IfmlModel {
     /// anything else.
     #[serde(default)]
     pub format_version: u32,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub domains: Vec<DomainDeclaration>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub views: Vec<ViewDeclaration>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<ActionDeclaration>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub modules: Vec<ModuleDeclaration>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actors: Vec<ActorDeclaration>,
     /// Raw string values of top-level `import "..."` statements, in source
     /// order. Duplicates are preserved; resolution/dedup is a resolver
     /// concern, not a parser concern.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub imports: Vec<String>,
 }
 
@@ -864,6 +903,33 @@ mod tests {
         let parsed = IfmlModel::from_json(&json).expect("deserialize");
         assert_eq!(parsed, model);
         assert_eq!(parsed.to_json_pretty().expect("re-serialize"), json);
+    }
+
+    /// The write-side half of the minimal-artifact claim: empty vec fields
+    /// are omitted, so an empty model serializes as exactly
+    /// `{"formatVersion":1}` — byte-identical to the empty ActorModel.
+    #[test]
+    fn empty_model_serializes_as_exactly_the_format_version_marker() {
+        let json = IfmlModel::default().to_json().expect("serialize empty");
+        assert_eq!(json, r#"{"formatVersion":1}"#);
+        let parsed = IfmlModel::from_json(&json).expect("deserialize empty");
+        assert_eq!(parsed, IfmlModel::default());
+    }
+
+    /// A populated model round-trips even though its empty vec fields are
+    /// omitted on write: absent means empty on read.
+    #[test]
+    fn omitted_empty_vecs_round_trip_as_empty() {
+        let mut model = sample_model();
+        model.views[0].events.clear();
+        model.views[0].roles.clear();
+        let json = model.to_json().expect("serialize");
+        assert!(
+            !json.contains("\"events\":[]") && !json.contains("\"roles\":[]"),
+            "empty vecs are omitted: {json}"
+        );
+        let parsed = IfmlModel::from_json(&json).expect("deserialize");
+        assert_eq!(parsed, model);
     }
 
     #[test]

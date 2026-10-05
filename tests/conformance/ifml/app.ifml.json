@@ -13,7 +13,6 @@
       "isLandmark": true,
       "isXor": false,
       "isModal": false,
-      "params": [],
       "properties": [
         {
           "key": "landmark",
@@ -45,7 +44,6 @@
           }
         }
       ],
-      "containers": [],
       "components": [
         {
           "name": "grid",
@@ -134,7 +132,6 @@
               "params": [
                 "row"
               ],
-              "requires": [],
               "condition": {
                 "type": "binOp",
                 "value": {
@@ -191,8 +188,6 @@
                 "type": "custom",
                 "value": "create"
               },
-              "params": [],
-              "requires": [],
               "condition": null,
               "action": {
                 "type": "navigate",
@@ -207,8 +202,6 @@
                 "type": "custom",
                 "value": "refreshData"
               },
-              "params": [],
-              "requires": [],
               "condition": null,
               "action": {
                 "type": "refresh",
@@ -222,13 +215,10 @@
           "condition": null
         }
       ],
-      "events": [],
-      "moduleUses": [],
       "roles": [
         "admin",
         "manager"
       ],
-      "requires": [],
       "condition": null,
       "position": {
         "x": 100.0,
@@ -256,8 +246,6 @@
           }
         }
       ],
-      "properties": [],
-      "containers": [],
       "components": [
         {
           "name": "editor",
@@ -312,7 +300,6 @@
                       }
                     }
                   ],
-                  "values": [],
                   "messages": [
                     "Title too short",
                     "Title required"
@@ -323,10 +310,7 @@
                   "input": {
                     "type": "dropdown"
                   },
-                  "required": false,
-                  "validations": [],
-                  "values": [],
-                  "messages": []
+                  "required": false
                 }
               ]
             }
@@ -399,8 +383,6 @@
                           "type": "custom",
                           "value": "success"
                         },
-                        "params": [],
-                        "requires": [],
                         "condition": null,
                         "action": {
                           "type": "navigate",
@@ -431,8 +413,6 @@
                           "type": "custom",
                           "value": "error"
                         },
-                        "params": [],
-                        "requires": [],
                         "condition": null,
                         "action": {
                           "type": "stay"
@@ -447,8 +427,6 @@
               "eventType": {
                 "type": "cancel"
               },
-              "params": [],
-              "requires": [],
               "condition": null,
               "action": {
                 "type": "navigate",
@@ -462,9 +440,6 @@
           "condition": null
         }
       ],
-      "events": [],
-      "moduleUses": [],
-      "roles": [],
       "requires": [
         "ManageCustomer"
       ],
@@ -477,7 +452,6 @@
       "isLandmark": false,
       "isXor": true,
       "isModal": false,
-      "params": [],
       "properties": [
         {
           "key": "xor",
@@ -493,7 +467,6 @@
           "label": null,
           "isDefault": true,
           "isXor": false,
-          "params": [],
           "properties": [
             {
               "key": "default",
@@ -503,7 +476,6 @@
               }
             }
           ],
-          "containers": [],
           "components": [
             {
               "name": "revenue",
@@ -521,13 +493,9 @@
                   ]
                 }
               },
-              "properties": [],
-              "events": [],
               "condition": null
             }
           ],
-          "events": [],
-          "moduleUses": [],
           "condition": null,
           "position": null
         },
@@ -536,9 +504,6 @@
           "label": null,
           "isDefault": false,
           "isXor": false,
-          "params": [],
-          "properties": [],
-          "containers": [],
           "components": [
             {
               "name": "rows",
@@ -617,21 +582,13 @@
                   }
                 }
               ],
-              "events": [],
               "condition": null
             }
           ],
-          "events": [],
-          "moduleUses": [],
           "condition": null,
           "position": null
         }
       ],
-      "components": [],
-      "events": [],
-      "moduleUses": [],
-      "roles": [],
-      "requires": [],
       "condition": null,
       "position": null
     },
@@ -641,9 +598,6 @@
       "isLandmark": false,
       "isXor": false,
       "isModal": false,
-      "params": [],
-      "properties": [],
-      "containers": [],
       "components": [
         {
           "name": "recentOrders",
@@ -708,7 +662,6 @@
               "params": [
                 "row"
               ],
-              "requires": [],
               "condition": null,
               "action": {
                 "type": "navigate",
@@ -743,8 +696,6 @@
           "eventType": {
             "type": "load"
           },
-          "params": [],
-          "requires": [],
           "condition": null,
           "action": {
             "type": "refresh",
@@ -770,8 +721,6 @@
           ]
         }
       ],
-      "roles": [],
-      "requires": [],
       "condition": null,
       "position": null
     }
@@ -787,8 +736,7 @@
             "value": "Customer"
           }
         }
-      ],
-      "events": []
+      ]
     }
   ],
   "modules": [
@@ -813,8 +761,6 @@
           "default": null
         }
       ],
-      "properties": [],
-      "containers": [],
       "components": [
         {
           "name": "pager",
@@ -843,11 +789,9 @@
               }
             }
           ],
-          "events": [],
           "condition": null
         }
-      ],
-      "events": []
+      ]
     }
   ],
   "actors": [

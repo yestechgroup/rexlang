@@ -14,11 +14,12 @@ reference; crate docs cover implementation.
 - **Doc comments**: `///` line comments and `/** ... */` block comments on
   their own lines directly above the `package` declaration, a declaration,
   feature, or enum literal become that element's **description**. Contiguous
-  `///` lines join into one description; a blank line or an intervening
+  `///` lines join into one description separated by newlines (markdown
+  source stays line-shaped); a blank line or an intervening
   non-doc comment detaches the run. Descriptions are carried in the IR and
   surface as `description` keywords in generated JSON Schema and as doc
   comments in generated code (the package description is carried in the IR
-  only).
+  only). The `.ddd` surface joins doc runs identically (see `docs/DDD.md`).
 - **Strings**: double-quoted with `\"` and `\\` escapes.
 - **Integers**: decimal, optional leading `-`.
 - **Identifiers**: `[A-Za-z_][A-Za-z0-9_]*`. Any keyword can be escaped with a

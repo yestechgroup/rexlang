@@ -122,8 +122,9 @@ Lexical and structural rules:
 - `import` declarations must precede the `application` declaration; there
   is exactly one application per file, and `base` must be its first member
   when present.
-- A `///` doc comment run directly above a `service` declaration becomes
-  the service's description in the artifact.
+- A `///` doc comment run directly above a `service` or `search` declaration
+  becomes its description in the artifact. Contiguous `///` lines join with
+  newlines — the same semantic as the `.mox` doc collection (`docs/LANGUAGE.md`).
 - Delegated operations (`name => target.operation`) copy the target's
   signature conceptually and declare none of their own; a delegated op may
   be named `save` (contextual keywords). Declared service operations may

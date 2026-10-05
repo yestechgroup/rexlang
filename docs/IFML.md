@@ -17,7 +17,7 @@ The IFML DSL lives alongside the `.mox` domain model as a *complementary* input:
 - Enums with payloads are *adjacently* tagged: `{"type": "<variant>", "value": <payload>}` (tags camelCase: `"navigate"`, `"stringLit"`, `"fieldExpr"`, `"bar"`). Unit-only enums serialize as bare camelCase strings (`"eq"`, `"regexMatch"`).
 - Unknown fields are ignored on deserialize; `PropertyAssignment::span` is parse-only and never serialized.
 
-Minimal artifact: an empty model serializes as exactly `{"formatVersion":1}`.
+Minimal artifact: an empty model serializes as exactly `{"formatVersion":1}` — every struct `Vec` field is `#[serde(default, skip_serializing_if = "Vec::is_empty")]` (the `ActorModel`/`DddModel` discipline), so empty vecs are omitted on write and absent vecs read back as empty.
 
 ```rust
 let model = rex_ifml::parse_ifml(source)?;

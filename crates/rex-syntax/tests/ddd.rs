@@ -129,7 +129,7 @@ fn service_ops_capabilities_and_dependencies_parse() {
     assert_eq!(service.name.text, "LoanService");
     assert_eq!(
         service.doc.as_deref(),
-        Some("Manages the lending of books. Also handles renewals.")
+        Some("Manages the lending of books.\nAlso handles renewals.")
     );
     assert_eq!(
         service
@@ -334,7 +334,7 @@ fn multiplicity_forms_parse() {
 }
 
 #[test]
-fn doc_runs_attach_to_services_only() {
+fn doc_runs_attach_to_services_and_searches() {
     let source = concat!(
         "application A {\n",
         "    module M {\n",
@@ -346,6 +346,8 @@ fn doc_runs_attach_to_services_only() {
         "        /// Separated by a blank line.\n",
         "\n",
         "        service Detached { }\n",
+        "        /// Search doc.\n",
+        "        search Lookup { }\n",
         "        entity Thing\n",
         "    }\n",
         "}\n",
@@ -356,11 +358,16 @@ fn doc_runs_attach_to_services_only() {
         "unexpected errors: {:?}",
         result.errors
     );
-    let services = &result.ast.unwrap().application.unwrap().modules[0].services;
-    // Contiguous `///` lines join with a space.
-    assert_eq!(services[0].doc.as_deref(), Some("First line. Second line."));
+    let module = &result.ast.unwrap().application.unwrap().modules[0];
+    let services = &module.services;
+    // Contiguous `///` lines join with newlines — the `.mox` semantic.
+    assert_eq!(
+        services[0].doc.as_deref(),
+        Some("First line.\nSecond line.")
+    );
     assert_eq!(services[1].doc, None, "a non-doc comment breaks the run");
     assert_eq!(services[2].doc, None, "a blank line breaks the run");
+    assert_eq!(module.searches[0].doc.as_deref(), Some("Search doc."));
 }
 
 #[test]
