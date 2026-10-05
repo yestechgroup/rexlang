@@ -1541,3 +1541,115 @@ fn import_without_schema_stays_an_error() {
         "a plain `import` in a .mox file must error"
     );
 }
+
+#[test]
+fn import_sigil_parses_top_level() {
+    let source = "package demo\n\nimport sigil \"cdm.rosetta\"";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let model = result.ast.expect("ast");
+    let Decl::ImportSchema(import) = &model.declarations[0] else {
+        panic!("expected import sigil, found {:?}", model.declarations[0]);
+    };
+    assert_eq!(import.kind, ImportKind::Sigil);
+    assert_eq!(import.path, "cdm.rosetta");
+    assert!(import.alias.is_none(), "a sigil import has no alias");
+    assert!(span_text(source, import.span).starts_with("import sigil"));
+}
+
+#[test]
+fn import_sigil_rejects_an_alias() {
+    let result = parse("package demo\n\nimport sigil \"x.rosetta\" as X");
+    assert!(
+        !result.errors.is_empty(),
+        "`import sigil ... as` must error"
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message.contains("does not take an alias")),
+        "the diagnostic must mention the alias clause: {:?}",
+        result.errors
+    );
+    assert!(
+        result.ast.is_some(),
+        "the committed declaration must still recover an AST"
+    );
+}
+
+#[test]
+fn import_sigil_requires_a_string_literal() {
+    let result = parse("package demo\n\nimport sigil");
+    assert!(
+        !result.errors.is_empty(),
+        "`import sigil` without a path must error"
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message.contains("string")),
+        "the diagnostic must mention the missing string literal: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn import_schema_and_import_sigil_coexist_in_source_order() {
+    let source = concat!(
+        "package demo\n\n",
+        "import schema \"a.json\" as A\n",
+        "import sigil \"sigils/b.rosetta\"\n",
+        "import schema \"c.json\"\n\n",
+        "enum Color { Red = 0 }\n\n",
+        "class Book { refers A a }"
+    );
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let declarations = &result.ast.expect("ast").declarations;
+    assert_eq!(declarations.len(), 5);
+    let kinds: Vec<_> = declarations[0..3]
+        .iter()
+        .map(|decl| match decl {
+            Decl::ImportSchema(import) => import.kind,
+            other => panic!("expected an import, found {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![ImportKind::Schema, ImportKind::Sigil, ImportKind::Schema]
+    );
+    assert!(matches!(&declarations[3], Decl::Enum(_)));
+    assert!(matches!(&declarations[4], Decl::Class(_)));
+}
+
+#[test]
+fn sigil_stays_a_contextual_keyword() {
+    // Regression guard: an existing model may use `sigil` as a class name,
+    // a feature name, and a plain identifier — adding `import sigil` must
+    // not reserve the word.
+    let source = concat!(
+        "package demo\n\n",
+        "class sigil { String sigil int sigil2 }\n\n",
+        "class Other { refers sigil[] sigil }"
+    );
+    let result = parse(source);
+    assert!(
+        result.errors.is_empty(),
+        "`sigil` must remain usable as an identifier: {:?}",
+        result.errors
+    );
+    let declarations = &result.ast.expect("ast").declarations;
+    let Decl::Class(class) = &declarations[0] else {
+        panic!("expected class named sigil")
+    };
+    assert_eq!(class.name.text, "sigil");
+}
+
+#[test]
+fn escaped_sigil_is_an_ordinary_identifier() {
+    let source = "package demo\n\nclass ^sigil { String ^sigil }";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+}

@@ -1,0 +1,49 @@
+package nz.example.library
+
+enum BookCategory {
+    Fiction as "F" = 0
+    NonFiction as "N" = 1
+}
+
+enum MovieGenre {
+    Drama as "D" = 0
+    Comedy as "C" = 1
+}
+
+class Library {
+    String name
+    contains Book[] books opposite library
+}
+
+class Media {
+    String title
+}
+
+class Book extends Media {
+    container Library library opposite books
+    String isbn
+    BookCategory category
+    contains Chapter[] chapters opposite book
+}
+
+class Chapter {
+    container Book book opposite chapters
+    String heading
+    int startPage
+}
+
+class Movie extends Media {
+    MovieGenre genre
+    int runtimeMinutes
+    String synopsis
+}
+
+class PhysicalMedia {
+    String status
+    refers Media media
+}
+
+class Person {
+    String fullName
+    date joinedOn
+}

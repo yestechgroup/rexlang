@@ -32,18 +32,22 @@ reference; crate docs cover implementation.
   plain identifiers: `id readonly get set String int ... date` — among them
   `schema`, which is special only directly after an `import` keyword of a
   `.mox` file (see [Importing JSON Schema types](#importing-json-schema-types)),
-  and `to`, which is special only on a delegation's `to` line.
+  and `sigil`, special in the same position (see
+  [Importing Rune models](#importing-rune-models)), and `to`, which is
+  special only on a delegation's `to` line.
 
 ## Model structure
 
 A file holds one package and any number of declarations:
 
 ```
-model        := package_decl (annotation_decl | import_schema_decl | class_decl | interface_decl
+model        := package_decl (annotation_decl | import_decl | class_decl | interface_decl
               | enum_decl | type_decl | vocabulary_decl | actors_decl)*
 package_decl := doc? "package" qualified_name
 annotation_decl := "annotation" string ("as" name)?
+import_decl  := import_schema_decl | import_sigil_decl
 import_schema_decl := "import" "schema" string ("as" name)?
+import_sigil_decl := "import" "sigil" string
 ```
 
 `doc` marks the optional doc-comment run described under Lexical rules; it
@@ -188,6 +192,99 @@ declarations compiled through them errors with
 `rexlang fmt` canonicalizes import-schema declarations into a section
 directly after the `package` declaration, before every other declaration —
 one per line, no blank lines between them (the `.actor` import rule).
+
+### Importing Rune models
+
+A `.mox` package can import a Rune DSL (`.rosetta`) file, whose namespaces
+lower into synthetic rexlang packages:
+
+```
+import_sigil_decl := "import" "sigil" string
+```
+
+```mox
+package nz.example.trading
+
+import sigil "rosetta/trade.rosetta"
+
+/// The lowered `oracle.basic.Trade` class is ordinary rexlang content.
+class Book {
+    refers oracle.basic.Trade about
+}
+```
+
+The path resolves **relative to the declaring `.mox` file's directory**,
+like `import schema`. A whole namespace set is imported, not one type, so
+the declaration takes no `as` alias (an `as` clause after `import sigil`
+is a syntax error). Beyond the named file, `rexlang check`/`ir`/`gen` also
+read every other `*.rosetta` file in the named file's directory (walking
+subdirectories, skipping dot and `target` directories) as **candidate**
+files, so rosetta-internal namespace imports (`import a.b.*`,
+`import a.b.C`) resolve transitively; the driver lowers only the namespace
+closure the named files actually need, and candidates that end up
+unselected are never diagnosed — an unrelated broken file next to the
+import must not block the model.
+
+**Lowering.** Each rosetta namespace becomes one synthetic rexlang package
+named after the namespace, appended after every declared `.mox` package of
+the compilation (the same namespace across files merges into one package).
+Elements map:
+
+| Rune | rexlang |
+|---|---|
+| `type T: <"…">` | `class T` — attributes → attribute features, `extends` kept, the `definition` string → the class'/feature's description |
+| `choice C: <"…">` | `interface C` (choice options do not survive: a rexlang interface declares no features); a `type` whose super type is a choice extends the interface |
+| `enum E: <"…">` | `enum E` — literals in declaration order with **synthesized integer values `0..n-1`** (rexlang enums require ints; this is the lowering contract); `displayName "…"` → the literal's `as` label, `definition` → description |
+| `typeAlias X: <"…"> t` | `type X wraps t` when `t` maps to a rexlang primitive, an opaque datatype otherwise |
+
+Attribute cardinalities map verbatim (`(1..1)`, `(0..1)`, `(0..*)`,
+`(2..10)`, …). Attribute `override`s lower as ordinary features. Conditions,
+annotation references, labels, rule references, and doc references are
+skipped in v1.
+
+The builtin `com.rosetta.model` namespace — which sigil implicitly
+wildcard-imports into every model — maps to rexlang primitives where
+counterparts exist (`boolean` → `boolean`, `string` → `String`, `int` →
+`int`, `number` → `double`, `date` → `date`); everything else it declares
+without one (`time`, `pattern`, the `dateTime`/`zonedDateTime` family,
+`calculation`, the `SerializationFormat` enum) lowers to an opaque
+datatype/enum in the synthetic `com.rosetta.model` package so references
+resolve. That package is emitted **only when something from it is actually
+referenced** by lowered content. Only the imported *user* namespaces join
+the `.mox`-side resolution namespace: a `.mox` reference to `number` or
+`time` stays an unknown-type error (the coinciding `string`/`int`/
+`boolean`/`date` resolve as the rexlang primitives they always were).
+
+Skipped elements in v1: `func`, `library function`, `rule`, `report`,
+external rule sources, `schema`/`body`/`corpus`/`segment`, `metaType`, and
+`annotation` declarations.
+
+Collisions are errors naming both sources: a synthetic package name
+(the rosetta namespace) that matches a declared `.mox` package of the
+compilation is rejected, whether from a user namespace or the referenced
+`com.rosetta.model` builtin. Everything lowered is ordinary `Model`
+content — downstream resolution, `.actor` capability targets, `.ddd`
+designs, and backends see it unchanged.
+
+Sigil parse and resolution diagnostics render against the rosetta source,
+tagged with its path (the way multi-file models render per file); any
+error blocks the artifact. The CLI reads the rosetta files from disk (a
+missing file is a clean CLI error naming the resolved path).
+
+**Resolution contract.** The driver stays filesystem-free: rosetta content
+arrives as text. Embedded callers (tests, language servers) pass content
+through `rex_driver::SigilImports`, keyed by the *(mox file path, import
+path)* pair exactly as named — additional entries for the same mox path
+are the candidate files described above. `compile_str` and `compile_files`
+provide nothing, so a model with `import sigil` declarations compiled
+through them errors with ``imported sigil '<path>' was not provided``;
+use `compile_str_with_imports`/`compile_files_with_imports`. The
+`.actor`/`.ddd` entry points take both maps as one
+`rex_driver::DomainImports` bundle (the `.actor`/`.ddd` file's domains'
+import content is keyed by each domain's path).
+
+`rexlang fmt` canonicalizes both import kinds into a section directly
+after the `package` declaration, before every other declaration.
 
 ### Classes and features
 
@@ -339,7 +436,10 @@ delegation_entry := ("permit" | "forbid") name ("when" expr)? obligation*
 The `actors` block grammar is identical to the inline `actors` block of a
 `.mox` model. Import paths are resolved **relative to the `.actor` file's
 directory** and may name any `.mox` domain; multiple imports are allowed and
-duplicates are collapsed. The compiled policy set is the **union** of the
+duplicates are collapsed. An imported domain's own `import schema` and
+`import sigil` declarations are provided too (the CLI reads that content
+from disk relative to the domain file), so capabilities may target lowered
+JSON-Schema and Rune types like any other class. The compiled policy set is the **union** of the
 actor file's blocks followed by every imported domain's inline blocks
 (in that order), so capabilities typecheck against the imported domain's
 classes (`permit EscalateTicket when (amount > 0)` resolves `amount` on
@@ -417,8 +517,8 @@ is a tested property, not an aspiration.
 
 | Command | Purpose |
 |---|---|
-| `rexlang check <file>...` | validate; ariadne-rendered diagnostics grouped per file (`.mox` and `.actor`; each input may be a directory, scanned recursively for `*.mox`) |
-| `rexlang ir <file>... -o <out>` | emit the Core IR artifact (`.actor`: the ActorModel artifact; several `.mox`: one multi-package model) |
+| `rexlang check <file>...` | validate; ariadne-rendered diagnostics grouped per file (`.mox`, `.actor`, and `.ddd`; each input may be a directory, scanned recursively for `*.mox`) |
+| `rexlang ir <file>... -o <out>` | emit the Core IR artifact (`.actor`: the ActorModel artifact; `.ddd`: the DDD design artifact; several `.mox`: one multi-package model) |
 | `rexlang gen rust <file>... -o <dir>` | arena-based Rust models |
 | `rexlang gen json-schema <file>... --profile wire\|api -o <dir>` | JSON Schema |
 | `rexlang gen cedar <file>... -o <dir>` | Cedar policies + schema (`.mox`: inline blocks; `.actor`: file + imported domains) |
@@ -426,3 +526,7 @@ is a tested property, not an aspiration.
 | `rexlang vocab fetch <file>` | vendor + pin vocabulary snapshots |
 | `rexlang fmt [--check] <files>\|-` | canonical formatting (comments kept) |
 | `rexlang lsp` | language server (stdio) |
+
+`.ddd` files are a separate design surface — a Sculptor-style DDD design
+layer compiled against the domain models they import; `check`, `ir`, and
+`fmt` dispatch on the `.ddd` extension. See [docs/DDD.md](DDD.md).

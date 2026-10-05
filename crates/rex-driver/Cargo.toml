@@ -11,6 +11,10 @@ workspace = true
 
 [dependencies]
 rex-syntax = { workspace = true }
+sigil-diag = { workspace = true }
+sigil-model = { workspace = true }
+sigil-resolve = { workspace = true }
+sigil-syntax = { workspace = true }
 rex-ir = { workspace = true }
 rex-expr = { workspace = true }
 rex-vocab = { workspace = true }

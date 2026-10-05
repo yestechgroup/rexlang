@@ -1,0 +1,409 @@
+{
+  "formatVersion": 1,
+  "application": {
+    "name": "Library",
+    "base": "nz.example.library"
+  },
+  "modules": [
+    {
+      "name": "media",
+      "services": [
+        {
+          "name": "MediaService",
+          "description": "Coordinates lending of physical media across branches.",
+          "operations": [
+            {
+              "name": "borrow",
+              "returnType": {
+                "type": "primitive",
+                "value": "boolean"
+              },
+              "params": [
+                {
+                  "name": "mediaId",
+                  "type": {
+                    "type": "primitive",
+                    "value": "string"
+                  }
+                },
+                {
+                  "name": "borrower",
+                  "type": {
+                    "type": "class",
+                    "value": {
+                      "package": "nz.example.library",
+                      "name": "Person"
+                    }
+                  }
+                }
+              ],
+              "capabilities": [
+                "BorrowMedia"
+              ]
+            },
+            {
+              "name": "registerMedia",
+              "returnType": {
+                "type": "class",
+                "value": {
+                  "package": "nz.example.library",
+                  "name": "PhysicalMedia"
+                }
+              },
+              "params": [
+                {
+                  "name": "status",
+                  "type": {
+                    "type": "primitive",
+                    "value": "string"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "save",
+              "delegation": {
+                "target": "PhysicalMediaRepository",
+                "operation": "save"
+              }
+            },
+            {
+              "name": "registerBorrower",
+              "delegation": {
+                "target": "PersonService",
+                "operation": "register"
+              }
+            },
+            {
+              "name": "findMedia",
+              "delegation": {
+                "target": "MediaSearch",
+                "operation": "search"
+              }
+            }
+          ],
+          "dependencies": [
+            "PhysicalMediaRepository",
+            "MovieRepository",
+            "PersonService",
+            "MediaSearch"
+          ]
+        }
+      ],
+      "designs": [
+        {
+          "class": "Library",
+          "stereotype": "entity",
+          "flags": {
+            "scaffold": true,
+            "cache": true
+          },
+          "repository": {
+            "name": "LibraryRepository",
+            "operations": [
+              {
+                "name": "findById",
+                "builtin": "findById"
+              },
+              {
+                "name": "findAll",
+                "builtin": "findAll"
+              },
+              {
+                "name": "save",
+                "builtin": "save"
+              },
+              {
+                "name": "delete",
+                "builtin": "delete"
+              },
+              {
+                "name": "renameLibrary",
+                "returnType": {
+                  "type": "primitive",
+                  "value": "boolean"
+                },
+                "params": [
+                  {
+                    "name": "name",
+                    "type": {
+                      "type": "primitive",
+                      "value": "string"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "class": "Book",
+          "stereotype": "entity"
+        },
+        {
+          "class": "Media",
+          "stereotype": "entity",
+          "isAbstract": true
+        },
+        {
+          "class": "Chapter",
+          "stereotype": "entity",
+          "flags": {
+            "auditable": true
+          }
+        },
+        {
+          "class": "Movie",
+          "stereotype": "entity",
+          "repository": {
+            "name": "MovieRepository",
+            "operations": [
+              {
+                "name": "findById",
+                "builtin": "findById"
+              },
+              {
+                "name": "findAll",
+                "builtin": "findAll"
+              },
+              {
+                "name": "save",
+                "builtin": "save"
+              },
+              {
+                "name": "delete",
+                "builtin": "delete"
+              },
+              {
+                "name": "findByTitle",
+                "returnType": {
+                  "type": "class",
+                  "value": {
+                    "package": "nz.example.library",
+                    "name": "Movie"
+                  }
+                },
+                "params": [
+                  {
+                    "name": "title",
+                    "type": {
+                      "type": "primitive",
+                      "value": "string"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "class": "PhysicalMedia",
+          "stereotype": "entity",
+          "flags": {
+            "scaffold": true
+          },
+          "repository": {
+            "name": "PhysicalMediaRepository",
+            "operations": [
+              {
+                "name": "findById",
+                "builtin": "findById"
+              },
+              {
+                "name": "findAll",
+                "builtin": "findAll"
+              },
+              {
+                "name": "save",
+                "builtin": "save"
+              },
+              {
+                "name": "delete",
+                "builtin": "delete"
+              },
+              {
+                "name": "findByStatus",
+                "returnType": {
+                  "type": "class",
+                  "value": {
+                    "package": "nz.example.library",
+                    "name": "PhysicalMedia"
+                  }
+                },
+                "params": [
+                  {
+                    "name": "status",
+                    "type": {
+                      "type": "primitive",
+                      "value": "string"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "searches": [
+        {
+          "name": "MediaSearch",
+          "description": "Full-text search over the movie catalogue.",
+          "entity": "Movie",
+          "text": [
+            {
+              "property": "title",
+              "boost": 3.0
+            },
+            {
+              "property": "synopsis",
+              "analyzer": "english"
+            }
+          ],
+          "filters": [
+            {
+              "property": "genre"
+            }
+          ],
+          "sort": [
+            {
+              "property": "title"
+            }
+          ],
+          "document": [
+            {
+              "name": "headline",
+              "expr": "title"
+            },
+            {
+              "name": "blurb",
+              "expr": "title + \" - \" + synopsis"
+            }
+          ],
+          "ranking": {
+            "type": "bm25"
+          },
+          "analyzer": "english",
+          "pagination": {
+            "limit": 20,
+            "maxLimit": 100,
+            "cursor": true
+          },
+          "capabilities": [
+            "SearchMedia"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "person",
+      "services": [
+        {
+          "name": "PersonService",
+          "description": "Keeps the member register current.",
+          "operations": [
+            {
+              "name": "register",
+              "delegation": {
+                "target": "PersonRepository",
+                "operation": "save"
+              }
+            },
+            {
+              "name": "findByName",
+              "delegation": {
+                "target": "PersonRepository",
+                "operation": "findByName"
+              }
+            }
+          ],
+          "dependencies": [
+            "PersonRepository"
+          ]
+        }
+      ],
+      "designs": [
+        {
+          "class": "Person",
+          "stereotype": "entity",
+          "repository": {
+            "name": "PersonRepository",
+            "operations": [
+              {
+                "name": "findById",
+                "builtin": "findById"
+              },
+              {
+                "name": "findAll",
+                "builtin": "findAll"
+              },
+              {
+                "name": "save",
+                "builtin": "save"
+              },
+              {
+                "name": "delete",
+                "builtin": "delete"
+              },
+              {
+                "name": "findByName",
+                "returnType": {
+                  "type": "class",
+                  "value": {
+                    "package": "nz.example.library",
+                    "name": "Person"
+                  }
+                },
+                "params": [
+                  {
+                    "name": "fullName",
+                    "type": {
+                      "type": "primitive",
+                      "value": "string"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "searches": [
+        {
+          "name": "MemberDirectory",
+          "entity": "Person",
+          "text": [
+            {
+              "property": "fullName",
+              "boost": 2.0
+            }
+          ],
+          "filters": [
+            {
+              "property": "joinedOn"
+            }
+          ],
+          "sort": [
+            {
+              "property": "fullName"
+            },
+            {
+              "property": "joinedOn"
+            }
+          ],
+          "document": [
+            {
+              "name": "displayName",
+              "expr": "fullName"
+            }
+          ],
+          "ranking": {
+            "type": "tfIdf"
+          },
+          "pagination": {
+            "limit": 10
+          }
+        }
+      ]
+    }
+  ]
+}

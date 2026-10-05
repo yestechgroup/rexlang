@@ -51,6 +51,7 @@ fn compile_example_pair(name: &str) -> (rex_ir::ActorModel, rex_ir::Model) {
         actor_path.to_str().expect("utf-8 example path"),
         &actor_source,
         &[(format!("{name}.mox"), domain_source.clone())],
+        &rex_driver::DomainImports::empty(),
     );
     assert!(
         compilation.diagnostics.is_empty(),

@@ -3,17 +3,18 @@
 //! Subcommands:
 //!
 //! * `rexlang check <file>...` — compile and render diagnostics; exits `1`
-//!   on errors. Accepts `.mox` models and `.actor` policy files (the latter
-//!   compile against the domain models they import). Each input is a file or
-//!   a directory (scanned recursively for `*.mox`); several `.mox` inputs
-//!   compile as one multi-package model.
+//!   on errors. Accepts `.mox` models, `.actor` policy files, and `.ddd`
+//!   design files (the latter two compile against the domain models they
+//!   import). Each input is a file or a directory (scanned recursively for
+//!   `*.mox`); several `.mox` inputs compile as one multi-package model.
 //! * `rexlang ir <file>... [-o <out>]` — compile and emit the Core IR JSON
 //!   to stdout or to a file; exits `1` on errors. On `.actor` files the
-//!   standalone ActorModel artifact is emitted.
+//!   standalone ActorModel artifact is emitted; on `.ddd` files the
+//!   standalone DDD design artifact is emitted.
 //! * `rexlang artifact check <artifact.json>...` — validate wire-format
-//!   artifacts (Core IR, standalone actor policy, canonical instance)
-//!   without the originating model; exits `1` on any violation. The
-//!   portable test kit for out-of-tree backends (see docs/BACKENDS.md).
+//!   artifacts (Core IR, standalone actor policy, DDD design, canonical
+//!   instance) without the originating model; exits `1` on any violation.
+//!   The portable test kit for out-of-tree backends (see docs/BACKENDS.md).
 //! * `rexlang vocab fetch <file> [--provider file:<DIR>|http]` — fetch and
 //!   vendor vocabulary snapshots, updating `model.lock`.
 
@@ -25,8 +26,8 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use rex_driver::{
-    compile_actors_str, compile_files_with_imports, compile_str_with_imports, render,
-    ActorCompilation, MultiCompilation, SchemaImports,
+    compile_actors_str, compile_ddd_str, compile_files_with_imports, compile_str_with_imports,
+    render, ActorCompilation, DomainImports, MultiCompilation, SchemaImports, SigilImports,
 };
 use rex_vocab::{FileProvider, HttpProvider, LockEntry, Lockfile, VocabularyProvider};
 /// rexlang compiler command-line interface.
@@ -39,19 +40,20 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Parse, resolve, and validate `.mox` or `.actor` files, rendering
-    /// diagnostics grouped per file.
+    /// Parse, resolve, and validate `.mox`, `.actor`, or `.ddd` files,
+    /// rendering diagnostics grouped per file.
     Check {
-        /// Paths to compile: `.mox`/`.actor` files, or directories scanned
-        /// recursively for `*.mox`.
+        /// Paths to compile: `.mox`/`.actor`/`.ddd` files, or directories
+        /// scanned recursively for `*.mox`.
         files: Vec<PathBuf>,
     },
-    /// Compile `.mox` or `.actor` files to the Core IR and emit it as JSON
-    /// (`.actor` files emit the standalone ActorModel artifact; several
-    /// `.mox` files emit one multi-package model).
+    /// Compile `.mox`, `.actor`, or `.ddd` files and emit the artifact as
+    /// JSON (`.actor` files emit the standalone ActorModel artifact, `.ddd`
+    /// files the standalone DDD design artifact; several `.mox` files emit
+    /// one multi-package model).
     Ir {
-        /// Paths to compile: `.mox`/`.actor` files, or directories scanned
-        /// recursively for `*.mox`.
+        /// Paths to compile: `.mox`/`.actor`/`.ddd` files, or directories
+        /// scanned recursively for `*.mox`.
         files: Vec<PathBuf>,
         /// Write the JSON to this path instead of stdout.
         #[arg(short, long, value_name = "FILE")]
@@ -62,7 +64,8 @@ enum Command {
         #[command(subcommand)]
         target: GenTarget,
     },
-    /// Format `.mox` files in place, preserving comments.
+    /// Format `.mox`, `.actor`, or `.ddd` files in place, preserving
+    /// comments.
     Fmt {
         /// List files whose formatting would change instead of rewriting
         /// them; exits `1` when any file is unformatted.
@@ -183,9 +186,25 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     match cli.command {
         Command::Check { files } => {
             let files = expand_inputs(&files)?;
-            if files.len() == 1 && is_actor_file(&files[0]) {
+            if files.len() == 1 && is_ddd_file(&files[0]) {
+                let design = read_ddd_design(&files[0])?;
+                let compilation = compile_ddd_str(
+                    &design.path,
+                    &design.source,
+                    &design.domains,
+                    &design.imports(),
+                );
+                report_ddd_diagnostics(&design, &compilation);
+                if compilation.model.is_some() {
+                    println!("OK {}", design.path);
+                    Ok(ExitCode::SUCCESS)
+                } else {
+                    Ok(ExitCode::FAILURE)
+                }
+            } else if files.len() == 1 && is_actor_file(&files[0]) {
                 let pair = read_actor_pair(&files[0])?;
-                let compilation = compile_actors_str(&pair.path, &pair.source, &pair.domains);
+                let compilation =
+                    compile_actors_str(&pair.path, &pair.source, &pair.domains, &pair.imports());
                 report_actor_diagnostics(&pair, &compilation);
                 if compilation.model.is_some() {
                     println!("OK {}", pair.path);
@@ -195,8 +214,13 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 }
             } else {
                 let sources = read_sources(&files)?;
-                let compilation = compile_sources(&sources)?;
-                report_multi_diagnostics(&sources, &compilation.diagnostics);
+                let (compilation, sigil_sources) = compile_sources(&sources)?;
+                report_multi_diagnostics(
+                    &sources,
+                    &sigil_sources.sources,
+                    &compilation.diagnostics,
+                    &compilation.sigil_diagnostics,
+                );
                 if compilation.model.is_some() {
                     for (path, _) in &sources {
                         println!("OK {path}");
@@ -209,9 +233,28 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         }
         Command::Ir { files, out } => {
             let files = expand_inputs(&files)?;
-            if files.len() == 1 && is_actor_file(&files[0]) {
+            if files.len() == 1 && is_ddd_file(&files[0]) {
+                let design = read_ddd_design(&files[0])?;
+                let compilation = compile_ddd_str(
+                    &design.path,
+                    &design.source,
+                    &design.domains,
+                    &design.imports(),
+                );
+                report_ddd_diagnostics(&design, &compilation);
+                let Some(ddd_model) = compilation.model else {
+                    return Ok(ExitCode::FAILURE);
+                };
+                let json = ddd_model.to_json_pretty()?;
+                match out {
+                    Some(out_path) => std::fs::write(out_path, json)?,
+                    None => println!("{json}"),
+                }
+                Ok(ExitCode::SUCCESS)
+            } else if files.len() == 1 && is_actor_file(&files[0]) {
                 let pair = read_actor_pair(&files[0])?;
-                let compilation = compile_actors_str(&pair.path, &pair.source, &pair.domains);
+                let compilation =
+                    compile_actors_str(&pair.path, &pair.source, &pair.domains, &pair.imports());
                 report_actor_diagnostics(&pair, &compilation);
                 let Some(actor_model) = compilation.model else {
                     return Ok(ExitCode::FAILURE);
@@ -224,8 +267,13 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 Ok(ExitCode::SUCCESS)
             } else {
                 let sources = read_sources(&files)?;
-                let compilation = compile_sources(&sources)?;
-                report_multi_diagnostics(&sources, &compilation.diagnostics);
+                let (compilation, sigil_sources) = compile_sources(&sources)?;
+                report_multi_diagnostics(
+                    &sources,
+                    &sigil_sources.sources,
+                    &compilation.diagnostics,
+                    &compilation.sigil_diagnostics,
+                );
                 let Some(model) = compilation.model else {
                     return Ok(ExitCode::FAILURE);
                 };
@@ -242,8 +290,13 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         } => {
             let files = expand_inputs(&files)?;
             let sources = read_sources(&files)?;
-            let compilation = compile_sources(&sources)?;
-            report_multi_diagnostics(&sources, &compilation.diagnostics);
+            let (compilation, sigil_sources) = compile_sources(&sources)?;
+            report_multi_diagnostics(
+                &sources,
+                &sigil_sources.sources,
+                &compilation.diagnostics,
+                &compilation.sigil_diagnostics,
+            );
             let Some(model) = compilation.model else {
                 return Ok(ExitCode::FAILURE);
             };
@@ -261,8 +314,13 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         } => {
             let files = expand_inputs(&files)?;
             let sources = read_sources(&files)?;
-            let compilation = compile_sources(&sources)?;
-            report_multi_diagnostics(&sources, &compilation.diagnostics);
+            let (compilation, sigil_sources) = compile_sources(&sources)?;
+            report_multi_diagnostics(
+                &sources,
+                &sigil_sources.sources,
+                &compilation.diagnostics,
+                &compilation.sigil_diagnostics,
+            );
             let Some(model) = compilation.model else {
                 return Ok(ExitCode::FAILURE);
             };
@@ -280,7 +338,8 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             let files = expand_inputs(&files)?;
             if files.len() == 1 && is_actor_file(&files[0]) {
                 let pair = read_actor_pair(&files[0])?;
-                let compilation = compile_actors_str(&pair.path, &pair.source, &pair.domains);
+                let compilation =
+                    compile_actors_str(&pair.path, &pair.source, &pair.domains, &pair.imports());
                 report_actor_diagnostics(&pair, &compilation);
                 let Some(actor_model) = compilation.model else {
                     return Ok(ExitCode::FAILURE);
@@ -293,8 +352,13 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 Ok(ExitCode::SUCCESS)
             } else {
                 let sources = read_sources(&files)?;
-                let compilation = compile_sources(&sources)?;
-                report_multi_diagnostics(&sources, &compilation.diagnostics);
+                let (compilation, sigil_sources) = compile_sources(&sources)?;
+                report_multi_diagnostics(
+                    &sources,
+                    &sigil_sources.sources,
+                    &compilation.diagnostics,
+                    &compilation.sigil_diagnostics,
+                );
                 let Some(model) = compilation.model else {
                     return Ok(ExitCode::FAILURE);
                 };
@@ -313,7 +377,8 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             let files = expand_inputs(&files)?;
             if files.len() == 1 && is_actor_file(&files[0]) {
                 let pair = read_actor_pair(&files[0])?;
-                let compilation = compile_actors_str(&pair.path, &pair.source, &pair.domains);
+                let compilation =
+                    compile_actors_str(&pair.path, &pair.source, &pair.domains, &pair.imports());
                 report_actor_diagnostics(&pair, &compilation);
                 let Some(actor_model) = compilation.model else {
                     return Ok(ExitCode::FAILURE);
@@ -321,8 +386,13 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 print_tool_manifests(&actor_model)?;
             } else {
                 let sources = read_sources(&files)?;
-                let compilation = compile_sources(&sources)?;
-                report_multi_diagnostics(&sources, &compilation.diagnostics);
+                let (compilation, sigil_sources) = compile_sources(&sources)?;
+                report_multi_diagnostics(
+                    &sources,
+                    &sigil_sources.sources,
+                    &compilation.diagnostics,
+                    &compilation.sigil_diagnostics,
+                );
                 let Some(model) = compilation.model else {
                     return Ok(ExitCode::FAILURE);
                 };
@@ -352,7 +422,9 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             for file in &files {
                 let source = std::fs::read_to_string(file)
                     .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
-                let formatted = if is_actor_file(file) {
+                let formatted = if is_ddd_file(file) {
+                    rex_syntax::fmt::format_ddd(&source)?
+                } else if is_actor_file(file) {
                     rex_syntax::fmt::format_actors(&source)?
                 } else {
                     rex_syntax::fmt::format(&source)?
@@ -714,34 +786,190 @@ fn collect_schema_imports(sources: &[(String, String)]) -> anyhow::Result<Schema
     Ok(imports)
 }
 
+/// The rosetta sources a compilation's `import sigil` declarations resolve
+/// to: every file handed to the driver, as `(tag path, source text)`. The
+/// tag path is what sigil diagnostics are labeled with.
+struct SigilSources {
+    /// The provider entries keyed `(mox path, import path)` — the named
+    /// imports plus the discovered candidates.
+    imports: SigilImports,
+    /// Every provided rosetta source keyed by its tag path, for rendering
+    /// sigil diagnostics against their own text.
+    sources: Vec<(String, String)>,
+}
+
+/// Collects the rosetta content of every `import sigil` declaration across
+/// `sources`, resolving each import path **relative to the declaring `.mox`
+/// file's directory** (the `.actor` import-resolution precedent: the CLI
+/// owns filesystem access, the driver receives texts only). A missing import
+/// file is a clean error naming the resolved path. Syntax errors in a source
+/// surface later as compile diagnostics, so they are not fatal here.
+///
+/// Rosetta-internal namespace imports are satisfied transitively: every
+/// `*.rosetta` file under the named file's directory is read as a candidate
+/// (mirroring sigil's project discovery: dot and `target` directories are
+/// skipped, depth-capped), keyed by its resolved path. The driver lowers
+/// only the namespace closure the named file actually needs, so unrelated
+/// siblings never leak into the artifact.
+fn collect_sigil_imports(sources: &[(String, String)]) -> anyhow::Result<SigilSources> {
+    let mut sigil = SigilSources {
+        imports: SigilImports::new(),
+        sources: Vec::new(),
+    };
+    for (path, source) in sources {
+        let Some(ast) = &rex_syntax::parse(source).ast else {
+            continue;
+        };
+        let dir = Path::new(path)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        for decl in &ast.declarations {
+            let rex_syntax::ast::Decl::ImportSchema(import) = decl else {
+                continue;
+            };
+            if import.kind != rex_syntax::ast::ImportKind::Sigil {
+                continue;
+            }
+            let resolved = dir.join(&import.path);
+            let text = std::fs::read_to_string(&resolved).map_err(|error| {
+                anyhow::anyhow!(
+                    "cannot read imported sigil {} (imported by {}): {error}",
+                    resolved.display(),
+                    path
+                )
+            })?;
+            sigil
+                .imports
+                .insert(path.clone(), import.path.clone(), text.clone());
+            sigil.sources.push((import.path.clone(), text));
+            // Candidate pool: every rosetta file next to the named import.
+            for candidate in discover_rosetta_files(&resolved) {
+                let candidate_path = candidate.display().to_string();
+                if sigil
+                    .sources
+                    .iter()
+                    .any(|(existing, _)| *existing == candidate_path)
+                {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&candidate).map_err(|error| {
+                    anyhow::anyhow!(
+                        "cannot read imported sigil {} (discovered for {} imported by {}): {error}",
+                        candidate.display(),
+                        import.path,
+                        path
+                    )
+                })?;
+                sigil
+                    .imports
+                    .insert(path.clone(), candidate_path.clone(), text.clone());
+                sigil.sources.push((candidate_path, text));
+            }
+        }
+    }
+    Ok(sigil)
+}
+
+/// Recursively collects `*.rosetta` files under `file`'s directory,
+/// mirroring sigil's project discovery: entries whose name starts with `.`
+/// or is exactly `target` are skipped with their subtree, and the walk is
+/// depth-capped (bounding symlink cycles). The named file itself is not
+/// included.
+fn discover_rosetta_files(file: &Path) -> Vec<PathBuf> {
+    const MAX_DEPTH: usize = 16;
+    fn collect(dir: &Path, depth: usize, named: &Path, out: &mut Vec<PathBuf>) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        let mut entries: Vec<std::fs::DirEntry> = entries.filter_map(Result::ok).collect();
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if name.starts_with('.') || name == "target" {
+                continue;
+            }
+            if path.is_dir() {
+                collect(&path, depth + 1, named, out);
+            } else if name.ends_with(".rosetta") && path != named {
+                out.push(path);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let base = file
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    collect(base, 0, file, &mut out);
+    out
+}
+
 /// Compiles in-memory sources into one model: a single source keeps the
 /// single-file pipeline (identical diagnostics and IR); several sources
 /// compile as one multi-package model. Schema imports declared by the
-/// sources are read from disk first (see [`collect_schema_imports`]).
-fn compile_sources(sources: &[(String, String)]) -> anyhow::Result<MultiCompilation> {
+/// sources are read from disk first (see [`collect_schema_imports`]), then
+/// sigil imports (see [`collect_sigil_imports`]).
+fn compile_sources(
+    sources: &[(String, String)],
+) -> anyhow::Result<(MultiCompilation, SigilSources)> {
     let schema_imports = collect_schema_imports(sources)?;
+    let sigil_sources = collect_sigil_imports(sources)?;
     if let [(path, source)] = sources {
-        let compilation = compile_str_with_imports(path, source, &schema_imports);
-        Ok(MultiCompilation {
-            model: compilation.model,
-            diagnostics: compilation
-                .diagnostics
-                .into_iter()
-                .map(|diagnostic| (path.clone(), diagnostic))
-                .collect(),
-        })
+        let compilation =
+            compile_str_with_imports(path, source, &schema_imports, &sigil_sources.imports);
+        Ok((
+            MultiCompilation {
+                model: compilation.model,
+                diagnostics: compilation
+                    .diagnostics
+                    .into_iter()
+                    .map(|diagnostic| (path.clone(), diagnostic))
+                    .collect(),
+                sigil_diagnostics: compilation.sigil_diagnostics,
+            },
+            sigil_sources,
+        ))
     } else {
-        Ok(compile_files_with_imports(sources, &schema_imports))
+        Ok((
+            compile_files_with_imports(sources, &schema_imports, &sigil_sources.imports),
+            sigil_sources,
+        ))
     }
 }
 
 /// Renders a compilation's diagnostics grouped per file: each file's
 /// diagnostics are ariadne-rendered against that file's own source, the way
-/// `check` renders single-model diagnostics.
+/// `check` renders single-model diagnostics. The `.mox` diagnostics render
+/// first, then the `import sigil` diagnostics against their rosetta sources.
 fn report_multi_diagnostics(
     sources: &[(String, String)],
+    rosetta_sources: &[(String, String)],
     diagnostics: &[(String, rex_driver::Diagnostic)],
+    sigil_diagnostics: &[(String, rex_driver::Diagnostic)],
 ) {
+    let mut lookup: Vec<(&str, &str)> = sources
+        .iter()
+        .map(|(path, source)| (path.as_str(), source.as_str()))
+        .collect();
+    lookup.extend(
+        rosetta_sources
+            .iter()
+            .map(|(path, source)| (path.as_str(), source.as_str())),
+    );
+    render_grouped(&lookup, diagnostics);
+    render_grouped(&lookup, sigil_diagnostics);
+}
+
+/// Groups diagnostics by file path and renders each group against its
+/// source; paths with no known source are skipped.
+fn render_grouped(lookup: &[(&str, &str)], diagnostics: &[(String, rex_driver::Diagnostic)]) {
     if diagnostics.is_empty() {
         return;
     }
@@ -755,11 +983,17 @@ fn report_multi_diagnostics(
         }
     }
     for (path, group) in groups {
-        let Some((_, source)) = sources.iter().find(|(name, _)| name == path) else {
+        let Some((_, source)) = lookup.iter().find(|(name, _)| *name == path) else {
             continue;
         };
         eprint!("{}", render(path, source, &group));
     }
+}
+
+/// `true` for `.ddd` paths: the standalone DDD design surface, compiled
+/// against the domain models it imports.
+fn is_ddd_file(file: &Path) -> bool {
+    file.extension().and_then(|extension| extension.to_str()) == Some("ddd")
 }
 
 /// `true` for `.actor` paths: the standalone actor-policy surface, compiled
@@ -781,11 +1015,24 @@ struct ActorPair {
     /// paths keep vocabulary snapshots anchored to the declaring file no
     /// matter where the process runs from.
     domains: Vec<(String, String)>,
+    /// The domains' `import schema` content, keyed by domain path.
+    schemas: SchemaImports,
+    /// The domains' `import sigil` content, plus the rosetta sources for
+    /// rendering sigil diagnostics.
+    sigil: SigilSources,
 }
 
 impl ActorPair {
+    /// The import bundle the driver entry point takes.
+    fn imports(&self) -> DomainImports<'_> {
+        DomainImports {
+            schemas: &self.schemas,
+            sigil: &self.sigil.imports,
+        }
+    }
+
     /// The source text of the file with the given driver path, if it is the
-    /// actor file or an imported domain.
+    /// actor file, an imported domain, or a rosetta source.
     fn source_of(&self, path: &str) -> Option<&str> {
         if path == self.path {
             return Some(&self.source);
@@ -794,6 +1041,13 @@ impl ActorPair {
             .iter()
             .find(|(name, _)| name == path)
             .map(|(_, source)| source.as_str())
+            .or_else(|| {
+                self.sigil
+                    .sources
+                    .iter()
+                    .find(|(name, _)| name == path)
+                    .map(|(_, source)| source.as_str())
+            })
     }
 }
 
@@ -830,10 +1084,107 @@ fn read_actor_pair(file: &Path) -> anyhow::Result<ActorPair> {
             domains.push((resolved.display().to_string(), text));
         }
     }
+    let schemas = collect_schema_imports(&domains)?;
+    let sigil = collect_sigil_imports(&domains)?;
     Ok(ActorPair {
         path,
         source,
         domains,
+        schemas,
+        sigil,
+    })
+}
+
+/// A `.ddd` file plus the domain sources it imports, ready for
+/// [`rex_driver::compile_ddd_str`].
+struct DddDesignPair {
+    /// The design file's path as given on the command line.
+    path: String,
+    /// The design file's source text.
+    source: String,
+    /// Each imported domain as `(resolved path, source)`, in import order;
+    /// the driver matches a design import by exact string or by lexical
+    /// resolution relative to the design file's directory, so resolved
+    /// paths keep vocabulary snapshots anchored to the declaring file no
+    /// matter where the process runs from.
+    domains: Vec<(String, String)>,
+    /// The domains' `import schema` content, keyed by domain path.
+    schemas: SchemaImports,
+    /// The domains' `import sigil` content, plus the rosetta sources for
+    /// rendering sigil diagnostics.
+    sigil: SigilSources,
+}
+
+impl DddDesignPair {
+    /// The import bundle the driver entry point takes.
+    fn imports(&self) -> DomainImports<'_> {
+        DomainImports {
+            schemas: &self.schemas,
+            sigil: &self.sigil.imports,
+        }
+    }
+
+    /// The source text of the file with the given driver path, if it is the
+    /// design file, an imported domain, or a rosetta source.
+    fn source_of(&self, path: &str) -> Option<&str> {
+        if path == self.path {
+            return Some(&self.source);
+        }
+        self.domains
+            .iter()
+            .find(|(name, _)| name == path)
+            .map(|(_, source)| source.as_str())
+            .or_else(|| {
+                self.sigil
+                    .sources
+                    .iter()
+                    .find(|(name, _)| name == path)
+                    .map(|(_, source)| source.as_str())
+            })
+    }
+}
+
+/// Reads a `.ddd` file plus every domain it imports.
+///
+/// Import paths resolve relative to the design file's own directory, and the
+/// **resolved** path is passed to the driver (the driver matches imports by
+/// exact string or by lexical resolution, and the domain's driver path also
+/// locates its `vocab/` directory — with raw import strings that lookup
+/// would be relative to the process CWD). A missing import file is a clean
+/// error naming the resolved path. Duplicate imports are read once.
+fn read_ddd_design(file: &Path) -> anyhow::Result<DddDesignPair> {
+    let source = std::fs::read_to_string(file)
+        .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
+    let path = file.display().to_string();
+    let mut domains: Vec<(String, String)> = Vec::new();
+    if let Some(ast) = &rex_syntax::parse_ddd(&source).ast {
+        let dir = file
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        for import in &ast.imports {
+            if domains.iter().any(|(existing, _)| *existing == import.path) {
+                continue;
+            }
+            let resolved = dir.join(&import.path);
+            let text = std::fs::read_to_string(&resolved).map_err(|error| {
+                anyhow::anyhow!(
+                    "cannot read imported file {} (imported by {}): {error}",
+                    resolved.display(),
+                    path
+                )
+            })?;
+            domains.push((resolved.display().to_string(), text));
+        }
+    }
+    let schemas = collect_schema_imports(&domains)?;
+    let sigil = collect_sigil_imports(&domains)?;
+    Ok(DddDesignPair {
+        path,
+        source,
+        domains,
+        schemas,
+        sigil,
     })
 }
 
@@ -851,6 +1202,30 @@ fn print_tool_manifests(actor_model: &rex_ir::ActorModel) -> anyhow::Result<()> 
 /// diagnostics are ariadne-rendered against that file's own source, the way
 /// `check` renders single-model diagnostics.
 fn report_actor_diagnostics(pair: &ActorPair, compilation: &ActorCompilation) {
+    if compilation.diagnostics.is_empty() {
+        return;
+    }
+    let mut groups: Vec<(&str, Vec<rex_driver::Diagnostic>)> = Vec::new();
+    for (path, diagnostic) in &compilation.diagnostics {
+        match groups.last_mut() {
+            Some((group_path, group)) if *group_path == path.as_str() => {
+                group.push(diagnostic.clone())
+            }
+            _ => groups.push((path.as_str(), vec![diagnostic.clone()])),
+        }
+    }
+    for (path, group) in groups {
+        let Some(source) = pair.source_of(path) else {
+            continue;
+        };
+        eprint!("{}", render(path, source, &group));
+    }
+}
+
+/// Renders a `.ddd` compilation's diagnostics grouped per file: each file's
+/// diagnostics are ariadne-rendered against that file's own source, the way
+/// `check` renders single-model diagnostics.
+fn report_ddd_diagnostics(pair: &DddDesignPair, compilation: &rex_driver::DddCompilation) {
     if compilation.diagnostics.is_empty() {
         return;
     }

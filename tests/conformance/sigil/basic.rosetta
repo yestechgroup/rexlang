@@ -1,0 +1,26 @@
+namespace rex.sigil.fixture
+version "1.0.0"
+
+type Instrument: <"A tradable financial instrument.">
+	instrumentId string (1..1) <"The instrument identifier.">
+	shortName string (0..1) <"An optional short name.">
+	keywords string (0..*)
+
+type Bond extends Instrument:
+	override instrumentId int (1..1)
+	couponRate number (1..1) <"The annual coupon rate.">
+
+choice InstrumentType: <"How an instrument is traded.">
+	Bond
+	ExchangeTraded
+
+type ExchangeTraded extends InstrumentType:
+	venue string (1..1) <"The trading venue.">
+
+enum InstrumentStatus: <"The lifecycle status of an instrument.">
+	ACTIVE <"Actively quoted.">
+	SUSPENDED displayName "Trading suspended"
+	MATURED
+
+typeAlias InstrumentCode: <"An external instrument code.">
+	string

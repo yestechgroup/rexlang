@@ -2,11 +2,11 @@
 //! [`rex_ir::Model`] (one resolved package set).
 //!
 //! The checker implements the typing rules of `docs/EXPRESSIONS.md` — the
-//! semantic rules R1–R8 (integer overflow, string equality, option/null
+//! semantic rules R1–R9 (integer overflow, string equality, option/null
 //! propagation, division by zero, date arithmetic overflow, date literals,
-//! date ordering/equality, month-add clamping) plus the auxiliary rules
-//! L1/L2 (literal polymorphism / operand types), U1 (branch unification),
-//! and A1–A6 (the collection algebra). Its compile-time obligations are the
+//! date ordering/equality, month-add clamping, string concatenation) plus
+//! the auxiliary rules L1/L2 (literal polymorphism / operand types), U1
+//! (branch unification), and A1–A6 (the collection algebra). Its compile-time obligations are the
 //! constant halves of R1 (checked constant arithmetic, `int` literal
 //! bounds), R4 (constant zero divisor), and R6 (the `date("…")` literal must
 //! name a real calendar day); the runtime halves are lowering contracts on
@@ -307,9 +307,8 @@ impl TypeChecker {
         errors: &mut Vec<ExprError>,
     ) -> Checked {
         match op {
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => {
-                self.arithmetic(scope, op, lhs, rhs, errors)
-            }
+            BinOp::Add => self.add(scope, lhs, rhs, errors),
+            BinOp::Sub | BinOp::Mul | BinOp::Div => self.arithmetic(scope, op, lhs, rhs, errors),
             BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
                 self.relational(scope, op, lhs, rhs, errors)
             }
@@ -328,13 +327,26 @@ impl TypeChecker {
         rhs: &Expr,
         errors: &mut Vec<ExprError>,
     ) -> (Checked, Checked) {
-        let long = Ty::long();
         let lhs_ty = self.check(scope, lhs, None, errors);
-        let rhs_ty = match &lhs_ty {
+        let rhs_ty = self.rhs_operand(scope, rhs, &lhs_ty, errors);
+        (lhs_ty, rhs_ty)
+    }
+
+    /// The right operand of an arithmetic/comparison pair, with L1
+    /// adaptation: when the (already-checked) left operand is `long`, an
+    /// integer literal on the right is typed `long`.
+    fn rhs_operand(
+        &self,
+        scope: &Scope,
+        rhs: &Expr,
+        lhs_ty: &Checked,
+        errors: &mut Vec<ExprError>,
+    ) -> Checked {
+        let long = Ty::long();
+        match lhs_ty {
             Ok(ty) if ty == &long => self.check(scope, rhs, Some(&long), errors),
             _ => self.check(scope, rhs, None, errors),
-        };
-        (lhs_ty, rhs_ty)
+        }
     }
 
     /// Reports an L2 mismatch when both sides are numeric but of different
@@ -356,6 +368,64 @@ impl TypeChecker {
         }
     }
 
+    /// The R9 mismatch error for a `+` whose operands are not both strings.
+    fn concat_mismatch(&self, lhs: &Ty, rhs: &Ty, span: Span) -> ExprError {
+        ExprError::new(
+            format!(
+                "cannot concatenate {lhs} and {rhs} with `+` (R9: `+` concatenates two \
+                 string operands with no implicit conversions; \
+                 see docs/EXPRESSIONS.md rule R9)"
+            ),
+            span,
+        )
+    }
+
+    /// Spec R9 + L2: string operands concatenate (an absent operand yields
+    /// an absent result, per R3); otherwise `+` falls through to the numeric
+    /// rules — L1 literal adaptation, the L2 same-type rule, and the R1/R4
+    /// compile-time halves — untouched. Each operand is checked exactly
+    /// once, so poisoned operands never cascade into a spurious error.
+    fn add(&self, scope: &Scope, lhs: &Expr, rhs: &Expr, errors: &mut Vec<ExprError>) -> Checked {
+        let lhs_ty = self.check(scope, lhs, None, errors);
+        if is_string_operand(lhs_ty.as_ref().ok()) {
+            // R9: the string path has no L1 adaptation, so the right operand
+            // is checked without an expected type.
+            let rhs_ty = self.check(scope, rhs, None, errors);
+            return self.string_concat(lhs_ty, rhs_ty, lhs.span, errors);
+        }
+        let rhs_ty = self.rhs_operand(scope, rhs, &lhs_ty, errors);
+        if is_string_operand(rhs_ty.as_ref().ok()) {
+            return self.string_concat(lhs_ty, rhs_ty, lhs.span, errors);
+        }
+        self.arithmetic_typed(BinOp::Add, lhs, rhs, lhs_ty, rhs_ty, errors)
+    }
+
+    /// Spec R9: two string operands concatenate (`Option<string>` when
+    /// either operand may be absent, per R3); anything else is a type error
+    /// naming the mismatch. A poisoned operand stays silent — its error was
+    /// already reported.
+    fn string_concat(
+        &self,
+        lhs_ty: Checked,
+        rhs_ty: Checked,
+        span: Span,
+        errors: &mut Vec<ExprError>,
+    ) -> Checked {
+        let (Ok(lhs_ty), Ok(rhs_ty)) = (lhs_ty, rhs_ty) else {
+            return Err(());
+        };
+        if !(is_string_operand(Some(&lhs_ty)) && is_string_operand(Some(&rhs_ty))) {
+            errors.push(self.concat_mismatch(&lhs_ty, &rhs_ty, span));
+            return Err(());
+        }
+        let absent = matches!(lhs_ty, Ty::Option(_)) || matches!(rhs_ty, Ty::Option(_));
+        if absent {
+            Ok(Ty::string().optional())
+        } else {
+            Ok(Ty::string())
+        }
+    }
+
     /// Spec L2 + R1 + R4: same-type numeric operands, constant folding with
     /// checked arithmetic, constant zero divisor rejected.
     fn arithmetic(
@@ -367,6 +437,21 @@ impl TypeChecker {
         errors: &mut Vec<ExprError>,
     ) -> Checked {
         let (lhs_ty, rhs_ty) = self.numeric_operands(scope, lhs, rhs, errors);
+        self.arithmetic_typed(op, lhs, rhs, lhs_ty, rhs_ty, errors)
+    }
+
+    /// The numeric decision of [`Self::arithmetic`] over already-checked
+    /// operand types, shared with [`Self::add`]'s numeric fall-through so
+    /// its operands are never checked twice.
+    fn arithmetic_typed(
+        &self,
+        op: BinOp,
+        lhs: &Expr,
+        rhs: &Expr,
+        lhs_ty: Checked,
+        rhs_ty: Checked,
+        errors: &mut Vec<ExprError>,
+    ) -> Checked {
         let lhs_ty = lhs_ty?;
         let rhs_ty = rhs_ty?;
 
@@ -1031,6 +1116,18 @@ fn is_int_literal(expr: &Expr) -> bool {
             op: UnOp::Neg,
             expr: inner,
         } => matches!(inner.kind, ExprKind::Int(_)),
+        _ => false,
+    }
+}
+
+/// Whether a checked type participates in string concatenation (spec R9):
+/// `string`, or `Option<string>` (an operand that may be absent, R3). The
+/// `null` literal is not a string operand — it behaves as on the numeric
+/// path, which rejects it.
+fn is_string_operand(ty: Option<&Ty>) -> bool {
+    match ty {
+        Some(Ty::Primitive(PrimitiveType::String)) => true,
+        Some(Ty::Option(inner)) => matches!(**inner, Ty::Primitive(PrimitiveType::String)),
         _ => false,
     }
 }

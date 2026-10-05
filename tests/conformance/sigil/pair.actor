@@ -1,0 +1,10 @@
+import "basic.mox"
+
+actors Trading {
+    actor Trader
+
+    capability SuspendInstrument on Instrument
+    grant Trader {
+        permit SuspendInstrument when (instrumentId == "X")
+    }
+}

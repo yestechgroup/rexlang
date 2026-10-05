@@ -13,6 +13,8 @@
 //!   via `unwrap_or` (the default is evaluated eagerly in Rust).
 //! - **R4** `/` is Rust's truncating integer division — a zero divisor
 //!   panics, which is exactly the rule's runtime contract.
+//! - **R9** string `+` lowers to plain `+` on the owned `String` operands
+//!   (left-associative chains; every binary node is parenthesized).
 //!
 //! Runtime representation: class-typed values are their typed ids (`BookId`,
 //! always `Copy`), so every feature access on a class-typed receiver goes
@@ -448,8 +450,9 @@ impl Lowerer<'_, '_> {
             BinOp::Eq | BinOp::Ne => self.equality(op, lhs, rhs),
             // R1/R4: plain operators — Rust's overflow/division panics are
             // the contracted runtime behavior. All remaining operators map
-            // 1:1, with L1 adapting an integer-literal right operand to the
-            // left operand's `long` width.
+            // 1:1 — including R9 string `+`, whose operands lower to owned
+            // `String` values — with L1 adapting an integer-literal right
+            // operand to the left operand's `long` width.
             _ => {
                 let lhs_ty = self.type_of(lhs)?;
                 let rhs_ty = self.operand_ty(rhs, lhs_ty == Ty::long())?;

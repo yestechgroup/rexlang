@@ -42,6 +42,14 @@ rex-vocab = { path = "crates/rex-vocab" }
 rex-lsp = { path = "crates/rex-lsp" }
 rex-runtime = { path = "crates/rex-runtime" }
 
+# The Rune DSL (`.rosetta`) toolchain, pinned by rev — the embedding
+# contract is documented in sigil's docs/api-stability.md (sigil-model is
+# the compatibility boundary).
+sigil-diag = { git = "https://github.com/yestechgroup/sigil.git", rev = "69115a79999e6ff2ce04c039a71edac6d8ba2468" }
+sigil-model = { git = "https://github.com/yestechgroup/sigil.git", rev = "69115a79999e6ff2ce04c039a71edac6d8ba2468" }
+sigil-resolve = { git = "https://github.com/yestechgroup/sigil.git", rev = "69115a79999e6ff2ce04c039a71edac6d8ba2468" }
+sigil-syntax = { git = "https://github.com/yestechgroup/sigil.git", rev = "69115a79999e6ff2ce04c039a71edac6d8ba2468" }
+
 anyhow = "1.0"
 ariadne = "0.5"
 askama = "0.14"

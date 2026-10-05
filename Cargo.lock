@@ -420,6 +420,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "chumsky"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0d2bfadce76f963d776feff99db6dc33783829539258314776383b33e2a00f8"
+dependencies = [
+ "hashbrown 0.15.5",
+ "regex-automata 0.4.18",
+ "serde",
+ "stacker",
+ "unicode-ident",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "clap"
 version = "4.6.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2475,6 +2489,10 @@ dependencies = [
  "salsa",
  "serde",
  "serde_json",
+ "sigil-diag",
+ "sigil-model",
+ "sigil-resolve",
+ "sigil-syntax",
  "thiserror",
 ]
 
@@ -2482,7 +2500,7 @@ dependencies = [
 name = "rex-expr"
 version = "0.1.0"
 dependencies = [
- "chumsky",
+ "chumsky 0.10.1",
  "logos 0.15.1",
  "rex-ir",
  "thiserror",
@@ -2538,7 +2556,7 @@ dependencies = [
 name = "rex-syntax"
 version = "0.1.0"
 dependencies = [
- "chumsky",
+ "chumsky 0.10.1",
  "logos 0.15.1",
  "thiserror",
 ]
@@ -2942,6 +2960,46 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+
+[[package]]
+name = "sigil-diag"
+version = "0.1.0"
+source = "git+https://github.com/yestechgroup/sigil.git?rev=69115a79999e6ff2ce04c039a71edac6d8ba2468#69115a79999e6ff2ce04c039a71edac6d8ba2468"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "sigil-model"
+version = "0.1.0"
+source = "git+https://github.com/yestechgroup/sigil.git?rev=69115a79999e6ff2ce04c039a71edac6d8ba2468#69115a79999e6ff2ce04c039a71edac6d8ba2468"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sigil-diag",
+]
+
+[[package]]
+name = "sigil-resolve"
+version = "0.1.0"
+source = "git+https://github.com/yestechgroup/sigil.git?rev=69115a79999e6ff2ce04c039a71edac6d8ba2468#69115a79999e6ff2ce04c039a71edac6d8ba2468"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sigil-diag",
+ "sigil-model",
+ "sigil-syntax",
+]
+
+[[package]]
+name = "sigil-syntax"
+version = "0.1.0"
+source = "git+https://github.com/yestechgroup/sigil.git?rev=69115a79999e6ff2ce04c039a71edac6d8ba2468#69115a79999e6ff2ce04c039a71edac6d8ba2468"
+dependencies = [
+ "chumsky 0.13.0",
+ "sigil-diag",
+ "sigil-model",
+]
 
 [[package]]
 name = "simd-adler32"

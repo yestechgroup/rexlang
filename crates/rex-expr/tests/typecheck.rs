@@ -2,7 +2,7 @@
 //! `nz.example.library` Core IR (the `examples/library.mox` shape used by
 //! `rex-backend-rust`'s end-to-end tests, extended with a `long` attribute and
 //! a second operation). Test names cite the rule numbers of
-//! `docs/EXPRESSIONS.md` (R1–R4, L1–L2, U1, A1–A6).
+//! `docs/EXPRESSIONS.md` (R1–R4, L1–L2, U1, A1–A6, R9).
 
 use rex_expr::{parse, ExprKind, NamedKind, Ty, TypeChecker, TypeContext};
 use rex_ir::{
@@ -60,6 +60,7 @@ fn library_model() -> Model {
         vec![OperationParam {
             name: "title".to_string(),
             type_: TypeRef::Primitive(PrimitiveType::String),
+            multiplicity: None,
         }],
     ));
     package.classes[0].operations.push(Operation::new(
@@ -68,6 +69,7 @@ fn library_model() -> Model {
         vec![OperationParam {
             name: "year".to_string(),
             type_: TypeRef::Primitive(PrimitiveType::Int),
+            multiplicity: None,
         }],
     ));
     package.classes.push(ClassDef::new(
@@ -755,4 +757,55 @@ fn collection_algebra_works_on_date_elements() {
     assert!(date_checker()
         .type_of(&parse("renewals.sum()").ast.expect("parses"))
         .is_err());
+}
+
+// ---------------------------------------------------------------------------
+// R9 — STRING CONCATENATION
+// ---------------------------------------------------------------------------
+
+#[test]
+fn r9_string_plus_string_types_as_string() {
+    assert_ty(r#"book.title + " - ""#, Ty::string());
+    assert_ty(r#""a" + "b""#, Ty::string());
+    assert_ty("book.title + book.title", Ty::string());
+    // Chains are left-associative and stay string.
+    assert_ty(r#"book.title + " - " + book.title"#, Ty::string());
+}
+
+#[test]
+fn r9_string_plus_non_string_is_an_error_in_both_orders() {
+    assert_err(r#"book.title + 1"#, "R9");
+    assert_err(r#"1 + book.title"#, "R9");
+    assert_err("book.pages + book.title", "R9");
+    assert_err(r#"true + book.title"#, "R9");
+    // date, enum, and list operands are not strings either.
+    assert_err("book.copyright + book.title", "R9");
+    assert_err("book.category + book.title", "R9");
+    assert_err("book.authors + book.title", "R9");
+}
+
+#[test]
+fn r9_option_string_plus_string_types_as_option_string() {
+    // An absent operand yields an absent result, in either order (R3).
+    assert_ty("book.citation + book.title", Ty::string().optional());
+    assert_ty("book.title + book.citation", Ty::string().optional());
+    assert_ty("book.citation + book.citation", Ty::string().optional());
+    assert_ty(r#"book.citation + "x""#, Ty::string().optional());
+}
+
+#[test]
+fn r9_null_is_not_a_string_operand() {
+    // `null` behaves as on the numeric path: rejected (R2/R3 are its only
+    // participants).
+    assert_err(r#"null + book.title"#, "R9");
+    assert_err(r#"book.title + null"#, "R9");
+}
+
+#[test]
+fn r9_numeric_plus_is_untouched_by_the_string_path() {
+    // The L1/R1/R4 halves apply to non-string operands exactly as before.
+    assert_ty("book.pages + book.pages", Ty::int());
+    assert_ty("book.downloads + 2147483648", Ty::long()); // L1 adaptation
+    assert_err("2147483647 + 1", "R1");
+    assert_err("book.pages + book.downloads", "L2");
 }

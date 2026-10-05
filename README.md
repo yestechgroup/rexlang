@@ -26,8 +26,9 @@ consumes the IR — in or out of tree — start with
 
 Front-end, Core IR, wire format, Rust backend, canonical JSON instances,
 JSON Schema (wire/api), the Tier-2 expression language, hermetic
-vocabularies, and the `.actor` authorization dimension with Cedar policy
-generation — implemented and CI-enforced. C#/Java backends and filter/query
+vocabularies, the `.actor` authorization dimension with Cedar policy
+generation, and the `.ddd` Sculptor-style design layer over imported
+domains — implemented and CI-enforced. C#/Java backends and filter/query
 predicates are future work.
 
 ## Usage

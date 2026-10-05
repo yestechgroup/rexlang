@@ -1,0 +1,18 @@
+import "basic.mox";
+
+application Instruments {
+    base rex.sigil.fixture
+    module instruments {
+        entity Instrument
+        entity Bond repository BondRepository {
+            findAll;
+            Bond[] findByShortName(String shortName);
+        }
+        search BondSearch {
+            entity Bond
+            text {
+                shortName
+            }
+        }
+    }
+}

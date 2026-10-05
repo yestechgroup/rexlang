@@ -124,6 +124,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+pub mod ddd;
 pub mod ifml;
 
 /// The artifact format version this crate writes and accepts.
@@ -443,6 +444,11 @@ pub struct OperationParam {
     /// The resolved parameter type.
     #[serde(rename = "type")]
     pub type_: TypeRef,
+    /// Declared cardinality. Domain `Operation` params are always
+    /// single-valued and never set this; DDD design signatures
+    /// (`rex::ddd`) carry it for collection-shaped parameters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multiplicity: Option<Multiplicity>,
 }
 
 /// A declared operation with optional per-target bodies (Tier 1).
@@ -1744,6 +1750,7 @@ mod tests {
                 vec![OperationParam {
                     name: "title".to_string(),
                     type_: TypeRef::Primitive(PrimitiveType::String),
+                    multiplicity: None,
                 }],
             )
             .with_body(

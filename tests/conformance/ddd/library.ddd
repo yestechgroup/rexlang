@@ -1,0 +1,104 @@
+import "library.mox";
+
+application Library {
+    base nz.example.library
+    module media {
+        /// Coordinates lending of physical media across branches.
+        service MediaService {
+            inject PhysicalMediaRepository;
+            inject MovieRepository;
+            inject PersonService;
+            inject MediaSearch;
+            boolean borrow(String mediaId, Person borrower) capability BorrowMedia;
+            PhysicalMedia registerMedia(String status);
+            save => PhysicalMediaRepository.save;
+            registerBorrower => PersonService.register;
+            findMedia => MediaSearch.search;
+        }
+        entity Library scaffold cache repository LibraryRepository {
+            findById;
+            findAll;
+            save;
+            delete;
+            boolean renameLibrary(String name);
+        }
+        entity Book
+        abstract entity Media
+        entity Chapter auditable
+        entity Movie repository MovieRepository {
+            findById;
+            findAll;
+            save;
+            delete;
+            Movie findByTitle(String title);
+        }
+        entity PhysicalMedia scaffold repository PhysicalMediaRepository {
+            findById;
+            findAll;
+            save;
+            delete;
+            PhysicalMedia findByStatus(String status);
+        }
+        /// Full-text search over the movie catalogue.
+        search MediaSearch {
+            entity Movie
+            text {
+                title boost 3
+                synopsis analyzer "english"
+            }
+            filters {
+                genre
+            }
+            sort {
+                title
+            }
+            document {
+                headline = title;
+                blurb = title + " - " + synopsis;
+            }
+            ranking bm25
+            analyzer "english"
+            pagination {
+                limit 20
+                max 100
+                cursor
+            }
+            capability SearchMedia
+        }
+    }
+    module person {
+        /// Keeps the member register current.
+        service PersonService {
+            inject PersonRepository;
+            register => PersonRepository.save;
+            findByName => PersonRepository.findByName;
+        }
+        entity Person repository PersonRepository {
+            findById;
+            findAll;
+            save;
+            delete;
+            Person findByName(String fullName);
+        }
+        search MemberDirectory {
+            entity Person
+            text {
+                fullName boost 2
+            }
+            filters {
+                joinedOn
+            }
+            sort {
+                fullName
+                joinedOn
+            }
+            document {
+                displayName = fullName;
+            }
+            ranking tfIdf
+            pagination {
+                limit 10
+            }
+        }
+    }
+}

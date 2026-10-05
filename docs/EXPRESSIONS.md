@@ -16,9 +16,10 @@ The pipeline is: parse (`rex-expr`) → type-check once in Rust against the Core
 IR (`rex-expr`, over a `rex_ir::Model`) → each backend lowers the **typed**
 expression tree to idiomatic target code. Because backends see typed trees,
 semantics must be pinned down explicitly where target languages disagree —
-integer overflow, string equality, null/`Option`, division by zero, and the
-calendar rules for dates are the disagreeing corners. Those are rules
-**R1–R8** below; they are numbered so tests and backends can cite them.
+integer overflow, string equality, string concatenation, null/`Option`,
+division by zero, and the calendar rules for dates are the disagreeing
+corners. Those are rules **R1–R9** below; they are numbered so tests and
+backends can cite them.
 
 Status: this document is the normative spec for the expression *surface and
 typing* (the front half). Backend lowering rules land with each backend; the
@@ -133,12 +134,13 @@ are **no implicit conversions**: in particular there is no implicit
 bits is an R1 constant-overflow error.
 
 **L2 (operand rule).** `+ - * /` require both operands to have the *same*
-numeric type and produce it. `< <= > >=` require the same numeric type — or
-two `date` values (rule R7) — and produce `boolean`. `&& || !` operate on
-`boolean` only; unary `-` takes a numeric. There is no ordering on `string`;
-strings support only equality. Dates take no arithmetic operators at all:
-calendar arithmetic is the typed method algebra described under R8, never
-`+`/`-`.
+numeric type and produce it — except `+`, which additionally admits two
+string operands and concatenates them (rule R9). `< <= > >=` require the
+same numeric type — or two `date` values (rule R7) — and produce `boolean`.
+`&& || !` operate on `boolean` only; unary `-` takes a numeric. There is no
+ordering on `string`; strings support equality (R2) and `+` concatenation
+(R9). Dates take no arithmetic operators at all: calendar arithmetic is the
+typed method algebra described under R8, never `+`/`-`.
 
 **U1 (if unification).** `if` requires a `boolean` condition. Both branches
 must have the *same* type — compared exactly, with no implicit `int → long`
@@ -168,11 +170,12 @@ bound is 0).
 
 ## The semantic rules
 
-These eight are where target languages disagree. They are **normative**: every
-backend lowering a typed expression tree must preserve them, and the
+These nine are where target languages disagree. They are **normative**:
+every backend lowering a typed expression tree must preserve them, and the
 type-checker enforces their compile-time halves. Each rule is cited by tests
-as `R1`–`R8`. R1–R4 predate the `date` primitive; R5–R8 pin the calendar
-semantics that came with it (issue #9).
+as `R1`–`R9`. R1–R4 predate the `date` primitive; R5–R8 pin the calendar
+semantics that came with it (issue #9); R9 adds string concatenation to
+`+`.
 
 ### R1 — INTEGER OVERFLOW
 
@@ -354,6 +357,37 @@ on overflow); lowered calls are plain method calls:
 
 ```rust
 (self.effective_date.plus_months(6i32))   // 2026-01-31 + 6 months → 2026-07-31
+```
+
+### R9 — STRING CONCATENATION
+
+`+` admits **two string operands**, in which case it **concatenates** them:
+`a + b` is the string whose characters are `a`'s followed by `b`'s. Chains
+are left-associative (the `additive` level), so `title + " - " + synopsis`
+is `(title + " - ") + synopsis`.
+
+Optionality follows R3: an **absent operand yields an absent result** —
+`Option<string> + string`, `string + Option<string>`, and
+`Option<string> + Option<string>` all type as `Option<string>`, and the
+concatenation happens only when every operand is present. The `null` literal
+is **not** a string operand: it behaves exactly as on the numeric path,
+which rejects it, so `null + s` and `s + null` are type errors (`null`
+exists only for equality, R2, and `?:`, R3).
+
+There are **no implicit conversions** between `string` and any numeric,
+`boolean`, or `date` type (L2): when either operand of `+` is a string (or
+`Option<string>`), the other must be too, and anything else — an integer,
+boolean, date, enum, class value, list — is a type error naming the
+mismatch. When neither operand is a string, `+` is entirely the numeric
+operator: L1 literal adaptation, the L2 same-type rule, and the R1/R4
+compile-time halves apply unchanged.
+
+**Rust lowering.** Plain `+` on the owned `String` operands — every string
+operand lowers to an owned value, so Rust's consuming `Add` is correct in
+left-associative chains (every binary node is parenthesized):
+
+```rust
+((self.title.clone() + " - ".to_string()) + self.synopsis.clone())
 ```
 
 ## Collection algebra

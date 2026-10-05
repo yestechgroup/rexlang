@@ -94,6 +94,7 @@ fn library_model() -> Model {
             vec![OperationParam {
                 name: "title".to_string(),
                 type_: TypeRef::Primitive(PrimitiveType::String),
+                multiplicity: None,
             }],
         )
         .with_body("rust", GET_BOOK_BODY),
@@ -125,6 +126,7 @@ fn library_model() -> Model {
             vec![OperationParam {
                 name: "title".to_string(),
                 type_: TypeRef::Primitive(PrimitiveType::String),
+                multiplicity: None,
             }],
         )
         .with_body("expr", "books.first(b => b.title == title)"),

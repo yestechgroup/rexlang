@@ -91,7 +91,12 @@ fn compile_conformance_model(relative_path: &str) -> rex_ir::Model {
             .unwrap_or_else(|error| panic!("read imported schema {}: {error}", resolved.display()));
         schema_imports = schema_imports.provide(path, import.path.clone(), json);
     }
-    let compilation = rex_driver::compile_str_with_imports(path, &source, &schema_imports);
+    let compilation = rex_driver::compile_str_with_imports(
+        path,
+        &source,
+        &schema_imports,
+        &rex_driver::SigilImports::new(),
+    );
     assert!(
         compilation.diagnostics.is_empty(),
         "conformance model {relative_path} must compile cleanly: {:?}",
@@ -122,8 +127,12 @@ fn compile_conformance_actor_file(relative_path: &str) -> rex_ir::ActorModel {
             (import.path.clone(), text)
         })
         .collect();
-    let compilation =
-        rex_driver::compile_actors_str(absolute.to_str().expect("utf-8 path"), &source, &domains);
+    let compilation = rex_driver::compile_actors_str(
+        absolute.to_str().expect("utf-8 path"),
+        &source,
+        &domains,
+        &rex_driver::DomainImports::empty(),
+    );
     assert!(
         compilation.diagnostics.is_empty(),
         "conformance actor file {relative_path} must compile cleanly: {:?}",
