@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use rex_driver::{compile_files_with_imports, SchemaImports, SigilImports};
+use rex_driver::{compile_files, DomainImports, SchemaImports, SigilImports};
 
 fn workspace_root() -> &'static Path {
     static ROOT: OnceLock<PathBuf> = OnceLock::new();
@@ -49,13 +49,15 @@ fn conformance_sigil_model_matches_golden_artifact() {
         SIGIL_PATH,
         rosetta,
     );
-    let compilation = compile_files_with_imports(
+    let compilation = compile_files(
         &[(
             model_absolute.to_str().expect("utf-8 path").to_string(),
             source,
         )],
-        &SchemaImports::new(),
-        &sigil,
+        &DomainImports {
+            schemas: SchemaImports::new(),
+            sigil,
+        },
     );
     let mut diagnostics = compilation.diagnostics.clone();
     diagnostics.extend(compilation.sigil_diagnostics.clone());

@@ -500,7 +500,7 @@ fn is_identifier(text: &str) -> bool {
 pub(crate) fn collect_schema_imports(
     file_path: &str,
     ast: &mox::Model,
-    provided: Option<&crate::SchemaImports>,
+    provided: &crate::SchemaImports,
     declared: &HashMap<String, TopKind>,
     diags: &mut Vec<Diagnostic>,
 ) -> Vec<SchemaImport> {
@@ -571,7 +571,7 @@ pub(crate) fn collect_schema_imports(
             );
             continue;
         }
-        match provided.and_then(|schema| schema.get(file_path, &decl.path)) {
+        match provided.get(file_path, &decl.path) {
             None => {
                 diags.push(
                     Diagnostic::error(
@@ -928,8 +928,7 @@ pub(crate) type MultiOutcome = (
 /// each file's diagnostics contiguous and in input order.
 pub(crate) fn compile_multi(
     files: &[MultiFile<'_>],
-    schema_imports: Option<&crate::SchemaImports>,
-    sigil_imports: Option<&crate::SigilImports>,
+    imports: &crate::DomainImports,
 ) -> MultiOutcome {
     // Per-file diagnostic buckets keep each file's diagnostics contiguous;
     // the cross-file passes append their (already tagged) diagnostics after.
@@ -1003,12 +1002,17 @@ pub(crate) fn compile_multi(
         }
         // Validate and register the file's `import schema` declarations:
         // each joins the namespace as a nominal class (alias or file stem).
-        let imports =
-            collect_schema_imports(file.path, ast, schema_imports, &kinds, &mut buckets[index]);
-        for import in &imports {
+        let file_schemas = collect_schema_imports(
+            file.path,
+            ast,
+            &imports.schemas,
+            &kinds,
+            &mut buckets[index],
+        );
+        for import in &file_schemas {
             kinds.insert(import.name.clone(), TopKind::Class);
         }
-        file_imports[index] = imports;
+        file_imports[index] = file_schemas;
         file_package[index] = Some(packages.len());
         packages.push(DomainPackage { name, kinds });
     }
@@ -1027,7 +1031,7 @@ pub(crate) fn compile_multi(
         .iter()
         .map(|(name, path)| (name.as_str(), *path))
         .collect();
-    let sigil = crate::sigil::compile_sigil_imports(&sigil_files, &declared_refs, sigil_imports);
+    let sigil = crate::sigil::compile_sigil_imports(&sigil_files, &declared_refs, &imports.sigil);
     packages.extend(sigil.namespaces);
 
     // Qualified constraint prep maps across all files, so enum closure
@@ -1286,8 +1290,8 @@ pub(crate) struct PerFileCompilation {
 /// Unlike [`compile_multi`] there is deliberately no all-or-nothing model:
 /// callers assemble what they need from the per-file results.
 ///
-/// `import schema` declarations resolve through `schema_imports`; `import
-/// sigil` declarations resolve through `sigil_imports`. A declaration
+/// `import schema` declarations resolve through `imports.schemas`; `import
+/// sigil` declarations resolve through `imports.sigil`. A declaration
 /// without a provider entry errors on the declaring file (which blocks its
 /// model). Sigil content errors are keyed by rosetta path: they collect in
 /// [`PerFileCompilation::sigil_diagnostics`] on the first sigil-declaring
@@ -1297,8 +1301,7 @@ pub(crate) struct PerFileCompilation {
 /// first-declared ownership the package declarations follow).
 pub(crate) fn compile_union_per_file(
     files: &[MultiFile<'_>],
-    schema_imports: Option<&crate::SchemaImports>,
-    sigil_imports: Option<&crate::SigilImports>,
+    imports: &crate::DomainImports,
 ) -> Vec<PerFileCompilation> {
     // Per-file diagnostic buckets keep each file's diagnostics in its own
     // result; cross-file passes route their (already tagged) diagnostics to
@@ -1371,12 +1374,17 @@ pub(crate) fn compile_union_per_file(
         }
         // Validate and register the file's `import schema` declarations:
         // each joins the namespace as a nominal class (alias or file stem).
-        let imports =
-            collect_schema_imports(file.path, ast, schema_imports, &kinds, &mut buckets[index]);
-        for import in &imports {
+        let file_schemas = collect_schema_imports(
+            file.path,
+            ast,
+            &imports.schemas,
+            &kinds,
+            &mut buckets[index],
+        );
+        for import in &file_schemas {
             kinds.insert(import.name.clone(), TopKind::Class);
         }
-        file_imports[index] = imports;
+        file_imports[index] = file_schemas;
         file_package[index] = Some(packages.len());
         packages.push(DomainPackage { name, kinds });
     }
@@ -1403,7 +1411,7 @@ pub(crate) fn compile_union_per_file(
     let union_sigil = crate::sigil::compile_sigil_imports(
         &union_sigil_files,
         &union_declared_refs,
-        sigil_imports,
+        &imports.sigil,
     );
     let mut union_sigil_diagnostics: Vec<(String, Diagnostic)> = Vec::new();
     let mut union_sigil_failed = false;
@@ -1723,8 +1731,7 @@ pub(crate) fn compile(
     path: &str,
     source: &str,
     model: &mox::Model,
-    schema_imports: Option<&crate::SchemaImports>,
-    sigil_imports: Option<&crate::SigilImports>,
+    imports: &crate::DomainImports,
 ) -> (
     Option<ir::Model>,
     Vec<Diagnostic>,
@@ -1782,8 +1789,8 @@ pub(crate) fn compile(
 
     // Validate and register the file's `import schema` declarations: each
     // joins the namespace as a nominal class (alias or file stem).
-    let imports = collect_schema_imports(path, model, schema_imports, &kinds, &mut diags);
-    for import in &imports {
+    let imported = collect_schema_imports(path, model, &imports.schemas, &kinds, &mut diags);
+    for import in &imported {
         kinds.insert(import.name.clone(), TopKind::Class);
     }
 
@@ -1794,7 +1801,7 @@ pub(crate) fn compile(
     let sigil = crate::sigil::compile_sigil_imports(
         &[(path, model)],
         &[(package.as_str(), path)],
-        sigil_imports,
+        &imports.sigil,
     );
 
     // Lower vocabulary declarations first (in source order): their entry
@@ -1919,7 +1926,7 @@ pub(crate) fn compile(
     }
     // Imported schemas join their package as nominal classes, after the
     // declared ones, in import-declaration order.
-    for import in &imports {
+    for import in &imported {
         out.classes.push(import_class_def(import));
     }
     for record in actors {

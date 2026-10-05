@@ -126,7 +126,6 @@ use crate::lower::{DomainPackage, TopKind};
 const BUILTIN_NAMESPACE: &str = "com.rosetta.model";
 
 /// The outcome of lowering a compilation's `import sigil` declarations.
-#[derive(Default)]
 pub(crate) struct SigilOutcome {
     /// Synthetic packages in emission order: user namespaces in
     /// first-appearance order, then `com.rosetta.model` when referenced.
@@ -211,11 +210,12 @@ impl Target {
 /// `files` are the compilation's `(mox path, parsed ast)` pairs in input
 /// order; `declared` names every declared `.mox` package as
 /// `(package name, declaring mox path)` for collision errors; `provided`
-/// carries the rosetta texts (see [`crate::SigilImports`]).
+/// carries the rosetta texts (see [`crate::SigilImports`] — an empty map
+/// leaves every declaration unsatisfied).
 pub(crate) fn compile_sigil_imports(
     files: &[(&str, &mox::Model)],
     declared: &[(&str, &str)],
-    provided: Option<&crate::SigilImports>,
+    provided: &crate::SigilImports,
 ) -> SigilOutcome {
     // The import declarations in compilation order; the first one anchors
     // import-level errors (namespace collisions) that have no tighter span.
@@ -233,17 +233,6 @@ pub(crate) fn compile_sigil_imports(
         .first()
         .map(|(path, decl)| ((*path).to_string(), decl.span))
         .unwrap_or_else(|| (String::new(), Span::from(0..0)));
-
-    // Every declaration without a provider entry errors immediately.
-    let Some(provided) = provided else {
-        return SigilOutcome {
-            diagnostics: decls
-                .iter()
-                .map(|(path, decl)| ((*path).to_string(), not_provided(decl)))
-                .collect(),
-            ..SigilOutcome::default()
-        };
-    };
 
     // Parse the candidate pool once per (mox path, entry key). Only selected
     // candidates report diagnostics.

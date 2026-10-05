@@ -66,7 +66,7 @@ fn compile(actor_source: &str, domains: &[(&str, &str)]) -> ActorCompilation {
         "support.actor",
         actor_source,
         &domains,
-        &rex_driver::DomainImports::empty(),
+        &rex_driver::DomainImports::default(),
     )
 }
 
@@ -740,8 +740,12 @@ actors Support {
 
 #[test]
 fn empty_actor_file_compiles_to_an_empty_artifact() {
-    let compilation =
-        compile_actors_str("empty.actor", "", &[], &rex_driver::DomainImports::empty());
+    let compilation = compile_actors_str(
+        "empty.actor",
+        "",
+        &[],
+        &rex_driver::DomainImports::default(),
+    );
     assert!(
         compilation.diagnostics.is_empty(),
         "unexpected diagnostics: {:?}",
@@ -778,7 +782,7 @@ fn actor_file_syntax_errors_are_tagged_and_block() {
         "broken.actor",
         "import",
         &[],
-        &rex_driver::DomainImports::empty(),
+        &rex_driver::DomainImports::default(),
     );
     assert!(compilation.model.is_none(), "errors block lowering");
     assert!(
@@ -1334,7 +1338,7 @@ actors ResolvePolicies {
             "project/nested/deep/domain.mox".to_string(),
             DOMAIN_WITH_CURRENCY.to_string(),
         )],
-        &rex_driver::DomainImports::empty(),
+        &rex_driver::DomainImports::default(),
     );
     assert!(
         compilation.diagnostics.is_empty(),

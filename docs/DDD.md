@@ -52,7 +52,7 @@ docs):
 Minimal artifact: an empty model serializes as exactly `{"formatVersion":1}`.
 
 ```rust
-let compilation = rex_driver::compile_ddd_str("library.ddd", source, &domains);
+let compilation = rex_driver::compile_ddd_str("library.ddd", source, &domains, &rex_driver::DomainImports::default());
 let json = compilation.model.unwrap().to_json_pretty()?; // versioned artifact
 let model = rex_ir::ddd::DddModel::from_json(&json)?;    // version-gated reload
 ```

@@ -25,7 +25,11 @@ class Product {
 "#;
 
 fn product_of(profile: Profile) -> serde_json::Value {
-    let compilation = compile_str("descriptions.mox", MODEL);
+    let compilation = compile_str(
+        "descriptions.mox",
+        MODEL,
+        &rex_driver::DomainImports::default(),
+    );
     assert!(
         compilation.diagnostics.is_empty(),
         "model must compile cleanly: {:?}",
@@ -92,6 +96,7 @@ fn constraintless_models_emit_no_constraint_or_description_keys() {
     let compilation = compile_str(
         "plain.mox",
         "package demo\n\nclass Person { String name }\n",
+        &rex_driver::DomainImports::default(),
     );
     let model = compilation.model.expect("model lowered");
     for profile in [Profile::Wire, Profile::Api] {
@@ -148,7 +153,11 @@ fn constraints_merge_into_datatype_vocabulary_and_enum_element_schemas() {
     .unwrap();
     let model_path = dir.join("constraints.mox");
     std::fs::write(&model_path, TYPED_MODEL).unwrap();
-    let compilation = compile_str(model_path.to_str().expect("utf-8 model path"), TYPED_MODEL);
+    let compilation = compile_str(
+        model_path.to_str().expect("utf-8 model path"),
+        TYPED_MODEL,
+        &rex_driver::DomainImports::default(),
+    );
     assert!(
         compilation.diagnostics.iter().all(|d| !d.is_error()),
         "model must compile: {:?}",
@@ -196,6 +205,7 @@ fn numeric_bounds_on_float_and_double_merge_into_the_element_schema() {
     let compilation = compile_str(
         "float_bounds.mox",
         "package demo\n\nclass Sensor {\n    double reading { minimum 0 maximum 100 }\n    float ratio { minimum -5 }\n}\n",
+        &rex_driver::DomainImports::default(),
     );
     assert!(
         compilation.diagnostics.is_empty(),
@@ -239,6 +249,7 @@ fn unique_constraint_emits_unique_items_in_both_profiles() {
     let compilation = compile_str(
         "unique.mox",
         "package demo\n\nclass Article {\n    String[] tags { unique }\n    String name\n}\n",
+        &rex_driver::DomainImports::default(),
     );
     assert!(
         compilation.diagnostics.is_empty(),
@@ -284,7 +295,11 @@ class Contact {
 /// `format` emits none.
 #[test]
 fn datatype_format_surfaces_in_both_profiles() {
-    let compilation = compile_str("format.mox", FORMAT_MODEL);
+    let compilation = compile_str(
+        "format.mox",
+        FORMAT_MODEL,
+        &rex_driver::DomainImports::default(),
+    );
     assert!(
         compilation.diagnostics.is_empty(),
         "model must compile cleanly: {:?}",

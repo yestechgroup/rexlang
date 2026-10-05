@@ -28,7 +28,11 @@ fn fixture_path(relative: &str) -> PathBuf {
 fn library_model() -> rex_ir::Model {
     let source =
         std::fs::read_to_string(fixture_path(MODEL_RELATIVE_PATH)).expect("read conformance model");
-    let compilation = compile_str(MODEL_RELATIVE_PATH, &source);
+    let compilation = compile_str(
+        MODEL_RELATIVE_PATH,
+        &source,
+        &rex_driver::DomainImports::default(),
+    );
     assert!(
         compilation.diagnostics.is_empty(),
         "conformance model must compile cleanly: {:?}",
@@ -198,7 +202,11 @@ fn currency_instance_validates_and_unknown_keys_are_rejected() {
 fn conformance_model(relative_path: &str) -> rex_ir::Model {
     let path = fixture_path(relative_path);
     let source = std::fs::read_to_string(&path).expect("read conformance model");
-    let compilation = compile_str(path.to_str().expect("utf-8 path"), &source);
+    let compilation = compile_str(
+        path.to_str().expect("utf-8 path"),
+        &source,
+        &rex_driver::DomainImports::default(),
+    );
     assert!(
         compilation.diagnostics.is_empty(),
         "conformance model {relative_path} must compile cleanly: {:?}",

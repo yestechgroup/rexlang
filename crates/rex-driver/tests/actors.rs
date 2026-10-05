@@ -8,7 +8,7 @@ use rex_ir::{ActorKind, GrantEffect, TypeRef};
 const FIXTURE: &str = include_str!("../../../tests/conformance/models/actors.mox");
 
 fn compile(source: &str) -> Compilation {
-    compile_str("actors.mox", source)
+    compile_str("actors.mox", source, &rex_driver::DomainImports::default())
 }
 
 /// Byte span of the `nth` (0-based) occurrence of `needle` in `source`.

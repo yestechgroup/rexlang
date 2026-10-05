@@ -275,13 +275,13 @@ missing file is a clean CLI error naming the resolved path).
 arrives as text. Embedded callers (tests, language servers) pass content
 through `rex_driver::SigilImports`, keyed by the *(mox file path, import
 path)* pair exactly as named — additional entries for the same mox path
-are the candidate files described above. `compile_str` and `compile_files`
-provide nothing, so a model with `import sigil` declarations compiled
-through them errors with ``imported sigil '<path>' was not provided``;
-use `compile_str_with_imports`/`compile_files_with_imports`. The
-`.actor`/`.ddd` entry points take both maps as one
-`rex_driver::DomainImports` bundle (the `.actor`/`.ddd` file's domains'
-import content is keyed by each domain's path).
+are the candidate files described above. Every compile entry point takes
+one `rex_driver::DomainImports` bundle holding the `SchemaImports` and
+`SigilImports` maps; the empty `DomainImports::default()` provides
+nothing, so a model with `import sigil` declarations compiled through it
+errors with ``imported sigil '<path>' was not provided``. (For the
+`.actor`/`.ddd` entry points the bundle carries the `.actor`/`.ddd`
+file's domains' import content, keyed by each domain's path.)
 
 `rexlang fmt` canonicalizes both import kinds into a section directly
 after the `package` declaration, before every other declaration.

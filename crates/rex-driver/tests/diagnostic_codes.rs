@@ -7,7 +7,7 @@ use rex_driver::{compile_str, render, DiagnosticCode};
 #[test]
 fn class_typed_attribute_carries_a_structured_code() {
     let source = "package demo\nclass Book { String t }\nclass Shelf { Book oops }";
-    let compilation = compile_str("shelf.mox", source);
+    let compilation = compile_str("shelf.mox", source, &rex_driver::DomainImports::default());
     let error = compilation
         .diagnostics
         .iter()
@@ -35,7 +35,11 @@ fn class_typed_attribute_carries_a_structured_code() {
 
 #[test]
 fn diagnostics_without_codes_default_to_none() {
-    let compilation = compile_str("x.mox", "package p\n\nclass C { Mystery f }");
+    let compilation = compile_str(
+        "x.mox",
+        "package p\n\nclass C { Mystery f }",
+        &rex_driver::DomainImports::default(),
+    );
     let unknown = compilation
         .diagnostics
         .iter()
@@ -65,7 +69,7 @@ fn diagnostic_codes_serialize_to_camel_case_with_the_type_span() {
 #[test]
 fn rendering_is_unaffected_by_codes() {
     let source = "package demo\nclass Book { String t }\nclass Shelf { Book oops }";
-    let compilation = compile_str("shelf.mox", source);
+    let compilation = compile_str("shelf.mox", source, &rex_driver::DomainImports::default());
     let rendered = render("shelf.mox", source, &compilation.diagnostics);
     assert!(rendered.contains("has class type"));
     assert!(rendered.contains("did you mean `contains Book[..] oops`"));

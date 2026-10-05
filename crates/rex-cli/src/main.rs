@@ -26,8 +26,8 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use rex_driver::{
-    compile_actors_str, compile_ddd_str, compile_files_with_imports, compile_str_with_imports,
-    render, ActorCompilation, DomainImports, MultiCompilation, SchemaImports, SigilImports,
+    compile_actors_str, compile_ddd_str, compile_files, compile_str, render, ActorCompilation,
+    DomainImports, MultiCompilation, SchemaImports, SigilImports,
 };
 use rex_vocab::{FileProvider, HttpProvider, LockEntry, Lockfile, VocabularyProvider};
 /// rexlang compiler command-line interface.
@@ -921,9 +921,12 @@ fn compile_sources(
 ) -> anyhow::Result<(MultiCompilation, SigilSources)> {
     let schema_imports = collect_schema_imports(sources)?;
     let sigil_sources = collect_sigil_imports(sources)?;
+    let imports = DomainImports {
+        schemas: schema_imports,
+        sigil: sigil_sources.imports.clone(),
+    };
     if let [(path, source)] = sources {
-        let compilation =
-            compile_str_with_imports(path, source, &schema_imports, &sigil_sources.imports);
+        let compilation = compile_str(path, source, &imports);
         Ok((
             MultiCompilation {
                 model: compilation.model,
@@ -937,10 +940,7 @@ fn compile_sources(
             sigil_sources,
         ))
     } else {
-        Ok((
-            compile_files_with_imports(sources, &schema_imports, &sigil_sources.imports),
-            sigil_sources,
-        ))
+        Ok((compile_files(sources, &imports), sigil_sources))
     }
 }
 
@@ -1024,10 +1024,10 @@ struct ActorPair {
 
 impl ActorPair {
     /// The import bundle the driver entry point takes.
-    fn imports(&self) -> DomainImports<'_> {
+    fn imports(&self) -> DomainImports {
         DomainImports {
-            schemas: &self.schemas,
-            sigil: &self.sigil.imports,
+            schemas: self.schemas.clone(),
+            sigil: self.sigil.imports.clone(),
         }
     }
 
@@ -1117,10 +1117,10 @@ struct DddDesignPair {
 
 impl DddDesignPair {
     /// The import bundle the driver entry point takes.
-    fn imports(&self) -> DomainImports<'_> {
+    fn imports(&self) -> DomainImports {
         DomainImports {
-            schemas: &self.schemas,
-            sigil: &self.sigil.imports,
+            schemas: self.schemas.clone(),
+            sigil: self.sigil.imports.clone(),
         }
     }
 
