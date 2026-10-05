@@ -1030,15 +1030,10 @@ pub enum DddFlagKind {
 }
 
 impl DddFlagKind {
-    /// The keyword text as written in the source.
+    /// The keyword text as written in the source (from the `ddd` module's
+    /// design-flag table, the single source of truth).
     pub fn keyword(self) -> &'static str {
-        match self {
-            DddFlagKind::Scaffold => "scaffold",
-            DddFlagKind::Auditable => "auditable",
-            DddFlagKind::OptimisticLocking => "optimisticLocking",
-            DddFlagKind::NonPersistent => "nonPersistent",
-            DddFlagKind::Cache => "cache",
-        }
+        crate::ddd::flag_keyword(self)
     }
 }
 
@@ -1150,25 +1145,15 @@ pub enum DddBuiltinOp {
 
 impl DddBuiltinOp {
     /// The built-in introduced by the given contextual keyword, or `None`
-    /// for any other identifier.
+    /// for any other identifier (from the `ddd` module's repository-builtin
+    /// table, the single source of truth).
     pub fn from_keyword(text: &str) -> Option<Self> {
-        match text {
-            "findById" => Some(DddBuiltinOp::FindById),
-            "findAll" => Some(DddBuiltinOp::FindAll),
-            "save" => Some(DddBuiltinOp::Save),
-            "delete" => Some(DddBuiltinOp::Delete),
-            _ => None,
-        }
+        crate::ddd::builtin_from_keyword(text)
     }
 
-    /// The keyword text as written in the source.
+    /// The keyword text as written in the source (from the same table).
     pub fn keyword(self) -> &'static str {
-        match self {
-            DddBuiltinOp::FindById => "findById",
-            DddBuiltinOp::FindAll => "findAll",
-            DddBuiltinOp::Save => "save",
-            DddBuiltinOp::Delete => "delete",
-        }
+        crate::ddd::builtin_keyword(self)
     }
 }
 

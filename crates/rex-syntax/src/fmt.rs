@@ -81,6 +81,7 @@
 //!   `nz.import.sigil.X`) are never hoisted.
 
 use crate::ast::Span;
+use crate::ddd;
 use crate::lexer::{lex_with_comments, CommentKind, LexError, Token};
 
 /// A formatting failure: the source could not be tokenized.
@@ -344,7 +345,7 @@ impl<'src> Formatter<'src> {
                 Some(Node::Comment { .. }) => self.advance(),
                 Some(Node::Token(token, _)) => match token {
                     Token::Import => self.scan_ddd_import(),
-                    Token::Ident("application") => self.scan_ddd_application(),
+                    Token::Ident(ddd::APPLICATION) => self.scan_ddd_application(),
                     _ => self.scan_top_junk_ddd(),
                 },
             }
@@ -1253,11 +1254,11 @@ impl<'src> Formatter<'src> {
 
     fn scan_ddd_application_item(&mut self) {
         match self.peek_tok() {
-            Some(Token::Ident("base")) => {
+            Some(Token::Ident(ddd::BASE)) => {
                 self.advance();
                 self.scan_qname();
             }
-            Some(Token::Ident("module")) => {
+            Some(Token::Ident(ddd::MODULE)) => {
                 self.advance();
                 self.take_name();
                 self.scan_body(BodyKind::DddModule);
@@ -1283,13 +1284,13 @@ impl<'src> Formatter<'src> {
 
     fn scan_ddd_module_item(&mut self) {
         match self.peek_tok() {
-            Some(Token::Ident("service")) => {
+            Some(Token::Ident(ddd::SERVICE)) => {
                 self.advance();
                 self.take_name();
                 self.scan_body(BodyKind::DddService);
             }
-            Some(Token::Ident("search")) => self.scan_ddd_search(),
-            Some(Token::Ident("abstract" | "entity" | "value" | "dto")) => self.scan_ddd_design(),
+            Some(Token::Ident(ddd::SEARCH)) => self.scan_ddd_search(),
+            Some(Token::Ident(text)) if ddd::starts_design_decl(text) => self.scan_ddd_design(),
             _ => {
                 // Junk always consumes the front token first (the stop set
                 // contains identifiers, and the body loop cannot make
@@ -1311,26 +1312,22 @@ impl<'src> Formatter<'src> {
 
     /// One design declaration: `abstract`? stereotype, the class name, the
     /// five design flags — collected and re-emitted in the canonical order
-    /// `scaffold auditable optimisticLocking nonPersistent cache` whatever
-    /// the source order (mirroring the parser's `DddFlags`, whose fields the
-    /// driver reads positionally) — and an optional `repository` block.
+    /// of [`ddd::DESIGN_FLAGS`] (`scaffold auditable optimisticLocking
+    /// nonPersistent cache`) whatever the source order (mirroring the
+    /// parser's `DddFlags`, whose fields the driver reads positionally) —
+    /// and an optional `repository` block.
     fn scan_ddd_design(&mut self) {
-        if matches!(self.peek_tok(), Some(Token::Ident("abstract"))) {
+        if matches!(self.peek_tok(), Some(Token::Ident(ddd::ABSTRACT))) {
             self.advance();
         }
         self.advance(); // the stereotype keyword
         self.take_name();
-        const FLAG_ORDER: [&str; 5] = [
-            "scaffold",
-            "auditable",
-            "optimisticLocking",
-            "nonPersistent",
-            "cache",
-        ];
-        let mut seen = [false; 5];
+        let mut seen = [false; ddd::DESIGN_FLAGS.len()];
         loop {
             let index = match self.peek_tok() {
-                Some(Token::Ident(text)) => FLAG_ORDER.iter().position(|keyword| *keyword == text),
+                Some(Token::Ident(text)) => ddd::DESIGN_FLAGS
+                    .iter()
+                    .position(|(keyword, _)| *keyword == text),
                 _ => None,
             };
             match index {
@@ -1341,12 +1338,12 @@ impl<'src> Formatter<'src> {
                 None => break,
             }
         }
-        for (index, text) in FLAG_ORDER.iter().enumerate() {
+        for (index, (keyword, _)) in ddd::DESIGN_FLAGS.iter().enumerate() {
             if seen[index] {
-                self.push_text(text, false);
+                self.push_text(keyword, false);
             }
         }
-        if matches!(self.peek_tok(), Some(Token::Ident("repository"))) {
+        if matches!(self.peek_tok(), Some(Token::Ident(ddd::REPOSITORY))) {
             self.advance();
             self.take_name();
             self.scan_body(BodyKind::DddRepository);
@@ -1355,7 +1352,7 @@ impl<'src> Formatter<'src> {
 
     fn scan_ddd_service_item(&mut self) {
         match self.peek_tok() {
-            Some(Token::Ident("inject")) => {
+            Some(Token::Ident(ddd::INJECT)) => {
                 self.advance();
                 self.take_name();
                 self.take_if(|token| matches!(token, Token::Other(';')));
@@ -1428,7 +1425,7 @@ impl<'src> Formatter<'src> {
 
     fn scan_ddd_repository_item(&mut self) {
         match self.peek_tok() {
-            Some(Token::Ident("findById" | "findAll" | "save" | "delete")) => {
+            Some(Token::Ident(text)) if ddd::builtin_from_keyword(text).is_some() => {
                 self.advance();
                 self.take_if(|token| matches!(token, Token::Other(';')));
             }
@@ -1468,31 +1465,15 @@ impl<'src> Formatter<'src> {
         self.scan_body(BodyKind::DddSearch);
     }
 
-    /// The canonical rank of a search member's leading keyword: `entity`,
-    /// `text`, `filters`, `sort`, `document`, `ranking`, `analyzer`,
-    /// `pagination`, then the `capability` clause.
-    fn search_member_rank(token: &Token<'_>) -> Option<usize> {
-        match token {
-            Token::Ident("entity") => Some(0),
-            Token::Ident("text") => Some(1),
-            Token::Ident("filters") => Some(2),
-            Token::Ident("sort") => Some(3),
-            Token::Ident("document") => Some(4),
-            Token::Ident("ranking") => Some(5),
-            Token::Ident("analyzer") => Some(6),
-            Token::Ident("pagination") => Some(7),
-            Token::Capability => Some(8),
-            _ => None,
-        }
-    }
-
     /// Rewrites the node stream of the search body ahead of the formatter
     /// (positioned at the body's `{`) so its members appear in the canonical
-    /// order whatever the source order — the same node-range technique the
-    /// import hoists use. Segments split at brace-depth 0 on the
-    /// member-leading keywords; segments that start with anything else (junk
-    /// from a parse-error region) keep their relative order at the end, and
-    /// a segment's leading comments travel with it.
+    /// order (the [`ddd::SEARCH_MEMBERS`] table order, via
+    /// [`ddd::search_member_rank`]) whatever the source order — the same
+    /// node-range technique the import hoists use. Segments split at
+    /// brace-depth 0 on the member-leading keywords; segments that start
+    /// with anything else (junk from a parse-error region) keep their
+    /// relative order at the end, and a segment's leading comments travel
+    /// with it.
     fn reorder_ddd_search_members(&mut self) {
         if !matches!(self.front(), Some(Node::Token(Token::LBrace, _))) {
             return;
@@ -1520,7 +1501,7 @@ impl<'src> Formatter<'src> {
         let mut depth = 0usize;
         for node in self.nodes[open + 1..close - 1].iter() {
             let rank = match node {
-                Node::Token(token, _) if depth == 0 => Self::search_member_rank(token),
+                Node::Token(token, _) if depth == 0 => ddd::search_member_rank(token),
                 _ => None,
             };
             if segments.is_empty() {
@@ -1546,38 +1527,41 @@ impl<'src> Formatter<'src> {
     }
 
     fn scan_ddd_search_item(&mut self) {
-        match self.peek_tok() {
-            Some(Token::Ident("entity")) => {
+        match self
+            .peek_tok()
+            .and_then(|token| ddd::search_member_kind(&token))
+        {
+            Some(ddd::SearchMemberKind::Entity) => {
                 self.advance();
                 self.scan_qname();
             }
-            Some(Token::Ident("text")) => {
+            Some(ddd::SearchMemberKind::Text) => {
                 self.advance();
                 self.scan_body(BodyKind::DddSearchField);
             }
-            Some(Token::Ident("filters" | "sort")) => {
+            Some(ddd::SearchMemberKind::Filters | ddd::SearchMemberKind::Sort) => {
                 self.advance();
                 self.scan_body(BodyKind::DddSearchNames);
             }
-            Some(Token::Ident("document")) => {
+            Some(ddd::SearchMemberKind::Document) => {
                 self.advance();
                 self.scan_body(BodyKind::DddSearchDocument);
             }
-            Some(Token::Ident("ranking")) => {
+            Some(ddd::SearchMemberKind::Ranking) => {
                 self.advance();
                 if matches!(self.peek_tok(), Some(Token::Ident(_)) | Some(Token::Str(_))) {
                     self.advance();
                 }
             }
-            Some(Token::Ident("analyzer")) => {
+            Some(ddd::SearchMemberKind::Analyzer) => {
                 self.advance();
                 self.take_if(|token| matches!(token, Token::Str(_)));
             }
-            Some(Token::Ident("pagination")) => {
+            Some(ddd::SearchMemberKind::Pagination) => {
                 self.advance();
                 self.scan_body(BodyKind::DddSearchPagination);
             }
-            Some(Token::Capability) => self.scan_ddd_capabilities(),
+            Some(ddd::SearchMemberKind::Capability) => self.scan_ddd_capabilities(),
             _ => {
                 // Junk always consumes the front token first (the stop set
                 // contains identifiers, and the body loop cannot make
@@ -1603,10 +1587,10 @@ impl<'src> Formatter<'src> {
         match self.peek_tok() {
             Some(Token::Ident(_) | Token::IdentEscaped(_)) => {
                 self.scan_qname();
-                if self.take_if(|token| matches!(token, Token::Ident("boost"))) {
+                if self.take_if(|token| matches!(token, Token::Ident(ddd::BOOST))) {
                     self.take_if(|token| matches!(token, Token::Int(_)));
                 }
-                if self.take_if(|token| matches!(token, Token::Ident("analyzer"))) {
+                if self.take_if(|token| matches!(token, Token::Ident(ddd::ANALYZER))) {
                     self.take_if(|token| matches!(token, Token::Str(_)));
                 }
             }
@@ -1691,11 +1675,11 @@ impl<'src> Formatter<'src> {
     /// One `limit <int>` / `max <int>` / `cursor` member of `pagination`.
     fn scan_ddd_search_pagination_item(&mut self) {
         match self.peek_tok() {
-            Some(Token::Ident("limit" | "max")) => {
+            Some(Token::Ident(text)) if text == ddd::LIMIT || text == ddd::MAX => {
                 self.advance();
                 self.take_if(|token| matches!(token, Token::Int(_)));
             }
-            Some(Token::Ident("cursor")) => self.advance(),
+            Some(Token::Ident(ddd::CURSOR)) => self.advance(),
             _ => {
                 if !matches!(self.peek_tok(), Some(Token::RBrace) | None) {
                     self.advance();

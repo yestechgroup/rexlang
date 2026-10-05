@@ -15,6 +15,7 @@
 //! the shape of [`parse`]; `.ddd` files use [`parse_ddd`] the same way.
 
 pub mod ast;
+pub(crate) mod ddd;
 pub mod fmt;
 pub mod lexer;
 pub mod parser;

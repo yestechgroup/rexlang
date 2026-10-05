@@ -17,6 +17,7 @@ use chumsky::input::{ExactSizeInput, ValueInput};
 use chumsky::prelude::*;
 
 use crate::ast::*;
+use crate::ddd;
 use crate::lexer::{lex, lex_with_comments, Token};
 
 /// Parser input: a token slice paired with a custom [`chumsky::Input`]
@@ -1818,7 +1819,7 @@ fn ddd_service_op<'src>() -> impl Parser<'src, Tokens<'src>, DddServiceOp, MoxEx
 
 /// An `inject <name>;` line of a `service` body.
 fn ddd_inject_decl<'src>() -> impl Parser<'src, Tokens<'src>, Name, MoxExtra<'src>> + Clone {
-    ddd_keyword("inject")
+    ddd_keyword(ddd::INJECT)
         .ignore_then(name())
         .then_ignore(kw(Token::Other(';')))
 }
@@ -1860,7 +1861,7 @@ fn ddd_service_member<'src>(
 /// A `service <name> { ... }` declaration of a `module`. Doc comments (`///`
 /// runs) directly above it become the service description after parsing.
 fn ddd_service_decl<'src>() -> impl Parser<'src, Tokens<'src>, DddService, MoxExtra<'src>> + Clone {
-    ddd_keyword("service")
+    ddd_keyword(ddd::SERVICE)
         .ignore_then(name())
         .then_ignore(kw(Token::LBrace))
         .then(ddd_service_member().repeated().collect::<Vec<_>>())
@@ -1890,28 +1891,27 @@ fn ddd_service_decl<'src>() -> impl Parser<'src, Tokens<'src>, DddService, MoxEx
 /// The `("abstract")? stereotype` head of a design declaration.
 fn ddd_design_head<'src>(
 ) -> impl Parser<'src, Tokens<'src>, (Option<Span>, DddStereotype), MoxExtra<'src>> + Clone {
-    ddd_keyword("abstract").or_not().then(ddd_stereotype())
+    ddd_keyword(ddd::ABSTRACT).or_not().then(ddd_stereotype())
 }
 
+/// The stereotype keyword of a design head: the `choice` alternatives come
+/// from [`ddd::STEREOTYPES`] in the table's order, so the parse order and
+/// the table order (the formatter's dispatch set) agree by construction.
 fn ddd_stereotype<'src>() -> impl Parser<'src, Tokens<'src>, DddStereotype, MoxExtra<'src>> + Clone
 {
-    choice((
-        ddd_keyword("entity").to(DddStereotype::Entity),
-        ddd_keyword("value").to(DddStereotype::Value),
-        ddd_keyword("dto").to(DddStereotype::Dto),
-    ))
+    choice(ddd::STEREOTYPES.map(|(keyword, stereotype)| ddd_keyword(keyword).to(stereotype)))
 }
 
-/// The design flags of a design declaration: any subset of `scaffold`,
-/// `auditable`, `optimisticLocking`, `nonPersistent`, `cache` in any order
-/// (the canonical order is a formatter concern). Repeats are idempotent.
+/// The design flags of a design declaration: any subset of the
+/// [`ddd::DESIGN_FLAGS`] keywords in any order (the canonical order is the
+/// table's, a formatter concern). Repeats are idempotent.
 fn ddd_flags<'src>() -> impl Parser<'src, Tokens<'src>, DddFlags, MoxExtra<'src>> + Clone {
     select! {
-        Token::Ident("scaffold") = e => (DddFlagKind::Scaffold, e.span()),
-        Token::Ident("auditable") = e => (DddFlagKind::Auditable, e.span()),
-        Token::Ident("optimisticLocking") = e => (DddFlagKind::OptimisticLocking, e.span()),
-        Token::Ident("nonPersistent") = e => (DddFlagKind::NonPersistent, e.span()),
-        Token::Ident("cache") = e => (DddFlagKind::Cache, e.span()),
+        // chumsky's `select!` takes a boolean guard expression, so the
+        // lookup runs twice; the `unwrap` is the guard's `Some`.
+        Token::Ident(text) = e if ddd::flag_kind(text).is_some() => {
+            (ddd::flag_kind(text).unwrap(), e.span())
+        }
     }
     .repeated()
     .collect::<Vec<_>>()
@@ -1952,10 +1952,11 @@ fn ddd_design_decl<'src>() -> impl Parser<'src, Tokens<'src>, DddDesign, MoxExtr
 fn ddd_repository_op<'src>(
 ) -> impl Parser<'src, Tokens<'src>, Option<DddRepositoryOp>, MoxExtra<'src>> + Clone {
     let builtin = select! {
-        Token::Ident("findById") = e => (e.span(), DddBuiltinOp::FindById),
-        Token::Ident("findAll") = e => (e.span(), DddBuiltinOp::FindAll),
-        Token::Ident("save") = e => (e.span(), DddBuiltinOp::Save),
-        Token::Ident("delete") = e => (e.span(), DddBuiltinOp::Delete),
+        // chumsky's `select!` takes a boolean guard expression, so the
+        // lookup runs twice; the `unwrap` is the guard's `Some`.
+        Token::Ident(text) = e if ddd::builtin_from_keyword(text).is_some() => {
+            (e.span(), ddd::builtin_from_keyword(text).unwrap())
+        }
     }
     .then_ignore(kw(Token::Other(';')))
     .map_with(|(keyword_span, builtin), e| DddRepositoryOp {
@@ -2003,7 +2004,7 @@ fn junk_ddd_repository_op<'src>() -> impl Parser<'src, Tokens<'src>, (), MoxExtr
 /// A `repository <name> { ... }` block of a design declaration.
 fn ddd_repository_decl<'src>(
 ) -> impl Parser<'src, Tokens<'src>, DddRepository, MoxExtra<'src>> + Clone {
-    ddd_keyword("repository")
+    ddd_keyword(ddd::REPOSITORY)
         .ignore_then(name())
         .then_ignore(kw(Token::LBrace))
         .then(ddd_repository_op().repeated().collect::<Vec<_>>())
@@ -2070,8 +2071,12 @@ fn ddd_document_entry<'src>(
 fn ddd_search_field<'src>(
 ) -> impl Parser<'src, Tokens<'src>, DddSearchField, MoxExtra<'src>> + Clone {
     qname()
-        .then(ddd_keyword("boost").ignore_then(int_lit()).or_not())
-        .then(ddd_keyword("analyzer").ignore_then(string_lit()).or_not())
+        .then(ddd_keyword(ddd::BOOST).ignore_then(int_lit()).or_not())
+        .then(
+            ddd_keyword(ddd::ANALYZER)
+                .ignore_then(string_lit())
+                .or_not(),
+        )
         .map_with(|((property, boost), analyzer), e| DddSearchField {
             property,
             boost,
@@ -2097,13 +2102,13 @@ fn ddd_ranking<'src>() -> impl Parser<'src, Tokens<'src>, DddRanking, MoxExtra<'
 fn ddd_pagination<'src>() -> impl Parser<'src, Tokens<'src>, DddPagination, MoxExtra<'src>> + Clone
 {
     let member = choice((
-        ddd_keyword("limit")
+        ddd_keyword(ddd::LIMIT)
             .ignore_then(int_lit())
             .map(|value| (Some(value), None, false)),
-        ddd_keyword("max")
+        ddd_keyword(ddd::MAX)
             .ignore_then(int_lit())
             .map(|value| (None, Some(value), false)),
-        ddd_keyword("cursor").to((None, None, true)),
+        ddd_keyword(ddd::CURSOR).to((None, None, true)),
     ));
     ddd_keyword("pagination")
         .ignore_then(kw(Token::LBrace))
@@ -2146,70 +2151,89 @@ fn junk_ddd_search_member<'src>() -> impl Parser<'src, Tokens<'src>, (), MoxExtr
         })
 }
 
-/// One member of a `search` body with junk recovery. Repeated `text`,
-/// `filters`, `sort`, and `document` clauses merge into their lists;
-/// `entity`, `ranking`, `analyzer`, and `pagination` are single — a repeat
-/// is idempotent, the first declaration wins (the design-flags precedent).
+/// The leading keyword of a [`ddd::SEARCH_MEMBERS`] row. Only the
+/// `capability` clause — led by the real `capability` token, not an
+/// identifier — has no keyword, and its arm never calls this.
+fn member_keyword(keyword: Option<&'static str>) -> &'static str {
+    keyword.expect("only the `capability` search member lacks a keyword")
+}
+
+/// One member of a `search` body with junk recovery. The alternatives come
+/// from [`ddd::SEARCH_MEMBERS`] in the table's order — the same order the
+/// formatter canonicalizes a search body to — so the parse order and the
+/// canonical order cannot drift apart. Repeated `text`, `filters`, `sort`,
+/// and `document` clauses merge into their lists; `entity`, `ranking`,
+/// `analyzer`, and `pagination` are single — a repeat is idempotent, the
+/// first declaration wins (the design-flags precedent).
 fn ddd_search_member<'src>(
 ) -> impl Parser<'src, Tokens<'src>, Vec<DddSearchMember>, MoxExtra<'src>> + Clone {
-    let entity = ddd_keyword("entity")
-        .ignore_then(qname())
-        .map(|qname| vec![DddSearchMember::Entity(qname)]);
-    let text = ddd_keyword("text")
-        .ignore_then(kw(Token::LBrace))
-        .ignore_then(
-            ddd_search_field()
-                .map(Some)
-                .or(junk_ddd_search_member().to(None))
-                .repeated()
-                .collect::<Vec<_>>(),
-        )
-        .then_ignore(kw(Token::RBrace))
-        .map(|fields| {
-            fields
-                .into_iter()
-                .flatten()
-                .map(DddSearchMember::Text)
-                .collect()
-        });
-    let document = ddd_keyword("document")
-        .ignore_then(kw(Token::LBrace))
-        .ignore_then(
-            ddd_document_entry()
-                .map(Some)
-                .or(junk_ddd_search_member().to(None))
-                .repeated()
-                .collect::<Vec<_>>(),
-        )
-        .then_ignore(kw(Token::RBrace))
-        .map(|entries| {
-            entries
-                .into_iter()
-                .flatten()
-                .map(DddSearchMember::Document)
-                .collect::<Vec<_>>()
-        });
-    let ranking = ddd_ranking().map(|ranking| vec![DddSearchMember::Ranking(ranking)]);
-    let analyzer = ddd_keyword("analyzer")
-        .ignore_then(string_lit())
-        .map(|analyzer| vec![DddSearchMember::Analyzer(analyzer)]);
-    let pagination =
-        ddd_pagination().map(|pagination| vec![DddSearchMember::Pagination(pagination)]);
-    let capability = kw(Token::Capability)
-        .ignore_then(name())
-        .map(|capability| vec![DddSearchMember::Capability(capability)]);
-    choice((
-        entity,
-        text,
-        ddd_search_names("filters", DddSearchMember::Filter),
-        ddd_search_names("sort", DddSearchMember::Sort),
-        document,
-        ranking,
-        analyzer,
-        pagination,
-        capability,
-    ))
-    .or(junk_ddd_search_member().to(Vec::new()))
+    let alternatives: Vec<Boxed<'src, 'src, Tokens<'src>, Vec<DddSearchMember>, MoxExtra<'src>>> =
+        ddd::SEARCH_MEMBERS
+            .iter()
+            .map(|(kind, keyword)| match kind {
+                ddd::SearchMemberKind::Entity => ddd_keyword(member_keyword(*keyword))
+                    .ignore_then(qname())
+                    .map(|qname| vec![DddSearchMember::Entity(qname)])
+                    .boxed(),
+                ddd::SearchMemberKind::Text => ddd_keyword(member_keyword(*keyword))
+                    .ignore_then(kw(Token::LBrace))
+                    .ignore_then(
+                        ddd_search_field()
+                            .map(Some)
+                            .or(junk_ddd_search_member().to(None))
+                            .repeated()
+                            .collect::<Vec<_>>(),
+                    )
+                    .then_ignore(kw(Token::RBrace))
+                    .map(|fields| {
+                        fields
+                            .into_iter()
+                            .flatten()
+                            .map(DddSearchMember::Text)
+                            .collect()
+                    })
+                    .boxed(),
+                ddd::SearchMemberKind::Filters => {
+                    ddd_search_names(member_keyword(*keyword), DddSearchMember::Filter).boxed()
+                }
+                ddd::SearchMemberKind::Sort => {
+                    ddd_search_names(member_keyword(*keyword), DddSearchMember::Sort).boxed()
+                }
+                ddd::SearchMemberKind::Document => ddd_keyword(member_keyword(*keyword))
+                    .ignore_then(kw(Token::LBrace))
+                    .ignore_then(
+                        ddd_document_entry()
+                            .map(Some)
+                            .or(junk_ddd_search_member().to(None))
+                            .repeated()
+                            .collect::<Vec<_>>(),
+                    )
+                    .then_ignore(kw(Token::RBrace))
+                    .map(|entries| {
+                        entries
+                            .into_iter()
+                            .flatten()
+                            .map(DddSearchMember::Document)
+                            .collect::<Vec<_>>()
+                    })
+                    .boxed(),
+                ddd::SearchMemberKind::Ranking => ddd_ranking()
+                    .map(|ranking| vec![DddSearchMember::Ranking(ranking)])
+                    .boxed(),
+                ddd::SearchMemberKind::Analyzer => ddd_keyword(member_keyword(*keyword))
+                    .ignore_then(string_lit())
+                    .map(|analyzer| vec![DddSearchMember::Analyzer(analyzer)])
+                    .boxed(),
+                ddd::SearchMemberKind::Pagination => ddd_pagination()
+                    .map(|pagination| vec![DddSearchMember::Pagination(pagination)])
+                    .boxed(),
+                ddd::SearchMemberKind::Capability => kw(Token::Capability)
+                    .ignore_then(name())
+                    .map(|capability| vec![DddSearchMember::Capability(capability)])
+                    .boxed(),
+            })
+            .collect();
+    choice(alternatives).or(junk_ddd_search_member().to(Vec::new()))
 }
 
 /// The `filters { ... }` / `sort { ... }` bodies: newline-separated
@@ -2234,7 +2258,7 @@ fn ddd_search_names<'src>(
 /// A `search <name> { ... }` projection of a `module`. Doc comments (`///`
 /// runs) directly above it become the search description after parsing.
 fn ddd_search_decl<'src>() -> impl Parser<'src, Tokens<'src>, DddSearch, MoxExtra<'src>> + Clone {
-    ddd_keyword("search")
+    ddd_keyword(ddd::SEARCH)
         .ignore_then(name())
         .then_ignore(kw(Token::LBrace))
         .then(ddd_search_member().repeated().collect::<Vec<_>>())
@@ -2324,7 +2348,7 @@ fn ddd_module_member<'src>(
 
 /// A `module <name> { ... }` declaration of the application.
 fn ddd_module_decl<'src>() -> impl Parser<'src, Tokens<'src>, DddModule, MoxExtra<'src>> + Clone {
-    ddd_keyword("module")
+    ddd_keyword(ddd::MODULE)
         .ignore_then(name())
         .then_ignore(kw(Token::LBrace))
         .then(ddd_module_member().repeated().collect::<Vec<_>>())
@@ -2353,7 +2377,7 @@ fn ddd_module_decl<'src>() -> impl Parser<'src, Tokens<'src>, DddModule, MoxExtr
 
 /// The `base <qualified-name>` member of the application body.
 fn ddd_base_decl<'src>() -> impl Parser<'src, Tokens<'src>, DddBase, MoxExtra<'src>> + Clone {
-    ddd_keyword("base")
+    ddd_keyword(ddd::BASE)
         .ignore_then(qname())
         .map_with(|package, e| DddBase {
             package,
@@ -2398,7 +2422,7 @@ fn ddd_application_item<'src>(
 /// the grammar pins to the first member position) followed by modules.
 fn ddd_application_decl<'src>(
 ) -> impl Parser<'src, Tokens<'src>, DddApplication, MoxExtra<'src>> + Clone {
-    ddd_keyword("application")
+    ddd_keyword(ddd::APPLICATION)
         .ignore_then(name())
         .then_ignore(kw(Token::LBrace))
         .then(ddd_application_item().repeated().collect::<Vec<_>>())
@@ -2457,7 +2481,7 @@ enum DddFileItem {
 /// error for the skipped region.
 fn junk_ddd_file<'src>() -> impl Parser<'src, Tokens<'src>, (), MoxExtra<'src>> + Clone {
     let rest = select! {
-        t if !matches!(t, Token::Import | Token::Ident("application")) => ()
+        t if !matches!(t, Token::Import | Token::Ident(ddd::APPLICATION)) => ()
     };
     any()
         .ignore_then(rest.repeated().ignored())
