@@ -1,0 +1,85 @@
+{
+  "formatVersion": 1,
+  "events": [
+    {
+      "name": "OrderPlaced",
+      "version": "1.0.0",
+      "fields": [
+        {
+          "name": "orderId",
+          "type": {
+            "type": "primitive",
+            "value": "string"
+          }
+        },
+        {
+          "name": "total",
+          "type": {
+            "type": "primitive",
+            "value": "int"
+          }
+        },
+        {
+          "name": "status",
+          "type": {
+            "type": "enum",
+            "value": {
+              "package": "nz.example.orders",
+              "name": "OrderStatus"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "OrderCancelled",
+      "version": "1.1.0",
+      "fields": [
+        {
+          "name": "orderId",
+          "type": {
+            "type": "primitive",
+            "value": "string"
+          }
+        },
+        {
+          "name": "reason",
+          "type": {
+            "type": "primitive",
+            "value": "string"
+          }
+        }
+      ]
+    }
+  ],
+  "channels": [
+    {
+      "name": "orders",
+      "publishes": [
+        {
+          "event": "OrderPlaced"
+        },
+        {
+          "event": "OrderCancelled"
+        }
+      ]
+    }
+  ],
+  "subscriptions": [
+    {
+      "name": "billing",
+      "events": [
+        "OrderPlaced",
+        "OrderCancelled"
+      ],
+      "consumer": "billing_service"
+    },
+    {
+      "name": "analytics",
+      "events": [
+        "OrderPlaced"
+      ],
+      "consumer": "analytics_service"
+    }
+  ]
+}

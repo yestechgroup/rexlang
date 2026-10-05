@@ -1,10 +1,10 @@
 //! Diagnostics rendering for the command handlers: the ariadne render
-//! helper and the per-file grouped reporters for multi-model, `.actor`, and
-//! `.ddd` compiles.
+//! helper and the per-file grouped reporters for multi-model, `.actor`,
+//! `.ddd`, and `.evt` compiles.
 
 use rex_driver::{render, ActorCompilation};
 
-use crate::inputs::{ActorPair, DddDesignPair};
+use crate::inputs::{ActorPair, DddDesignPair, EvtPair};
 
 /// Renders a compilation's diagnostics grouped per file: each file's
 /// diagnostics are ariadne-rendered against that file's own source, the way
@@ -83,6 +83,30 @@ pub(crate) fn report_ddd_diagnostics(
     pair: &DddDesignPair,
     compilation: &rex_driver::DddCompilation,
 ) {
+    if compilation.diagnostics.is_empty() {
+        return;
+    }
+    let mut groups: Vec<(&str, Vec<rex_driver::Diagnostic>)> = Vec::new();
+    for (path, diagnostic) in &compilation.diagnostics {
+        match groups.last_mut() {
+            Some((group_path, group)) if *group_path == path.as_str() => {
+                group.push(diagnostic.clone())
+            }
+            _ => groups.push((path.as_str(), vec![diagnostic.clone()])),
+        }
+    }
+    for (path, group) in groups {
+        let Some(source) = pair.source_of(path) else {
+            continue;
+        };
+        eprint!("{}", render(path, source, &group));
+    }
+}
+
+/// Renders an `.evt` compilation's diagnostics grouped per file: each file's
+/// diagnostics are ariadne-rendered against that file's own source, the way
+/// `check` renders single-model diagnostics.
+pub(crate) fn report_evt_diagnostics(pair: &EvtPair, compilation: &rex_driver::EventCompilation) {
     if compilation.diagnostics.is_empty() {
         return;
     }

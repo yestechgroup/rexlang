@@ -2,12 +2,14 @@
 //! test kit behind `rexlang artifact check`.
 //!
 //! Third-party backends consume [`rex_ir::Model`] / [`rex_ir::ActorModel`]
-//! / [`rex_ir::ddd::DddModel`] (or read the serialized artifact directly)
-//! and emit canonical instance JSON. This module checks the *format*
-//! invariants of those documents without needing the originating model:
+//! / [`rex_ir::ddd::DddModel`] / [`rex_ir::events::EventModel`] (or read the
+//! serialized artifact directly) and emit canonical instance JSON. This
+//! module checks the *format* invariants of those documents without needing
+//! the originating model:
 //!
 //! * the root shape matches a known artifact kind (IR artifact, standalone
-//!   actor-policy artifact, DDD design artifact, or canonical instance),
+//!   actor-policy artifact, DDD design artifact, event-contract artifact, or
+//!   canonical instance),
 //! * `formatVersion` is present and supported — a higher version is rejected
 //!   with an error naming it, mirroring the readers' version gate
 //!   ([`rex_ir::IrError::UnsupportedFormatVersion`]),
@@ -47,6 +49,10 @@ pub enum ArtifactKind {
     /// carries an `application` object or a `modules` array (both omitted
     /// when empty).
     DddModel,
+    /// A standalone event-contract artifact
+    /// (`rex_ir::events::EventModel`): root carries an `events`,
+    /// `channels`, or `subscriptions` array (all omitted when empty).
+    EventModel,
     /// A canonical instance document: root `$type` is `rex.instance`.
     Instance,
 }
@@ -69,7 +75,8 @@ pub fn check_str(path: &str, text: &str) -> Result<ArtifactKind, Vec<String>> {
 ///
 /// 1. **`$type` (instances).** A root `$type` selects the instance path:
 ///    `rex.instance` validates as an [`ArtifactKind::Instance`]; any other
-///    string is rejected (IR/actor/DDD artifacts carry no root `$type`).
+///    string is rejected (IR/actor/DDD/event artifacts carry no root
+///    `$type`).
 /// 2. **`packages`/`rexVersion` → IR artifact.** A [`rex_ir::Model`] always
 ///    emits `packages` (and stamps `rexVersion` provenance), so either key
 ///    claims the document for [`ArtifactKind::IrModel`].
@@ -79,18 +86,32 @@ pub fn check_str(path: &str, text: &str) -> Result<ArtifactKind, Vec<String>> {
 ///    runs *before* the actor fallback: those keys exist on no other
 ///    artifact, so design-shaped documents must be reported as designs even
 ///    when malformed (the tightened-fallback regression).
-/// 4. **`blocks` or exactly `{"formatVersion": N}` → actor artifact.** The
+/// 4. **`events`/`channels`/`subscriptions` → event contract.** A
+///    `formatVersion`-bearing root that carries any of those arrays
+///    validates as an [`ArtifactKind::EventModel`]. Like the DDD rule this
+///    runs *before* the actor fallback (the keys exist on no other
+///    artifact), and after the DDD rule only for documentation symmetry —
+///    the key sets are disjoint, so rules 3 and 4 can never both match.
+/// 5. **`blocks` or exactly `{"formatVersion": N}` → actor artifact.** The
 ///    canonical block-less [`rex_ir::ActorModel`] is exactly the version
 ///    marker, and the marker alone can only be an ActorModel (a Model always
 ///    emits `packages`; a DddModel always carries the design keys), so the
 ///    minimal-empty document falls here.
-/// 5. **Anything else** is rejected as `unrecognized artifact`.
+/// 6. **Anything else** is rejected as `unrecognized artifact`.
 ///
-/// Known limitation: [`rex_ir::ifml::IfmlModel`] is *not* a classified kind.
-/// Its shape-sniffed classification is ambiguous — an empty IFML model
-/// serializes as exactly `{"formatVersion":1}` (rule 4), and a module-bearing
-/// one carries `modules` (rule 3); only a view-bearing one is unrecognized.
-/// A root `$type` discriminator on all artifact kinds would resolve this, at
+/// Known limitations, same root cause: the minimal-empty artifact is exactly
+/// `{"formatVersion":1}` for several kinds, and shape-sniffing cannot tell
+/// them apart.
+///
+/// - [`rex_ir::events::EventModel`] is empty-form-collided: an empty event
+///   artifact serializes as exactly `{"formatVersion":1}` and classifies as
+///   an ActorModel via rule 5 (only a non-empty one reaches rule 4).
+/// - [`rex_ir::ifml::IfmlModel`] is *not* a classified kind at all: an empty
+///   IFML model is the same `{"formatVersion":1}` bytes (rule 5), and a
+///   module-bearing one carries `modules` (rule 3); only a view-bearing one
+///   is unrecognized.
+///
+/// A root `$type` discriminator on all artifact kinds would resolve both, at
 /// the cost of a wire-format change (golden churn, version bump) — see the
 /// classification table test for the pinned behavior.
 pub fn check(text: &str) -> Result<ArtifactKind, Vec<String>> {
@@ -126,16 +147,32 @@ pub fn check(text: &str) -> Result<ArtifactKind, Vec<String>> {
     {
         return check_ddd_model(root);
     }
-    // No `packages`/`rexVersion`, no DDD design shape: the canonical
-    // block-less ActorModel is exactly `{"formatVersion": N}` — a Model
-    // always emits `packages`, a DddModel always carries the design keys.
-    // Anything else has no known root shape.
+    // An event-contract artifact carries an `events`, `channels`, or
+    // `subscriptions` array — keys no other artifact has — so its check
+    // runs before the actor fallback: anything with the event shape must
+    // validate as an EventModel, never as a (block-less) ActorModel. The
+    // empty event artifact serializes as exactly `{"formatVersion":1}` and
+    // therefore falls through to the actor fallback (the documented
+    // empty-form limitation, shared with IFML).
+    if root.get("formatVersion").is_some_and(Value::is_u64)
+        && (root.get("events").is_some_and(Value::is_array)
+            || root.get("channels").is_some_and(Value::is_array)
+            || root.get("subscriptions").is_some_and(Value::is_array))
+    {
+        return check_event_model(root);
+    }
+    // No `packages`/`rexVersion`, no DDD design shape, no event-contract
+    // shape: the canonical block-less ActorModel is exactly
+    // `{"formatVersion": N}` — a Model always emits `packages`, a DddModel
+    // always carries the design keys, an EventModel always carries one of
+    // the event arrays. Anything else has no known root shape.
     if root.contains_key("blocks") || (root.len() == 1 && root.contains_key("formatVersion")) {
         return check_actor_model(root);
     }
     Err(vec![format!(
         "unrecognized artifact: no known root shape (IR artifacts carry \"packages\", \
          actor artifacts \"blocks\", DDD design artifacts \"application\"/\"modules\", \
+         event artifacts \"events\"/\"channels\"/\"subscriptions\", \
          instances declare $type {:?})",
         rex_runtime::INSTANCE_TYPE
     )])
@@ -203,6 +240,28 @@ fn check_ddd_model(root: &serde_json::Map<String, Value>) -> Result<ArtifactKind
     }
     scan_snake_case_keys(&Value::Object(root.clone()), &mut errors);
     finish(ArtifactKind::DddModel, errors)
+}
+
+/// Validates an event-contract artifact exactly like the other kinds: the
+/// version gate mirrors `rex_ir::events::EventModel::from_json` (only
+/// [`rex_ir::events::EVENT_MODEL_FORMAT_VERSION`] passes), and `events`,
+/// `channels`, and `subscriptions` must be arrays of named objects.
+fn check_event_model(root: &serde_json::Map<String, Value>) -> Result<ArtifactKind, Vec<String>> {
+    let mut errors = Vec::new();
+    if let Some(error) = format_version_error(
+        root,
+        rex_ir::events::EVENT_MODEL_FORMAT_VERSION,
+        "event artifact",
+    ) {
+        errors.push(error);
+    }
+    for key in ["events", "channels", "subscriptions"] {
+        if let Some(array) = root.get(key) {
+            check_named_array(array, key, &mut errors);
+        }
+    }
+    scan_snake_case_keys(&Value::Object(root.clone()), &mut errors);
+    finish(ArtifactKind::EventModel, errors)
 }
 
 fn check_instance(root: &serde_json::Map<String, Value>) -> Result<ArtifactKind, Vec<String>> {
@@ -294,8 +353,8 @@ fn check_named_array(value: &Value, key: &str, errors: &mut Vec<String>) {
     }
 }
 
-/// Every structural (non model-defined) key of the IR, actor, and DDD
-/// design wire formats, from the `rex-ir` serde shapes — the camelCase
+/// Every structural (non model-defined) key of the IR, actor, DDD design,
+/// and event wire formats, from the `rex-ir` serde shapes — the camelCase
 /// spellings a snake_case key is compared against. Sorted for binary search.
 const STRUCTURAL_KEYS: &[&str] = &[
     "actors",
@@ -309,9 +368,11 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "capabilities",
     "capability",
     "cedar",
+    "channels",
     "class",
     "classes",
     "constraints",
+    "consumer",
     "convert",
     "create",
     "datatypes",
@@ -324,6 +385,7 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "effect",
     "entries",
     "enums",
+    "events",
     "extends",
     "facets",
     "features",
@@ -362,6 +424,7 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "params",
     "pattern",
     "platform",
+    "publishes",
     "purposes",
     "repository",
     "returnMultiplicity",
@@ -370,6 +433,7 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "services",
     "source",
     "stereotype",
+    "subscriptions",
     "target",
     "targetBindings",
     "to",
@@ -386,7 +450,7 @@ const STRUCTURAL_KEYS: &[&str] = &[
 /// is a known structural key — the readers ignore unknown fields (forward
 /// compatibility), so such artifacts load but silently drop the value.
 ///
-/// Runs on IR, actor, and DDD design artifacts only: their keys are
+/// Runs on IR, actor, DDD design, and event artifacts only: their keys are
 /// entirely structural. Instance objects' feature keys are model-defined
 /// names, so instance documents are exempt.
 fn scan_snake_case_keys(value: &Value, errors: &mut Vec<String>) {
@@ -581,6 +645,8 @@ mod tests {
             serde_json::to_string(&block_less_actor).expect("serialize ActorModel");
         let empty_ifml = rex_ir::ifml::IfmlModel::default();
         let empty_ifml_json = serde_json::to_string(&empty_ifml).expect("serialize IfmlModel");
+        let empty_event = rex_ir::events::EventModel::new();
+        let empty_event_json = serde_json::to_string(&empty_event).expect("serialize EventModel");
 
         let cases = vec![
             ClassificationCase {
@@ -611,20 +677,51 @@ mod tests {
                 .expect("serialize DddModel"),
                 expected: Ok(ArtifactKind::DddModel),
             },
-            // Misclassification guard: a malformed design-shaped document
-            // must be reported by the DddModel check, never fall through to
-            // the actor fallback (whose "missing formatVersion"-style errors
-            // would misattribute the artifact kind).
             ClassificationCase {
-                name: "malformed design shape is reported as a DddModel, not an ActorModel",
-                json: r#"{"formatVersion": 1, "application": {"name": "X"}, "modules": [{"oops": true}]}"#
-                    .to_string(),
-                expected: Err("modules[0]"),
+                name: "event-contract artifact (serialized EventModel)",
+                json: serde_json::to_string(
+                    &rex_ir::events::EventModel::new()
+                        .event(rex_ir::events::EventDef::new("Ping"))
+                        .channel(rex_ir::events::ChannelDef::new("pings").publishes("Ping"))
+                        .subscription(
+                            rex_ir::events::SubscriptionDef::new("watch")
+                                .event("Ping")
+                                .consumer("watcher"),
+                        ),
+                )
+                .expect("serialize EventModel"),
+                expected: Ok(ArtifactKind::EventModel),
+            },
+            // Misclassification guard: a malformed event-shaped document
+            // must be reported by the EventModel check, never fall through
+            // to the actor fallback (whose "missing formatVersion"-style
+            // errors would misattribute the artifact kind).
+            ClassificationCase {
+                name: "malformed event shape is reported as an EventModel, not an ActorModel",
+                json: r#"{"formatVersion": 1, "events": [{"oops": true}]}"#.to_string(),
+                expected: Err("events[0]"),
             },
             ClassificationCase {
                 name: "unknown root shape is unrecognized",
                 json: r#"{"formatVersion": 1, "nobodyKnowsMe": true}"#.to_string(),
                 expected: Err("unrecognized artifact"),
+            },
+            // Empty-form limitation, shared with the empty IfmlModel: an
+            // empty EventModel serializes as exactly `{"formatVersion":1}`,
+            // so shape-sniffing classifies it as the block-less ActorModel.
+            // Pinned here so any future $type discriminator must update the
+            // three kinds consciously.
+            ClassificationCase {
+                name: "empty event artifact serializes as the same minimal-empty bytes",
+                json: {
+                    assert_eq!(
+                        empty_event_json, block_less_actor_json,
+                        "an empty EventModel and an empty ActorModel are \
+                         byte-identical on the wire"
+                    );
+                    empty_event_json.clone()
+                },
+                expected: Ok(ArtifactKind::ActorModel),
             },
             // IfmlModel is not a classified kind; the two shape collisions
             // and the one clean miss are pinned here so any future $type
@@ -846,6 +943,71 @@ mod tests {
         let errors = check(r#"{"formatVersion": 2, "application": {"name": "X"}}"#).unwrap_err();
         assert!(
             errors[0].contains("formatVersion 2") && errors[0].contains("formatVersion 1"),
+            "errors: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn an_event_artifact_does_not_fall_through_to_the_actor_fallback() {
+        // Regression for the fallback order: before the EventModel check
+        // existed, the actor fallback claimed any versioned document
+        // without `packages`/`application`/`modules`/`blocks`.
+        assert_eq!(
+            check(r#"{"formatVersion": 1, "events": [{"name": "Ping"}]}"#),
+            Ok(ArtifactKind::EventModel)
+        );
+        assert_eq!(
+            check(r#"{"formatVersion": 1, "channels": [{"name": "pings"}]}"#),
+            Ok(ArtifactKind::EventModel)
+        );
+        assert_eq!(
+            check(r#"{"formatVersion": 1, "subscriptions": [{"name": "w", "consumer": "c"}]}"#,),
+            Ok(ArtifactKind::EventModel)
+        );
+    }
+
+    #[test]
+    fn event_format_version_gate_names_both_versions() {
+        let errors = check(r#"{"formatVersion": 2, "events": []}"#).unwrap_err();
+        assert!(
+            errors[0].contains("formatVersion 2") && errors[0].contains("formatVersion 1"),
+            "errors: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn event_arrays_must_be_arrays_of_named_objects() {
+        let errors = check(
+            r#"{"formatVersion": 1, "events": [42], "channels": [{}], "subscriptions": [7]}"#,
+        )
+        .unwrap_err();
+        assert!(
+            errors.iter().any(|error| error.contains("events[0]")),
+            "errors: {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("channels[0] is missing \"name\"")),
+            "errors: {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("subscriptions[0]")),
+            "errors: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn snake_case_event_keys_are_reported_with_the_camel_case_spelling() {
+        let errors =
+            check(r#"{"formatVersion": 1, "events": [{"name": "Ping", "format_version": 1}]}"#)
+                .unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("format_version") && error.contains("formatVersion")),
             "errors: {errors:?}"
         );
     }

@@ -1,11 +1,11 @@
-//! `rexlang fmt`: format `.mox`, `.actor`, or `.ddd` files in place,
-//! preserving comments.
+//! `rexlang fmt`: format `.mox`, `.actor`, `.ddd`, or `.evt` files in
+//! place, preserving comments.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use crate::inputs::{is_actor_file, is_ddd_file};
+use crate::inputs::{is_actor_file, is_ddd_file, is_evt_file};
 
 pub(crate) fn run(check: bool, files: Vec<PathBuf>) -> anyhow::Result<ExitCode> {
     if files.is_empty() || files.iter().any(|file| file == Path::new("-")) {
@@ -27,6 +27,8 @@ pub(crate) fn run(check: bool, files: Vec<PathBuf>) -> anyhow::Result<ExitCode> 
             rex_syntax::fmt::format_ddd(&source)?
         } else if is_actor_file(file) {
             rex_syntax::fmt::format_actors(&source)?
+        } else if is_evt_file(file) {
+            rex_syntax::fmt::format_evt(&source)?
         } else {
             rex_syntax::fmt::format(&source)?
         };

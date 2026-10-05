@@ -11,6 +11,7 @@ Surfaces are parsed in `rex-syntax` (logos lexer + chumsky parser, one parse/fmt
 | `.mox` domain model | `parse` / `format` | `compile_str` / `compile_files` → **Core IR `Model`** (the product; the only input backends may consume) | `docs/LANGUAGE.md` |
 | `.actor` actor policy (standalone `import` + `actors` surface) | `parse_actors` / `format_actors` | `compile_actors_str` → `ActorModel` — feeds `rex-backend-cedar` as the policy dimension alongside the domain `Model` | `docs/LANGUAGE.md` (actor section) |
 | `.ddd` design (standalone `import` + `application` surface) | `parse_ddd` / `format_ddd` | `compile_ddd_str` (+ `compile_ddd_str_with_actors`) → `rex_ir::ddd::DddModel` (standalone design artifact; no in-tree backend) | `docs/DDD.md` |
+| `.evt` event contract (standalone `import` + `event`/`channel`/`subscription` surface) | `parse_evt` / `format_evt` | `compile_evt_str` → `rex_ir::events::EventModel` (standalone artifact; field types resolve against the imported domain union; no in-tree backend) | `docs/EVENTS.md` |
 | `.ifml` interaction flow | **Pest** parser in `rex-ifml` (`parse_ifml`/`parse_ifml_file`) — not chumsky | lowers `.ifml` sources directly to the versioned `rex_ir::ifml::IfmlModel` (no rex-driver stage) | `docs/IFML.md` |
 | `.rosetta` (Rune DSL) | **external, rev-pinned sigil toolchain — not ours to specify** | `import sigil` lowering: Rune namespaces → synthetic rexlang packages; normative contract in `crates/rex-driver/src/sigil.rs` | `docs/LANGUAGE.md` (Importing Rune models) |
 

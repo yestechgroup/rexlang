@@ -3,14 +3,16 @@
 //! Subcommands:
 //!
 //! * `rexlang check <file>...` — compile and render diagnostics; exits `1`
-//!   on errors. Accepts `.mox` models, `.actor` policy files, and `.ddd`
-//!   design files (the latter two compile against the domain models they
-//!   import). Each input is a file or a directory (scanned recursively for
-//!   `*.mox`); several `.mox` inputs compile as one multi-package model.
+//!   on errors. Accepts `.mox` models, `.actor` policy files, `.ddd`
+//!   design files, and `.evt` event-contract files (the latter three compile
+//!   against the domain models they import). Each input is a file or a
+//!   directory (scanned recursively for `*.mox`); several `.mox` inputs
+//!   compile as one multi-package model.
 //! * `rexlang ir <file>... [-o <out>]` — compile and emit the Core IR JSON
 //!   to stdout or to a file; exits `1` on errors. On `.actor` files the
 //!   standalone ActorModel artifact is emitted; on `.ddd` files the
-//!   standalone DDD design artifact is emitted.
+//!   standalone DDD design artifact; on `.evt` files the standalone
+//!   EventModel artifact.
 //! * `rexlang artifact check <artifact.json>...` — validate wire-format
 //!   artifacts (Core IR, standalone actor policy, DDD design, canonical
 //!   instance) without the originating model; exits `1` on any violation.
@@ -45,20 +47,21 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Parse, resolve, and validate `.mox`, `.actor`, or `.ddd` files,
-    /// rendering diagnostics grouped per file.
+    /// Parse, resolve, and validate `.mox`, `.actor`, `.ddd`, or `.evt`
+    /// files, rendering diagnostics grouped per file.
     Check {
-        /// Paths to compile: `.mox`/`.actor`/`.ddd` files, or directories
-        /// scanned recursively for `*.mox`.
+        /// Paths to compile: `.mox`/`.actor`/`.ddd`/`.evt` files, or
+        /// directories scanned recursively for `*.mox`.
         files: Vec<PathBuf>,
     },
-    /// Compile `.mox`, `.actor`, or `.ddd` files and emit the artifact as
-    /// JSON (`.actor` files emit the standalone ActorModel artifact, `.ddd`
-    /// files the standalone DDD design artifact; several `.mox` files emit
+    /// Compile `.mox`, `.actor`, `.ddd`, or `.evt` files and emit the
+    /// artifact as JSON (`.actor` files emit the standalone ActorModel
+    /// artifact, `.ddd` files the standalone DDD design artifact, `.evt`
+    /// files the standalone EventModel artifact; several `.mox` files emit
     /// one multi-package model).
     Ir {
-        /// Paths to compile: `.mox`/`.actor`/`.ddd` files, or directories
-        /// scanned recursively for `*.mox`.
+        /// Paths to compile: `.mox`/`.actor`/`.ddd`/`.evt` files, or
+        /// directories scanned recursively for `*.mox`.
         files: Vec<PathBuf>,
         /// Write the JSON to this path instead of stdout.
         #[arg(short, long, value_name = "FILE")]
@@ -69,8 +72,8 @@ enum Command {
         #[command(subcommand)]
         target: GenTarget,
     },
-    /// Format `.mox`, `.actor`, or `.ddd` files in place, preserving
-    /// comments.
+    /// Format `.mox`, `.actor`, `.ddd`, or `.evt` files in place,
+    /// preserving comments.
     Fmt {
         /// List files whose formatting would change instead of rewriting
         /// them; exits `1` when any file is unformatted.
