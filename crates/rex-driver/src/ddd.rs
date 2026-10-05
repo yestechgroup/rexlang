@@ -106,7 +106,7 @@ pub(crate) fn compile_ddd_file(
     design_source: &str,
     ast: Option<&dsl::DddFile>,
     parse_diagnostics: &[Diagnostic],
-    domains: &[DomainUnit<'_>],
+    domains: &[DomainUnit],
     actors: Option<&rex_ir::ActorModel>,
 ) -> (Option<DddModel>, Vec<(String, Diagnostic)>) {
     let mut diags: Vec<(String, Diagnostic)> = parse_diagnostics
@@ -131,8 +131,8 @@ pub(crate) fn compile_ddd_file(
 
     // Domain diagnostics propagate under their own file, in import order.
     for unit in domains {
-        for diagnostic in unit.diagnostics {
-            diags.push((unit.path.to_string(), diagnostic.clone()));
+        for diagnostic in &unit.diagnostics {
+            diags.push((unit.path.clone(), diagnostic.clone()));
         }
     }
 
@@ -1028,7 +1028,7 @@ pub(crate) fn compile_ddd_file(
 
 /// `true` when every imported domain lowered successfully (vacuously true
 /// for an empty import set).
-fn all_domains_lowered(domains: &[DomainUnit<'_>]) -> bool {
+fn all_domains_lowered(domains: &[DomainUnit]) -> bool {
     domains.iter().all(|unit| unit.model.is_some())
 }
 

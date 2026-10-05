@@ -4409,33 +4409,34 @@ fn validate_actor_delegations_union(
     }
 }
 
-/// One imported domain model handed to [`compile_actor_file`]: its lowered
-/// model (when error-free), its AST, and its own diagnostics.
-pub(crate) struct DomainUnit<'a> {
+/// One imported domain model handed to [`compile_actor_file`] and
+/// [`crate::ddd::compile_ddd_file`]: its lowered model (when error-free),
+/// its AST, and its own diagnostics.
+pub(crate) struct DomainUnit {
     /// The path the actor file's import named (and the file was provided
     /// under); tags the unit's diagnostics and spans.
-    pub path: &'a str,
+    pub path: String,
     /// The domain's full source text (condition and body slicing).
-    pub source: &'a str,
+    pub source: String,
     /// The lowered domain model, `None` when the domain has errors (its
     /// blocks then stay out of the union).
     pub model: Option<ir::Model>,
     /// The domain's parsed AST.
-    pub ast: Option<&'a mox::Model>,
+    pub ast: Option<mox::Model>,
     /// The domain's own compile diagnostics (tagged with `path` here).
-    pub diagnostics: &'a [Diagnostic],
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 /// Builds the combined type namespace of the error-free domains (in
 /// first-appearance order): each domain's declared top-level types plus its
 /// `import schema` nominal classes. This is the shared namespace the
 /// `.actor` and `.ddd` pipelines resolve their references against.
-pub(crate) fn domain_namespaces(domains: &[DomainUnit<'_>]) -> Vec<DomainPackage> {
+pub(crate) fn domain_namespaces(domains: &[DomainUnit]) -> Vec<DomainPackage> {
     domains
         .iter()
         .filter_map(|unit| {
             let model = unit.model.as_ref()?;
-            let ast = unit.ast?;
+            let ast = unit.ast.as_ref()?;
             let mut kinds: HashMap<String, TopKind> = HashMap::new();
             for decl in &ast.declarations {
                 let kind = match decl {
@@ -4526,7 +4527,7 @@ pub(crate) fn compile_actor_file(
     actor_source: &str,
     actor_ast: Option<&mox::ActorFile>,
     actor_diagnostics: &[Diagnostic],
-    domains: &[DomainUnit<'_>],
+    domains: &[DomainUnit],
 ) -> (Option<ir::ActorModel>, Vec<(String, Diagnostic)>) {
     let mut diags: Vec<(String, Diagnostic)> = Vec::new();
     for diagnostic in actor_diagnostics {
@@ -4551,8 +4552,8 @@ pub(crate) fn compile_actor_file(
 
     // Domain diagnostics propagate under their own file, in import order.
     for unit in domains {
-        for diagnostic in unit.diagnostics {
-            diags.push((unit.path.to_string(), diagnostic.clone()));
+        for diagnostic in &unit.diagnostics {
+            diags.push((unit.path.clone(), diagnostic.clone()));
         }
     }
 
@@ -4588,10 +4589,10 @@ pub(crate) fn compile_actor_file(
             if unit.model.is_none() {
                 continue;
             }
-            if let Some(ast) = unit.ast {
+            if let Some(ast) = &unit.ast {
                 for decl in &ast.declarations {
                     if let mox::Decl::Actors(decl) = decl {
-                        lower_block(decl, unit.source, unit.path);
+                        lower_block(decl, &unit.source, &unit.path);
                     }
                 }
             }

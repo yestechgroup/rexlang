@@ -450,41 +450,56 @@ pub fn compile_actors(
     compile_actors_with(db, actor, domains, None, None)
 }
 
-/// The body of [`compile_actors`], parameterized over the provided
-/// import content for the domain files (the tracked query cannot take the
-/// non-input import maps).
-fn compile_actors_with(
+/// The domain lowering shared by the `.actor` and `.ddd` pipelines: resolve
+/// the origin file's `import` declarations against the provided domain
+/// files, lower every named domain against the **union namespace of all
+/// imports** (the same rule multi-file `.mox` compiles follow), and assemble
+/// the per-domain results the actor/design tails consume.
+struct LoweredDomains {
+    /// One unit per imported domain (imports in first-appearance order).
+    domain_units: Vec<lower::DomainUnit>,
+    /// The union model of all imported domains — only meaningful when every
+    /// domain lowered successfully. The first sigil-declaring domain carries
+    /// the compilation's synthetic packages. Cedar class lookup and `.ddd`
+    /// design resolution consume this instead of recompiling the domains
+    /// standalone (which cannot resolve cross-package references).
+    domains_model: Option<rex_ir::Model>,
+    /// Sigil content diagnostics keyed by rosetta path (rendered against
+    /// the retained rosetta texts); each caller appends them after its own
+    /// diagnostics, following the domain ones.
+    sigil_diagnostics: Vec<(String, Diagnostic)>,
+}
+
+/// The body shared by [`compile_actors_with`] and [`compile_ddd_with`]:
+/// resolve `imports` against `domains` (deduplicated by import path, in
+/// first-appearance order; only imported domains are compiled — extras are
+/// ignored so their diagnostics do not leak), lower every named domain
+/// against the shared union namespace, and collect the results.
+///
+/// A domain with errors yields no model while the remaining domains keep
+/// resolving, so the tails can still bind capabilities and resolve designs
+/// against the surviving domains.
+fn lower_domains(
     db: &dyn Db,
-    actor: SourceFile,
-    domains: Vec<SourceFile>,
+    origin_path: &str,
+    imports: &[rex_syntax::ImportDecl],
+    domains: &[SourceFile],
     schema_imports: Option<&SchemaImports>,
     sigil_imports: Option<&SigilImports>,
-) -> ActorCompilation {
-    let actor_path = actor.path(db);
-    let actor_source = actor.text(db);
-    let parsed = parse_actors_query(db, actor);
-
-    // Resolve imports to provided domains, deduplicated by import path, in
-    // first-appearance order. Only imported domains are compiled; extras
-    // are ignored (their diagnostics must not leak).
+) -> LoweredDomains {
     let mut lookups: Vec<(String, SourceFile)> = Vec::new();
-    if let Some(ast) = &parsed.ast {
-        for import in &ast.imports {
-            if lookups.iter().any(|(path, _)| *path == import.path) {
-                continue;
-            }
-            if let Some(domain) = domains
-                .iter()
-                .find(|file| import_matches(&import.path, &actor_path, &file.path(db)))
-            {
-                lookups.push((import.path.clone(), *domain));
-            }
+    for import in imports {
+        if lookups.iter().any(|(path, _)| *path == import.path) {
+            continue;
+        }
+        if let Some(domain) = domains
+            .iter()
+            .find(|file| import_matches(&import.path, origin_path, &file.path(db)))
+        {
+            lookups.push((import.path.clone(), *domain));
         }
     }
 
-    // Lower every imported domain against the shared union namespace,
-    // keeping the results per file: a domain with errors yields no model
-    // while the remaining domains keep resolving.
     let mut paths: Vec<String> = Vec::new();
     let mut sources: Vec<String> = Vec::new();
     let mut parse_outputs: Vec<ParseOutput> = Vec::new();
@@ -505,29 +520,11 @@ fn compile_actors_with(
         .collect();
     let compilations = lower::compile_union_per_file(&units, schema_imports, sigil_imports);
 
-    // Sigil content diagnostics are keyed by rosetta path (rendered against
-    // the retained rosetta texts); they join the actor file's diagnostics
-    // after the domain ones.
     let sigil_diagnostics: Vec<(String, Diagnostic)> = compilations
         .iter()
         .flat_map(|compilation| compilation.sigil_diagnostics.iter().cloned())
         .collect();
 
-    let domain_units: Vec<lower::DomainUnit<'_>> = lookups
-        .iter()
-        .enumerate()
-        .map(|(index, (path, _))| lower::DomainUnit {
-            path,
-            source: &sources[index],
-            model: compilations[index].model.clone(),
-            ast: parse_outputs[index].ast.as_ref(),
-            diagnostics: &compilations[index].diagnostics,
-        })
-        .collect();
-
-    // The union model of all imported domains, for Cedar class lookup —
-    // only meaningful when every domain lowered successfully. The first
-    // sigil-declaring domain carries the compilation's synthetic packages.
     let domains_model = if compilations
         .iter()
         .all(|compilation| compilation.model.is_some())
@@ -543,18 +540,67 @@ fn compile_actors_with(
         None
     };
 
+    let domain_units: Vec<lower::DomainUnit> = lookups
+        .into_iter()
+        .zip(sources)
+        .zip(parse_outputs)
+        .zip(compilations)
+        .map(
+            |((((path, _), source), parse), compilation)| lower::DomainUnit {
+                path,
+                source,
+                model: compilation.model,
+                ast: parse.ast,
+                diagnostics: compilation.diagnostics,
+            },
+        )
+        .collect();
+
+    LoweredDomains {
+        domain_units,
+        domains_model,
+        sigil_diagnostics,
+    }
+}
+
+/// The body of [`compile_actors`], parameterized over the provided
+/// import content for the domain files (the tracked query cannot take the
+/// non-input import maps).
+fn compile_actors_with(
+    db: &dyn Db,
+    actor: SourceFile,
+    domains: Vec<SourceFile>,
+    schema_imports: Option<&SchemaImports>,
+    sigil_imports: Option<&SigilImports>,
+) -> ActorCompilation {
+    let actor_path = actor.path(db);
+    let actor_source = actor.text(db);
+    let parsed = parse_actors_query(db, actor);
+    let domains = lower_domains(
+        db,
+        &actor_path,
+        parsed
+            .ast
+            .as_ref()
+            .map(|ast| ast.imports.as_slice())
+            .unwrap_or_default(),
+        &domains,
+        schema_imports,
+        sigil_imports,
+    );
+
     let (model, diagnostics) = lower::compile_actor_file(
         &actor_path,
         &actor_source,
         parsed.ast.as_ref(),
         &parsed.diagnostics,
-        &domain_units,
+        &domains.domain_units,
     );
     let mut diagnostics = diagnostics;
-    diagnostics.extend(sigil_diagnostics);
+    diagnostics.extend(domains.sigil_diagnostics);
     ActorCompilation {
         model,
-        domains_model,
+        domains_model: domains.domains_model,
         diagnostics,
     }
 }
@@ -866,100 +912,32 @@ fn compile_ddd_with(
 ) -> DddCompilation {
     let design_path = design.path(db);
     let parsed = parse_ddd_query(db, design);
-
-    // Resolve imports to provided domains, deduplicated by import path, in
-    // first-appearance order. Only imported domains are compiled; extras
-    // are ignored (their diagnostics must not leak).
-    let mut lookups: Vec<(String, SourceFile)> = Vec::new();
-    if let Some(ast) = &parsed.ast {
-        for import in &ast.imports {
-            if lookups.iter().any(|(path, _)| *path == import.path) {
-                continue;
-            }
-            if let Some(domain) = domains
-                .iter()
-                .find(|file| import_matches(&import.path, &design_path, &file.path(db)))
-            {
-                lookups.push((import.path.clone(), *domain));
-            }
-        }
-    }
-
-    // Lower every imported domain against the shared union namespace,
-    // keeping the results per file: a domain with errors yields no model
-    // while the remaining domains keep resolving.
-    let mut paths: Vec<String> = Vec::new();
-    let mut sources: Vec<String> = Vec::new();
-    let mut parse_outputs: Vec<ParseOutput> = Vec::new();
-    for (_, domain) in &lookups {
-        paths.push(domain.path(db));
-        sources.push(domain.text(db));
-        parse_outputs.push(parse_query(db, *domain));
-    }
-    let units: Vec<lower::MultiFile<'_>> = lookups
-        .iter()
-        .enumerate()
-        .map(|(index, _)| lower::MultiFile {
-            path: &paths[index],
-            source: &sources[index],
-            ast: parse_outputs[index].ast.as_ref(),
-            parse_diagnostics: &parse_outputs[index].diagnostics,
-        })
-        .collect();
-    let compilations = lower::compile_union_per_file(&units, schema_imports, sigil_imports);
-
-    // Sigil content diagnostics are keyed by rosetta path (rendered against
-    // the retained rosetta texts); they join the design's diagnostics after
-    // the domain ones.
-    let sigil_diagnostics: Vec<(String, Diagnostic)> = compilations
-        .iter()
-        .flat_map(|compilation| compilation.sigil_diagnostics.iter().cloned())
-        .collect();
-
-    let domain_units: Vec<lower::DomainUnit<'_>> = lookups
-        .iter()
-        .enumerate()
-        .map(|(index, (path, _))| lower::DomainUnit {
-            path,
-            source: &sources[index],
-            model: compilations[index].model.clone(),
-            ast: parse_outputs[index].ast.as_ref(),
-            diagnostics: &compilations[index].diagnostics,
-        })
-        .collect();
-
-    // The union model of all imported domains, for consumers that need the
-    // resolved domain — only meaningful when every domain lowered
-    // successfully. The first sigil-declaring domain carries the
-    // compilation's synthetic packages.
-    let domains_model = if compilations
-        .iter()
-        .all(|compilation| compilation.model.is_some())
-    {
-        let mut union = rex_ir::Model::new();
-        for compilation in &compilations {
-            if let Some(model) = &compilation.model {
-                union.packages.extend(model.packages.clone());
-            }
-        }
-        Some(union)
-    } else {
-        None
-    };
+    let domains = lower_domains(
+        db,
+        &design_path,
+        parsed
+            .ast
+            .as_ref()
+            .map(|ast| ast.imports.as_slice())
+            .unwrap_or_default(),
+        &domains,
+        schema_imports,
+        sigil_imports,
+    );
 
     let (model, diagnostics) = ddd::compile_ddd_file(
         &design_path,
         &design.text(db),
         parsed.ast.as_ref(),
         &parsed.diagnostics,
-        &domain_units,
+        &domains.domain_units,
         actors,
     );
     let mut diagnostics = diagnostics;
-    diagnostics.extend(sigil_diagnostics);
+    diagnostics.extend(domains.sigil_diagnostics);
     DddCompilation {
         model,
-        domains_model,
+        domains_model: domains.domains_model,
         diagnostics,
     }
 }
