@@ -209,177 +209,34 @@ view "DeleteConfirm" {
 
 ---
 
-## Complete Pest Grammar
+## Grammar
 
-The `.pest` grammar file (`crates/rex-ifml/src/grammar/ifml.pest`) defines the full DSL syntax. Key rule categories:
+**The normative grammar is the Pest grammar file itself:**
+`crates/rex-ifml/src/grammar/ifml.pest`. It is machine-checked —
+`pest_derive` compiles it at build time and every parse runs through it — so
+it is never restated in prose. What follows is a non-normative orientation,
+naming the top-level rules per category; read the `.pest` file for the exact
+productions.
 
-### 1. Top-level structure
-
-```pest
-// ── Entry point ──────────────────────────────────────────────────
-ifml_model = {
-    SOI ~
-    (import_declaration | domain_declaration)* ~
-    (import_declaration | view_declaration | action_declaration | module_declaration | actor_declaration)* ~
-    EOI
-}
-
-domain_declaration = {
-    "domain" ~ string ~ "{" ~
-        "schema" ~ string ~ ";" ~
-    "}"
-}
-```
-
-### 2. View containers
-
-```pest
-view_declaration = {
-    "view" ~ string ~ view_body
-}
-
-view_body = {
-    "{" ~
-        params_block? ~
-        label_declaration? ~
-        property_assignment* ~
-        (container_declaration | component_declaration | event_handler | condition_statement | module_use_statement)* ~
-    "}"
-}
-
-container_declaration = {
-    "container" ~ string ~ container_body
-}
-
-parameter_block = {
-    "{" ~ parameter_decl ~ ("," ~ parameter_decl)* ~ "}"
-}
-
-parameter_decl = {
-    identifier ~ ":" ~ type_ref ~ ("=" ~ param_default)?
-}
-```
-
-### 3. Components
-
-```pest
-component_declaration = {
-    "component" ~ string ~ component_body
-}
-
-component_body = {
-    "{" ~
-        property_assignment* ~
-        (column_decl | field_decl | chart_decl | condition_statement)* ~
-        (event_handler | condition_statement)* ~
-    "}"
-}
-
-property_assignment = {
-    identifier ~ ":" ~ value_expression ~ ";"
-}
-```
-
-### 4. Events
-
-```pest
-event_handler = {
-    "on" ~ event_type ~ event_param? ~ event_requires? ~ event_condition? ~ "->" ~ event_action ~ ";"
-}
-
-event_requires = { "requires" ~ ":" ~ "[" ~ identifier ~ ("," ~ identifier)* ~ "]" }
-
-event_action = {
-    navigate_action |
-    refresh_action |
-    action_invocation |
-    stay_statement
-}
-
-navigate_action = {
-    "navigate" ~ "(" ~ string ~ ("," ~ parameter_binding)? ~ ")"
-}
-
-parameter_binding = {
-    "{" ~ (parameter_binding_pair ~ ("," ~ parameter_binding_pair)*)? ~ "}"
-}
-
-parameter_binding_pair = {
-    identifier ~ ":" ~ expression
-}
-```
-
-### 5. C-like expressions
-
-```pest
-expression = { logical_or }
-
-logical_or = { logical_and ~ ("||" ~ logical_and)* }
-logical_and = { comparison ~ ("&&" ~ comparison)* }
-
-comparison_op = { "<=" | ">=" | "==" | "!=" | "~=" | "!~" | "<" | ">" }
-
-unary = {
-    "!" ~ unary |
-    "-" ~ unary |
-    primary
-}
-
-primary = {
-    string |
-    number |
-    boolean |
-    call_expr |
-    field_expr |
-    identifier |
-    group_expr
-}
-```
-
-### 6. Actions
-
-```pest
-action_declaration = {
-    "action" ~ string ~ "{" ~
-        property_assignment* ~
-        event_handler* ~
-    "}"
-}
-```
-
-### 7. Modules (for reusable interaction patterns)
-
-```pest
-module_declaration = {
-    "module" ~ string ~ "{" ~
-        "input" ~ parameter_block ~
-        "output" ~ parameter_block ~
-        property_assignment* ~
-        (container_declaration | component_declaration | event_handler)* ~
-    "}"
-}
-```
-
-### 8. Lexical rules
-
-```pest
-identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
-
-string = @{ "\"" ~ (escape_char | (!("\"" | "\\") ~ ANY))* ~ "\"" }
-
-escape_char = @{ "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t" | "u" ~ ASCII_HEX_DIGIT{4}) }
-
-number = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
-
-boolean = { "true" | "false" }
-
-type_ref = { "Uuid" | "String" | "Int" | "Float" | "Boolean" | "DateTime" | identifier }
-
-comment = @{ "//" ~ (!"\n" ~ ANY)* }
-
-WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
-COMMENT = _{ comment }
-```
+- **Entry point** — `ifml_model`: imports and `domain_declaration`s first,
+  then `view_declaration` / `action_declaration` / `module_declaration` /
+  `actor_declaration` items.
+- **Views and containers** — `view_declaration` / `container_declaration`
+  share a body shape: optional `params_block` and `label_declaration`,
+  property assignments, then nested containers, components, event handlers,
+  condition statements, and module uses.
+- **Components** — `component_declaration` with `column_decl`, `field_decl`
+  (typed inputs), and `chart_decl` members alongside properties and events.
+- **Events** — `event_handler`: `on <type> (params)? (requires ...)? (if
+  expr)? -> <action> ;` with `navigate_action`, `refresh_action`,
+  `action_invocation`, or `stay_statement`.
+- **Actions and modules** — `action_declaration` (properties + events) and
+  `module_declaration` (required `input`/`output` parameter blocks).
+- **Expressions** — the C-like precedence chain `expression` → `logical_or`
+  → `logical_and` → `comparison` → `addition` → `multiplication` → `unary`
+  → `primary` (calls, field access, literals, groups).
+- **Lexical rules** — `identifier`, `string` (with escapes), `number`,
+  `boolean`, `type_ref`, `comment`, whitespace.
 
 ---
 

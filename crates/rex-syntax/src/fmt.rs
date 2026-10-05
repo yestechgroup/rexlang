@@ -2,7 +2,7 @@
 //!
 //! The formatter is *token-stream based*: it never builds the AST and never
 //! reports syntax errors, so sources with parse errors still format. Only a
-//! lex error (which cannot be tokenized) is rejected. See [`format`] for the
+//! lex error (which cannot be tokenized) is rejected. See [`format()`] for the
 //! entry point and the module-level style it implements.
 //!
 //! Style rules implemented here:
