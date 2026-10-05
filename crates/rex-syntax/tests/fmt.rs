@@ -977,8 +977,65 @@ fn import_schema_without_alias_and_with_comments() {
 fn qualified_and_keyword_names_stay_in_place_around_import_hoisting() {
     // A keyword inside a dotted reference (`nz.package.Thing`) and an
     // identifier sequence that merely looks like an import (`import.schema.X`
-    // as a name segment) must never be mistaken for import declarations and
-    // hoisted to the top.
-    let source = "package demo\n\nclass A extends nz.package.Thing {}\n\nclass B extends nz.import.schema.Thing {}\n";
+    // or `import.sigil.X` as a name segment) must never be mistaken for
+    // import declarations and hoisted to the top.
+    let source = "\
+package demo
+
+class A extends nz.package.Thing {}
+
+class B extends nz.import.schema.Thing {}
+
+class C extends nz.import.sigil.Thing {}
+";
     assert_eq!(fmt(source), source);
+}
+
+#[test]
+fn import_sigil_hoists_alongside_schema_imports_in_source_order() {
+    // Canonical form: the package first, then the import section — both
+    // kinds interleaved in source order (tight, one declaration per line) —
+    // then every other declaration.
+    let source = "\
+package demo
+
+class Book { String title }
+
+import schema \"../schemas/todo_item.json\" as TodoItem
+import sigil \"../sigils/cdm.rosetta\"
+import sigil \"../sigils/lex.rosetta\"
+";
+    let formatted = fmt(source);
+    assert_eq!(
+        formatted,
+        "\
+package demo
+
+import schema \"../schemas/todo_item.json\" as TodoItem
+import sigil \"../sigils/cdm.rosetta\"
+import sigil \"../sigils/lex.rosetta\"
+
+class Book {
+    String title
+}
+"
+    );
+    // Fixpoint: the canonical form reformats to itself (`fmt --check` gate).
+    assert_eq!(fmt(&formatted), formatted);
+}
+
+#[test]
+fn import_sigil_is_a_fixpoint_when_already_canonical() {
+    let source =
+        "package demo\n\nimport sigil \"s.rosetta\"\nimport schema \"a.json\" as A\n\nclass B {}\n";
+    assert_eq!(fmt(source), source);
+}
+
+#[test]
+fn import_sigil_normalizes_spacing() {
+    let source = "package demo\n\nimport   sigil   \"a.rosetta\"\nimport sigil \"b.rosetta\"\n";
+    assert_eq!(
+        fmt(source),
+        "package demo\n\nimport sigil \"a.rosetta\"\nimport sigil \"b.rosetta\"\n"
+    );
 }

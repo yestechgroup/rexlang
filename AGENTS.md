@@ -4,7 +4,7 @@ Rust cargo workspace. `.mox` modeling sources compile to a Core IR artifact; bac
 
 ## Pipeline (crate ownership)
 
-`rex-syntax` (logos lexer, chumsky parser, **fmt**, `.ddd` parser/`format_ddd`) → `rex-driver` (salsa resolve/validate/lower, navigation index, diagnostics, `.ddd` compile/validate via `compile_ddd_str`) → `rex-ir` (Core IR = the product; plus the standalone `ddd::DddModel` design artifact) → `rex-backend-rust` / `rex-backend-jsonschema` / `rex-backend-cedar`. Plus `rex-expr` (expression parser/typechecker), `rex-ifml` (IFML interaction-flow DSL: Pest parser lowering `.ifml` sources directly to the versioned `rex_ir::ifml::IfmlModel` artifact; docs/IFML.md), `rex-vocab` (providers/lockfile), `rex-runtime` (generated code's support lib), `rex-lsp`, `rex-cli` (the `rexlang` binary). `.actor` policy files (standalone `import` + `actors` surface) compile via `compile_actors_str` to a separate `rex_ir::ActorModel` artifact that feeds `rex-backend-cedar` as the policy dimension alongside the domain `Model`. `.ddd` design files (standalone `import` + `application` surface) compile via `compile_ddd_str` to a separate `rex_ir::ddd::DddModel` artifact (docs/DDD.md); the CLI resolves `.ddd` imports from disk, the driver stays filesystem-free.
+`rex-syntax` (logos lexer, chumsky parser, **fmt**, `.ddd` parser/`format_ddd`) → `rex-driver` (salsa resolve/validate/lower, navigation index, diagnostics, `.ddd` compile/validate via `compile_ddd_str`, `import sigil` `.rosetta` lowering via the rev-pinned sigil toolchain) → `rex-ir` (Core IR = the product; plus the standalone `ddd::DddModel` design artifact) → `rex-backend-rust` / `rex-backend-jsonschema` / `rex-backend-cedar`. Plus `rex-expr` (expression parser/typechecker), `rex-ifml` (IFML interaction-flow DSL: Pest parser lowering `.ifml` sources directly to the versioned `rex_ir::ifml::IfmlModel` artifact; docs/IFML.md), `rex-vocab` (providers/lockfile), `rex-runtime` (generated code's support lib), `rex-lsp`, `rex-cli` (the `rexlang` binary). `.actor` policy files (standalone `import` + `actors` surface) compile via `compile_actors_str` to a separate `rex_ir::ActorModel` artifact that feeds `rex-backend-cedar` as the policy dimension alongside the domain `Model`. `.ddd` design files (standalone `import` + `application` surface) compile via `compile_ddd_str` to a separate `rex_ir::ddd::DddModel` artifact (docs/DDD.md); the CLI resolves `.ddd` imports from disk, the driver stays filesystem-free. `.mox` `import sigil "x.rosetta"` lowers Rune namespaces into synthetic packages (normative contract in `crates/rex-driver/src/sigil.rs`); the CLI likewise resolves sigil imports from disk (relative to the `.mox` file, walking the named file's directory for transitive rosetta imports).
 
 - Backends must consume **only** `rex_ir::Model` (and, for Cedar, the `ActorModel` pair) — never the AST. Lowering happens in `rex-driver`.
 - The serialized IR is a versioned wire format: camelCase, adjacent tagging, `formatVersion` gate. Contract and rules live in the `rex-ir` crate docs. New fields must be `#[serde(default)]` (+ `skip_serializing_if`) so body-less/vocabulary-less models stay **byte-identical** — golden tests enforce this.
@@ -16,11 +16,11 @@ cargo test --workspace                          # full suite (~600 tests)
 cargo test -p rex-driver --test navigation      # one test suite
 cargo clippy --workspace --all-targets          # must be ZERO warnings
 cargo fmt --all                                 # rustfmt
-cargo run -p rex-cli -- fmt --check tests/conformance/models/*.mox tests/conformance/models/*.actor   # fixture format gate (.ddd gate: tests/conformance/ddd/*.ddd)
+cargo run -p rex-cli -- fmt --check tests/conformance/models/*.mox tests/conformance/models/*.actor   # fixture format gate (.ddd gate: tests/conformance/ddd/*.ddd; sigil gate: tests/conformance/sigil/*.mox)
 REX_UPDATE_FIXTURES=1 cargo test --workspace    # regenerate golden files
 ```
 
-CI (`.github/workflows/ci.yml`) runs build, tests, `clippy -- -D warnings`, then **both** format gates: `cargo fmt --all -- --check` **and** `rexlang fmt --check` on the canonical fixtures (`.mox`, `.actor`, and `.ddd`). A warning anywhere is a failure.
+CI (`.github/workflows/ci.yml`) runs build, tests, `clippy -- -D warnings`, then **both** format gates: `cargo fmt --all -- --check` **and** `rexlang fmt --check` on the canonical fixtures (`.mox`, `.actor`, and `.ddd`, plus the sigil fixture's `.mox`). A warning anywhere is a failure.
 
 ## Testing quirks
 

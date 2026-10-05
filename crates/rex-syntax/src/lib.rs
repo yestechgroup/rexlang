@@ -24,8 +24,9 @@ pub use ast::{
     DddDelegation, DddDesign, DddDocumentEntry, DddFile, DddFlagKind, DddFlags, DddModule,
     DddPagination, DddParam, DddRanking, DddRepository, DddRepositoryOp, DddSearch, DddSearchField,
     DddService, DddServiceOp, DddStereotype, Decl, DefaultValue, EnumDecl, EnumLiteral,
-    FeatureDecl, ImportDecl, InterfaceDecl, Model, MultBound, Multiplicity, MultiplicityKind, Name,
-    Param, QualifiedName, Span, TypeRef, VocabularyDecl, VocabularyFacetDecl, Wraps,
+    FeatureDecl, ImportDecl, ImportKind, InterfaceDecl, Model, MultBound, Multiplicity,
+    MultiplicityKind, Name, Param, QualifiedName, Span, TypeRef, VocabularyDecl,
+    VocabularyFacetDecl, Wraps,
 };
 pub use fmt::{format, format_actors, format_ddd, FormatError};
 pub use lexer::{lex, lex_with_comments, Comment, CommentKind, LexError, Token};

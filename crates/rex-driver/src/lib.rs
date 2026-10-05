@@ -31,6 +31,7 @@ pub mod diagnostic;
 pub(crate) mod lower;
 pub mod manifest;
 pub mod navigation;
+pub(crate) mod sigil;
 
 pub use diagnostic::{render, Diagnostic, DiagnosticCode, Severity};
 pub use navigation::{
@@ -92,7 +93,7 @@ pub fn parse_query(db: &dyn Db, file: SourceFile) -> ParseOutput {
 /// wins).
 ///
 /// ```
-/// use rex_driver::{SchemaImports, compile_files_with_imports};
+/// use rex_driver::{SchemaImports, SigilImports, compile_files_with_imports};
 ///
 /// let imports = SchemaImports::new()
 ///     .provide("demo.mox", "schemas/todo_item.json", r#"{"title": "Todo item"}"#);
@@ -100,6 +101,7 @@ pub fn parse_query(db: &dyn Db, file: SourceFile) -> ParseOutput {
 ///     &[("demo.mox".to_string(),
 ///        "package demo\n\nimport schema \"schemas/todo_item.json\" as TodoItem\n\nclass C { refers TodoItem t }\n".to_string())],
 ///     &imports,
+///     &SigilImports::new(),
 /// );
 /// assert!(compilation.diagnostics.is_empty());
 /// ```
@@ -160,6 +162,114 @@ impl SchemaImports {
     }
 }
 
+/// The rosetta source texts of the `import sigil` declarations of a
+/// compilation.
+///
+/// Mirrors [`SchemaImports`]: the driver is filesystem-free, so a host that
+/// reads `.mox` files from disk (the CLI) or embeds them (tests, language
+/// servers) provides each import's rosetta text through this type. Keys are
+/// the **(mox file path, import path)** pair, both exactly as the host names
+/// them — the mox path must match the path the file is compiled under, and
+/// the import path must match the string written in the
+/// `import sigil "<path>"` declaration. Content provided for another mox
+/// file does not satisfy an import; a declared import without provided
+/// content is the error diagnostic
+/// ``imported sigil '<path>' was not provided``.
+///
+/// Additional entries for the same mox path (a different import path each)
+/// are **candidate files**: the CLI provides every `*.rosetta` file next to
+/// the named import so rosetta-internal namespace imports resolve
+/// transitively, and the driver lowers only the closure the named file
+/// actually needs (see the crate-internal `sigil` lowering module for the
+/// selection rule). Candidate files that end up unselected are never
+/// diagnosed.
+///
+/// Re-providing a `(mox, import)` pair replaces the earlier entry (last
+/// wins).
+///
+/// ```
+/// use rex_driver::{SigilImports, compile_str_with_imports};
+///
+/// let sigil = SigilImports::new().provide(
+///     "demo.mox",
+///     "oracle/trade.rosetta",
+///     "namespace oracle.basic\n\ntype Trade:\n    id string (1..1)\n",
+/// );
+/// let compilation = compile_str_with_imports(
+///     "demo.mox",
+///     "package demo\n\nimport sigil \"oracle/trade.rosetta\"\n\nclass Book { refers oracle.basic.Trade about }\n",
+///     &rex_driver::SchemaImports::new(),
+///     &sigil,
+/// );
+/// assert!(compilation.diagnostics.is_empty());
+/// let model = compilation.model.unwrap();
+/// assert_eq!(model.packages.len(), 2);
+/// assert_eq!(model.packages[1].name, "oracle.basic");
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SigilImports {
+    entries: Vec<(String, String, String)>,
+}
+
+impl SigilImports {
+    /// Creates an empty provider.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Provides the rosetta text for one `(mox path, import path)` pair.
+    pub fn provide(
+        mut self,
+        mox_path: impl Into<String>,
+        import_path: impl Into<String>,
+        rosetta: impl Into<String>,
+    ) -> Self {
+        self.insert(mox_path, import_path, rosetta);
+        self
+    }
+
+    /// Inserts one `(mox path, import path)` pair, replacing any earlier
+    /// entry for the same pair.
+    pub fn insert(
+        &mut self,
+        mox_path: impl Into<String>,
+        import_path: impl Into<String>,
+        rosetta: impl Into<String>,
+    ) {
+        let mox_path = mox_path.into();
+        let import_path = import_path.into();
+        let rosetta = rosetta.into();
+        match self
+            .entries
+            .iter_mut()
+            .find(|(mox, import, _)| *mox == mox_path && *import == import_path)
+        {
+            Some(entry) => entry.2 = rosetta,
+            None => self.entries.push((mox_path, import_path, rosetta)),
+        }
+    }
+
+    /// The provided rosetta text for the `(mox path, import path)` pair, if
+    /// any.
+    pub fn get(&self, mox_path: &str, import_path: &str) -> Option<&str> {
+        self.entries
+            .iter()
+            .find(|(mox, import, _)| mox == mox_path && import == import_path)
+            .map(|(_, _, rosetta)| rosetta.as_str())
+    }
+
+    /// Every provided entry as `(mox path, import path, rosetta text)`, in
+    /// insertion order.
+    pub fn entries(&self) -> &[(String, String, String)] {
+        &self.entries
+    }
+
+    /// `true` when no content is provided at all.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
 /// The result of compiling a [`SourceFile`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Compiled {
@@ -168,35 +278,55 @@ pub struct Compiled {
     pub model: Option<rex_ir::Model>,
     /// Parse and semantic diagnostics, in compilation order.
     pub diagnostics: Vec<Diagnostic>,
+    /// Diagnostics from the compilation's `import sigil` declarations (sigil
+    /// parse/resolution/lowering problems), each tagged with the rosetta
+    /// file's key path — these concern rosetta sources, not the `.mox` file.
+    /// Errors here block the artifact like any other error.
+    pub sigil_diagnostics: Vec<(String, Diagnostic)>,
 }
 
 /// Compiles a [`SourceFile`] to the Core IR (memoized by salsa):
 /// parse → resolve/validate → lower.
 #[salsa::tracked]
 pub fn compile(db: &dyn Db, file: SourceFile) -> Compiled {
-    compile_file(db, file, None)
+    compile_file(db, file, None, None)
 }
 
 /// The body of [`compile`], parameterized over the provided import-schema
-/// content (the tracked query cannot take the non-input `SchemaImports`).
-fn compile_file(db: &dyn Db, file: SourceFile, schema_imports: Option<&SchemaImports>) -> Compiled {
+/// and import-sigil content (the tracked query cannot take the non-input
+/// `SchemaImports`/`SigilImports`).
+fn compile_file(
+    db: &dyn Db,
+    file: SourceFile,
+    schema_imports: Option<&SchemaImports>,
+    sigil_imports: Option<&SigilImports>,
+) -> Compiled {
     let source = file.text(db);
     let parsed = parse_query(db, file);
     let mut diagnostics = parsed.diagnostics;
     let lowered = parsed
         .ast
         .as_ref()
-        .map(|ast| lower::compile(&file.path(db), &source, ast, schema_imports));
-    if let Some((_, semantic)) = &lowered {
+        .map(|ast| lower::compile(&file.path(db), &source, ast, schema_imports, sigil_imports));
+    let sigil_diagnostics = lowered
+        .as_ref()
+        .map(|(_, _, sigil)| sigil.clone())
+        .unwrap_or_default();
+    if let Some((_, semantic, _)) = &lowered {
         diagnostics.extend(semantic.iter().cloned());
     }
-    let blocked = diagnostics.iter().any(Diagnostic::is_error);
+    let blocked = diagnostics.iter().any(Diagnostic::is_error)
+        || sigil_diagnostics.iter().any(|(_, d)| d.is_error());
     let model = if blocked {
         None
     } else {
-        lowered.and_then(|(model, _)| model)
+        lowered.and_then(|(model, _, _)| model)
     };
-    Compiled { model, diagnostics }
+    Compiled {
+        model,
+        diagnostics,
+        sigil_diagnostics,
+    }
 }
 
 /// The outcome of parsing a [`SourceFile`] as an `.actor` file.
@@ -448,6 +578,10 @@ pub struct MultiCompilation {
     /// Diagnostics from every file, each tagged with its file's path, in
     /// compilation order.
     pub diagnostics: Vec<(String, Diagnostic)>,
+    /// Diagnostics from the compilation's `import sigil` declarations, each
+    /// tagged with the rosetta file's key path. Errors here block the
+    /// artifact like any other error.
+    pub sigil_diagnostics: Vec<(String, Diagnostic)>,
 }
 
 /// Compiles several `.mox` files — one package per file — to a single
@@ -461,16 +595,17 @@ pub(crate) fn compile_multi(
     first: SourceFile,
     rest: Vec<SourceFile>,
 ) -> MultiCompilation {
-    compile_multi_files(db, first, rest, None)
+    compile_multi_files(db, first, rest, None, None)
 }
 
 /// The body of [`compile_multi`], parameterized over the provided
-/// import-schema content.
+/// import-schema and import-sigil content.
 fn compile_multi_files(
     db: &dyn Db,
     first: SourceFile,
     rest: Vec<SourceFile>,
     schema_imports: Option<&SchemaImports>,
+    sigil_imports: Option<&SigilImports>,
 ) -> MultiCompilation {
     let mut files: Vec<SourceFile> = vec![first];
     files.extend(rest);
@@ -492,8 +627,13 @@ fn compile_multi_files(
             parse_diagnostics: &parse_outputs[index].diagnostics,
         })
         .collect();
-    let (model, diagnostics) = lower::compile_multi(&units, schema_imports);
-    MultiCompilation { model, diagnostics }
+    let (model, diagnostics, sigil_diagnostics) =
+        lower::compile_multi(&units, schema_imports, sigil_imports);
+    MultiCompilation {
+        model,
+        diagnostics,
+        sigil_diagnostics,
+    }
 }
 
 /// Compiles multiple in-memory sources — one package per file — in one call.
@@ -513,16 +653,18 @@ fn compile_multi_files(
 /// assert_eq!(compilation.model.unwrap().packages.len(), 2);
 /// ```
 pub fn compile_files(files: &[(String, String)]) -> MultiCompilation {
-    compile_files_with_imports(files, &SchemaImports::new())
+    compile_files_with_imports(files, &SchemaImports::new(), &SigilImports::new())
 }
 
 /// Like [`compile_files`], but the JSON content of the files'
-/// `import schema` declarations is provided through [`SchemaImports`]
-/// instead of being absent: every declared import must have an entry for
-/// its `(mox path, import path)` pair or the compilation errors.
+/// `import schema` declarations is provided through [`SchemaImports`], and
+/// the rosetta content of their `import sigil` declarations through
+/// [`SigilImports`]: every declared import must have an entry for its
+/// `(mox path, import path)` pair or the compilation errors.
 pub fn compile_files_with_imports(
     files: &[(String, String)],
     schema_imports: &SchemaImports,
+    sigil_imports: &SigilImports,
 ) -> MultiCompilation {
     let db = Database::new();
     let sources: Vec<SourceFile> = files
@@ -532,7 +674,13 @@ pub fn compile_files_with_imports(
     let Some(first) = sources.first().copied() else {
         return MultiCompilation::default();
     };
-    compile_multi_files(&db, first, sources[1..].to_vec(), Some(schema_imports))
+    compile_multi_files(
+        &db,
+        first,
+        sources[1..].to_vec(),
+        Some(schema_imports),
+        Some(sigil_imports),
+    )
 }
 
 /// The salsa database for the rexlang driver.
@@ -567,6 +715,10 @@ pub struct Compilation {
     pub model: Option<rex_ir::Model>,
     /// Parse and semantic diagnostics, in compilation order.
     pub diagnostics: Vec<Diagnostic>,
+    /// Diagnostics from the compilation's `import sigil` declarations, each
+    /// tagged with the rosetta file's key path. Errors here block the
+    /// artifact like any other error.
+    pub sigil_diagnostics: Vec<(String, Diagnostic)>,
 }
 
 /// Compiles in-memory source text in one call.
@@ -576,22 +728,26 @@ pub struct Compilation {
 /// assert!(compilation.model.is_some());
 /// ```
 pub fn compile_str(path: &str, source: &str) -> Compilation {
-    compile_str_with_imports(path, source, &SchemaImports::new())
+    compile_str_with_imports(path, source, &SchemaImports::new(), &SigilImports::new())
 }
 
 /// Like [`compile_str`], but the JSON content of the source's
-/// `import schema` declarations is provided through [`SchemaImports`].
+/// `import schema` declarations is provided through [`SchemaImports`], and
+/// the rosetta content of its `import sigil` declarations through
+/// [`SigilImports`].
 pub fn compile_str_with_imports(
     path: &str,
     source: &str,
     schema_imports: &SchemaImports,
+    sigil_imports: &SigilImports,
 ) -> Compilation {
     let db = Database::new();
     let file = SourceFile::new(&db, path.to_string(), source.to_string());
-    let compiled = compile_file(&db, file, Some(schema_imports));
+    let compiled = compile_file(&db, file, Some(schema_imports), Some(sigil_imports));
     Compilation {
         model: compiled.model,
         diagnostics: compiled.diagnostics,
+        sigil_diagnostics: compiled.sigil_diagnostics,
     }
 }
 

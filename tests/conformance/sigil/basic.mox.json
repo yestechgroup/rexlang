@@ -1,0 +1,269 @@
+{
+  "formatVersion": 1,
+  "rexVersion": "0.1.0",
+  "packages": [
+    {
+      "name": "rex.conformance.sigil",
+      "annotations": [],
+      "enums": [],
+      "datatypes": [],
+      "interfaces": [],
+      "classes": [
+        {
+          "name": "Portfolio",
+          "description": "A portfolio over the lowered sigil types: a class reference, an enum\nattribute, and a datatype attribute.",
+          "extends": [],
+          "features": [
+            {
+              "id": 0,
+              "name": "bonds",
+              "kind": "crossReference",
+              "type": {
+                "type": "class",
+                "value": {
+                  "package": "rex.sigil.fixture",
+                  "name": "Bond"
+                }
+              },
+              "multiplicity": {
+                "lower": 0,
+                "upper": "unbounded"
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            },
+            {
+              "id": 1,
+              "name": "status",
+              "kind": "attribute",
+              "type": {
+                "type": "enum",
+                "value": {
+                  "package": "rex.sigil.fixture",
+                  "name": "InstrumentStatus"
+                }
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            },
+            {
+              "id": 2,
+              "name": "code",
+              "kind": "attribute",
+              "type": {
+                "type": "datatype",
+                "value": {
+                  "package": "rex.sigil.fixture",
+                  "name": "InstrumentCode"
+                }
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "rex.sigil.fixture",
+      "annotations": [],
+      "enums": [
+        {
+          "name": "InstrumentStatus",
+          "description": "The lifecycle status of an instrument.",
+          "literals": [
+            {
+              "name": "ACTIVE",
+              "value": 0,
+              "description": "Actively quoted."
+            },
+            {
+              "name": "SUSPENDED",
+              "label": "Trading suspended",
+              "value": 1
+            },
+            {
+              "name": "MATURED",
+              "value": 2
+            }
+          ]
+        }
+      ],
+      "datatypes": [
+        {
+          "name": "InstrumentCode",
+          "description": "An external instrument code.",
+          "platform": "string"
+        }
+      ],
+      "interfaces": [
+        {
+          "name": "InstrumentType",
+          "description": "How an instrument is traded."
+        }
+      ],
+      "classes": [
+        {
+          "name": "Instrument",
+          "description": "A tradable financial instrument.",
+          "extends": [],
+          "features": [
+            {
+              "id": 0,
+              "name": "instrumentId",
+              "description": "The instrument identifier.",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            },
+            {
+              "id": 1,
+              "name": "shortName",
+              "description": "An optional short name.",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 0,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            },
+            {
+              "id": 2,
+              "name": "keywords",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 0,
+                "upper": "unbounded"
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            }
+          ]
+        },
+        {
+          "name": "Bond",
+          "extends": [
+            {
+              "type": "class",
+              "value": {
+                "package": "rex.sigil.fixture",
+                "name": "Instrument"
+              }
+            }
+          ],
+          "features": [
+            {
+              "id": 0,
+              "name": "instrumentId",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "int"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            },
+            {
+              "id": 1,
+              "name": "couponRate",
+              "description": "The annual coupon rate.",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "double"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            }
+          ]
+        },
+        {
+          "name": "ExchangeTraded",
+          "extends": [
+            {
+              "type": "interface",
+              "value": {
+                "package": "rex.sigil.fixture",
+                "name": "InstrumentType"
+              }
+            }
+          ],
+          "features": [
+            {
+              "id": 0,
+              "name": "venue",
+              "description": "The trading venue.",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

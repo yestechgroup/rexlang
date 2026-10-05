@@ -1247,8 +1247,58 @@ fn import_schema_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<
                 emitter.emit(Rich::custom(schema_span, "expected a name after `as`"));
             }
             Decl::ImportSchema(ImportSchemaDecl {
+                kind: ImportKind::Schema,
                 path: path.unwrap_or_default(),
                 alias,
+                span,
+            })
+        })
+}
+
+/// The contextual `sigil` word of an `import sigil` declaration: an
+/// ordinary identifier that is special only directly after the `import`
+/// keyword of a `.mox` file (the `schema`-entry precedent). Escaped
+/// `^sigil` never matches.
+fn sigil_keyword<'src>() -> impl Parser<'src, Tokens<'src>, Span, MoxExtra<'src>> + Clone {
+    select! { Token::Ident(text) = e if text == "sigil" => e.span() }
+}
+
+/// An `import sigil "<path>"` declaration of a `.mox` source: a Rune DSL
+/// (`.rosetta`) namespace set imported into the package's namespace. A whole
+/// namespace set is imported, not one type, so the declaration takes no `as`
+/// alias. Once the contextual `sigil` word matched, the declaration is
+/// committed: a missing path literal or a present `as` clause is a syntax
+/// error, but the AST still recovers a declaration so the surrounding model
+/// parses on. `import` without `sigil` is not this declaration (the
+/// alternative fails and declaration-level recovery reports the region).
+fn import_sigil_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>> + Clone {
+    kw(Token::Import)
+        .ignore_then(sigil_keyword())
+        .then(string_lit().or_not())
+        .then(
+            kw(Token::As)
+                .map_with(|_, e| e.span())
+                .or_not()
+                .then(name().or_not()),
+        )
+        .map_with(|((sigil_span, path), (as_kw, _alias)), e| (sigil_span, path, as_kw, e.span()))
+        .validate(|(sigil_span, path, as_kw, span), _e, emitter| {
+            if path.is_none() {
+                emitter.emit(Rich::custom(
+                    sigil_span,
+                    "`import sigil` requires a string literal path",
+                ));
+            }
+            if let Some(as_span) = as_kw {
+                emitter.emit(Rich::custom(
+                    as_span,
+                    "`import sigil` does not take an alias",
+                ));
+            }
+            Decl::ImportSchema(ImportSchemaDecl {
+                kind: ImportKind::Sigil,
+                path: path.unwrap_or_default(),
+                alias: None,
                 span,
             })
         })
@@ -1307,6 +1357,7 @@ fn model<'src>() -> impl Parser<'src, Tokens<'src>, Model, MoxExtra<'src>> + Clo
         vocabulary_decl().map(Item::Decl),
         actors_decl().map(Item::Decl),
         import_schema_decl().map(Item::Decl),
+        import_sigil_decl().map(Item::Decl),
     ))
     .or(junk_decl().to(Item::Junk));
 

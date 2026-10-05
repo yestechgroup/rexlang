@@ -219,8 +219,9 @@ pub enum Decl {
     Vocabulary(VocabularyDecl),
     /// An `actors { ... }` declaration.
     Actors(ActorsDecl),
-    /// An `import schema "<path>" (as <name>)?` declaration: a JSON Schema
-    /// type imported into the package's namespace.
+    /// An `import schema "<path>" (as <name>)?` or `import sigil "<path>"`
+    /// declaration: a JSON Schema type or a Rune DSL (`.rosetta`) namespace
+    /// set imported into the package's namespace.
     ImportSchema(ImportSchemaDecl),
 }
 
@@ -242,7 +243,7 @@ impl Decl {
     /// The declared name, if the declaration kind has one. Annotations only
     /// have a name when the `as` clause is present; an import schema only
     /// when the `as` clause is present (otherwise the file stem names it,
-    /// which the driver derives).
+    /// which the driver derives; a sigil import never has one).
     pub fn name(&self) -> Option<&Name> {
         match self {
             Decl::Class(decl) => Some(&decl.name),
@@ -539,19 +540,37 @@ pub struct ImportDecl {
     pub span: Span,
 }
 
-/// An `import schema "<path>" (as <name>)?` declaration of a `.mox` file:
-/// a JSON Schema type imported into the package's namespace. The `schema`
-/// word is a contextual keyword (only special directly after `import`), so
-/// existing models may keep using `schema` as an identifier. The driver
-/// derives the imported name from the `as` clause, or from the path's file
-/// stem when the clause is absent.
+/// Which import kind an [`ImportSchemaDecl`] declares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportKind {
+    /// `import schema "<path>" (as <name>)?`: a JSON Schema type imported
+    /// into the package's namespace.
+    Schema,
+    /// `import sigil "<path>"`: a Rune DSL (`.rosetta`) namespace set
+    /// imported into the package's namespace. A whole namespace set is
+    /// imported, not one type, so the declaration takes no `as` alias.
+    Sigil,
+}
+
+/// An `import schema "<path>" (as <name>)?` or `import sigil "<path>"`
+/// declaration of a `.mox` file, discriminated by [`ImportSchemaDecl::kind`]:
+/// a JSON Schema type or a Rune DSL (`.rosetta`) namespace set imported into
+/// the package's namespace. The `schema`/`sigil` words are contextual
+/// keywords (only special directly after `import`), so existing models may
+/// keep using either as an identifier. The driver derives an imported
+/// schema's name from the `as` clause, or from the path's file stem when the
+/// clause is absent; a sigil import never takes an alias (an `as` clause is
+/// a syntax error).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImportSchemaDecl {
+    /// Which import kind this declaration is.
+    pub kind: ImportKind,
     /// The imported path (the unescaped string literal payload), resolved
     /// relative to the declaring `.mox` file's directory.
     pub path: String,
     /// The name the import joins the package namespace as, from the `as`
-    /// clause. `None` when the import relies on the path's file stem.
+    /// clause. `None` when the import relies on the path's file stem
+    /// (always `None` for a sigil import).
     pub alias: Option<Name>,
     /// Span of the whole declaration, `import` keyword included.
     pub span: Span,

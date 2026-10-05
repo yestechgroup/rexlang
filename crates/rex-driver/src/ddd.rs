@@ -789,11 +789,11 @@ pub(crate) fn compile_ddd_file(
                         ));
                     }
                 }
-                let mut pagination_out = Pagination::default();
-                pagination_out.limit = pagination.limit.map(|value| value.max(0) as u32);
-                pagination_out.max_limit = pagination.max.map(|value| value.max(0) as u32);
-                pagination_out.cursor = pagination.cursor;
-                search_out.pagination = Some(pagination_out);
+                search_out.pagination = Some(Pagination {
+                    limit: pagination.limit.map(|value| value.max(0) as u32),
+                    max_limit: pagination.max.map(|value| value.max(0) as u32),
+                    cursor: pagination.cursor,
+                });
             }
 
             if !searches.iter().any(|(name, _)| *name == search.name.text) {

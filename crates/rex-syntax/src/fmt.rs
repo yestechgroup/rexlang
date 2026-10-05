@@ -69,15 +69,16 @@
 //!   entries, pagination members) keep their source order, and a document
 //!   expression is emitted verbatim token-by-token at canonical spacing
 //!   (so `;` inside string literals survives and nested braces balance).
-//! * An `import schema` declaration of a `.mox` source is hoisted into a
-//!   canonical section directly after the `package` declaration (mirroring
-//!   the `.actor` import rule): the section renders before every other
-//!   declaration, one per line, tight — no blank lines between imports, but
-//!   one blank line separating the section from the package above and from
-//!   the first following declaration. A top-level item is an import-schema
-//!   declaration only when it starts `import` → `schema` → string literal,
-//!   so keyword or identifier lookalikes inside dotted references
-//!   (`nz.package.Thing`, `nz.import.schema.X`) are never hoisted.
+//! * An `import schema` or `import sigil` declaration of a `.mox` source is
+//!   hoisted into a canonical section directly after the `package`
+//!   declaration (mirroring the `.actor` import rule): the section renders
+//!   before every other declaration, one per line, tight — no blank lines
+//!   between imports, but one blank line separating the section from the
+//!   package above and from the first following declaration. A top-level
+//!   item is an import declaration only when it starts `import` → `schema`
+//!   or `sigil` → string literal, so keyword or identifier lookalikes
+//!   inside dotted references (`nz.package.Thing`, `nz.import.schema.X`,
+//!   `nz.import.sigil.X`) are never hoisted.
 
 use crate::ast::Span;
 use crate::lexer::{lex_with_comments, CommentKind, LexError, Token};
@@ -223,9 +224,10 @@ struct Formatter<'src> {
     /// When set, the next text joins the line without a leading space
     /// (used after `(` so param lists read `size(String unit)`).
     glue_next: bool,
-    /// Whether an `import schema` declaration was emitted already; the
-    /// section's first declaration gets the canonical blank line above it
-    /// (after the package), the rest render tight.
+    /// Whether a `.mox` import declaration (`import schema`/`import sigil`)
+    /// was emitted already; the section's first declaration gets the
+    /// canonical blank line above it (after the package), the rest render
+    /// tight.
     import_emitted: bool,
 }
 
@@ -1711,15 +1713,15 @@ impl<'src> Formatter<'src> {
     // --- top-level declarations ----------------------------------------------
 
     /// Rewrites the node stream into canonical order: `package` (when it is
-    /// the first item) stays at the front, `import schema` declarations are
-    /// hoisted directly after it (in source order), and every other
-    /// top-level item keeps its relative order.
+    /// the first item) stays at the front, `import schema`/`import sigil`
+    /// declarations are hoisted directly after it (in source order), and
+    /// every other top-level item keeps its relative order.
     ///
     /// Items are contiguous node ranges split at brace-depth 0 on the
     /// top-level declaration keywords (plus `Import`); the first node
     /// unconditionally begins item 0, so leading comments travel with it. An
-    /// item counts as an import-schema declaration only when its first three
-    /// tokens are `import`, the contextual `schema` identifier and a string
+    /// item counts as an import declaration only when its first three tokens
+    /// are `import`, the contextual `schema`/`sigil` identifier and a string
     /// literal — lookalikes inside dotted references are left alone.
     fn hoist_import_schemas(&mut self) {
         /// The tokens that begin a top-level item (mirrors the parser's
@@ -1740,9 +1742,10 @@ impl<'src> Formatter<'src> {
             )
         }
 
-        /// Whether the item starting at `start` is an `import schema "…"`
-        /// declaration: the import keyword, the contextual `schema`
-        /// identifier, then a string literal (comments skipped).
+        /// Whether the item starting at `start` is an `import schema "…"` or
+        /// `import sigil "…"` declaration: the import keyword, the
+        /// contextual `schema`/`sigil` identifier, then a string literal
+        /// (comments skipped).
         fn is_import_schema(nodes: &[Node<'_>], start: usize) -> bool {
             let mut tokens = nodes[start..].iter().filter_map(|node| match node {
                 Node::Token(token, _) => Some(token),
@@ -1752,7 +1755,7 @@ impl<'src> Formatter<'src> {
                 (tokens.next(), tokens.next(), tokens.next()),
                 (
                     Some(Token::Import),
-                    Some(Token::Ident("schema")),
+                    Some(Token::Ident("schema") | Token::Ident("sigil")),
                     Some(Token::Str(_))
                 )
             )
@@ -1990,13 +1993,13 @@ impl<'src> Formatter<'src> {
         self.flush_line();
     }
 
-    /// Consumes and emits one `import schema "<path>" (as <name>)?`
-    /// declaration of a `.mox` file. The section mirrors the `.actor`
-    /// import rule: one declaration per line, tight — the first declaration
-    /// gets the canonical blank line above it (after the package), the rest
-    /// follow with no blank lines in between; the blank line before the
-    /// next non-import declaration comes from that declaration's
-    /// `begin_top_decl`.
+    /// Consumes and emits one `import schema "<path>" (as <name>)?` or
+    /// `import sigil "<path>"` declaration of a `.mox` file. The section
+    /// mirrors the `.actor` import rule: one declaration per line, tight —
+    /// the first declaration gets the canonical blank line above it (after
+    /// the package), the rest follow with no blank lines in between; the
+    /// blank line before the next non-import declaration comes from that
+    /// declaration's `begin_top_decl`.
     fn scan_import_schema(&mut self) {
         if self.import_emitted {
             self.flush_line();
@@ -2008,9 +2011,9 @@ impl<'src> Formatter<'src> {
         self.advance(); // `import`
         if matches!(
             self.peek_tok(),
-            Some(Token::Ident(text)) if text == "schema"
+            Some(Token::Ident(text)) if text == "schema" || text == "sigil"
         ) {
-            self.advance(); // the contextual `schema` word
+            self.advance(); // the contextual `schema`/`sigil` word
         }
         self.take_if(|token| matches!(token, Token::Str(_)));
         if self.take_if(|token| matches!(token, Token::As)) {

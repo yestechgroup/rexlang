@@ -251,7 +251,10 @@ rexlang artifact check library.ddd.json    # validate the serialized artifact
 - Import paths resolve **relative to the `.ddd` file's directory**; each
   imported `.mox` is read from disk and compiled through the ordinary
   domain pipeline. A missing import file is a clean error naming the
-  resolved path.
+  resolved path. An imported domain that itself declares `import sigil`
+  is currently rejected (the design pipeline provides no rosetta content,
+  so the import errors with ``imported sigil '<path>' was not provided``);
+  see [Importing Rune models](LANGUAGE.md#importing-rune-models).
 - Diagnostics come from every file involved and render grouped per file,
   the way `.actor` compiles render them.
 - `rexlang ir` on a `.ddd` file emits only the design artifact; the domain
