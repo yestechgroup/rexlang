@@ -27,7 +27,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use rex_driver::{
     compile_actors_str, compile_ddd_str, compile_files_with_imports, compile_str_with_imports,
-    render, ActorCompilation, MultiCompilation, SchemaImports, SigilImports,
+    render, ActorCompilation, DomainImports, MultiCompilation, SchemaImports, SigilImports,
 };
 use rex_vocab::{FileProvider, HttpProvider, LockEntry, Lockfile, VocabularyProvider};
 /// rexlang compiler command-line interface.
@@ -188,7 +188,12 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             let files = expand_inputs(&files)?;
             if files.len() == 1 && is_ddd_file(&files[0]) {
                 let design = read_ddd_design(&files[0])?;
-                let compilation = compile_ddd_str(&design.path, &design.source, &design.domains);
+                let compilation = compile_ddd_str(
+                    &design.path,
+                    &design.source,
+                    &design.domains,
+                    &design.imports(),
+                );
                 report_ddd_diagnostics(&design, &compilation);
                 if compilation.model.is_some() {
                     println!("OK {}", design.path);
@@ -198,7 +203,8 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 }
             } else if files.len() == 1 && is_actor_file(&files[0]) {
                 let pair = read_actor_pair(&files[0])?;
-                let compilation = compile_actors_str(&pair.path, &pair.source, &pair.domains);
+                let compilation =
+                    compile_actors_str(&pair.path, &pair.source, &pair.domains, &pair.imports());
                 report_actor_diagnostics(&pair, &compilation);
                 if compilation.model.is_some() {
                     println!("OK {}", pair.path);
@@ -229,7 +235,12 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             let files = expand_inputs(&files)?;
             if files.len() == 1 && is_ddd_file(&files[0]) {
                 let design = read_ddd_design(&files[0])?;
-                let compilation = compile_ddd_str(&design.path, &design.source, &design.domains);
+                let compilation = compile_ddd_str(
+                    &design.path,
+                    &design.source,
+                    &design.domains,
+                    &design.imports(),
+                );
                 report_ddd_diagnostics(&design, &compilation);
                 let Some(ddd_model) = compilation.model else {
                     return Ok(ExitCode::FAILURE);
@@ -242,7 +253,8 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 Ok(ExitCode::SUCCESS)
             } else if files.len() == 1 && is_actor_file(&files[0]) {
                 let pair = read_actor_pair(&files[0])?;
-                let compilation = compile_actors_str(&pair.path, &pair.source, &pair.domains);
+                let compilation =
+                    compile_actors_str(&pair.path, &pair.source, &pair.domains, &pair.imports());
                 report_actor_diagnostics(&pair, &compilation);
                 let Some(actor_model) = compilation.model else {
                     return Ok(ExitCode::FAILURE);
@@ -326,7 +338,8 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             let files = expand_inputs(&files)?;
             if files.len() == 1 && is_actor_file(&files[0]) {
                 let pair = read_actor_pair(&files[0])?;
-                let compilation = compile_actors_str(&pair.path, &pair.source, &pair.domains);
+                let compilation =
+                    compile_actors_str(&pair.path, &pair.source, &pair.domains, &pair.imports());
                 report_actor_diagnostics(&pair, &compilation);
                 let Some(actor_model) = compilation.model else {
                     return Ok(ExitCode::FAILURE);
@@ -364,7 +377,8 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             let files = expand_inputs(&files)?;
             if files.len() == 1 && is_actor_file(&files[0]) {
                 let pair = read_actor_pair(&files[0])?;
-                let compilation = compile_actors_str(&pair.path, &pair.source, &pair.domains);
+                let compilation =
+                    compile_actors_str(&pair.path, &pair.source, &pair.domains, &pair.imports());
                 report_actor_diagnostics(&pair, &compilation);
                 let Some(actor_model) = compilation.model else {
                     return Ok(ExitCode::FAILURE);
@@ -1001,11 +1015,24 @@ struct ActorPair {
     /// paths keep vocabulary snapshots anchored to the declaring file no
     /// matter where the process runs from.
     domains: Vec<(String, String)>,
+    /// The domains' `import schema` content, keyed by domain path.
+    schemas: SchemaImports,
+    /// The domains' `import sigil` content, plus the rosetta sources for
+    /// rendering sigil diagnostics.
+    sigil: SigilSources,
 }
 
 impl ActorPair {
+    /// The import bundle the driver entry point takes.
+    fn imports(&self) -> DomainImports<'_> {
+        DomainImports {
+            schemas: &self.schemas,
+            sigil: &self.sigil.imports,
+        }
+    }
+
     /// The source text of the file with the given driver path, if it is the
-    /// actor file or an imported domain.
+    /// actor file, an imported domain, or a rosetta source.
     fn source_of(&self, path: &str) -> Option<&str> {
         if path == self.path {
             return Some(&self.source);
@@ -1014,6 +1041,13 @@ impl ActorPair {
             .iter()
             .find(|(name, _)| name == path)
             .map(|(_, source)| source.as_str())
+            .or_else(|| {
+                self.sigil
+                    .sources
+                    .iter()
+                    .find(|(name, _)| name == path)
+                    .map(|(_, source)| source.as_str())
+            })
     }
 }
 
@@ -1050,10 +1084,14 @@ fn read_actor_pair(file: &Path) -> anyhow::Result<ActorPair> {
             domains.push((resolved.display().to_string(), text));
         }
     }
+    let schemas = collect_schema_imports(&domains)?;
+    let sigil = collect_sigil_imports(&domains)?;
     Ok(ActorPair {
         path,
         source,
         domains,
+        schemas,
+        sigil,
     })
 }
 
@@ -1070,11 +1108,24 @@ struct DddDesignPair {
     /// paths keep vocabulary snapshots anchored to the declaring file no
     /// matter where the process runs from.
     domains: Vec<(String, String)>,
+    /// The domains' `import schema` content, keyed by domain path.
+    schemas: SchemaImports,
+    /// The domains' `import sigil` content, plus the rosetta sources for
+    /// rendering sigil diagnostics.
+    sigil: SigilSources,
 }
 
 impl DddDesignPair {
+    /// The import bundle the driver entry point takes.
+    fn imports(&self) -> DomainImports<'_> {
+        DomainImports {
+            schemas: &self.schemas,
+            sigil: &self.sigil.imports,
+        }
+    }
+
     /// The source text of the file with the given driver path, if it is the
-    /// design file or an imported domain.
+    /// design file, an imported domain, or a rosetta source.
     fn source_of(&self, path: &str) -> Option<&str> {
         if path == self.path {
             return Some(&self.source);
@@ -1083,6 +1134,13 @@ impl DddDesignPair {
             .iter()
             .find(|(name, _)| name == path)
             .map(|(_, source)| source.as_str())
+            .or_else(|| {
+                self.sigil
+                    .sources
+                    .iter()
+                    .find(|(name, _)| name == path)
+                    .map(|(_, source)| source.as_str())
+            })
     }
 }
 
@@ -1119,10 +1177,14 @@ fn read_ddd_design(file: &Path) -> anyhow::Result<DddDesignPair> {
             domains.push((resolved.display().to_string(), text));
         }
     }
+    let schemas = collect_schema_imports(&domains)?;
+    let sigil = collect_sigil_imports(&domains)?;
     Ok(DddDesignPair {
         path,
         source,
         domains,
+        schemas,
+        sigil,
     })
 }
 

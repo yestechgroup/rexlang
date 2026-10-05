@@ -278,7 +278,10 @@ path)* pair exactly as named — additional entries for the same mox path
 are the candidate files described above. `compile_str` and `compile_files`
 provide nothing, so a model with `import sigil` declarations compiled
 through them errors with ``imported sigil '<path>' was not provided``;
-use `compile_str_with_imports`/`compile_files_with_imports`.
+use `compile_str_with_imports`/`compile_files_with_imports`. The
+`.actor`/`.ddd` entry points take both maps as one
+`rex_driver::DomainImports` bundle (the `.actor`/`.ddd` file's domains'
+import content is keyed by each domain's path).
 
 `rexlang fmt` canonicalizes both import kinds into a section directly
 after the `package` declaration, before every other declaration.
@@ -433,7 +436,10 @@ delegation_entry := ("permit" | "forbid") name ("when" expr)? obligation*
 The `actors` block grammar is identical to the inline `actors` block of a
 `.mox` model. Import paths are resolved **relative to the `.actor` file's
 directory** and may name any `.mox` domain; multiple imports are allowed and
-duplicates are collapsed. The compiled policy set is the **union** of the
+duplicates are collapsed. An imported domain's own `import schema` and
+`import sigil` declarations are provided too (the CLI reads that content
+from disk relative to the domain file), so capabilities may target lowered
+JSON-Schema and Rune types like any other class. The compiled policy set is the **union** of the
 actor file's blocks followed by every imported domain's inline blocks
 (in that order), so capabilities typecheck against the imported domain's
 classes (`permit EscalateTicket when (amount > 0)` resolves `amount` on

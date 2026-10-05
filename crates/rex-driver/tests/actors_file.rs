@@ -62,7 +62,12 @@ fn compile(actor_source: &str, domains: &[(&str, &str)]) -> ActorCompilation {
         .iter()
         .map(|(path, source)| (path.to_string(), source.to_string()))
         .collect();
-    compile_actors_str("support.actor", actor_source, &domains)
+    compile_actors_str(
+        "support.actor",
+        actor_source,
+        &domains,
+        &rex_driver::DomainImports::empty(),
+    )
 }
 
 /// Byte span of the `nth` (0-based) occurrence of `needle` in `source`.
@@ -735,7 +740,8 @@ actors Support {
 
 #[test]
 fn empty_actor_file_compiles_to_an_empty_artifact() {
-    let compilation = compile_actors_str("empty.actor", "", &[]);
+    let compilation =
+        compile_actors_str("empty.actor", "", &[], &rex_driver::DomainImports::empty());
     assert!(
         compilation.diagnostics.is_empty(),
         "unexpected diagnostics: {:?}",
@@ -768,7 +774,12 @@ actors Support {
 
 #[test]
 fn actor_file_syntax_errors_are_tagged_and_block() {
-    let compilation = compile_actors_str("broken.actor", "import", &[]);
+    let compilation = compile_actors_str(
+        "broken.actor",
+        "import",
+        &[],
+        &rex_driver::DomainImports::empty(),
+    );
     assert!(compilation.model.is_none(), "errors block lowering");
     assert!(
         !compilation.diagnostics.is_empty(),
@@ -1323,6 +1334,7 @@ actors ResolvePolicies {
             "project/nested/deep/domain.mox".to_string(),
             DOMAIN_WITH_CURRENCY.to_string(),
         )],
+        &rex_driver::DomainImports::empty(),
     );
     assert!(
         compilation.diagnostics.is_empty(),

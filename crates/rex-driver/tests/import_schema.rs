@@ -7,8 +7,8 @@
 //! [`rex_driver::SchemaImports`], keyed by `(mox file path, import path)`.
 
 use rex_driver::{
-    compile_actors_str_with_imports, compile_files, compile_files_with_imports, render,
-    SchemaImports, SigilImports,
+    compile_actors_str, compile_files, compile_files_with_imports, render, SchemaImports,
+    SigilImports,
 };
 use rex_ir::{FeatureKind, TypeRef};
 
@@ -388,11 +388,14 @@ fn actor_file_capabilities_resolve_imported_schema_names() {
         "schemas/todo_item.json",
         "{\"title\": \"Todo item\"}",
     );
-    let compilation = compile_actors_str_with_imports(
+    let compilation = compile_actors_str(
         "ops.actor",
         actor,
         &[("demo.mox".to_string(), domain.to_string())],
-        &imports,
+        &rex_driver::DomainImports {
+            schemas: &imports,
+            sigil: &rex_driver::SigilImports::new(),
+        },
     );
     assert!(
         compilation.diagnostics.is_empty(),

@@ -48,6 +48,7 @@ fn conformance_design_matches_golden_artifact() {
             domain_absolute.to_str().expect("utf-8 path").to_string(),
             domain,
         )],
+        &rex_driver::DomainImports::empty(),
     );
     assert!(
         compilation.diagnostics.is_empty(),

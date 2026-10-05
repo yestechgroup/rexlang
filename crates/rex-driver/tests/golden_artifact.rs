@@ -127,8 +127,12 @@ fn compile_conformance_actor_file(relative_path: &str) -> rex_ir::ActorModel {
             (import.path.clone(), text)
         })
         .collect();
-    let compilation =
-        rex_driver::compile_actors_str(absolute.to_str().expect("utf-8 path"), &source, &domains);
+    let compilation = rex_driver::compile_actors_str(
+        absolute.to_str().expect("utf-8 path"),
+        &source,
+        &domains,
+        &rex_driver::DomainImports::empty(),
+    );
     assert!(
         compilation.diagnostics.is_empty(),
         "conformance actor file {relative_path} must compile cleanly: {:?}",

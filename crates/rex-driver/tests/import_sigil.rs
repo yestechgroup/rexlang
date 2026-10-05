@@ -911,6 +911,7 @@ fn a_domain_with_a_sigil_import_errors_cleanly_in_the_actor_path() {
         "ops.actor",
         actor,
         &[("demo.mox".to_string(), domain.to_string())],
+        &rex_driver::DomainImports::empty(),
     );
     assert!(compilation.model.is_none());
     assert!(
@@ -922,4 +923,167 @@ fn a_domain_with_a_sigil_import_errors_cleanly_in_the_actor_path() {
         "{:?}",
         compilation.diagnostics
     );
+}
+
+// --- the .actor and .ddd pipelines over sigil-importing domains ---------------
+
+fn actor_source() -> String {
+    concat!(
+        "import \"demo.mox\"\n\n",
+        "actors Ops {\n",
+        "    actor Agent\n",
+        "    capability TouchTrade on Trade\n",
+        "    grant Agent {\n",
+        "        permit TouchTrade when (id == \"T1\")\n",
+        "    }\n",
+        "}\n"
+    )
+    .to_string()
+}
+
+#[test]
+fn actor_pipeline_resolves_sigil_domain_types() {
+    // The capability targets a lowered rosetta class and its `when`
+    // condition type-checks against a rosetta feature.
+    let compilation = rex_driver::compile_actors_str(
+        "ops.actor",
+        &actor_source(),
+        &[(MOX.to_string(), mox_with_sigil())],
+        &rex_driver::DomainImports {
+            schemas: &rex_driver::SchemaImports::new(),
+            sigil: &sigil_imports(),
+        },
+    );
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        compilation.diagnostics
+    );
+    let model = compilation.model.expect("actor model lowered");
+    let block = &model.blocks[0];
+    assert_eq!(block.capabilities[0].name, "TouchTrade");
+    assert_eq!(
+        block.capabilities[0].class,
+        rex_ir::TypeRef::Class {
+            package: "oracle.basic".to_string(),
+            name: "Trade".to_string(),
+        }
+    );
+    // The union model carries the synthetic packages for Cedar lookup.
+    let domains_model = compilation.domains_model.expect("domains lowered");
+    assert!(domains_model
+        .packages
+        .iter()
+        .any(|package| package.name == "oracle.basic"));
+}
+
+#[test]
+fn ddd_pipeline_designs_sigil_domain_types() {
+    // A rosetta class with no containment into it is an aggregate root: a
+    // repository is legal, and a search over its string feature type-checks.
+    let design = concat!(
+        "import \"demo.mox\"\n",
+        "\n",
+        "application Trading {\n",
+        "    base oracle.basic\n",
+        "\n",
+        "    module trade {\n",
+        "        entity Trade repository TradeRepository {\n",
+        "            findAll;\n",
+        "            Trade findById(String id);\n",
+        "        }\n",
+        "        search TradeSearch {\n",
+        "            entity Trade\n",
+        "            text {\n",
+        "                id\n",
+        "            }\n",
+        "        }\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = rex_driver::compile_ddd_str(
+        "design.ddd",
+        design,
+        &[(MOX.to_string(), mox_with_sigil())],
+        &rex_driver::DomainImports {
+            schemas: &rex_driver::SchemaImports::new(),
+            sigil: &sigil_imports(),
+        },
+    );
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        compilation.diagnostics
+    );
+    let model = compilation.model.expect("design lowered");
+    let design = &model.modules[0].designs[0];
+    assert_eq!(design.class, "Trade");
+    assert!(design.repository.is_some());
+    // The union model carries the synthetic packages for consumers.
+    let domains_model = compilation.domains_model.expect("domains lowered");
+    assert!(domains_model
+        .packages
+        .iter()
+        .any(|package| package.name == "oracle.basic"));
+}
+
+#[test]
+fn missing_sigil_content_blocks_the_actor_domain() {
+    let compilation = rex_driver::compile_actors_str(
+        "ops.actor",
+        &actor_source(),
+        &[(MOX.to_string(), mox_with_sigil())],
+        &rex_driver::DomainImports::empty(),
+    );
+    assert!(
+        compilation
+            .diagnostics
+            .iter()
+            .any(|(path, diagnostic)| path == MOX
+                && diagnostic
+                    .message
+                    .contains("imported sigil 'oracle/trade.rosetta' was not provided")),
+        "the not-provided error names the domain: {:?}",
+        compilation.diagnostics
+    );
+    assert!(compilation.model.is_none());
+    assert!(compilation.domains_model.is_none());
+}
+
+#[test]
+fn sigil_content_errors_surface_tagged_with_the_rosetta_path() {
+    // A rosetta attribute typed by an unknown name fails resolution; the
+    // diagnostic is keyed by the rosetta path and blocks the artifact.
+    let broken = concat!(
+        "namespace oracle.basic\n\n",
+        "type Trade:\n",
+        "    id bogus (1..1)\n"
+    );
+    let compilation = rex_driver::compile_ddd_str(
+        "design.ddd",
+        concat!(
+            "import \"demo.mox\"\n",
+            "\n",
+            "application Trading {\n",
+            "    module trade {\n",
+            "        entity Trade\n",
+            "    }\n",
+            "}\n",
+        ),
+        &[(MOX.to_string(), mox_with_sigil())],
+        &rex_driver::DomainImports {
+            schemas: &rex_driver::SchemaImports::new(),
+            sigil: &rex_driver::SigilImports::new().provide(MOX, TRADE, broken),
+        },
+    );
+    assert!(
+        compilation
+            .diagnostics
+            .iter()
+            .any(|(path, _)| path == TRADE),
+        "sigil diagnostics are keyed by the rosetta path: {:?}",
+        compilation.diagnostics
+    );
+    assert!(compilation.model.is_none());
+    assert!(compilation.domains_model.is_none());
 }
