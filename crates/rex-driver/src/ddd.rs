@@ -18,9 +18,9 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use rex_ir::ddd::{
-    Application, BuiltinRepositoryOp, DddModel, Delegation, Design, DesignFlags, DocumentField,
-    Module, Pagination, RankingStrategy, Repository, RepositoryOperation, SearchDef, SearchField,
-    SearchFilter, SearchSort, Service, ServiceOperation, Stereotype,
+    Application, Boost, BuiltinRepositoryOp, DddModel, Delegation, Design, DesignFlags,
+    DocumentField, Module, Pagination, RankingStrategy, Repository, RepositoryOperation, SearchDef,
+    SearchField, SearchFilter, SearchSort, Service, ServiceOperation, Stereotype,
 };
 use rex_syntax::ast as dsl;
 use rex_syntax::Span;
@@ -634,7 +634,7 @@ pub(crate) fn compile_ddd_file(
                         ));
                     }
                     let mut field_out = SearchField::new(field.property.full_name());
-                    field_out.boost = field.boost.map(|boost| boost as f32);
+                    field_out.boost = field.boost.map(|boost| Boost::new(boost as f32));
                     field_out.analyzer = field.analyzer.clone();
                     search_out.text.push(field_out);
                 }

@@ -1057,7 +1057,7 @@ fn search_lowers_with_all_members() {
     assert_eq!(search.entity, "Movie");
     assert_eq!(search.text.len(), 2);
     assert_eq!(search.text[0].property, "title");
-    assert_eq!(search.text[0].boost, Some(3.0));
+    assert_eq!(search.text[0].boost, Some(3.0.into()));
     assert_eq!(search.text[1].analyzer.as_deref(), Some("english"));
     assert_eq!(search.filters[0].property, "genre");
     assert_eq!(search.sort[0].property, "synopsis");

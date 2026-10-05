@@ -33,7 +33,16 @@
 //! an empty payload array is a meaningful value there (`today()`), not an
 //! absent record field.
 //!
+//! Equality policy (wire contract rule 14): [`IfmlModel`] and every type
+//! nested in it derive [`Eq`]; the `f64` values (layout coordinates,
+//! property numbers, condition literals) are wrapped in the ordered
+//! [`Float`] newtype — transparent on the wire, total in equality,
+//! hashing, and ordering.
+//!
 //! [rexlang]: https://github.com/anton-makes/rexlang
+
+use std::cmp::Ordering;
+use std::hash::{Hash, Hasher};
 
 use serde::{Deserialize, Serialize};
 
@@ -47,7 +56,7 @@ use crate::IrError;
 /// bump whenever the IFML wire format changes incompatibly.
 pub const IFML_MODEL_FORMAT_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "camelCase")]
 pub enum IfmlDefinition {
     Domain(DomainDeclaration),
@@ -57,14 +66,14 @@ pub enum IfmlDefinition {
     Actor(ActorDeclaration),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DomainDeclaration {
     pub name: String,
     pub schema_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewDeclaration {
     pub name: String,
@@ -94,14 +103,99 @@ pub struct ViewDeclaration {
     pub position: Option<Position>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Position {
-    pub x: f64,
-    pub y: f64,
+/// The ordered, equality-preserving wrapper for every `f64` this artifact
+/// carries — layout coordinates ([`Position`]), property-bag numbers
+/// ([`ValueExpression::Number`]), and condition literals
+/// ([`Expression::NumLit`]) — so [`IfmlModel`] and everything nested in it
+/// derive [`Eq`] (wire contract rule 14).
+///
+/// # Wire layout
+///
+/// `#[serde(transparent)]`: a `Float` serializes and deserializes exactly
+/// as the bare JSON number it wraps — artifacts are byte-identical to the
+/// raw-`f64` encoding.
+///
+/// # Equality and hashing
+///
+/// [`PartialEq`]/[`Eq`] follow `f64::total_cmp` semantics: equality is
+/// bit-pattern equality, which makes it reflexive even for `NaN` (a `NaN`
+/// equals only another `NaN` with the same bit pattern) and distinguishes
+/// `-0.0` from `0.0` (both deliberate). [`Hash`] hashes the raw bit
+/// pattern, consistent with that equality.
+///
+/// # Ordering
+///
+/// [`Ord`]/[`PartialOrd`] are `f64::total_cmp`: a genuine total order
+/// (`-0.0 < 0.0`, every `NaN` above [`f64::INFINITY`]).
+///
+/// # Where `NaN`/`-0.0` can come from
+///
+/// The `.ifml` grammar accepts only finite numeric literals and JSON
+/// cannot encode `NaN`, so neither source nor wire artifacts produce one
+/// today; the `NaN`/`-0.0` behavior above is the type's deliberate
+/// contract for programmatic construction, not dead-letter handling.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Float(f64);
+
+impl Float {
+    /// Wraps a raw `f64`.
+    pub fn new(value: f64) -> Self {
+        Self(value)
+    }
+
+    /// The raw `f64`.
+    pub fn value(self) -> f64 {
+        self.0
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+impl From<f64> for Float {
+    fn from(value: f64) -> Self {
+        Self(value)
+    }
+}
+
+impl From<Float> for f64 {
+    fn from(value: Float) -> Self {
+        value.0
+    }
+}
+
+impl PartialEq for Float {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.total_cmp(&other.0) == Ordering::Equal
+    }
+}
+
+impl Eq for Float {}
+
+impl Hash for Float {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.to_bits().hash(state);
+    }
+}
+
+impl Ord for Float {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.total_cmp(&other.0)
+    }
+}
+
+impl PartialOrd for Float {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Position {
+    pub x: Float,
+    pub y: Float,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContainerDeclaration {
     pub name: String,
@@ -132,7 +226,7 @@ pub struct ContainerDeclaration {
     pub position: Option<Position>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "camelCase")]
 pub enum ComponentType {
     List,
@@ -190,7 +284,7 @@ impl From<&str> for ComponentType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentDeclaration {
     pub name: String,
@@ -203,7 +297,7 @@ pub struct ComponentDeclaration {
     pub condition: Option<Expression>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "camelCase")]
 pub enum ComponentSpec {
     Table(TableSpec),
@@ -211,7 +305,7 @@ pub enum ComponentSpec {
     Chart(ChartSpec),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TableSpec {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -219,7 +313,7 @@ pub struct TableSpec {
     pub pagination: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "camelCase")]
 pub enum ColumnDef {
     Field {
@@ -237,21 +331,21 @@ pub enum ColumnDef {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PropertyRef {
     pub entity: String,
     pub property: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FormSpec {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<FieldDef>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FieldDef {
     pub name: String,
@@ -267,7 +361,7 @@ pub struct FieldDef {
 
 /// A `use "Module" as alias { ... };` statement instantiating a declared
 /// module inside a view or container body.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModuleUse {
     pub module: String,
@@ -276,7 +370,7 @@ pub struct ModuleUse {
     pub properties: Vec<PropertyAssignment>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "camelCase")]
 pub enum InputFieldType {
     Text,
@@ -318,7 +412,7 @@ impl From<&str> for InputFieldType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChartSpec {
     pub kind: ChartKind,
@@ -327,7 +421,7 @@ pub struct ChartSpec {
     pub value_fields: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ChartKind {
     Bar,
@@ -337,7 +431,7 @@ pub enum ChartKind {
     Metric,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PropertyAssignment {
     pub key: String,
@@ -346,19 +440,19 @@ pub struct PropertyAssignment {
     pub span: Option<(usize, usize)>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ObjectMember {
     pub key: String,
     pub value: ValueExpression,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "camelCase")]
 pub enum ValueExpression {
     Identifier(String),
     String(String),
-    Number(f64),
+    Number(Float),
     Bool(bool),
     Array(Vec<ValueExpression>),
     Object(Vec<ObjectMember>),
@@ -379,7 +473,7 @@ pub enum ValueExpression {
     Group(Box<ValueExpression>),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventHandler {
     pub event_type: EventType,
@@ -393,7 +487,7 @@ pub struct EventHandler {
     pub action: EventAction,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "camelCase")]
 pub enum EventType {
     Select,
@@ -428,7 +522,7 @@ impl EventType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "camelCase")]
 pub enum EventAction {
     Navigate {
@@ -446,7 +540,7 @@ pub enum EventAction {
     Stay,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActionBody {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -455,7 +549,7 @@ pub struct ActionBody {
     pub handlers: Vec<EventHandler>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParameterDecl {
     pub name: String,
@@ -464,19 +558,19 @@ pub struct ParameterDecl {
     pub default: Option<ValueExpression>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParameterBinding {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pairs: Vec<(String, Expression)>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "camelCase")]
 pub enum Expression {
     Ident(String),
     StringLit(String),
-    NumLit(f64),
+    NumLit(Float),
     BoolLit(bool),
     FieldExpr {
         object: Box<Expression>,
@@ -498,7 +592,7 @@ pub enum Expression {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum BinOp {
     Eq,
@@ -540,7 +634,7 @@ impl BinOp {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum UnaryOp {
     Not,
@@ -563,7 +657,7 @@ pub fn render_expression(expr: &Expression) -> String {
     match expr {
         Expression::Ident(s) => s.clone(),
         Expression::StringLit(s) => format!("\"{s}\""),
-        Expression::NumLit(n) => n.to_string(),
+        Expression::NumLit(n) => n.value().to_string(),
         Expression::BoolLit(b) => b.to_string(),
         Expression::FieldExpr { object, field } => {
             format!("{}.{}", render_expression(object), field)
@@ -585,7 +679,7 @@ pub fn render_expression(expr: &Expression) -> String {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActionDeclaration {
     pub name: String,
@@ -595,7 +689,7 @@ pub struct ActionDeclaration {
     pub events: Vec<EventHandler>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModuleDeclaration {
     pub name: String,
@@ -616,7 +710,7 @@ pub struct ModuleDeclaration {
 /// A top-level `actor "Name" { ... }` declaration. Actors carry
 /// label-style properties only; event handlers and node persistence
 /// are deferred until the roles/permissions slice lands.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActorDeclaration {
     pub name: String,
@@ -627,7 +721,7 @@ pub struct ActorDeclaration {
 /// The root of an IFML interaction model: a standalone, versioned wire
 /// artifact (see the [wire format contract](crate#wire-format-contract) and
 /// the [module docs](self)).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IfmlModel {
     /// Artifact format version. Always [`IFML_MODEL_FORMAT_VERSION`] for
@@ -744,7 +838,7 @@ mod tests {
             render_expression(&Expression::StringLit("admin".to_string())),
             "\"admin\""
         );
-        assert_eq!(render_expression(&Expression::NumLit(42.0)), "42");
+        assert_eq!(render_expression(&Expression::NumLit(42.0.into())), "42");
         assert_eq!(render_expression(&Expression::BoolLit(true)), "true");
     }
 
@@ -768,7 +862,7 @@ mod tests {
         assert_eq!(
             render_expression(&Expression::UnaryOp {
                 op: UnaryOp::Neg,
-                operand: Box::new(Expression::NumLit(1.5)),
+                operand: Box::new(Expression::NumLit(1.5.into())),
             }),
             "-1.5"
         );
@@ -786,7 +880,7 @@ mod tests {
             bin_op(
                 field("account", "balance"),
                 BinOp::Ge,
-                Expression::NumLit(100.0),
+                Expression::NumLit(100.0.into()),
             ),
         );
         assert_eq!(
@@ -1027,5 +1121,95 @@ mod tests {
         // parse-only and never survive an artifact round trip.
         let parsed: PropertyAssignment = serde_json::from_str(&json).expect("deserialize property");
         assert_eq!(parsed.span, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Float: the ordered f64 newtype (wire contract rule 14)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn float_serializes_as_the_bare_f64_and_round_trips() {
+        for value in [200.75f64, 1.0, -0.0] {
+            let json = serde_json::to_string(&Float::new(value)).expect("serialize");
+            assert_eq!(
+                json,
+                serde_json::to_string(&value).expect("plain f64"),
+                "transparent layout: {json}"
+            );
+            let back: Float = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(back, Float::new(value));
+            assert_eq!(back.value(), value);
+        }
+    }
+
+    #[test]
+    fn float_equality_is_bit_pattern_equality() {
+        // Reflexive even for NaN; a NaN equals only its own bit pattern.
+        assert_eq!(Float::new(f64::NAN), Float::new(f64::NAN));
+        assert_ne!(
+            Float::new(f64::NAN),
+            Float::new(f64::from_bits(f64::NAN.to_bits() + 1))
+        );
+        // Intended: -0.0 is its own value, distinct from 0.0.
+        assert_ne!(Float::new(-0.0), Float::new(0.0));
+        assert_eq!(
+            Position {
+                x: 1.5.into(),
+                y: 2.5.into()
+            },
+            Position {
+                x: 1.5.into(),
+                y: 2.5.into()
+            }
+        );
+        assert_ne!(
+            Position {
+                x: 1.5.into(),
+                y: 2.5.into()
+            },
+            Position {
+                x: 1.5.into(),
+                y: (-2.5).into()
+            }
+        );
+    }
+
+    #[test]
+    fn float_hash_is_consistent_with_equality() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        fn hash_of(value: f64) -> u64 {
+            let mut hasher = DefaultHasher::new();
+            Float::new(value).hash(&mut hasher);
+            hasher.finish()
+        }
+        assert_eq!(hash_of(2.5), hash_of(2.5));
+        assert_ne!(hash_of(-0.0), hash_of(0.0));
+        assert_ne!(
+            hash_of(f64::NAN),
+            hash_of(f64::from_bits(f64::NAN.to_bits() + 1))
+        );
+    }
+
+    #[test]
+    fn float_orders_like_total_cmp() {
+        let mut values = [
+            Float::new(2.5),
+            Float::new(f64::NAN),
+            Float::new(0.0),
+            Float::new(-0.0),
+        ];
+        values.sort();
+        // Bit patterns, because -0.0 == 0.0 under plain f64 equality.
+        let bits: Vec<u64> = values.iter().map(|value| value.value().to_bits()).collect();
+        assert_eq!(
+            bits,
+            vec![
+                (-0.0f64).to_bits(),
+                0.0f64.to_bits(),
+                2.5f64.to_bits(),
+                f64::NAN.to_bits(),
+            ]
+        );
     }
 }

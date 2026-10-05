@@ -611,10 +611,10 @@ fn compile_actors_with(
 /// Diagnostics come from every file involved, so each is tagged with its
 /// path; group or render them per file (see [`render`](crate::render)).
 ///
-/// `Eq` is deliberately not derived: the artifact's search fields carry an
-/// `f32` boost, so only [`PartialEq`] equality is available (mirroring
-/// [`rex_ir::ddd::DddModel`]).
-#[derive(Debug, Clone, PartialEq)]
+/// Like every artifact type, [`rex_ir::ddd::DddModel`] derives `Eq` (the
+/// rex-ir wire-contract equality policy, rule 14) — and so does this
+/// compilation result.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DddCompilation {
     /// The design artifact, or `None` when any error-severity diagnostic
     /// was produced in any file. Warnings do not block lowering.
