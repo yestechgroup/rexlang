@@ -1083,3 +1083,250 @@ fn sigil_content_errors_surface_tagged_with_the_rosetta_path() {
     assert!(compilation.model.is_none());
     assert!(compilation.domains_model.is_none());
 }
+
+// --- per-namespace blocking -------------------------------------------------------
+
+/// The two-domain actor harness for the blocking tests: `a.mox` and
+/// `b.mox` are compiled through the `.actor` union path, and the actor
+/// file's `capability ... on <target>` must resolve against whatever
+/// domains survived. `target` names the capability's class (a plain alpha
+/// class, or a rosetta class lowered through `a.mox`'s import).
+fn two_domain_actor(
+    target: &str,
+    sigil: &rex_driver::SigilImports,
+) -> rex_driver::ActorCompilation {
+    let domain_a = concat!(
+        "package alpha\n\n",
+        "import sigil \"good.rosetta\"\n\n",
+        "class Wrapper { String x }\n"
+    );
+    let domain_b = concat!(
+        "package beta\n\n",
+        "import sigil \"bad.rosetta\"\n\n",
+        "class Other { String x }\n"
+    );
+    let actor = format!(
+        concat!(
+            "import \"a.mox\"\n",
+            "import \"b.mox\"\n\n",
+            "actors Ops {{\n",
+            "    actor Agent\n",
+            "    capability Touch on {target}\n",
+            "    grant Agent {{ permit Touch }}\n",
+            "}}\n"
+        ),
+        target = target
+    );
+    rex_driver::compile_actors_str(
+        "ops.actor",
+        &actor,
+        &[
+            ("a.mox".to_string(), domain_a.to_string()),
+            ("b.mox".to_string(), domain_b.to_string()),
+        ],
+        &rex_driver::DomainImports {
+            schemas: rex_driver::SchemaImports::new(),
+            sigil: sigil.clone(),
+        },
+    )
+}
+
+fn good_rosetta() -> &'static str {
+    "namespace oracle.good\n\ntype Fine:\n    x int (1..1)\n"
+}
+
+/// The only error must be the failing namespace's, keyed by its rosetta
+/// path: no fallout in the surviving domain (`a.mox`) or the actor file
+/// (`capability on <target>` resolved, so the model survived), and the
+/// declaring domain's own model dropped (the domain union is incomplete).
+fn assert_only_the_rosetta_error_remains(
+    compilation: &rex_driver::ActorCompilation,
+    key: &str,
+    needle: &str,
+) {
+    assert!(
+        compilation.model.is_some(),
+        "the actor artifact depends on nothing that failed: {:?}",
+        compilation.diagnostics
+    );
+    assert!(
+        compilation.domains_model.is_none(),
+        "the declaring domain's model must have dropped"
+    );
+    let errors: Vec<&(String, rex_driver::Diagnostic)> = compilation
+        .diagnostics
+        .iter()
+        .filter(|(_, diagnostic)| diagnostic.is_error())
+        .collect();
+    assert_eq!(errors.len(), 1, "{:?}", compilation.diagnostics);
+    assert_eq!(errors[0].0, key, "keyed by the rosetta path");
+    assert!(
+        errors[0].1.message.contains(needle),
+        "{:?}",
+        errors[0].1.message
+    );
+    assert!(
+        compilation
+            .diagnostics
+            .iter()
+            .all(|(path, _)| path != "a.mox" && path != "ops.actor"),
+        "no fallout in the surviving domain or the actor file: {:?}",
+        compilation.diagnostics
+    );
+}
+
+#[test]
+fn a_failing_rosetta_namespace_blocks_only_its_declaring_file() {
+    // beta's rosetta fails resolution; alpha's namespace lowers cleanly.
+    // The capability targets alpha's own class: alpha's model must have
+    // survived (under the old coarse blocking it dropped too, and the
+    // capability resolution would add a second error).
+    let compilation = two_domain_actor(
+        "Wrapper",
+        &rex_driver::SigilImports::new()
+            .provide("a.mox", "good.rosetta", good_rosetta())
+            .provide(
+                "b.mox",
+                "bad.rosetta",
+                "namespace oracle.bad\n\ntype Broken:\n    who NoSuchType (1..1)\n",
+            ),
+    );
+    assert_only_the_rosetta_error_remains(&compilation, "bad.rosetta", "NoSuchType");
+}
+
+#[test]
+fn the_surviving_domains_synthetic_packages_stay_resolvable() {
+    // As above, but the capability targets the rosetta class itself: the
+    // successful namespace's synthetic package must have joined the union
+    // namespace through the surviving domain's model.
+    let compilation = two_domain_actor(
+        "Fine",
+        &rex_driver::SigilImports::new()
+            .provide("a.mox", "good.rosetta", good_rosetta())
+            .provide(
+                "b.mox",
+                "bad.rosetta",
+                "namespace oracle.bad\n\ntype Broken:\n    who NoSuchType (1..1)\n",
+            ),
+    );
+    assert_only_the_rosetta_error_remains(&compilation, "bad.rosetta", "NoSuchType");
+}
+
+#[test]
+fn an_unparseable_rosetta_file_blocks_only_its_declaring_file() {
+    // A parse failure names no namespace: only beta's model drops.
+    let compilation = two_domain_actor(
+        "Wrapper",
+        &rex_driver::SigilImports::new()
+            .provide("a.mox", "good.rosetta", good_rosetta())
+            .provide(
+                "b.mox",
+                "bad.rosetta",
+                "namespace oracle.bad\n\ntype Broken:\n    who (1..1)\n",
+            ),
+    );
+    assert_only_the_rosetta_error_remains(&compilation, "bad.rosetta", "expected");
+}
+
+#[test]
+fn a_domain_without_sigil_imports_survives_another_domains_sigil_failure() {
+    // alpha declares no sigil import at all; beta's rosetta fails. alpha's
+    // model must survive (the old coarse blocking dropped every domain).
+    let domain_a = "package alpha\n\nclass Wrapper { String x }\n".to_string();
+    let domain_b = concat!(
+        "package beta\n\n",
+        "import sigil \"bad.rosetta\"\n\n",
+        "class Other { String x }\n"
+    )
+    .to_string();
+    let actor = concat!(
+        "import \"a.mox\"\n",
+        "import \"b.mox\"\n\n",
+        "actors Ops {\n",
+        "    actor Agent\n",
+        "    capability Touch on Wrapper\n",
+        "    grant Agent { permit Touch }\n",
+        "}\n"
+    );
+    let compilation = rex_driver::compile_actors_str(
+        "ops.actor",
+        actor,
+        &[
+            ("a.mox".to_string(), domain_a),
+            ("b.mox".to_string(), domain_b),
+        ],
+        &rex_driver::DomainImports {
+            schemas: rex_driver::SchemaImports::new(),
+            sigil: rex_driver::SigilImports::new().provide(
+                "b.mox",
+                "bad.rosetta",
+                "namespace oracle.bad\n\ntype Broken:\n    who NoSuchType (1..1)\n",
+            ),
+        },
+    );
+    assert_only_the_rosetta_error_remains(&compilation, "bad.rosetta", "NoSuchType");
+}
+
+#[test]
+fn references_into_a_failed_namespace_error_on_the_referencing_file() {
+    // The failed namespace's names stay out of the union resolution
+    // namespace: beta's reference to its own (failed) rosetta type errors
+    // on beta, while alpha and the actor file stay clean.
+    let domain_a = concat!(
+        "package alpha\n\n",
+        "import sigil \"good.rosetta\"\n\n",
+        "class Wrapper { String x }\n"
+    )
+    .to_string();
+    let domain_b = concat!(
+        "package beta\n\n",
+        "import sigil \"bad.rosetta\"\n\n",
+        "class Other { refers oracle.bad.Broken x }\n"
+    )
+    .to_string();
+    let actor = concat!(
+        "import \"a.mox\"\n",
+        "import \"b.mox\"\n\n",
+        "actors Ops {\n",
+        "    actor Agent\n",
+        "    capability Touch on Wrapper\n",
+        "    grant Agent { permit Touch }\n",
+        "}\n"
+    );
+    let compilation = rex_driver::compile_actors_str(
+        "ops.actor",
+        actor,
+        &[
+            ("a.mox".to_string(), domain_a),
+            ("b.mox".to_string(), domain_b),
+        ],
+        &rex_driver::DomainImports {
+            schemas: rex_driver::SchemaImports::new(),
+            sigil: rex_driver::SigilImports::new()
+                .provide("a.mox", "good.rosetta", good_rosetta())
+                .provide(
+                    "b.mox",
+                    "bad.rosetta",
+                    "namespace oracle.bad\n\ntype Broken:\n    who NoSuchType (1..1)\n",
+                ),
+        },
+    );
+    assert!(compilation.model.is_none());
+    // beta's own reference error, tagged with its file; the sigil content
+    // error, keyed by the rosetta path; nothing else.
+    assert!(compilation.diagnostics.iter().any(|(path, diagnostic)| {
+        path == "b.mox"
+            && diagnostic.is_error()
+            && diagnostic
+                .message
+                .contains("unknown type 'oracle.bad.Broken'")
+    }));
+    assert!(compilation
+        .diagnostics
+        .iter()
+        .any(|(path, _)| path == "bad.rosetta"));
+    assert!(compilation
+        .diagnostics
+        .iter()
+        .all(|(path, _)| path != "a.mox" && path != "ops.actor"));
+}

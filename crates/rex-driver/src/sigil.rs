@@ -36,7 +36,12 @@
 //! 4. The selected files go to `sigil_resolve::resolve` in one call (sigil
 //!    prepends its builtins automatically). Parse and resolution diagnostics
 //!    map to rexlang diagnostics tagged with the rosetta entry's key path;
-//!    any ERROR severity blocks the artifact.
+//!    any ERROR severity fails the namespace carrying it: that namespace's
+//!    package is dropped and every declaring file whose import targets it
+//!    loses its model. An import whose rosetta file failed to parse names no
+//!    namespace — only its declaring file's model drops. Both shapes are
+//!    carried by the structured [`ImportOutcome`] (origins, failed
+//!    namespaces, per-file blocking) the callers consume.
 //!
 //! ## Mapping
 //!
@@ -107,7 +112,7 @@
 //! packages), `.actor` capability targets, `.ddd` designs, and backends work
 //! on it unchanged.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use rex_ir as ir;
 use rex_syntax::ast as mox;
@@ -125,18 +130,79 @@ use crate::lower::{DomainPackage, TopKind};
 /// referenced.
 const BUILTIN_NAMESPACE: &str = "com.rosetta.model";
 
-/// The outcome of lowering a compilation's `import sigil` declarations.
-pub(crate) struct SigilOutcome {
-    /// Synthetic packages in emission order: user namespaces in
-    /// first-appearance order, then `com.rosetta.model` when referenced.
+/// Where an `import sigil` diagnostic belongs.
+#[derive(Debug, Clone)]
+pub(crate) enum DiagnosticOrigin {
+    /// An import-level diagnostic concerning the `.mox` file at `path`
+    /// (a missing provider entry, a namespace collision anchored here):
+    /// callers route it into that file's own diagnostics, where its
+    /// severity blocks that file's model.
+    DeclaringFile { path: String },
+    /// A content diagnostic raised by the rosetta file at this key path:
+    /// rosetta-keyed (rendered against the retained rosetta texts, not the
+    /// domain's), and a namespace failure when its severity is an error.
+    Content { path: String },
+}
+
+impl DiagnosticOrigin {
+    /// The diagnostic's tag: the declaring `.mox` path for import-level
+    /// diagnostics, the rosetta key path for content diagnostics. The
+    /// single-file and multi-file pipelines surface these tags unchanged.
+    pub(crate) fn tag(&self) -> &str {
+        match self {
+            DiagnosticOrigin::DeclaringFile { path } => path,
+            DiagnosticOrigin::Content { path } => path,
+        }
+    }
+}
+
+/// The structured outcome of a compilation's `import sigil` declarations:
+/// what lowered, what failed, and where each diagnostic belongs. Callers
+/// consume this instead of inferring ownership and routing at assembly
+/// time.
+pub(crate) struct ImportOutcome {
+    /// The synthetic packages of the namespaces that lowered without
+    /// errors, in emission order. Owned by [`ImportOutcome::owner`]: that
+    /// `.mox` file's model carries them. Failed namespaces are already
+    /// excluded, so a caller cannot attach their dropped content.
     pub(crate) packages: Vec<ir::Package>,
-    /// The user namespaces as resolution packages, so `.mox` declarations
-    /// resolve bare and qualified references into the synthetic packages.
+    /// The path of the `.mox` file whose model carries
+    /// [`ImportOutcome::packages`]: the first file declaring an `import
+    /// sigil` (the same first-declared ownership the package declarations
+    /// follow). `None` when no file declares one.
+    pub(crate) owner: Option<String>,
+    /// The successfully lowered namespaces as resolution packages, so
+    /// `.mox` declarations resolve bare and qualified references into the
+    /// synthetic packages. Failed namespaces are already excluded.
     pub(crate) namespaces: Vec<DomainPackage>,
-    /// Sigil parse/resolution/lowering diagnostics, each tagged with the
-    /// rosetta entry's key path (or the importing `.mox` path for
-    /// import-level errors such as a missing provider entry).
-    pub(crate) diagnostics: Vec<(String, Diagnostic)>,
+    /// Every diagnostic with its structured origin.
+    pub(crate) diagnostics: Vec<(DiagnosticOrigin, Diagnostic)>,
+    /// The namespaces whose rosetta content produced error diagnostics. A
+    /// namespace's files share its fate: its package is dropped, and a
+    /// declaring file's model drops when its import targets the namespace.
+    pub(crate) failed_namespaces: BTreeSet<String>,
+    /// The named imports whose rosetta file failed to parse, keyed
+    /// `(mox path, import path)`. A parse failure names no namespace, so
+    /// only the declaring file's model drops.
+    pub(crate) failed_imports: BTreeSet<(String, String)>,
+    /// The namespace each parsed import targets: `(mox path, namespace)`
+    /// per named import, in declaration order. A declaring file's model
+    /// depends on its imports' namespaces.
+    pub(crate) dependencies: Vec<(String, String)>,
+}
+
+impl ImportOutcome {
+    /// `true` when the `.mox` file at `mox_path` depends on failed sigil
+    /// content and must drop its model: one of its own imports' rosetta
+    /// files failed to parse, or one of its imports targets a namespace
+    /// whose lowering failed. Files whose imports all succeeded keep their
+    /// models even when other namespaces failed.
+    pub(crate) fn blocks(&self, mox_path: &str) -> bool {
+        self.failed_imports.iter().any(|(path, _)| path == mox_path)
+            || self.dependencies.iter().any(|(path, namespace)| {
+                path == mox_path && self.failed_namespaces.contains(namespace)
+            })
+    }
 }
 
 /// A parsed candidate of the pool: its mox path, its entry key (the tag for
@@ -205,7 +271,8 @@ impl Target {
     }
 }
 
-/// Lowers every `import sigil` declaration of the compilation.
+/// Lowers every `import sigil` declaration of the compilation into an
+/// [`ImportOutcome`].
 ///
 /// `files` are the compilation's `(mox path, parsed ast)` pairs in input
 /// order; `declared` names every declared `.mox` package as
@@ -216,9 +283,10 @@ pub(crate) fn compile_sigil_imports(
     files: &[(&str, &mox::Model)],
     declared: &[(&str, &str)],
     provided: &crate::SigilImports,
-) -> SigilOutcome {
+) -> ImportOutcome {
     // The import declarations in compilation order; the first one anchors
-    // import-level errors (namespace collisions) that have no tighter span.
+    // import-level errors (namespace collisions) that have no tighter span,
+    // and its file owns the synthetic packages.
     let mut decls: Vec<(&str, &mox::ImportSchemaDecl)> = Vec::new();
     for (path, ast) in files {
         for declaration in &ast.declarations {
@@ -233,6 +301,7 @@ pub(crate) fn compile_sigil_imports(
         .first()
         .map(|(path, decl)| ((*path).to_string(), decl.span))
         .unwrap_or_else(|| (String::new(), Span::from(0..0)));
+    let owner = decls.first().map(|(path, _)| (*path).to_string());
 
     // Parse the candidate pool once per (mox path, entry key). Only selected
     // candidates report diagnostics.
@@ -248,9 +317,13 @@ pub(crate) fn compile_sigil_imports(
 
     // The named files: the entry keyed (mox path, decl.path) per declaration.
     // A named file reports its parse diagnostics even when nothing could be
-    // parsed — it is what the import asked for.
+    // parsed — it is what the import asked for. Parsed imports record the
+    // namespace their declaring file depends on; unparseable ones record an
+    // outright import failure (no namespace exists to attribute them to).
     let mut named: Vec<usize> = Vec::new();
-    let mut diagnostics: Vec<(String, Diagnostic)> = Vec::new();
+    let mut diagnostics: Vec<(DiagnosticOrigin, Diagnostic)> = Vec::new();
+    let mut failed_imports: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut dependencies: Vec<(String, String)> = Vec::new();
     for (path, decl) in &decls {
         match candidates
             .iter()
@@ -258,11 +331,28 @@ pub(crate) fn compile_sigil_imports(
         {
             Some(index) => {
                 named.push(index);
-                if candidates[index].file.is_none() {
-                    diagnostics.extend(candidates[index].diagnostics.clone());
+                if let Some(file) = &candidates[index].file {
+                    dependencies.push(((*path).to_string(), file.namespace.clone()));
+                } else {
+                    failed_imports.insert(((*path).to_string(), decl.path.clone()));
+                    diagnostics.extend(candidates[index].diagnostics.iter().map(
+                        |(_, diagnostic)| {
+                            (
+                                DiagnosticOrigin::Content {
+                                    path: decl.path.clone(),
+                                },
+                                diagnostic.clone(),
+                            )
+                        },
+                    ));
                 }
             }
-            None => diagnostics.push(((*path).to_string(), not_provided(decl))),
+            None => diagnostics.push((
+                DiagnosticOrigin::DeclaringFile {
+                    path: (*path).to_string(),
+                },
+                not_provided(decl),
+            )),
         }
     }
 
@@ -303,9 +393,23 @@ pub(crate) fn compile_sigil_imports(
         }
     }
 
-    // Selected candidates report their parse diagnostics.
+    // Selected candidates report their parse diagnostics; an error fails
+    // the candidate's namespace.
+    let mut failed_namespaces: BTreeSet<String> = BTreeSet::new();
     for &index in &selected {
-        diagnostics.extend(candidates[index].diagnostics.clone());
+        let candidate = &candidates[index];
+        let namespace = candidate.file.as_ref().map(|file| file.namespace.clone());
+        for (_, diagnostic) in &candidate.diagnostics {
+            if diagnostic.is_error() {
+                failed_namespaces.extend(namespace.iter().cloned());
+            }
+            diagnostics.push((
+                DiagnosticOrigin::Content {
+                    path: candidate.key.clone(),
+                },
+                diagnostic.clone(),
+            ));
+        }
     }
 
     // Resolve the selected files in one call (sigil prepends builtins).
@@ -324,7 +428,24 @@ pub(crate) fn compile_sigil_imports(
             "sigil {} in {} (at {})",
             diagnostic.code, diagnostic.file, diagnostic.path
         ));
-        diagnostics.push((diagnostic.file.clone(), rex));
+        if rex.is_error() {
+            // The diagnostic's file is the rosetta key: every selected
+            // namespace carrying that key fails (the key is shared when
+            // several mox files import the same path).
+            for &index in &selected {
+                if candidates[index].key == diagnostic.file {
+                    if let Some(file) = &candidates[index].file {
+                        failed_namespaces.insert(file.namespace.clone());
+                    }
+                }
+            }
+        }
+        diagnostics.push((
+            DiagnosticOrigin::Content {
+                path: diagnostic.file.clone(),
+            },
+            rex,
+        ));
     }
 
     let mut lowerer = Lowerer::new(&resolution);
@@ -336,11 +457,15 @@ pub(crate) fn compile_sigil_imports(
     lowerer.lower_elements(&selected_files);
     // The user namespaces double as resolution packages for the `.mox`
     // declarations (bare and qualified references into the synthetic
-    // packages resolve through the union namespace).
+    // packages resolve through the union namespace). Failed namespaces stay
+    // out: their content is dropped, so referencing declarations must not
+    // resolve against it.
     let namespaces: Vec<DomainPackage> = lowerer
         .order
         .iter()
-        .filter(|namespace| *namespace != BUILTIN_NAMESPACE)
+        .filter(|namespace| {
+            *namespace != BUILTIN_NAMESPACE && !failed_namespaces.contains(*namespace)
+        })
         .map(|namespace| DomainPackage {
             name: (*namespace).clone(),
             kinds: lowerer
@@ -350,11 +475,15 @@ pub(crate) fn compile_sigil_imports(
                 .unwrap_or_default(),
         })
         .collect();
-    let packages = lowerer.finish(declared, &anchor, &mut diagnostics);
-    SigilOutcome {
+    let packages = lowerer.finish(declared, &anchor, &failed_namespaces, &mut diagnostics);
+    ImportOutcome {
         packages,
+        owner,
         namespaces,
         diagnostics,
+        failed_namespaces,
+        failed_imports,
+        dependencies,
     }
 }
 
@@ -775,13 +904,16 @@ impl<'a> Lowerer<'a> {
 
     /// Assembles the synthetic packages: user namespaces in first-appearance
     /// order, then `com.rosetta.model` with only the definitions lowered
-    /// content actually references. Namespace/package collisions with the
+    /// content actually references. Failed namespaces are skipped (their
+    /// content is dropped), so the builtin emission only sees references
+    /// from surviving content. Namespace/package collisions with the
     /// declared `.mox` packages error naming both sources.
     fn finish(
         self,
         declared: &[(&str, &str)],
         anchor: &(String, Span),
-        diagnostics: &mut Vec<(String, Diagnostic)>,
+        failed: &BTreeSet<String>,
+        diagnostics: &mut Vec<(DiagnosticOrigin, Diagnostic)>,
     ) -> Vec<ir::Package> {
         let mut packages: Vec<ir::Package> = Vec::new();
         for namespace in &self.order {
@@ -789,7 +921,9 @@ impl<'a> Lowerer<'a> {
             // the rosetta namespace and the `.mox` package of the same name.
             if let Some((_, mox_path)) = declared.iter().find(|(name, _)| name == namespace) {
                 diagnostics.push((
-                    anchor.0.clone(),
+                    DiagnosticOrigin::DeclaringFile {
+                        path: anchor.0.clone(),
+                    },
                     Diagnostic::error(
                         format!(
                             "imported sigil namespace '{namespace}' collides with the package \
@@ -803,7 +937,7 @@ impl<'a> Lowerer<'a> {
                     ),
                 ));
             }
-            if namespace == BUILTIN_NAMESPACE {
+            if namespace == BUILTIN_NAMESPACE || failed.contains(namespace) {
                 continue;
             }
             let content = self.packages.get(namespace).expect("registered");
@@ -821,7 +955,9 @@ impl<'a> Lowerer<'a> {
                 declared.iter().find(|(name, _)| *name == BUILTIN_NAMESPACE)
             {
                 diagnostics.push((
-                    anchor.0.clone(),
+                    DiagnosticOrigin::DeclaringFile {
+                        path: anchor.0.clone(),
+                    },
                     Diagnostic::error(
                         format!(
                             "imported sigil namespace '{BUILTIN_NAMESPACE}' collides with the \
