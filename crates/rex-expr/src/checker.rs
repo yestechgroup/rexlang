@@ -32,69 +32,109 @@ type Checked = Result<Ty, ()>;
 /// binding (its initializer failed to check).
 type Scope = Vec<(String, Option<Ty>)>;
 
-/// The type universe of a model: classes with their features and operations,
-/// plus every named type.
+/// The resolvable members of one class.
 #[derive(Debug, Clone, Default)]
-pub struct TypeContext {
+pub struct ClassInfo {
+    pub extends: Vec<TypeRef>,
+    pub features: Vec<Feature>,
+    pub operations: Vec<Operation>,
+}
+
+/// The unified domain-object index: the generic binding seam every surface
+/// lowers into. Classes carry their resolvable members (features, operations,
+/// supertypes); every other named type is registered by kind. Built from a
+/// [`rex_ir::Model`] — which is what `.mox` compiles to and what sigil
+/// imports, schema imports, `.ddd`, and `.evt` all resolve against — or
+/// assembled incrementally with [`DomainTypes::insert_class`] and
+/// [`DomainTypes::insert_named`], so surfaces without a full `Model` can
+/// still contribute bindable domain objects.
+#[derive(Debug, Clone, Default)]
+pub struct DomainTypes {
     classes: BTreeMap<(String, String), ClassInfo>,
     named: BTreeMap<(String, String), NamedKind>,
 }
 
-/// The resolvable members of one class.
-#[derive(Debug, Clone, Default)]
-struct ClassInfo {
-    extends: Vec<TypeRef>,
-    features: Vec<Feature>,
-    operations: Vec<Operation>,
-}
+/// Compatibility alias: the type universe of a model, as consumed by
+/// [`TypeChecker`].
+pub type TypeContext = DomainTypes;
 
-impl TypeContext {
-    /// Builds a context from a resolved model.
+impl DomainTypes {
+    /// Builds a domain-type index from a resolved model.
     pub fn from_model(model: &Model) -> Self {
-        let mut context = TypeContext::default();
+        let mut context = DomainTypes::default();
         for package in &model.packages {
             for class in &package.classes {
-                context
-                    .named
-                    .insert((package.name.clone(), class.name.clone()), NamedKind::Class);
-                context.classes.insert(
-                    (package.name.clone(), class.name.clone()),
-                    ClassInfo {
-                        extends: class.extends.clone(),
-                        features: class.features.clone(),
-                        operations: class.operations.clone(),
-                    },
+                context.insert_class(
+                    &package.name,
+                    &class.name,
+                    class.extends.clone(),
+                    class.features.clone(),
+                    class.operations.clone(),
                 );
             }
             for enum_ in &package.enums {
-                context
-                    .named
-                    .insert((package.name.clone(), enum_.name.clone()), NamedKind::Enum);
+                context.insert_named(&package.name, &enum_.name, NamedKind::Enum);
             }
             for datatype in &package.datatypes {
-                context.named.insert(
-                    (package.name.clone(), datatype.name.clone()),
-                    NamedKind::Datatype,
-                );
+                context.insert_named(&package.name, &datatype.name, NamedKind::Datatype);
             }
             for interface in &package.interfaces {
-                context.named.insert(
-                    (package.name.clone(), interface.name.clone()),
-                    NamedKind::Interface,
-                );
+                context.insert_named(&package.name, &interface.name, NamedKind::Interface);
             }
             for vocabulary in &package.vocabularies {
-                context.named.insert(
-                    (package.name.clone(), vocabulary.name.clone()),
-                    NamedKind::Vocabulary,
-                );
+                context.insert_named(&package.name, &vocabulary.name, NamedKind::Vocabulary);
             }
         }
         context
     }
 
-    fn class(&self, package: &str, name: &str) -> Option<&ClassInfo> {
+    /// Registers one class with its resolvable members, replacing any
+    /// previous entry (and its kind) for the same (package, name).
+    pub fn insert_class(
+        &mut self,
+        package: &str,
+        name: &str,
+        extends: Vec<TypeRef>,
+        features: Vec<Feature>,
+        operations: Vec<Operation>,
+    ) {
+        let key = (package.to_string(), name.to_string());
+        self.named.insert(key.clone(), NamedKind::Class);
+        self.classes.insert(
+            key,
+            ClassInfo {
+                extends,
+                features,
+                operations,
+            },
+        );
+    }
+
+    /// Registers a non-class named type (enum, datatype, interface,
+    /// vocabulary) by kind.
+    pub fn insert_named(&mut self, package: &str, name: &str, kind: NamedKind) {
+        self.named
+            .insert((package.to_string(), name.to_string()), kind);
+    }
+
+    /// Merges `other` into `self`; `other`'s entries win on collision. This
+    /// is how domain unions are assembled: one [`DomainTypes`] per
+    /// contributing surface, combined before binding.
+    pub fn merge(&mut self, other: DomainTypes) {
+        self.classes.extend(other.classes);
+        self.named.extend(other.named);
+    }
+
+    /// Looks up a class's resolvable members.
+    pub fn class(&self, package: &str, name: &str) -> Option<&ClassInfo> {
         self.classes.get(&(package.to_string(), name.to_string()))
+    }
+
+    /// Looks up a named type's kind.
+    pub fn named_kind(&self, package: &str, name: &str) -> Option<NamedKind> {
+        self.named
+            .get(&(package.to_string(), name.to_string()))
+            .copied()
     }
 }
 

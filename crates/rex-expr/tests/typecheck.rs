@@ -4,7 +4,7 @@
 //! a second operation). Test names cite the rule numbers of
 //! `docs/EXPRESSIONS.md` (R1–R4, L1–L2, U1, A1–A6, R9).
 
-use rex_expr::{parse, ExprKind, NamedKind, Ty, TypeChecker, TypeContext};
+use rex_expr::{parse, DomainTypes, ExprKind, NamedKind, Ty, TypeChecker, TypeContext};
 use rex_ir::{
     ClassDef, DatatypeDef, EnumDef, EnumLiteral, Feature, FeatureKind, Model, Multiplicity,
     Operation, OperationParam, Package, PrimitiveType, TypeRef,
@@ -808,4 +808,63 @@ fn r9_numeric_plus_is_untouched_by_the_string_path() {
     assert_ty("book.downloads + 2147483648", Ty::long()); // L1 adaptation
     assert_err("2147483647 + 1", "R1");
     assert_err("book.pages + book.downloads", "L2");
+}
+
+#[test]
+fn domain_types_is_assembled_incrementally_and_merges() {
+    // The generic binding seam: a DomainTypes built part-by-part (as a
+    // surface without a full Model would) behaves like one built from a
+    // model, and `merge` unions two indexes with right-hand precedence.
+    let model = library_model();
+    let from_model = DomainTypes::from_model(&model);
+
+    let mut assembled = DomainTypes::default();
+    for package in &model.packages {
+        for class in &package.classes {
+            assembled.insert_class(
+                &package.name,
+                &class.name,
+                class.extends.clone(),
+                class.features.clone(),
+                class.operations.clone(),
+            );
+        }
+        for enum_ in &package.enums {
+            assembled.insert_named(&package.name, &enum_.name, NamedKind::Enum);
+        }
+        for datatype in &package.datatypes {
+            assembled.insert_named(&package.name, &datatype.name, NamedKind::Datatype);
+        }
+    }
+    let mut extra = DomainTypes::default();
+    extra.insert_named(PKG, "Date", NamedKind::Vocabulary); // collision: other wins
+    assembled.merge(extra);
+
+    assert_eq!(assembled.named_kind(PKG, "Book"), Some(NamedKind::Class));
+    assert_eq!(
+        assembled.named_kind(PKG, "Date"),
+        Some(NamedKind::Vocabulary)
+    );
+    assert_eq!(assembled.named_kind(PKG, "Nope"), None);
+    let book = assembled.class(PKG, "Book").expect("Book registered");
+    assert!(book.features.iter().any(|f| f.name == "pages"));
+
+    // The class assembles into a checker-compatible index with the same
+    // members as `from_model`.
+    assert_eq!(
+        assembled.class(PKG, "Book").map(|c| c.features.len()),
+        from_model.class(PKG, "Book").map(|c| c.features.len()),
+    );
+    assert_eq!(
+        assembled.named_kind(PKG, "BookCategory"),
+        Some(NamedKind::Enum)
+    );
+}
+
+#[test]
+fn type_context_alias_remains_the_checker_entry_point() {
+    let checker = TypeChecker::new(TypeContext::from_model(&library_model()))
+        .with_binding("book", Ty::class(PKG, "Book"));
+    let parsed = parse("book.pages").ast.unwrap();
+    assert_eq!(checker.type_of(&parsed).unwrap(), Ty::int());
 }
