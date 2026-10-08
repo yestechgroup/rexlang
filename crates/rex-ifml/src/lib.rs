@@ -60,11 +60,13 @@
 //! swap the dependency.
 
 mod check;
+mod fmt;
 mod index;
 mod parser;
 mod resolve;
 
 pub use check::check_ifml;
+pub use fmt::format_ifml;
 pub use index::{
     parse_ifml_indexed, IfmlIndex, IndexFile, IndexParam, LiteralKind, ModuleDeclSite,
     ModuleUseSite, NamedSite, UseOverride,
