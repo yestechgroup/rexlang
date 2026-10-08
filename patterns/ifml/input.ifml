@@ -13,7 +13,9 @@ module "FormPanel" {
         mode: edit;
 
         on submit(values) -> action("Save", {
-            on success -> navigate("ItemDetail", { id: values.id });
+            on success -> navigate("ItemDetail", {
+                id: values.id
+            });
             on error -> stay;
         });
 
@@ -25,16 +27,16 @@ module "ReferencePicker" {
     input { entity: Item, filters: Filter, query: String = "" }
     output { selected: Uuid }
 
-    use "SearchPanel" as search {
-        filters: Filter;
-    };
+    use "SearchPanel" as search { filters: Filter; };
 
     component "candidates" {
         type: list;
         data: Item;
         fields: [name];
 
-        on select(row) -> navigate("Preview", { id: row.id });
+        on select(row) -> navigate("Preview", {
+            id: row.id
+        });
     }
 
     component "preview" {
@@ -50,9 +52,7 @@ module "Upload" {
     component "dropzone" {
         type: form;
 
-        field attachment -> input file {
-            required: true;
-        }
+        field attachment -> input file { required: true; }
 
         on upload(values) -> action("StoreFile", {
             target: target;

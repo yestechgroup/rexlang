@@ -13,7 +13,9 @@ module "DataList" {
         data: Item;
         fields: [name, status];
 
-        on select(row) -> navigate("ItemDetail", { id: row.id });
+        on select(row) -> navigate("ItemDetail", {
+            id: row.id
+        });
     }
 }
 
@@ -26,7 +28,9 @@ module "CardGrid" {
         data: Item;
         fields: [title, subtitle];
 
-        on select(card) -> navigate("ItemDetail", { id: card.id });
+        on select(card) -> navigate("ItemDetail", {
+            id: card.id
+        });
     }
 }
 
@@ -54,10 +58,7 @@ module "Feed" {
     input { source: Item, ordering: String = "newest" }
     output { refreshed: Boolean }
 
-    use "Pagination" as pager {
-        page: 1;
-        pageSize: 20;
-    };
+    use "Pagination" as pager { page: 1; pageSize: 20; };
 
     component "stream" {
         type: list;
@@ -69,7 +70,11 @@ module "Feed" {
 }
 
 module "Timeline" {
-    input { events: Item, timestamp: String = "createdAt", grouping: String = "day" }
+    input {
+        events: Item,
+        timestamp: String = "createdAt",
+        grouping: String = "day"
+    }
     output { selected: Uuid }
 
     component "track" {
@@ -78,7 +83,9 @@ module "Timeline" {
         fields: [title, createdAt];
         sort: "createdAt desc";
 
-        on select(entry) -> navigate("EntryDetail", { id: entry.id });
+        on select(entry) -> navigate("EntryDetail", {
+            id: entry.id
+        });
     }
 }
 
@@ -92,7 +99,9 @@ module "MasterDetail" {
             data: Item;
             fields: [name];
 
-            on select(row) -> navigate("DetailPane", { id: row.id });
+            on select(row) -> navigate("DetailPane", {
+                id: row.id
+            });
         }
 
         container "detailPane" {
@@ -113,6 +122,8 @@ module "MediaGallery" {
         data: Item;
         fields: [url, alt];
 
-        on select(picture) -> navigate("MediaViewer", { id: picture.id });
+        on select(picture) -> navigate("MediaViewer", {
+            id: picture.id
+        });
     }
 }

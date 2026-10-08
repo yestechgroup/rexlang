@@ -10,9 +10,15 @@ module "Pagination" {
         data: Item;
         fields: [name];
 
-        on first -> navigate("FirstPage", { page: 1 });
-        on previous if page > 1 -> navigate("PreviousPage", { page: page - 1 });
-        on next if page * pageSize < total -> navigate("NextPage", { page: page + 1 });
+        on first -> navigate("FirstPage", {
+            page: 1
+        });
+        on previous if page > 1 -> navigate("PreviousPage", {
+            page: page - 1
+        });
+        on next if page * pageSize < total -> navigate("NextPage", {
+            page: page + 1
+        });
         on last -> navigate("LastPage");
     }
 }
@@ -27,7 +33,9 @@ module "Tabs" {
             data: Item;
             fields: [name, active];
 
-            on select(tab) -> navigate("Tab", { name: tab.name });
+            on select(tab) -> navigate("Tab", {
+                name: tab.name
+            });
         }
     }
 }
@@ -41,7 +49,9 @@ module "Breadcrumbs" {
         data: Item;
         fields: [name];
 
-        on select(crumb) -> navigate("Crumb", { name: crumb.name });
+        on select(crumb) -> navigate("Crumb", {
+            name: crumb.name
+        });
     }
 }
 

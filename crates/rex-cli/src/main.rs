@@ -4,15 +4,18 @@
 //!
 //! * `rexlang check <file>...` — compile and render diagnostics; exits `1`
 //!   on errors. Accepts `.mox` models, `.actor` policy files, `.ddd`
-//!   design files, and `.evt` event-contract files (the latter three compile
-//!   against the domain models they import). Each input is a file or a
+//!   design files, `.evt` event-contract files, and `.ifml` interaction
+//!   flows (the latter four compile against the domain models and `.ifml`
+//!   pattern libraries they import; `.ifml` expressions are also type-checked
+//!   against the imported domains). Each input is a file or a
 //!   directory (scanned recursively for `*.mox`); several `.mox` inputs
 //!   compile as one multi-package model.
 //! * `rexlang ir <file>... [-o <out>]` — compile and emit the Core IR JSON
 //!   to stdout or to a file; exits `1` on errors. On `.actor` files the
 //!   standalone ActorModel artifact is emitted; on `.ddd` files the
 //!   standalone DDD design artifact; on `.evt` files the standalone
-//!   EventModel artifact.
+//!   EventModel artifact; on `.ifml` files the standalone IfmlModel
+//!   artifact.
 //! * `rexlang artifact check <artifact.json>...` — validate wire-format
 //!   artifacts (Core IR, standalone actor policy, DDD design, canonical
 //!   instance) without the originating model; exits `1` on any violation.
@@ -47,8 +50,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Parse, resolve, and validate `.mox`, `.actor`, `.ddd`, or `.evt`
-    /// files, rendering diagnostics grouped per file.
+    /// Parse, resolve, validate, and type-check `.mox`, `.actor`, `.ddd`,
+    /// `.evt`, or `.ifml` files, rendering diagnostics grouped per file.
     Check {
         /// Paths to compile: `.mox`/`.actor`/`.ddd`/`.evt` files, or
         /// directories scanned recursively for `*.mox`.
@@ -72,7 +75,7 @@ enum Command {
         #[command(subcommand)]
         target: GenTarget,
     },
-    /// Format `.mox`, `.actor`, `.ddd`, or `.evt` files in place,
+    /// Format `.mox`, `.actor`, `.ddd`, `.evt`, or `.ifml` files in place,
     /// preserving comments.
     Fmt {
         /// List files whose formatting would change instead of rewriting

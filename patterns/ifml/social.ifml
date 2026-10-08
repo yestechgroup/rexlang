@@ -20,15 +20,15 @@ module "SocialItem" {
     input { author: Item, content: Item }
     output { commented: Boolean }
 
-    use "ReactionBar" as reactions {
-        target: Item;
-    };
+    use "ReactionBar" as reactions { target: Item; };
 
     component "card" {
         type: details;
         data: Item;
 
-        on comment -> navigate("CommentThread", { postId: content.id });
+        on comment -> navigate("CommentThread", {
+            postId: content.id
+        });
     }
 }
 

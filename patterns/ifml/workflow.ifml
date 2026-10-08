@@ -17,7 +17,9 @@ module "Wizard" {
                 type: form;
                 data: Item;
 
-                on next(values) if values.name != "" -> navigate("stepTwo", { draft: values });
+                on next(values) if values.name != "" -> navigate("stepTwo", {
+                    draft: values
+                });
                 on cancel -> stay;
             }
         }
@@ -45,7 +47,11 @@ module "Wizard" {
 }
 
 module "WorkQueue" {
-    input { queue: Item, fields: String = "name", assignAction: String = "Assign" }
+    input {
+        queue: Item,
+        fields: String = "name",
+        assignAction: String = "Assign"
+    }
     output { assigned: Boolean }
 
     component "backlog" {
@@ -57,13 +63,20 @@ module "WorkQueue" {
         column "Name"   -> field Item.name;
         column "Status" -> field Item.status;
 
-        on select(row) -> navigate("WorkItem", { id: row.id });
+
+        on select(row) -> navigate("WorkItem", {
+            id: row.id
+        });
         on assign(rows) -> action("Assign");
     }
 }
 
 module "ApprovalQueue" {
-    input { queue: Item, fields: String = "name", assignAction: String = "Assign" }
+    input {
+        queue: Item,
+        fields: String = "name",
+        assignAction: String = "Assign"
+    }
     output { approved: Boolean }
 
     use "WorkQueue" as queue {

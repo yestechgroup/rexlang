@@ -629,17 +629,23 @@ impl Printer {
 
     fn print_document(&mut self) {
         let mut first = true;
+        let mut prev_was_import = false;
         while self.peek().is_some() {
             // Comments at document level always print together with the
-            // declaration they precede (print_statement consumes them), so
-            // every document-level statement simply gets one blank line
-            // before it.
-            if !first {
+            // declaration they precede (print_statement consumes them).
+            // Every document-level statement gets one blank line before it,
+            // except consecutive `import` statements, which group tight.
+            let starts_import = self.toks[self.pos..]
+                .iter()
+                .find(|info| !is_comment(&info.tok))
+                .is_some_and(|info| info.tok == Tok::Ident("import".to_string()));
+            if !first && !(starts_import && prev_was_import) {
                 self.out.push('\n');
             }
             self.emit_indent();
             self.print_statement();
             first = false;
+            prev_was_import = starts_import;
         }
         while self.out.ends_with('\n') {
             self.out.pop();

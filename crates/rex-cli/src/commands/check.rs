@@ -6,17 +6,43 @@ use std::process::ExitCode;
 use rex_driver::{compile_actors_str, compile_ddd_str, compile_evt_str};
 
 use crate::inputs::{
-    compile_sources, expand_inputs, is_actor_file, is_ddd_file, is_evt_file, read_actor_pair,
-    read_ddd_design, read_evt_pair, read_sources,
+    compile_sources, expand_inputs, is_actor_file, is_ddd_file, is_evt_file, is_ifml_file,
+    read_actor_pair, read_ddd_design, read_evt_pair, read_ifml_inputs, read_sources,
 };
 use crate::report::{
     report_actor_diagnostics, report_ddd_diagnostics, report_evt_diagnostics,
-    report_multi_diagnostics,
+    report_ifml_diagnostics, report_multi_diagnostics,
 };
 
 pub(crate) fn run(files: Vec<PathBuf>) -> anyhow::Result<ExitCode> {
     let files = expand_inputs(&files)?;
-    if files.len() == 1 && is_ddd_file(&files[0]) {
+    if files.len() == 1 && is_ifml_file(&files[0]) {
+        let inputs = read_ifml_inputs(&files[0])?;
+        let main_source = vec![(inputs.path.clone(), inputs.source.clone())];
+        let sources = |compilation: &rex_ifml::IfmlCompilation| -> Vec<(String, String)> {
+            compilation
+                .index
+                .files
+                .iter()
+                .map(|file| (file.path.clone(), file.text.clone()))
+                .collect()
+        };
+        let compilation =
+            match rex_ifml::compile_ifml_str(&inputs.path, &inputs.source, &inputs.ifml_imports) {
+                Ok(compilation) => compilation,
+                Err(diagnostics) => {
+                    report_ifml_diagnostics(&main_source, &diagnostics);
+                    return Ok(ExitCode::FAILURE);
+                }
+            };
+        let binding = rex_ifml::check_ifml(&compilation, inputs.domains.as_ref());
+        report_ifml_diagnostics(&sources(&compilation), &binding);
+        if binding.is_empty() {
+            println!("OK {}", inputs.path);
+            return Ok(ExitCode::SUCCESS);
+        }
+        Ok(ExitCode::FAILURE)
+    } else if files.len() == 1 && is_ddd_file(&files[0]) {
         let design = read_ddd_design(&files[0])?;
         let compilation = compile_ddd_str(
             &design.path,

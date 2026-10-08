@@ -9,16 +9,16 @@ module "Inbox" {
     input { messages: Item, folders: Item, markReadAction: String = "MarkRead" }
     output { selected: Uuid }
 
-    use "SearchPanel" as search {
-        filters: Folder;
-    };
+    use "SearchPanel" as search { filters: Folder; };
 
     component "folderList" {
         type: menu;
         data: Item;
         fields: [name, unreadCount];
 
-        on select(folder) -> navigate("Folder", { id: folder.id });
+        on select(folder) -> navigate("Folder", {
+            id: folder.id
+        });
     }
 
     use "DataList" as items {
@@ -63,16 +63,16 @@ module "CommentThread" {
         data: Item;
         fields: [author, body, createdAt];
 
-        on select(comment) -> navigate("CommentDetail", { id: comment.id });
+        on select(comment) -> navigate("CommentDetail", {
+            id: comment.id
+        });
     }
 
     component "reply" {
         type: form;
         data: Item;
 
-        field body -> input textarea {
-            required: true;
-        }
+        field body -> input textarea { required: true; }
 
         on post(values) -> action("PostComment", {
             body: values.body;

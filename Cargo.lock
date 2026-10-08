@@ -2469,6 +2469,7 @@ dependencies = [
  "rex-backend-jsonschema",
  "rex-backend-rust",
  "rex-driver",
+ "rex-ifml",
  "rex-ir",
  "rex-lsp",
  "rex-runtime",

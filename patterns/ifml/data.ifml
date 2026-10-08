@@ -10,7 +10,9 @@ module "Detail" {
         type: details;
         data: Item;
 
-        on edit -> navigate("ItemEdit", { id: entity.id });
+        on edit -> navigate("ItemEdit", {
+            id: entity.id
+        });
     }
 }
 
@@ -22,7 +24,9 @@ module "Summary" {
         type: details;
         data: Item;
 
-        on expand -> navigate("ItemDetail", { id: entity.id });
+        on expand -> navigate("ItemDetail", {
+            id: entity.id
+        });
     }
 }
 
@@ -45,7 +49,9 @@ module "SearchPanel" {
 
         field query -> input text;
 
-        on submit(values) -> refresh("results", { query: values.query });
+        on submit(values) -> refresh("results", {
+            query: values.query
+        });
     }
 }
 
@@ -58,7 +64,9 @@ module "Calendar" {
         data: Item;
         fields: [title, date];
 
-        on select(day) -> navigate("DayView", { date: day.date });
+        on select(day) -> navigate("DayView", {
+            date: day.date
+        });
     }
 }
 
@@ -71,6 +79,8 @@ module "Map" {
         data: Item;
         fields: [latitude, longitude];
 
-        on select(pin) -> navigate("PointDetail", { id: pin.id });
+        on select(pin) -> navigate("PointDetail", {
+            id: pin.id
+        });
     }
 }

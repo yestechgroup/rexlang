@@ -12,25 +12,20 @@ module "Catalogue" {
     input { products: Item, categories: Item, filters: Filter }
     output { selected: Uuid }
 
-    use "SearchPanel" as search {
-        filters: Filter;
-    };
+    use "SearchPanel" as search { filters: Filter; };
 
-    use "CardGrid" as grid {
-        items: Product;
-    };
+    use "CardGrid" as grid { items: Product; };
 
-    use "Pagination" as pager {
-        page: 1;
-        pageSize: 24;
-    };
+    use "Pagination" as pager { page: 1; pageSize: 24; };
 
     component "categories" {
         type: menu;
         data: Item;
         fields: [name];
 
-        on select(category) -> navigate("Category", { id: category.id });
+        on select(category) -> navigate("Category", {
+            id: category.id
+        });
     }
 }
 
@@ -75,9 +70,7 @@ module "Cart" {
         data: Item;
         fields: [name, quantity, price];
 
-        field quantity -> input number {
-            required: true;
-        }
+        field quantity -> input number { required: true; }
 
         on checkout -> navigate("Checkout");
     }

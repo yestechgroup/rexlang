@@ -2287,3 +2287,155 @@ fn fmt_check_passes_on_the_canonical_sigil_fixture() {
     );
     assert!(String::from_utf8_lossy(&output.stdout).is_empty());
 }
+
+// --- `.ifml` interaction-flow files ---------------------------------------------
+
+const IFML_DOMAIN: &str = r#"package demo
+
+class Product {
+    String name
+    int price
+}
+
+class Category {
+    String name
+}
+"#;
+
+const GOOD_IFML: &str = r#"import "ifml-domain.mox"
+import "pager.ifml";
+
+domain "demo" {
+    schema "demo";
+}
+
+view "Catalogue" {
+    params { product: Product };
+
+    use "Pager" as pager { pageSize: 10; };
+
+    component "grid" {
+        type: list;
+        data: Product;
+        filter: product.name != "";
+
+        on select(row) -> navigate("Detail", {
+            productId: row.name
+        });
+    }
+}
+"#;
+
+const PAGER_IFML: &str = r#"module "Pager" {
+    input { page: Int = 1, pageSize: Int = 25 }
+    output { total: Int }
+
+    component "pager" {
+        type: list;
+        data: Item;
+    }
+}
+"#;
+
+const BROKEN_IFML: &str = r#"import "ifml-domain.mox";
+
+view "Catalogue" {
+    params { product: Product };
+
+    component "grid" {
+        type: list;
+        data: Product;
+        filter: product.pric;
+
+        on select(row) -> navigate("Detail", {
+            productId: row.nope
+        });
+    }
+}
+"#;
+
+#[test]
+fn check_succeeds_on_ifml_with_typed_binding() {
+    let _ = write_source("ifml-domain.mox", IFML_DOMAIN);
+    let _ = write_source("pager.ifml", PAGER_IFML);
+    let flow = write_source("good.ifml", GOOD_IFML);
+    let output = rexlang()
+        .args(["check", flow.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("OK {}\n", flow.display())
+    );
+}
+
+#[test]
+fn check_reports_ifml_type_errors_with_site_context() {
+    let _ = write_source("ifml-domain.mox", IFML_DOMAIN);
+    let flow = write_source("broken.ifml", BROKEN_IFML);
+    let output = rexlang()
+        .args(["check", flow.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E0102"), "stderr: {stderr}");
+    assert!(stderr.contains("unknown feature"), "stderr: {stderr}");
+}
+
+#[test]
+fn ir_emits_ifml_artifact_json() {
+    let _ = write_source("ifml-domain.mox", IFML_DOMAIN);
+    let _ = write_source("pager.ifml", PAGER_IFML);
+    let flow = write_source("good.ifml", GOOD_IFML);
+    let output = rexlang()
+        .args(["ir", flow.to_str().unwrap()])
+        .output()
+        .expect("run rexlang ir");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"formatVersion\": 1"));
+    assert!(stdout.contains("Catalogue"));
+}
+
+#[test]
+fn fmt_check_passes_on_formatted_ifml() {
+    let flow = write_source("formatted.ifml", GOOD_IFML);
+    let output = rexlang()
+        .args(["fmt", "--check", flow.to_str().unwrap()])
+        .output()
+        .expect("run rexlang fmt --check");
+    assert!(
+        output.status.success(),
+        "stderr: {:?} stdout: {:?}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn fmt_rewrites_scrambled_ifml() {
+    let scrambled = "view \"A\"  {\n      label \"x\";\n}\n";
+    let flow = write_source("scrambled.ifml", scrambled);
+    let check = rexlang()
+        .args(["fmt", "--check", flow.to_str().unwrap()])
+        .output()
+        .expect("run rexlang fmt --check");
+    assert!(!check.status.success());
+    let format = rexlang()
+        .args(["fmt", flow.to_str().unwrap()])
+        .output()
+        .expect("run rexlang fmt");
+    assert!(format.status.success());
+    let formatted = std::fs::read_to_string(&flow).unwrap();
+    assert_eq!(formatted, "view \"A\" {\n    label \"x\";\n}\n");
+}

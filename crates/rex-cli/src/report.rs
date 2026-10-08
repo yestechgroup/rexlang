@@ -1,6 +1,6 @@
 //! Diagnostics rendering for the command handlers: the ariadne render
 //! helper and the per-file grouped reporters for multi-model, `.actor`,
-//! `.ddd`, and `.evt` compiles.
+//! `.ddd`, `.evt`, and `.ifml` compiles.
 
 use rex_driver::{render, ActorCompilation};
 
@@ -121,6 +121,41 @@ pub(crate) fn report_evt_diagnostics(pair: &EvtPair, compilation: &rex_driver::E
     }
     for (path, group) in groups {
         let Some(source) = pair.source_of(path) else {
+            continue;
+        };
+        eprint!("{}", render(path, source, &group));
+    }
+}
+
+/// Renders an `.ifml` compilation's diagnostics (resolver plus typed-binding
+/// checker) grouped per file, ariadne-rendered against each file's own
+/// source — the main interaction file and every imported `.ifml` file.
+pub(crate) fn report_ifml_diagnostics(
+    sources: &[(String, String)],
+    diagnostics: &[rex_ifml::IfmlDiagnostic],
+) {
+    if diagnostics.is_empty() {
+        return;
+    }
+    let mut groups: Vec<(&str, Vec<rex_driver::Diagnostic>)> = Vec::new();
+    for diagnostic in diagnostics {
+        let converted = rex_driver::Diagnostic::error(
+            format!("{} {}", diagnostic.code, diagnostic.message),
+            Some(rex_driver::Span {
+                start: diagnostic.span.0,
+                end: diagnostic.span.1,
+                context: (),
+            }),
+        );
+        match groups.last_mut() {
+            Some((group_path, group)) if *group_path == diagnostic.file.as_str() => {
+                group.push(converted)
+            }
+            _ => groups.push((diagnostic.file.as_str(), vec![converted])),
+        }
+    }
+    for (path, group) in groups {
+        let Some((_, source)) = sources.iter().find(|(name, _)| name == path) else {
             continue;
         };
         eprint!("{}", render(path, source, &group));
