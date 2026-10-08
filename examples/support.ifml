@@ -1,0 +1,56 @@
+// Support-desk interaction flows: the reference pattern library
+// (patterns/ifml) composed into views and bound to the support domain
+// (support.mox, with its policy surface in support.actor). The library's
+// generic Item inputs bind to the desk's Ticket where the domain has no
+// dedicated class.
+
+import "support.mox";
+import "../patterns/ifml/communication.ifml";
+import "../patterns/ifml/workflow.ifml";
+
+view "Inbox" {
+    params { tickets: Ticket, folders: Ticket };
+    label "Support Inbox";
+    landmark: true;
+
+    use "Inbox" as inbox { messages: tickets; folders: folders; };
+
+    component "escalations" {
+        type: list;
+        data: Ticket;
+        fields: [ticketNo, title, refundCents];
+        filter: refundCents > 0;
+
+        on select(row) -> navigate("Queue", {
+            ticket: row.ticketNo
+        });
+    }
+}
+
+view "Queue" {
+    params { queue: Ticket, agent: User };
+    label "Approval Queue";
+
+    use "ApprovalQueue" as approvals { queue: queue; };
+
+    component "refunds" {
+        type: table;
+        data: Ticket;
+        fields: [ticketNo, title, refundCents];
+
+        column "Refund" -> expr refundCents / 100;
+
+
+        on approve(row) if agent.active -> action("ApproveRefund", {
+            ticket: queue.ticketNo;
+        });
+    }
+
+    component "intake" {
+        type: form;
+        data: Ticket;
+        if refundCents > 0;
+
+        on raise(values) -> action("RaiseRefund");
+    }
+}

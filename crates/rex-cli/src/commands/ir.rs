@@ -50,12 +50,11 @@ pub(crate) fn run(files: Vec<PathBuf>, out: Option<PathBuf>) -> anyhow::Result<E
         Ok(ExitCode::SUCCESS)
     } else if files.len() == 1 && is_ifml_file(&files[0]) {
         let inputs = read_ifml_inputs(&files[0])?;
-        let main_source = vec![(inputs.path.clone(), inputs.source.clone())];
         let compilation =
             match rex_ifml::compile_ifml_str(&inputs.path, &inputs.source, &inputs.ifml_imports) {
                 Ok(compilation) => compilation,
                 Err(diagnostics) => {
-                    report_ifml_diagnostics(&main_source, &diagnostics);
+                    report_ifml_diagnostics(&inputs.sources, &diagnostics);
                     return Ok(ExitCode::FAILURE);
                 }
             };

@@ -136,6 +136,11 @@ pub(crate) struct IfmlInputs {
     /// `(importing-file path, import path)` — the bundle
     /// [`rex_ifml::compile_ifml_str`] resolves against.
     pub(crate) ifml_imports: rex_ifml::IfmlImports,
+    /// Every `.ifml` file in the compilation as `(resolver identity,
+    /// source)` — the main file first, then each import under its as-written
+    /// path. Used to render diagnostics for files the resolver rejected
+    /// before building its index.
+    pub(crate) sources: Vec<(String, String)>,
     /// The union of all imported `.mox` domain models, for typed binding.
     /// `None` when the file imports no domains (binding checks are then
     /// skipped).
@@ -144,16 +149,19 @@ pub(crate) struct IfmlInputs {
 
 /// Reads an `.ifml` file plus every `.ifml` and `.mox` file it imports,
 /// transitively. Import paths resolve relative to the importing file's own
-/// directory (the resolved path is recorded, so nested imports nest under
-/// it); imports with other extensions (`.actor`) pass through untouched.
-/// Imported `.mox` files are compiled to Core IR and unioned for typed
-/// expression binding; a domain that fails to compile is a hard error. A
-/// missing import file is a clean error naming the resolved path.
+/// directory on disk, while the resolver keys each import by the importing
+/// file's identity and the import string **as written** (the resolver is
+/// filesystem-free and sees only the strings). Imports with other extensions
+/// (`.actor`) pass through untouched. Imported `.mox` files are compiled to
+/// Core IR and unioned for typed expression binding; a domain that fails to
+/// compile is a hard error. A missing import file is a clean error naming
+/// the resolved path.
 pub(crate) fn read_ifml_inputs(file: &Path) -> anyhow::Result<IfmlInputs> {
     let source = std::fs::read_to_string(file)
         .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
     let path = file.display().to_string();
     let mut inputs = IfmlInputs {
+        sources: vec![(path.clone(), source.clone())],
         path: path.clone(),
         source,
         ifml_imports: rex_ifml::IfmlImports::default(),
@@ -162,8 +170,10 @@ pub(crate) fn read_ifml_inputs(file: &Path) -> anyhow::Result<IfmlInputs> {
     let mut domain_sources: Vec<(String, String)> = Vec::new();
     collect_ifml_imports(
         &path,
+        file,
         &inputs.source,
         &mut inputs.ifml_imports,
+        &mut inputs.sources,
         &mut domain_sources,
         &mut Vec::new(),
     )?;
@@ -199,21 +209,28 @@ fn diagnostics_preview(path: &str, source: &str, compilation: &rex_driver::Compi
     rex_driver::render(path, source, &compilation.diagnostics)
 }
 
-/// Depth-first import collection for one `.ifml` file: `.ifml` imports are
-/// provided to the bundle (recursing), `.mox` imports join the domain
-/// source list, everything else passes through.
+/// Depth-first import collection for one `.ifml` file. `identity` is the
+/// resolver-facing path (the CLI path for the main file, the as-written
+/// import string for each import); `disk_path` is where the file lives, so
+/// its own imports resolve relative to it. `.ifml` imports are provided to
+/// the bundle under `(identity, import-as-written)` and recursed; `.mox`
+/// imports join the domain source list (deduplicated by resolved path);
+/// everything else passes through.
 fn collect_ifml_imports(
-    importing_path: &str,
+    identity: &str,
+    disk_path: &Path,
     source: &str,
     bundle: &mut rex_ifml::IfmlImports,
+    sources: &mut Vec<(String, String)>,
     domains: &mut Vec<(String, String)>,
     stack: &mut Vec<String>,
 ) -> anyhow::Result<()> {
-    if stack.iter().any(|seen| seen == importing_path) {
+    let resolved_key = disk_path.display().to_string();
+    if stack.contains(&resolved_key) {
         return Ok(()); // cycles are diagnosed by the resolver
     }
-    stack.push(importing_path.to_string());
-    let dir = Path::new(importing_path)
+    stack.push(resolved_key);
+    let dir = disk_path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
@@ -221,20 +238,21 @@ fn collect_ifml_imports(
         .map(|model| model.imports)
         .unwrap_or_default();
     for import in imports {
+        let resolved = dir.join(&import);
         if import.ends_with(".ifml") {
-            let resolved = dir.join(&import);
             let text = std::fs::read_to_string(&resolved).map_err(|error| {
                 anyhow::anyhow!(
                     "cannot read imported file {} (imported by {}): {error}",
                     resolved.display(),
-                    importing_path
+                    identity
                 )
             })?;
-            let resolved_path = resolved.display().to_string();
-            bundle.provide(importing_path, &import, text.clone());
-            collect_ifml_imports(&resolved_path, &text, bundle, domains, stack)?;
+            bundle.provide(identity, &import, text.clone());
+            if !sources.iter().any(|(existing, _)| existing == &import) {
+                sources.push((import.clone(), text.clone()));
+            }
+            collect_ifml_imports(&import, &resolved, &text, bundle, sources, domains, stack)?;
         } else if import.ends_with(".mox") {
-            let resolved = dir.join(&import);
             let resolved_path = resolved.display().to_string();
             if domains
                 .iter()
@@ -246,7 +264,7 @@ fn collect_ifml_imports(
                 anyhow::anyhow!(
                     "cannot read imported file {} (imported by {}): {error}",
                     resolved.display(),
-                    importing_path
+                    identity
                 )
             })?;
             domains.push((resolved_path, text));
