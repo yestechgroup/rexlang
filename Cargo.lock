@@ -2512,6 +2512,7 @@ version = "0.1.0"
 dependencies = [
  "pest",
  "pest_derive",
+ "rex-expr",
  "rex-ir",
  "serde_json",
  "thiserror",

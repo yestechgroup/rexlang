@@ -33,6 +33,16 @@
 //! file's own parse, unchanged, so artifacts stay byte-identical. See
 //! [`resolve`] for the semantics and the diagnostic codes.
 //!
+//! # Type-checking
+//!
+//! [`check_ifml`] re-checks the type-checkable expressions of a compiled
+//! model against an optional domain model (the union `rex_ir::Model` every
+//! domain surface lowers into), via `rex_expr`'s [`DomainTypes`] — the same
+//! checker `.mox` operation bodies use. Constructs the shared expression
+//! language cannot type (bare calls such as `today()`, regex operators,
+//! non-integral numbers) are silently skipped, still deferred to generation
+//! time. See [`check`] for the walk order and diagnostic codes.
+//!
 //! # Transitional architecture
 //!
 //! The parser produces `rex_ir::ifml` types **directly** — there is no
@@ -49,10 +59,12 @@
 //! `codegraph-ifml-dsl` crate did, so consumers of the moved crate need only
 //! swap the dependency.
 
+mod check;
 mod index;
 mod parser;
 mod resolve;
 
+pub use check::check_ifml;
 pub use index::{
     parse_ifml_indexed, IfmlIndex, IndexFile, IndexParam, LiteralKind, ModuleDeclSite,
     ModuleUseSite, NamedSite, UseOverride,

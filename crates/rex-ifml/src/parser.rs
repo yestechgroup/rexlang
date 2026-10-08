@@ -126,18 +126,17 @@ fn parse_value_primary(pair: Pair<Rule>) -> ValueExpression {
         }
         Rule::field_expr => {
             let mut inner = pair.clone().into_inner();
-            let object = inner
-                .next()
-                .map(|p| p.as_str().to_string())
-                .unwrap_or_default();
-            let field = inner
-                .next()
-                .map(|p| p.as_str().to_string())
-                .unwrap_or_default();
-            ValueExpression::FieldAccess {
-                object: Box::new(ValueExpression::Identifier(object)),
-                field,
+            let mut object = match inner.next() {
+                Some(p) => ValueExpression::Identifier(p.as_str().to_string()),
+                None => return ValueExpression::Identifier(String::new()),
+            };
+            for field_pair in inner {
+                object = ValueExpression::FieldAccess {
+                    object: Box::new(object),
+                    field: field_pair.as_str().to_string(),
+                };
             }
+            object
         }
         Rule::group_expr => {
             if let Some(inner) = pair.clone().into_inner().next() {
@@ -573,20 +572,21 @@ fn parse_expression(pair: Pair<Rule>) -> Expression {
             }
         }
         Rule::field_expr => {
-            let mut inner = pair.clone().into_inner();
-            if let Some(obj_pair) = inner.next() {
-                let object = obj_pair.as_str().to_string();
-                if let Some(field_pair) = inner.next() {
-                    let field = field_pair.as_str().to_string();
-                    Expression::FieldExpr {
-                        object: Box::new(Expression::Ident(object)),
-                        field,
-                    }
-                } else {
-                    Expression::Ident(object)
-                }
-            } else {
+            let mut inner = pair.clone().into_inner().peekable();
+            let Some(object) = inner.next() else {
+                return fallback_expr(&pair);
+            };
+            let mut object = Expression::Ident(object.as_str().to_string());
+            for field_pair in inner {
+                object = Expression::FieldExpr {
+                    object: Box::new(object),
+                    field: field_pair.as_str().to_string(),
+                };
+            }
+            if matches!(object, Expression::Ident(_)) {
                 fallback_expr(&pair)
+            } else {
+                object
             }
         }
         Rule::group_expr => {
@@ -623,21 +623,18 @@ fn parse_primary_expression(pair: Pair<Rule>) -> Expression {
             }
         }
         Rule::field_expr => {
-            let mut inner = pair.clone().into_inner();
-            if let Some(obj_pair) = inner.next() {
-                let object = obj_pair.as_str().to_string();
-                if let Some(field_pair) = inner.next() {
-                    let field = field_pair.as_str().to_string();
-                    Expression::FieldExpr {
-                        object: Box::new(Expression::Ident(object)),
-                        field,
-                    }
-                } else {
-                    Expression::Ident(object)
-                }
-            } else {
-                Expression::Ident(pair.as_str().to_string())
+            let mut inner = pair.clone().into_inner().peekable();
+            let Some(object) = inner.next() else {
+                return Expression::Ident(String::new());
+            };
+            let mut object = Expression::Ident(object.as_str().to_string());
+            for field_pair in inner {
+                object = Expression::FieldExpr {
+                    object: Box::new(object),
+                    field: field_pair.as_str().to_string(),
+                };
             }
+            object
         }
         Rule::group_expr => {
             if let Some(inner) = pair.clone().into_inner().next() {
@@ -2945,6 +2942,52 @@ view "AdminDashboard" {
                 op: BinOp::Eq,
                 right: Box::new(Expression::StringLit("admin".to_string())),
             })
+        );
+    }
+
+    #[test]
+    fn test_deep_field_navigation_folds_left() {
+        let input = r#"
+view "Catalogue" {
+    component "grid" {
+        type: list;
+        data: Product;
+        filter: product.category.name == "tools" && product.brand.name != null;
+    }
+}
+"#;
+        let model = parse_ifml(input).unwrap();
+        let filter = model.views[0].components[0]
+            .properties
+            .iter()
+            .find(|p| p.key == "filter")
+            .unwrap();
+        let deep = |object: &ValueExpression, field: &str| ValueExpression::FieldAccess {
+            object: Box::new(object.clone()),
+            field: field.to_string(),
+        };
+        let product_category_name = deep(
+            &ValueExpression::Identifier("product".to_string()),
+            "category",
+        );
+        let product_category_name = deep(&product_category_name, "name");
+        let product_brand_name = deep(&ValueExpression::Identifier("product".to_string()), "brand");
+        let product_brand_name = deep(&product_brand_name, "name");
+        assert_eq!(
+            filter.value,
+            ValueExpression::BinOp {
+                left: Box::new(ValueExpression::BinOp {
+                    left: Box::new(product_category_name),
+                    op: BinOp::Eq,
+                    right: Box::new(ValueExpression::String("tools".to_string())),
+                }),
+                op: BinOp::And,
+                right: Box::new(ValueExpression::BinOp {
+                    left: Box::new(product_brand_name),
+                    op: BinOp::Ne,
+                    right: Box::new(ValueExpression::Identifier("null".to_string())),
+                }),
+            }
         );
     }
 

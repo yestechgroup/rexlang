@@ -261,7 +261,9 @@ primary = {
 }
 
 call_expr = { identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
-field_expr = { identifier ~ "." ~ identifier }
+// Deep navigation: one or more `.` segments fold left, so `a.b.c` is
+// FieldExpr { object: FieldExpr { object: Ident("a"), field: "b" }, field: "c" }.
+field_expr = { identifier ~ ("." ~ identifier)+ }
 group_expr = { "(" ~ expression ~ ")" }
 
 // ── Lexical rules ──────────────────────────────────────────────────
