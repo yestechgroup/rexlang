@@ -1,0 +1,76 @@
+// rexlang reference pattern library — data.
+// Read-side patterns: detail and summary views, metrics, search panels,
+// calendars, and maps.
+
+module "Detail" {
+    input { entity: Item, fields: String = "name" }
+    output { edited: Boolean }
+
+    component "info" {
+        type: details;
+        data: Item;
+
+        on edit -> navigate("ItemEdit", { id: entity.id });
+    }
+}
+
+module "Summary" {
+    input { entity: Item, sections: String = "" }
+    output { expanded: Boolean }
+
+    component "overview" {
+        type: details;
+        data: Item;
+
+        on expand -> navigate("ItemDetail", { id: entity.id });
+    }
+}
+
+module "Metric" {
+    input { label: String = "Value", value: Float = 0, delta: Float = 0 }
+    output { value: Float }
+
+    component "figure" {
+        type: chart;
+        chart metric { label: label; values: [value]; }
+    }
+}
+
+module "SearchPanel" {
+    input { query: String = "", filters: Filter }
+    output { query: String }
+
+    component "panel" {
+        type: search;
+
+        field query -> input text;
+
+        on submit(values) -> refresh("results", { query: values.query });
+    }
+}
+
+module "Calendar" {
+    input { events: Item, view: String = "month" }
+    output { selected: Uuid }
+
+    component "month" {
+        type: table;
+        data: Item;
+        fields: [title, date];
+
+        on select(day) -> navigate("DayView", { date: day.date });
+    }
+}
+
+module "Map" {
+    input { points: Item, center: String = "" }
+    output { selected: Uuid }
+
+    component "canvas" {
+        type: embedded;
+        data: Item;
+        fields: [latitude, longitude];
+
+        on select(pin) -> navigate("PointDetail", { id: pin.id });
+    }
+}
