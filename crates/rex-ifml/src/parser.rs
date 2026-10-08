@@ -19,7 +19,7 @@ pub enum IfmlParseError {
 #[grammar = "grammar/ifml.pest"]
 pub struct IfmlParser;
 
-fn parse_string(pair: &Pair<Rule>) -> String {
+pub(crate) fn parse_string(pair: &Pair<Rule>) -> String {
     let s = pair.as_str();
     let inner = &s[1..s.len() - 1];
     let mut result = String::with_capacity(inner.len());
@@ -1446,6 +1446,7 @@ fn parse_module_declaration(pair: Pair<Rule>) -> ModuleDeclaration {
     let mut containers = Vec::new();
     let mut components = Vec::new();
     let mut events = Vec::new();
+    let mut module_uses = Vec::new();
 
     for child in inner {
         match child.as_rule() {
@@ -1460,6 +1461,7 @@ fn parse_module_declaration(pair: Pair<Rule>) -> ModuleDeclaration {
             Rule::container_declaration => containers.push(parse_container_declaration(child)),
             Rule::component_declaration => components.push(parse_component_declaration(child)),
             Rule::event_handler => events.push(parse_event_handler(child)),
+            Rule::module_use_statement => module_uses.push(parse_module_use_statement(child)),
             _ => {}
         }
     }
@@ -1472,6 +1474,7 @@ fn parse_module_declaration(pair: Pair<Rule>) -> ModuleDeclaration {
         containers,
         components,
         events,
+        module_uses,
     }
 }
 
@@ -1501,7 +1504,7 @@ fn parse_import_declaration(pair: Pair<Rule>) -> String {
     inner.next().map(|p| parse_string(&p)).unwrap_or_default()
 }
 
-fn parse_ifml_model(pairs: Pairs<Rule>) -> Result<IfmlModel, IfmlParseError> {
+pub(crate) fn parse_ifml_model(pairs: Pairs<Rule>) -> Result<IfmlModel, IfmlParseError> {
     let mut domains = Vec::new();
     let mut views = Vec::new();
     let mut actions = Vec::new();
@@ -1533,8 +1536,10 @@ fn parse_ifml_model(pairs: Pairs<Rule>) -> Result<IfmlModel, IfmlParseError> {
     ))
 }
 
-/// Parse an IFML DSL string into an AST model.
-pub fn parse_ifml(input: &str) -> Result<IfmlModel, IfmlParseError> {
+/// Parses `input` and returns the top-level `ifml_model` pair (`None` for
+/// empty input), the shared entry for the model lowering and the span index
+/// walk.
+pub(crate) fn parse_ifml_top_pair(input: &str) -> Result<Option<Pair<'_, Rule>>, IfmlParseError> {
     let parsed = IfmlParser::parse(Rule::ifml_model, input).map_err(|e| IfmlParseError::Parse {
         position: "unknown".to_string(),
         message: format!("{}", e),
@@ -1542,7 +1547,7 @@ pub fn parse_ifml(input: &str) -> Result<IfmlModel, IfmlParseError> {
 
     let top_level_pairs: Vec<Pair<Rule>> = parsed.collect();
     if top_level_pairs.is_empty() {
-        return Ok(IfmlModel::default());
+        return Ok(None);
     }
 
     let top = &top_level_pairs[0];
@@ -1553,7 +1558,15 @@ pub fn parse_ifml(input: &str) -> Result<IfmlModel, IfmlParseError> {
         });
     }
 
-    parse_ifml_model(top.clone().into_inner())
+    Ok(Some(top.clone()))
+}
+
+/// Parse an IFML DSL string into an AST model.
+pub fn parse_ifml(input: &str) -> Result<IfmlModel, IfmlParseError> {
+    match parse_ifml_top_pair(input)? {
+        None => Ok(IfmlModel::default()),
+        Some(top) => parse_ifml_model(top.into_inner()),
+    }
 }
 
 /// Parse an IFML DSL file into an AST model.
@@ -2041,6 +2054,65 @@ module "Pagination" {
         assert_eq!(module.output_params.len(), 1);
         assert_eq!(module.output_params[0].name, "result");
         assert_eq!(module.components.len(), 1);
+    }
+
+    #[test]
+    fn test_module_internal_use() {
+        let input = r#"
+module "MasterDetail" {
+    input { entityId: Uuid, pageSize: Int = 20 }
+    output { selected: Uuid }
+
+    use "Pagination" as inner {
+        page_size: 50;
+    }
+
+    component "list" {
+        type: list;
+        data: Item;
+    }
+
+    use "Footer";
+}
+"#;
+        let model = parse_ifml(input).unwrap();
+        assert_eq!(model.modules.len(), 1);
+        let module = &model.modules[0];
+        assert_eq!(module.name, "MasterDetail");
+        assert_eq!(module.module_uses.len(), 2);
+
+        assert_eq!(module.module_uses[0].module, "Pagination");
+        assert_eq!(module.module_uses[0].alias.as_deref(), Some("inner"));
+        assert_eq!(module.module_uses[0].properties.len(), 1);
+        assert_eq!(module.module_uses[0].properties[0].key, "page_size");
+        assert_eq!(
+            module.module_uses[0].properties[0].value,
+            ValueExpression::Number(50.0.into())
+        );
+
+        assert_eq!(module.module_uses[1].module, "Footer");
+        assert_eq!(module.module_uses[1].alias, None);
+        assert!(module.module_uses[1].properties.is_empty());
+    }
+
+    /// A `use:` property assignment inside a module body still lowers as a
+    /// property, not a module use (the colon disambiguates), mirroring the
+    /// view-body rule.
+    #[test]
+    fn test_module_use_still_parses_as_property_name() {
+        let input = r#"
+module "M" {
+    input { page: Int }
+    output { total: Int }
+
+    use: "fallback";
+}
+"#;
+        let model = parse_ifml(input).unwrap();
+        let module = &model.modules[0];
+        assert!(module.module_uses.is_empty());
+        assert_eq!(module.properties.len(), 1);
+        assert_eq!(module.properties[0].key, "use");
     }
 
     #[test]

@@ -705,6 +705,11 @@ pub struct ModuleDeclaration {
     pub components: Vec<ComponentDeclaration>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<EventHandler>,
+    /// `use "Module" as alias { ... };` statements inside the module body —
+    /// module composition. Cross-file resolution is a resolver concern; the
+    /// artifact carries the statements verbatim.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub module_uses: Vec<ModuleUse>,
 }
 
 /// A top-level `actor "Name" { ... }` declaration. Actors carry

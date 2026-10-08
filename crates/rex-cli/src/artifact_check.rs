@@ -749,6 +749,7 @@ mod tests {
                         containers: Vec::new(),
                         components: Vec::new(),
                         events: Vec::new(),
+                        module_uses: Vec::new(),
                     }],
                     ..rex_ir::ifml::IfmlModel::default()
                 })

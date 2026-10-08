@@ -231,7 +231,9 @@ productions.
   expr)? -> <action> ;` with `navigate_action`, `refresh_action`,
   `action_invocation`, or `stay_statement`.
 - **Actions and modules** — `action_declaration` (properties + events) and
-  `module_declaration` (required `input`/`output` parameter blocks).
+  `module_declaration` (required `input`/`output` parameter blocks; the body
+  may also contain `module_use_statement`s, composing other declared
+  modules).
 - **Expressions** — the C-like precedence chain `expression` → `logical_or`
   → `logical_and` → `comparison` → `addition` → `multiplication` → `unary`
   → `primary` (calls, field access, literals, groups).
@@ -329,13 +331,31 @@ Expression evaluation is **deferred to generation time** — the artifact stores
 crates/rex-ifml/
 ├── Cargo.toml
 ├── src/
-│   ├── lib.rs            # Public API: parse_ifml, parse_ifml_file + re-exports of rex_ir::ifml
+│   ├── lib.rs            # Public API: parse_ifml, parse_ifml_file, parse_ifml_indexed, compile_ifml_str + re-exports of rex_ir::ifml
 │   ├── parser.rs         # Pest parser wrapper + IfmlParseError
+│   ├── index.rs          # Span side-table (IfmlIndex): module decls/uses, views, actions, actors — never serialized
+│   ├── resolve.rs        # Cross-file module resolution: IfmlImports bundle, compile_ifml_str, IfmlDiagnostic (E0001–E0009)
 │   └── grammar/
 │       └── ifml.pest     # Pest grammar file
 └── tests/
-    └── golden.rs         # Conformance golden (REX_UPDATE_FIXTURES=1 regenerates)
+    ├── golden.rs         # Conformance golden (REX_UPDATE_FIXTURES=1 regenerates)
+    └── resolve.rs        # Resolver conformance tests
 ```
+
+### Module Resolution
+
+`compile_ifml_str(path, text, &imports)` compiles a file plus its `.ifml`
+imports in one call. Imports resolve through the `IfmlImports` bundle
+(keyed `(importing path, import path)`, provided by the host — the resolver
+never touches the filesystem); imports not ending in `.ifml` pass through
+untouched. Local modules shadow imported ones; one name exported by two
+distinct imported files is ambiguous. Every `use` in the main file — in
+views, containers, and module bodies — is resolved and its overrides
+validated against the target module's inputs and properties. Results live
+in the `IfmlIndex` side-table (`ModuleUseSite::resolved_module`); the
+returned `IfmlModel` is the main file's own parse, unchanged, so wire
+artifacts stay byte-identical. See `crates/rex-ifml/src/resolve.rs` for the
+diagnostic-code table.
 
 Goldens live next to the other conformance fixtures: `tests/conformance/ifml/app.ifml` (canonical source) and `tests/conformance/ifml/app.ifml.json` (committed artifact).
 

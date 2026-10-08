@@ -195,12 +195,15 @@ action_declaration = {
 }
 
 // ── Module declarations ────────────────────────────────────────────
+// A module body may itself contain `use` statements, composing other
+// declared modules (cross-file resolution is the resolver's job, not the
+// grammar's).
 module_declaration = {
     "module" ~ string ~ "{" ~
         "input" ~ parameter_block ~
         "output" ~ parameter_block ~
         property_assignment* ~
-        (container_declaration | component_declaration | event_handler)* ~
+        (container_declaration | component_declaration | event_handler | module_use_statement)* ~
     "}"
 }
 
