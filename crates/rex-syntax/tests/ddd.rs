@@ -291,6 +291,50 @@ fn designs_parse_with_flags_and_repositories() {
 }
 
 #[test]
+fn negated_flags_parse_with_the_bang_in_their_span() {
+    let source = concat!(
+        "application A { module m {\n",
+        "    entity Book !auditable cache\n",
+        "    entity Movie !optimisticLocking\n",
+        "} }\n",
+    );
+    let result = parse_ddd(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let designs = &result.ast.unwrap().application.unwrap().modules[0].designs;
+    let book = &designs[0];
+    let auditable = book.flags.auditable.expect("!auditable parsed");
+    assert!(auditable.negated);
+    assert_eq!(span_text(source, auditable.span), "!auditable");
+    assert!(!book.flags.cache.expect("cache parsed").negated);
+
+    let movie = &designs[1];
+    let locking = movie
+        .flags
+        .optimistic_locking
+        .expect("!optimisticLocking parsed");
+    assert!(locking.negated);
+    assert_eq!(span_text(source, locking.span), "!optimisticLocking");
+}
+
+#[test]
+fn negated_flags_survive_formatting_in_canonical_position() {
+    // Source order is scrambled on purpose: the negated flag re-emits with
+    // its `!` attached, in the canonical flag order.
+    let source = "application A { module m { entity Book cache !auditable } }\n";
+    let formatted = format_ddd(source).unwrap();
+    assert!(
+        formatted.contains("entity Book !auditable cache"),
+        "canonical order with the negation kept: {formatted:?}"
+    );
+    // Idempotent: formatting the formatted output is a fixpoint.
+    assert_eq!(format_ddd(&formatted).unwrap(), formatted);
+}
+
+#[test]
 fn multiplicity_forms_parse() {
     let source = concat!(
         "application A { module M { service S {\n",

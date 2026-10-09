@@ -187,8 +187,9 @@
 //! module_member     := service_decl | design_decl | search_decl
 //! service_decl      := "service" name "{" service_member* "}"
 //! service_member    := service_op | inject_decl
-//! service_op        := signature capability_clause? ";"
-//!                    | name "=>" qualified_name capability_clause? ";"
+//! service_op        := "protected"? signature capability_clause? ";"
+//!                    | "protected"? name "=>" qualified_name
+//!                      capability_clause? ";"
 //! inject_decl       := "inject" name ";"
 //! signature         := type_ref multiplicity? name
 //!                      "(" (param ("," param)*)? ")"
@@ -197,11 +198,12 @@
 //! design_decl       := "abstract"? stereotype name design_flag*
 //!                      repository_decl?
 //! stereotype        := "entity" | "value" | "dto"
-//! design_flag       := "scaffold" | "auditable" | "optimisticLocking"
-//!                    | "nonPersistent" | "cache"
+//! design_flag       := "!"? ("scaffold" | "auditable" | "optimisticLocking"
+//!                               | "nonPersistent" | "cache")
 //! repository_decl   := "repository" name "{" repository_op* "}"
-//! repository_op     := repository_builtin ";" | signature ";"
-//! repository_builtin := "findById" | "findAll" | "save" | "delete"
+//! repository_op     := "protected"? (repository_builtin | signature) ";"
+//! repository_builtin := "findById" | "findAll" | "findByExample"
+//!                    | "findByKeys" | "save" | "delete"
 //! search_decl       := "search" name "{" search_member* "}"
 //! search_member     := "entity" qualified_name
 //!                    | "text" "{" search_field* "}"
@@ -232,7 +234,9 @@
 //! * `design_flag`s and the single-member search lines (`entity`, `ranking`,
 //!   `analyzer`, `pagination`) are idempotent on repeat — the first
 //!   declaration wins; repeated `text`/`filters`/`sort`/`document` clauses
-//!   merge.
+//!   merge. A flag may be written negated (`!auditable`): the negation is
+//!   the opt-out from a flag that defaults on — whether a `!flag` is
+//!   *meaningful* (and each flag's default) is the driver's rule 4.
 //! * `base` must be the application's first member; a duplicate or late
 //!   `base` is an error.
 //! * `document_entry`'s `raw_expr` spans balanced `()`/`[]`/`{}` nesting up
@@ -2390,7 +2394,8 @@ fn ddd_delegation<'src>() -> impl Parser<'src, Tokens<'src>, DddDelegation, MoxE
     )
 }
 
-/// One operation of a `service` body: a declared signature
+/// One operation of a `service` body: an optional `protected` modifier, then
+/// a declared signature
 /// (`type_ref multiplicity? name "(" params? ")" capability*? ";"`) or a
 /// delegation (`name "=>" target.operation capability*? ";"`). The two
 /// alternatives are distinguished by the `=>` after the leading name;
@@ -2407,6 +2412,7 @@ fn ddd_service_op<'src>() -> impl Parser<'src, Tokens<'src>, DddServiceOp, MoxEx
                 multiplicity,
                 params,
                 delegation: None,
+                is_protected: false,
                 capabilities: capabilities.unwrap_or_default(),
                 span: e.span(),
             },
@@ -2422,10 +2428,19 @@ fn ddd_service_op<'src>() -> impl Parser<'src, Tokens<'src>, DddServiceOp, MoxEx
             multiplicity: None,
             params: Vec::new(),
             delegation: Some(delegation),
+            is_protected: false,
             capabilities: capabilities.unwrap_or_default(),
             span: e.span(),
         });
-    delegated.or(declared)
+    ddd_keyword(ddd::PROTECTED)
+        .or_not()
+        .then(delegated.or(declared))
+        .map_with(|(protected, mut op), e| {
+            op.is_protected = protected.is_some();
+            // The span covers the whole operation, modifier included.
+            op.span = e.span();
+            op
+        })
 }
 
 /// An `inject <name>;` line of a `service` body.
@@ -2514,25 +2529,40 @@ fn ddd_stereotype<'src>() -> impl Parser<'src, Tokens<'src>, DddStereotype, MoxE
 }
 
 /// The design flags of a design declaration: any subset of the
-/// [`ddd::DESIGN_FLAGS`] keywords in any order (the canonical order is the
-/// table's, a formatter concern). Repeats are idempotent.
+/// [`ddd::DESIGN_FLAGS`] keywords in any order, each optionally negated
+/// (`!auditable` — the opt-out from a flag that defaults on; the canonical
+/// order is the table's, a formatter concern). Repeats are idempotent.
 fn ddd_flags<'src>() -> impl Parser<'src, Tokens<'src>, DddFlags, MoxExtra<'src>> + Clone {
-    select! {
-        // chumsky's `select!` takes a boolean guard expression, so the
-        // lookup runs twice; the `unwrap` is the guard's `Some`.
-        Token::Ident(text) = e if ddd::flag_kind(text).is_some() => {
-            (ddd::flag_kind(text).unwrap(), e.span())
-        }
-    }
-    .repeated()
-    .collect::<Vec<_>>()
-    .map(|pairs| {
-        let mut flags = DddFlags::default();
-        for (kind, span) in pairs {
-            flags.push(kind, span);
-        }
-        flags
-    })
+    kw(Token::Other('!'))
+        .or_not()
+        .then(select! {
+            // chumsky's `select!` takes a boolean guard expression, so the
+            // lookup runs twice; the `unwrap` is the guard's `Some`.
+            Token::Ident(text) = e if ddd::flag_kind(text).is_some() => {
+                (ddd::flag_kind(text).unwrap(), e.span())
+            }
+        })
+        .repeated()
+        .collect::<Vec<_>>()
+        .map(|pairs| {
+            let mut flags = DddFlags::default();
+            for (bang, (kind, span)) in pairs {
+                // A negated occurrence spans from the `!` through the
+                // keyword, so diagnostics point at the whole `!flag` form.
+                let span = match bang {
+                    Some(bang) => (bang.start..span.end).into(),
+                    None => span,
+                };
+                flags.push(
+                    kind,
+                    DddFlagUse {
+                        negated: bang.is_some(),
+                        span,
+                    },
+                );
+            }
+            flags
+        })
 }
 
 /// A design declaration: `("abstract")? stereotype name flag*
@@ -2554,7 +2584,8 @@ fn ddd_design_decl<'src>() -> impl Parser<'src, Tokens<'src>, DddDesign, MoxExtr
         )
 }
 
-/// One operation of a `repository` body: a built-in (`findById`, `findAll`,
+/// One operation of a `repository` body: an optional `protected` modifier,
+/// then a built-in (`findById`, `findAll`, `findByExample`, `findByKeys`,
 /// `save`, `delete` — recognized by their contextual keywords, no signature
 /// of their own) or a declared operation with an explicit signature. Both
 /// forms end in `;`. A declared repository operation takes no `capability`
@@ -2580,6 +2611,7 @@ fn ddd_repository_op<'src>(
         return_type: None,
         multiplicity: None,
         params: Vec::new(),
+        is_protected: false,
         span: e.span(),
     });
     let declared = ddd_signature().then_ignore(kw(Token::Other(';'))).map_with(
@@ -2589,13 +2621,24 @@ fn ddd_repository_op<'src>(
             return_type: Some(type_ref),
             multiplicity,
             params,
+            is_protected: false,
             span: e.span(),
         },
     );
-    builtin
-        .map(Some)
-        .or(declared.map(Some))
-        .or(junk_ddd_repository_op().to(None))
+    ddd_keyword(ddd::PROTECTED)
+        .or_not()
+        .then(
+            builtin
+                .map(Some)
+                .or(declared.map(Some))
+                .or(junk_ddd_repository_op().to(None)),
+        )
+        .map(|(protected, op)| {
+            op.map(|mut op| {
+                op.is_protected = protected.is_some();
+                op
+            })
+        })
 }
 
 /// Consumes a run of tokens that cannot start or continue a repository
@@ -3358,6 +3401,7 @@ mod grammar_doc_tests {
             ddd::ABSTRACT,
             ddd::REPOSITORY,
             ddd::INJECT,
+            ddd::PROTECTED,
             ddd::BOOST,
             ddd::ANALYZER,
             ddd::LIMIT,

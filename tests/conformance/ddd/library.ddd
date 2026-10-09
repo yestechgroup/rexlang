@@ -11,7 +11,7 @@ application Library {
             inject MediaSearch;
             boolean borrow(String mediaId, Person borrower) capability BorrowMedia;
             PhysicalMedia registerMedia(String status);
-            save => PhysicalMediaRepository.save;
+            protected save => PhysicalMediaRepository.save;
             registerBorrower => PersonService.register;
             findMedia => MediaSearch.search;
         }
@@ -76,9 +76,11 @@ application Library {
         entity Person repository PersonRepository {
             findById;
             findAll;
+            findByExample;
+            findByKeys;
             save;
             delete;
-            Person findByName(String fullName);
+            protected Person findByName(String fullName);
         }
         search MemberDirectory {
             entity Person

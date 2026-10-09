@@ -24,6 +24,38 @@ fn feature<'a>(class: &'a ClassDef, name: &str) -> &'a rex_ir::Feature {
 }
 
 #[test]
+fn multiple_id_features_lower_into_a_composite_natural_key() {
+    // Sculptor's composite keys: several `key` attributes on one class.
+    // rexlang's spelling is the `id` modifier, and nothing limits it to one
+    // feature — every `id` feature lowers with `isId`, so the composite key
+    // is the set of `isId` features (the Tier-1 backends give it meaning).
+    let source = r#"
+package nz.example.library
+
+class Account {
+    id String bank
+    id String number
+    int balance
+}
+"#;
+    let compilation = compile_str("library.mox", source, &rex_driver::DomainImports::default());
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "expected no diagnostics, got:\n{}",
+        render("library.mox", source, &compilation.diagnostics)
+    );
+    let model = compilation.model.expect("a model on success");
+    let account = &model.packages[0].classes[0];
+    let key_features: Vec<&str> = account
+        .features
+        .iter()
+        .filter(|feature| feature.is_id)
+        .map(|feature| feature.name.as_str())
+        .collect();
+    assert_eq!(key_features, ["bank", "number"]);
+}
+
+#[test]
 fn library_example_compiles_with_zero_diagnostics() {
     let compilation = compile_str(
         "library.mox",

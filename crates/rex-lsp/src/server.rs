@@ -17,12 +17,14 @@ const SOURCE_NAME: &str = "rexlang";
 
 /// Which surface an open document belongs to, decided by URI extension at
 /// open time. `.mox` drives the salsa session; `.ifml` gets the rex-ifml
-/// one-shot compile; anything else publishes no diagnostics (an unknown
-/// file kind must never produce bogus `.mox` errors).
+/// one-shot compile; `.ddd` gets the one-shot design compile (diagnostics
+/// only — no navigation yet); anything else publishes no diagnostics (an
+/// unknown file kind must never produce bogus `.mox` errors).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Surface {
     Mox,
     Ifml,
+    Ddd,
     Other,
 }
 
@@ -30,6 +32,7 @@ fn surface_for(uri: &Url) -> Surface {
     match uri.path().rsplit('.').next() {
         Some("mox") => Surface::Mox,
         Some("ifml") => Surface::Ifml,
+        Some("ddd") => Surface::Ddd,
         _ => Surface::Other,
     }
 }
@@ -147,6 +150,15 @@ impl RexBackend {
                     .map(|diagnostic| to_ifml_diagnostic(diagnostic, &map))
                     .collect()
             }
+            Surface::Ddd => {
+                let (domains, imports) = self.domain_sources_for_ddd(uri, &text);
+                rex_driver::compile_ddd_str(uri.as_str(), &text, &domains, &imports)
+                    .diagnostics
+                    .iter()
+                    .filter(|(file, _)| file == uri.as_str())
+                    .map(|(_, diagnostic)| to_lsp_diagnostic(diagnostic, &map))
+                    .collect()
+            }
             Surface::Other => Vec::new(),
         };
         self.client
@@ -197,6 +209,62 @@ impl RexBackend {
             }),
             diagnostics,
         )
+    }
+
+    /// The imported domain sources of one open `.ddd` document, plus the
+    /// import bundle their `import schema`/`import sigil` declarations
+    /// need. Import paths resolve relative to the design file's directory
+    /// (the CLI's `read_ddd_design` semantics), and an open `.mox` document
+    /// at the resolved path is preferred over its disk copy — editing an
+    /// imported domain refreshes the design without a save. A missing
+    /// import file is skipped here: the driver reports the unprovided
+    /// import as a diagnostic.
+    fn domain_sources_for_ddd(
+        &self,
+        uri: &Url,
+        text: &str,
+    ) -> (Vec<(String, String)>, rex_driver::DomainImports) {
+        let mut domains: Vec<(String, String)> = Vec::new();
+        let dir = uri
+            .to_file_path()
+            .ok()
+            .and_then(|path| path.parent().map(std::path::Path::to_path_buf));
+        if let Some(dir) = dir {
+            if let Some(ast) = &rex_syntax::parse_ddd(text).ast {
+                for import in &ast.imports {
+                    if domains.iter().any(|(existing, _)| *existing == import.path) {
+                        continue;
+                    }
+                    let resolved = dir.join(&import.path);
+                    let open = {
+                        let documents = self.documents.lock().unwrap();
+                        documents.iter().find_map(|(open_uri, document)| {
+                            if document.surface != Surface::Mox {
+                                return None;
+                            }
+                            let open_path = open_uri.to_file_path().ok()?;
+                            (open_path == resolved).then(|| document.text.clone())
+                        })
+                    };
+                    let Some(source) = open.or_else(|| std::fs::read_to_string(&resolved).ok())
+                    else {
+                        continue;
+                    };
+                    domains.push((resolved.display().to_string(), source));
+                }
+            }
+        }
+        // The domains' own `import schema`/`import sigil` content resolves
+        // from disk relative to each domain file (the domains' driver paths
+        // are disk paths, so no re-keying is needed).
+        let schemas =
+            rex_driver::workspace_imports::collect_schema_imports(&domains).unwrap_or_default();
+        let sigil = rex_driver::workspace_imports::collect_sigil_imports(&domains).ok();
+        let imports = rex_driver::DomainImports {
+            schemas,
+            sigil: sigil.map(|sigil| sigil.imports).unwrap_or_default(),
+        };
+        (domains, imports)
     }
 
     /// The import closure of one `.ifml` document: the resolver bundle, the
@@ -1036,7 +1104,7 @@ impl LanguageServer for RexBackend {
                     text_document.text.clone(),
                 ))
             }
-            Surface::Ifml | Surface::Other => None,
+            Surface::Ifml | Surface::Ddd | Surface::Other => None,
         };
         self.documents.lock().unwrap().insert(
             uri.clone(),
@@ -2786,6 +2854,43 @@ view "App" {
         let publish = next_publish(&mut socket, &ifml_uri("plain.ifml"))
             .await
             .expect("publishDiagnostics for the clean flow");
+        assert!(
+            publish.diagnostics.is_empty(),
+            "no diagnostics: {publish:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ddd_open_publishes_design_diagnostics() {
+        let (mut service, mut socket) = initialized_service().await;
+        // No imports are provided (the file:// workspace has no domains on
+        // disk), so the design's class reference cannot resolve — the
+        // design surface's validation reaches the editor.
+        open_at(
+            &mut service,
+            &ifml_uri("design.ddd"),
+            "application A {\n    module m {\n        entity Book\n    }\n}\n",
+        )
+        .await;
+        let publish = next_publish(&mut socket, &ifml_uri("design.ddd"))
+            .await
+            .expect("publishDiagnostics for the design");
+        assert!(
+            publish
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("unknown type 'Book'")),
+            "design diagnostics publish: {publish:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ddd_open_clean_design_publishes_no_diagnostics() {
+        let (mut service, mut socket) = initialized_service().await;
+        open_at(&mut service, &ifml_uri("plain.ddd"), "application A {}\n").await;
+        let publish = next_publish(&mut socket, &ifml_uri("plain.ddd"))
+            .await
+            .expect("publishDiagnostics for the clean design");
         assert!(
             publish.diagnostics.is_empty(),
             "no diagnostics: {publish:?}"
