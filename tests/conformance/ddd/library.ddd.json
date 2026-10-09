@@ -65,7 +65,8 @@
               "delegation": {
                 "target": "PhysicalMediaRepository",
                 "operation": "save"
-              }
+              },
+              "isProtected": true
             },
             {
               "name": "registerBorrower",
@@ -96,6 +97,8 @@
           "stereotype": "entity",
           "flags": {
             "scaffold": true,
+            "auditable": true,
+            "optimisticLocking": true,
             "cache": true
           },
           "repository": {
@@ -138,23 +141,36 @@
         },
         {
           "class": "Book",
-          "stereotype": "entity"
+          "stereotype": "entity",
+          "flags": {
+            "auditable": true,
+            "optimisticLocking": true
+          }
         },
         {
           "class": "Media",
           "stereotype": "entity",
-          "isAbstract": true
+          "isAbstract": true,
+          "flags": {
+            "auditable": true,
+            "optimisticLocking": true
+          }
         },
         {
           "class": "Chapter",
           "stereotype": "entity",
           "flags": {
-            "auditable": true
+            "auditable": true,
+            "optimisticLocking": true
           }
         },
         {
           "class": "Movie",
           "stereotype": "entity",
+          "flags": {
+            "auditable": true,
+            "optimisticLocking": true
+          },
           "repository": {
             "name": "MovieRepository",
             "operations": [
@@ -200,7 +216,9 @@
           "class": "PhysicalMedia",
           "stereotype": "entity",
           "flags": {
-            "scaffold": true
+            "scaffold": true,
+            "auditable": true,
+            "optimisticLocking": true
           },
           "repository": {
             "name": "PhysicalMediaRepository",
@@ -325,6 +343,10 @@
         {
           "class": "Person",
           "stereotype": "entity",
+          "flags": {
+            "auditable": true,
+            "optimisticLocking": true
+          },
           "repository": {
             "name": "PersonRepository",
             "operations": [
@@ -335,6 +357,14 @@
               {
                 "name": "findAll",
                 "builtin": "findAll"
+              },
+              {
+                "name": "findByExample",
+                "builtin": "findByExample"
+              },
+              {
+                "name": "findByKeys",
+                "builtin": "findByKeys"
               },
               {
                 "name": "save",
@@ -361,7 +391,8 @@
                       "value": "string"
                     }
                   }
-                ]
+                ],
+                "isProtected": true
               }
             ]
           }

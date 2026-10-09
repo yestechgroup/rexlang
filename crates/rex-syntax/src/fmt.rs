@@ -496,6 +496,29 @@ impl<'src> Formatter<'src> {
         }
     }
 
+    /// The token `offset` positions ahead of the front token (comments
+    /// skipped), for the two-token lookahead the negated design flags need
+    /// (`! keyword` — the `!` may only be consumed once the keyword
+    /// confirms). `None` when fewer tokens follow.
+    fn peek_tok_nth(&mut self, offset: usize) -> Option<Token<'src>> {
+        self.drain_comments();
+        let mut index = self.pos;
+        let mut seen = 0;
+        while let Some(node) = self.nodes.get(index) {
+            match node {
+                Node::Token(token, _) => {
+                    if seen == offset {
+                        return Some(token.clone());
+                    }
+                    seen += 1;
+                }
+                Node::Comment { .. } => {}
+            }
+            index += 1;
+        }
+        None
+    }
+
     /// Consumes and emits the next token when it matches `pred`.
     fn take_if(&mut self, pred: impl Fn(&Token) -> bool) -> bool {
         self.drain_comments();
@@ -1368,36 +1391,49 @@ impl<'src> Formatter<'src> {
     }
 
     /// One design declaration: `abstract`? stereotype, the class name, the
-    /// five design flags — collected and re-emitted in the canonical order
-    /// of [`ddd::DESIGN_FLAGS`] (`scaffold auditable optimisticLocking
-    /// nonPersistent cache`) whatever the source order (mirroring the
-    /// parser's `DddFlags`, whose fields the driver reads positionally) —
-    /// and an optional `repository` block.
+    /// five design flags (each possibly negated, `!auditable`) — collected
+    /// and re-emitted in the canonical order of [`ddd::DESIGN_FLAGS`]
+    /// (`scaffold auditable optimisticLocking nonPersistent cache`) whatever
+    /// the source order (mirroring the parser's `DddFlags`, whose fields the
+    /// driver reads positionally) — and an optional `repository` block.
     fn scan_ddd_design(&mut self) {
         if matches!(self.peek_tok(), Some(Token::Ident(ddd::ABSTRACT))) {
             self.advance();
         }
         self.advance(); // the stereotype keyword
         self.take_name();
-        let mut seen = [false; ddd::DESIGN_FLAGS.len()];
+        let mut seen = [None; ddd::DESIGN_FLAGS.len()];
         loop {
+            // A negated flag is the two-token run `! keyword`; the `!` is
+            // consumed without emitting (flags re-emit canonically below)
+            // only once a flag keyword confirms behind it.
+            let negated = matches!(self.peek_tok(), Some(Token::Other('!')))
+                && self.peek_tok_nth(1).is_some_and(
+                    |token| matches!(&token, Token::Ident(text) if ddd::flag_kind(text).is_some()),
+                );
+            if negated {
+                self.bump_token();
+            }
             let index = match self.peek_tok() {
                 Some(Token::Ident(text)) => ddd::DESIGN_FLAGS
                     .iter()
                     .position(|(keyword, _)| *keyword == text),
                 _ => None,
             };
-            match index {
-                Some(index) => {
-                    self.bump_token();
-                    seen[index] = true;
-                }
-                None => break,
-            }
+            let Some(index) = index else {
+                break;
+            };
+            self.bump_token();
+            seen[index] = Some(negated);
         }
         for (index, (keyword, _)) in ddd::DESIGN_FLAGS.iter().enumerate() {
-            if seen[index] {
-                self.push_text(keyword, false);
+            if let Some(negated) = seen[index] {
+                if negated {
+                    self.push_text("!", false);
+                    self.push_text(keyword, true);
+                } else {
+                    self.push_text(keyword, false);
+                }
             }
         }
         if matches!(self.peek_tok(), Some(Token::Ident(ddd::REPOSITORY))) {
@@ -1415,6 +1451,12 @@ impl<'src> Formatter<'src> {
                 self.take_if(|token| matches!(token, Token::Other(';')));
             }
             Some(Token::Ident(_) | Token::IdentEscaped(_)) => {
+                // An optional `protected` modifier precedes the operation
+                // (contextual: anywhere else it is an ordinary name, and
+                // `advance()` re-emits it verbatim).
+                if matches!(self.peek_tok(), Some(Token::Ident(ddd::PROTECTED))) {
+                    self.advance();
+                }
                 self.scan_qname();
                 if self.take_if(|token| matches!(token, Token::FatArrow)) {
                     // Delegated: the `Target.operation` pair (one dotted
@@ -1482,11 +1524,28 @@ impl<'src> Formatter<'src> {
 
     fn scan_ddd_repository_item(&mut self) {
         match self.peek_tok() {
+            // A `protected` modifier on a built-in (`protected findByKeys;`):
+            // both tokens re-emit verbatim via `advance()`.
+            Some(Token::Ident(ddd::PROTECTED))
+                if self.peek_tok_nth(1).is_some_and(|token| {
+                    matches!(&token, Token::Ident(text) if ddd::builtin_from_keyword(text).is_some())
+                }) =>
+            {
+                self.advance();
+                self.advance();
+                self.take_if(|token| matches!(token, Token::Other(';')));
+            }
             Some(Token::Ident(text)) if ddd::builtin_from_keyword(text).is_some() => {
                 self.advance();
                 self.take_if(|token| matches!(token, Token::Other(';')));
             }
             Some(Token::Ident(_) | Token::IdentEscaped(_)) => {
+                // An optional `protected` modifier precedes the operation
+                // (contextual: anywhere else it is an ordinary name, and
+                // `advance()` re-emits it verbatim).
+                if matches!(self.peek_tok(), Some(Token::Ident(ddd::PROTECTED))) {
+                    self.advance();
+                }
                 self.scan_qname();
                 self.scan_multiplicity();
                 self.take_name();

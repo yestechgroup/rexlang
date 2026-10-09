@@ -14,7 +14,8 @@
 //!   `returnType`, `optimisticLocking`, ...). Unit-only enums serialize as
 //!   bare strings: [`Stereotype`] lowercase (`"entity" | "value" | "dto"`),
 //!   [`BuiltinRepositoryOp`] camelCase (`"findById"`, `"findAll"`,
-//!   `"save"`, `"delete"`). The one payload-bearing enum,
+//!   `"findByExample"`, `"findByKeys"`, `"save"`, `"delete"`). The one
+//!   payload-bearing enum,
 //!   [`RankingStrategy`], is adjacently tagged instead (`{"type":
 //!   "tfIdf"}`, `{"type": "custom", "value": "..."}`).
 //! - **Version gate.** [`DddModel::from_json`] rejects any other
@@ -257,6 +258,10 @@ pub struct ServiceOperation {
     /// operation instead of declaring its own body.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegation: Option<Delegation>,
+    /// `true` for a `protected` operation: it stays off the public service
+    /// interface (Sculptor's visibility). Additive; omitted when `false`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_protected: bool,
     /// Actor capability names guarding this operation (the
     /// [`crate::ActorModel`] dimension); loosely coupled, not validated at
     /// the wire layer.
@@ -274,6 +279,7 @@ impl ServiceOperation {
             return_multiplicity: None,
             params: Vec::new(),
             delegation: None,
+            is_protected: false,
             capabilities: Vec::new(),
         }
     }
@@ -281,6 +287,12 @@ impl ServiceOperation {
     /// Chainable setter for the declared return cardinality.
     pub fn with_return_multiplicity(mut self, multiplicity: Option<Multiplicity>) -> Self {
         self.return_multiplicity = multiplicity;
+        self
+    }
+
+    /// Chainable setter marking the operation `protected`.
+    pub fn with_protected(mut self, is_protected: bool) -> Self {
+        self.is_protected = is_protected;
         self
     }
 }
@@ -315,16 +327,24 @@ pub enum Stereotype {
 
 /// The design flags of a [`Design`], all defaulting to `false`. A
 /// fully-default flags value is omitted entirely on serialize.
+///
+/// The bools carry the **effective** decision, not the raw spelling: the
+/// design DSL defaults `auditable` and `optimisticLocking` on for entity
+/// designs (Sculptor's polarity, opted out with `!auditable`), so a plain
+/// `entity Book` design serializes both as `true` while a `value`/`dto`
+/// design leaves them absent.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesignFlags {
     /// Generate scaffolding for the class.
     #[serde(default, skip_serializing_if = "is_false")]
     pub scaffold: bool,
-    /// Record an audit trail for the class's mutations.
+    /// Record an audit trail for the class's mutations. Defaults to `true`
+    /// for entity designs; `!auditable` opts out.
     #[serde(default, skip_serializing_if = "is_false")]
     pub auditable: bool,
-    /// Optimistic locking on the class's persistent state.
+    /// Optimistic locking on the class's persistent state. Defaults to
+    /// `true` for entity designs; `!optimisticLocking` opts out.
     #[serde(default, skip_serializing_if = "is_false")]
     pub optimistic_locking: bool,
     /// The class is never persisted.
@@ -430,6 +450,11 @@ pub struct RepositoryOperation {
     /// Declared parameters in declaration order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub params: Vec<OperationParam>,
+    /// `true` for a `protected` operation: it stays off the public
+    /// repository interface (Sculptor's visibility). Additive; omitted when
+    /// `false`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_protected: bool,
 }
 
 impl RepositoryOperation {
@@ -441,6 +466,7 @@ impl RepositoryOperation {
             return_type: None,
             return_multiplicity: None,
             params: Vec::new(),
+            is_protected: false,
         }
     }
 
@@ -457,6 +483,7 @@ impl RepositoryOperation {
             return_type,
             return_multiplicity: None,
             params,
+            is_protected: false,
         }
     }
 
@@ -465,10 +492,17 @@ impl RepositoryOperation {
         self.return_multiplicity = multiplicity;
         self
     }
+
+    /// Chainable setter marking the operation `protected`.
+    pub fn with_protected(mut self, is_protected: bool) -> Self {
+        self.is_protected = is_protected;
+        self
+    }
 }
 
 /// The built-in repository operations. Serialized as bare camelCase
-/// strings: `"findById"`, `"findAll"`, `"save"`, `"delete"`.
+/// strings: `"findById"`, `"findAll"`, `"findByExample"`, `"findByKeys"`,
+/// `"save"`, `"delete"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum BuiltinRepositoryOp {
@@ -476,6 +510,10 @@ pub enum BuiltinRepositoryOp {
     FindById,
     /// Fetch all aggregates.
     FindAll,
+    /// Fetch the aggregates matching an example instance.
+    FindByExample,
+    /// Fetch the aggregates by their natural keys.
+    FindByKeys,
     /// Insert or update an aggregate.
     Save,
     /// Delete an aggregate.
@@ -874,6 +912,7 @@ mod tests {
                             return_multiplicity: None,
                             params: vec![param("book", class_ref("Book"))],
                             delegation: None,
+                            is_protected: false,
                             capabilities: vec!["BorrowBooks".to_string()],
                         },
                         ServiceOperation {
@@ -885,6 +924,7 @@ mod tests {
                                 target: "LoanRepository".to_string(),
                                 operation: "save".to_string(),
                             }),
+                            is_protected: false,
                             capabilities: Vec::new(),
                         },
                     ],

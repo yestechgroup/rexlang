@@ -973,6 +973,9 @@ pub struct DddServiceOp {
     /// The delegation target, when this operation forwards instead of
     /// declaring a signature.
     pub delegation: Option<DddDelegation>,
+    /// `true` for the `protected` modifier: the operation stays off the
+    /// public interface (Sculptor's visibility).
+    pub is_protected: bool,
     /// Actor capability names from the `capability` clause, in source order.
     pub capabilities: Vec<Name>,
     /// Span of the whole operation, `;` included.
@@ -1039,34 +1042,48 @@ impl DddFlagKind {
     }
 }
 
+/// One occurrence of a design flag: the flag keyword with its span and
+/// whether it was written negated (`!auditable` — the Sculptor opt-out from
+/// a flag that defaults on).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DddFlagUse {
+    /// `true` for the `!flag` form.
+    pub negated: bool,
+    /// Span of the occurrence, `!` included when negated.
+    pub span: Span,
+}
+
 /// The design flags of a [`DddDesign`], each carrying the span of the flag
-/// keyword as written. Absence means the flag is off. Repeating a flag is
-/// idempotent (the first span wins).
+/// occurrence as written. Absence means the flag is unset (which — for the
+/// flags that default on — the driver lowers to the stereotype's default).
+/// Repeating a flag is idempotent (the first occurrence wins).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DddFlags {
-    /// Span of the `scaffold` keyword, if present.
-    pub scaffold: Option<Span>,
-    /// Span of the `auditable` keyword, if present.
-    pub auditable: Option<Span>,
-    /// Span of the `optimisticLocking` keyword, if present.
-    pub optimistic_locking: Option<Span>,
-    /// Span of the `nonPersistent` keyword, if present.
-    pub non_persistent: Option<Span>,
-    /// Span of the `cache` keyword, if present.
-    pub cache: Option<Span>,
+    /// The `scaffold` occurrence, if present.
+    pub scaffold: Option<DddFlagUse>,
+    /// The `auditable` occurrence, if present.
+    pub auditable: Option<DddFlagUse>,
+    /// The `optimisticLocking` occurrence, if present.
+    pub optimistic_locking: Option<DddFlagUse>,
+    /// The `nonPersistent` occurrence, if present.
+    pub non_persistent: Option<DddFlagUse>,
+    /// The `cache` occurrence, if present.
+    pub cache: Option<DddFlagUse>,
 }
 
 impl DddFlags {
-    /// Records one flag; repeats are idempotent (the first span wins).
-    pub fn push(&mut self, kind: DddFlagKind, span: Span) {
+    /// Records one flag occurrence; repeats are idempotent (the first wins).
+    pub fn push(&mut self, kind: DddFlagKind, occurrence: DddFlagUse) {
         match kind {
-            DddFlagKind::Scaffold => self.scaffold = self.scaffold.or(Some(span)),
-            DddFlagKind::Auditable => self.auditable = self.auditable.or(Some(span)),
+            DddFlagKind::Scaffold => self.scaffold = self.scaffold.or(Some(occurrence)),
+            DddFlagKind::Auditable => self.auditable = self.auditable.or(Some(occurrence)),
             DddFlagKind::OptimisticLocking => {
-                self.optimistic_locking = self.optimistic_locking.or(Some(span))
+                self.optimistic_locking = self.optimistic_locking.or(Some(occurrence))
             }
-            DddFlagKind::NonPersistent => self.non_persistent = self.non_persistent.or(Some(span)),
-            DddFlagKind::Cache => self.cache = self.cache.or(Some(span)),
+            DddFlagKind::NonPersistent => {
+                self.non_persistent = self.non_persistent.or(Some(occurrence))
+            }
+            DddFlagKind::Cache => self.cache = self.cache.or(Some(occurrence)),
         }
     }
 
@@ -1127,6 +1144,9 @@ pub struct DddRepositoryOp {
     pub multiplicity: Option<Multiplicity>,
     /// Declared parameters in source order.
     pub params: Vec<DddParam>,
+    /// `true` for the `protected` modifier: the operation stays off the
+    /// public interface (Sculptor's visibility).
+    pub is_protected: bool,
     /// Span of the whole operation, `;` included.
     pub span: Span,
 }
@@ -1139,6 +1159,10 @@ pub enum DddBuiltinOp {
     FindById,
     /// `findAll` — fetch all aggregates.
     FindAll,
+    /// `findByExample` — fetch the aggregates matching an example instance.
+    FindByExample,
+    /// `findByKeys` — fetch the aggregates by their natural keys.
+    FindByKeys,
     /// `save` — insert or update an aggregate.
     Save,
     /// `delete` — delete an aggregate.

@@ -55,6 +55,11 @@ pub(crate) const ABSTRACT: &str = "abstract";
 pub(crate) const REPOSITORY: &str = "repository";
 /// The `inject <name>;` keyword of a service body.
 pub(crate) const INJECT: &str = "inject";
+/// The optional `protected` visibility modifier of a service or repository
+/// operation (Sculptor's `protected` — the operation stays off the public
+/// interface). A contextual word like the rest: in leading position it is
+/// the modifier, anywhere else an ordinary name.
+pub(crate) const PROTECTED: &str = "protected";
 /// The `boost <int>` keyword of a `text` field.
 pub(crate) const BOOST: &str = "boost";
 /// The `analyzer "<...>"` keyword, both as a search member and as a `text`
@@ -89,9 +94,11 @@ pub(crate) const DESIGN_FLAGS: [(&str, DddFlagKind); 5] = [
 
 /// The built-in repository operations, in table order (their recognition
 /// is order-independent; the order pins the keyword list).
-pub(crate) const REPOSITORY_BUILTINS: [(&str, DddBuiltinOp); 4] = [
+pub(crate) const REPOSITORY_BUILTINS: [(&str, DddBuiltinOp); 6] = [
     ("findById", DddBuiltinOp::FindById),
     ("findAll", DddBuiltinOp::FindAll),
+    ("findByExample", DddBuiltinOp::FindByExample),
+    ("findByKeys", DddBuiltinOp::FindByKeys),
     ("save", DddBuiltinOp::Save),
     ("delete", DddBuiltinOp::Delete),
 ];
@@ -246,7 +253,14 @@ mod tests {
         );
         assert_eq!(
             REPOSITORY_BUILTINS.map(|(keyword, _)| keyword),
-            ["findById", "findAll", "save", "delete"],
+            [
+                "findById",
+                "findAll",
+                "findByExample",
+                "findByKeys",
+                "save",
+                "delete"
+            ],
         );
     }
 
@@ -267,6 +281,8 @@ mod tests {
         for builtin in [
             DddBuiltinOp::FindById,
             DddBuiltinOp::FindAll,
+            DddBuiltinOp::FindByExample,
+            DddBuiltinOp::FindByKeys,
             DddBuiltinOp::Save,
             DddBuiltinOp::Delete,
         ] {
