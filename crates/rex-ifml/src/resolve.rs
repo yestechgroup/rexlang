@@ -141,6 +141,88 @@ pub struct IfmlCompilation {
     pub index: IfmlIndex,
 }
 
+/// The result of walking one `.ifml` entry file's import tree: every
+/// `.ifml` source in the walk as `(identity, text)` — the entry file
+/// first, then each import under its as-written path, depth-first in
+/// source order. Identities are unique (each file is walked once).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IfmlImportWalk {
+    /// All walked `.ifml` sources, entry file first.
+    pub sources: Vec<(String, String)>,
+}
+
+/// Walks one `.ifml` file's import tree without touching the filesystem —
+/// the shared traversal behind every host that gathers `.ifml` sources
+/// (the CLI's disk reader, test harnesses, the LSP). `fetch` is called for
+/// **every** `import "..."` statement with the importing file's identity
+/// and the import string as written; returning `Some` text recurses into
+/// it as an `.ifml` file, returning `None` skips it (non-`.ifml` imports
+/// and unreadable files are host concerns — collect `.mox` domains through
+/// the same callback's side effects). The walk is depth-first in source
+/// order; an identity already fully processed is skipped and an identity
+/// re-entering the active path is a cycle the resolver will diagnose —
+/// both mirror [`compile_ifml_str`]'s semantics, so bundle keys built from
+/// this walk always match what the resolver looks up.
+///
+/// ```
+/// use rex_ifml::walk_ifml_imports;
+///
+/// let walk = walk_ifml_imports("app.ifml", "import \"pager.ifml\";", &mut |importer, import| {
+///     if importer == "app.ifml" && import == "pager.ifml" {
+///         Some("view \"Pager\" {}".to_string())
+///     } else {
+///         None
+///     }
+/// });
+/// assert_eq!(walk.sources.len(), 2);
+/// assert_eq!(walk.sources[0].0, "app.ifml");
+/// assert_eq!(walk.sources[1].0, "pager.ifml");
+/// ```
+pub fn walk_ifml_imports(
+    entry_identity: &str,
+    entry_source: &str,
+    fetch: &mut dyn FnMut(&str, &str) -> Option<String>,
+) -> IfmlImportWalk {
+    let mut walk = IfmlImportWalk::default();
+    let mut visited: BTreeSet<String> = BTreeSet::new();
+    let mut active: Vec<String> = Vec::new();
+    walk_file(
+        entry_identity,
+        entry_source,
+        fetch,
+        &mut walk,
+        &mut visited,
+        &mut active,
+    );
+    walk
+}
+
+fn walk_file(
+    identity: &str,
+    source: &str,
+    fetch: &mut dyn FnMut(&str, &str) -> Option<String>,
+    walk: &mut IfmlImportWalk,
+    visited: &mut BTreeSet<String>,
+    active: &mut Vec<String>,
+) {
+    if visited.contains(identity) || active.iter().any(|seen| seen == identity) {
+        return;
+    }
+    visited.insert(identity.to_string());
+    active.push(identity.to_string());
+    walk.sources
+        .push((identity.to_string(), source.to_string()));
+    let imports = crate::parse_ifml(source)
+        .map(|model| model.imports)
+        .unwrap_or_default();
+    for import in imports {
+        if let Some(text) = fetch(identity, &import) {
+            walk_file(&import, &text, fetch, walk, visited, active);
+        }
+    }
+    active.pop();
+}
+
 /// Compiles in-memory `.ifml` source in one call: parse the main file,
 /// resolve its `.ifml` imports through `imports`, build the module table,
 /// and resolve/validate every `use` in the main file. Returns the model +
@@ -439,5 +521,66 @@ mod tests {
         assert!(literal_suits_type("Boolean", LiteralKind::Bool));
         assert!(!literal_suits_type("Int", LiteralKind::Bool));
         assert!(!literal_suits_type("String", LiteralKind::Bool));
+    }
+
+    #[test]
+    fn walker_walks_depth_first_in_source_order() {
+        let walk = walk_ifml_imports(
+            "app.ifml",
+            "import \"a.ifml\";\nimport \"b.ifml\";",
+            &mut |importer, import| match (importer, import) {
+                ("app.ifml", "a.ifml") => Some("import \"c.ifml\";".to_string()),
+                ("a.ifml", "c.ifml") => Some("view \"C\" {}".to_string()),
+                ("app.ifml", "b.ifml") => Some("view \"B\" {}".to_string()),
+                _ => None,
+            },
+        );
+        let identities: Vec<&str> = walk.sources.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(identities, vec!["app.ifml", "a.ifml", "c.ifml", "b.ifml"]);
+    }
+
+    #[test]
+    fn walker_dedupes_diamond_imports_and_skips_cycles() {
+        let walk = walk_ifml_imports(
+            "app.ifml",
+            "import \"a.ifml\";\nimport \"b.ifml\";",
+            &mut |importer, import| match (importer, import) {
+                ("app.ifml", "a.ifml") | ("app.ifml", "b.ifml") => {
+                    Some("import \"shared.ifml\";".to_string())
+                }
+                ("a.ifml", "shared.ifml") | ("b.ifml", "shared.ifml") => {
+                    Some("view \"S\" {}".to_string())
+                }
+                _ => None,
+            },
+        );
+        let identities: Vec<&str> = walk.sources.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(
+            identities,
+            vec!["app.ifml", "a.ifml", "shared.ifml", "b.ifml"]
+        );
+    }
+
+    #[test]
+    fn walker_leaves_cycles_to_the_resolver() {
+        let walk = walk_ifml_imports(
+            "app.ifml",
+            "import \"loop.ifml\";",
+            &mut |importer, import| match (importer, import) {
+                ("app.ifml", "loop.ifml") => Some("import \"app.ifml\";".to_string()),
+                _ => None,
+            },
+        );
+        assert_eq!(walk.sources.len(), 2);
+    }
+
+    #[test]
+    fn walker_skips_imports_the_host_declines() {
+        let walk = walk_ifml_imports(
+            "app.ifml",
+            "import \"auth.actor\";\nimport \"model.mox\";",
+            &mut |_importer, _import| None,
+        );
+        assert_eq!(walk.sources.len(), 1);
     }
 }

@@ -2,6 +2,7 @@
 //! compilations: input expansion, source reading, the `.actor`/`.ddd`/`.evt`
 //! readers, and the shared compile step over collected sources.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use rex_driver::{compile_files, compile_str, DomainImports, MultiCompilation, SchemaImports};
@@ -175,7 +176,6 @@ pub(crate) fn read_ifml_inputs(file: &Path) -> anyhow::Result<IfmlInputs> {
         &mut inputs.ifml_imports,
         &mut inputs.sources,
         &mut domain_sources,
-        &mut Vec::new(),
     )?;
     if domain_sources.is_empty() {
         return Ok(inputs);
@@ -209,13 +209,14 @@ fn diagnostics_preview(path: &str, source: &str, compilation: &rex_driver::Compi
     rex_driver::render(path, source, &compilation.diagnostics)
 }
 
-/// Depth-first import collection for one `.ifml` file. `identity` is the
-/// resolver-facing path (the CLI path for the main file, the as-written
-/// import string for each import); `disk_path` is where the file lives, so
-/// its own imports resolve relative to it. `.ifml` imports are provided to
-/// the bundle under `(identity, import-as-written)` and recursed; `.mox`
-/// imports join the domain source list (deduplicated by resolved path);
-/// everything else passes through.
+/// Gathers the `.ifml` import tree of one interaction file through
+/// [`rex_ifml::walk_ifml_imports`]: the fetch closure resolves each import
+/// relative to its importer's location on disk, provides `.ifml` content to
+/// the bundle under the walker's `(importer identity, import-as-written)`
+/// keys (the identities the resolver itself uses), and collects `.mox`
+/// domains (deduplicated by resolved path) as a side effect. The first
+/// unreadable import surfaces as an error after the walk. Disk paths are
+/// tracked per identity here — the walker only ever sees identities.
 fn collect_ifml_imports(
     identity: &str,
     disk_path: &Path,
@@ -223,54 +224,69 @@ fn collect_ifml_imports(
     bundle: &mut rex_ifml::IfmlImports,
     sources: &mut Vec<(String, String)>,
     domains: &mut Vec<(String, String)>,
-    stack: &mut Vec<String>,
 ) -> anyhow::Result<()> {
-    let resolved_key = disk_path.display().to_string();
-    if stack.contains(&resolved_key) {
-        return Ok(()); // cycles are diagnosed by the resolver
-    }
-    stack.push(resolved_key);
-    let dir = disk_path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let imports = rex_ifml::parse_ifml(source)
-        .map(|model| model.imports)
-        .unwrap_or_default();
-    for import in imports {
-        let resolved = dir.join(&import);
+    let mut disk_paths: BTreeMap<String, PathBuf> = BTreeMap::new();
+    disk_paths.insert(identity.to_string(), disk_path.to_path_buf());
+    let mut read_error: Option<anyhow::Error> = None;
+    let dir_of = |path: &Path| -> PathBuf {
+        path.parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf()
+    };
+    let walk = rex_ifml::walk_ifml_imports(identity, source, &mut |importer, import| {
+        let importer_disk = disk_paths.get(importer)?;
+        let resolved = dir_of(importer_disk).join(import);
         if import.ends_with(".ifml") {
-            let text = std::fs::read_to_string(&resolved).map_err(|error| {
-                anyhow::anyhow!(
-                    "cannot read imported file {} (imported by {}): {error}",
-                    resolved.display(),
-                    identity
-                )
-            })?;
-            bundle.provide(identity, &import, text.clone());
-            if !sources.iter().any(|(existing, _)| existing == &import) {
-                sources.push((import.clone(), text.clone()));
+            match std::fs::read_to_string(&resolved) {
+                Ok(text) => {
+                    disk_paths.insert(import.to_string(), resolved);
+                    bundle.provide(importer, import, text.clone());
+                    Some(text)
+                }
+                Err(error) => {
+                    if read_error.is_none() {
+                        read_error = Some(anyhow::anyhow!(
+                            "cannot read imported file {} (imported by {}): {error}",
+                            resolved.display(),
+                            importer
+                        ));
+                    }
+                    None
+                }
             }
-            collect_ifml_imports(&import, &resolved, &text, bundle, sources, domains, stack)?;
         } else if import.ends_with(".mox") {
             let resolved_path = resolved.display().to_string();
             if domains
                 .iter()
                 .any(|(existing, _)| *existing == resolved_path)
             {
-                continue;
+                return None;
             }
-            let text = std::fs::read_to_string(&resolved).map_err(|error| {
-                anyhow::anyhow!(
-                    "cannot read imported file {} (imported by {}): {error}",
-                    resolved.display(),
-                    identity
-                )
-            })?;
-            domains.push((resolved_path, text));
+            match std::fs::read_to_string(&resolved) {
+                Ok(text) => {
+                    domains.push((resolved_path, text));
+                    None
+                }
+                Err(error) => {
+                    if read_error.is_none() {
+                        read_error = Some(anyhow::anyhow!(
+                            "cannot read imported file {} (imported by {}): {error}",
+                            resolved.display(),
+                            importer
+                        ));
+                    }
+                    None
+                }
+            }
+        } else {
+            None
         }
+    });
+    if let Some(error) = read_error {
+        return Err(error);
     }
-    stack.pop();
+    *sources = walk.sources;
     Ok(())
 }
 

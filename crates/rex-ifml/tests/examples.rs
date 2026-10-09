@@ -5,7 +5,7 @@
 //! domains, and be byte-identical to its own canonical formatting.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rex_driver::{compile_str, DomainImports};
 use rex_ifml::{check_ifml, compile_ifml_str, IfmlCompilation, IfmlDiagnostic, IfmlImports};
@@ -25,12 +25,13 @@ struct Example {
     domains: Vec<(String, String)>,
 }
 
-/// Reads `examples/<name>.ifml` plus everything it imports, mirroring the
-/// CLI's depth-first collection: `.ifml` imports resolve relative to the
-/// importing file's directory and recurse, `.mox` imports join the domain
-/// list (deduplicated by resolved path), other extensions are ignored. The
-/// bundle is keyed the way the resolver looks entries up: the importing
-/// file's key plus the import string exactly as written.
+/// Reads `examples/<name>.ifml` plus everything it imports through
+/// [`rex_ifml::walk_ifml_imports`], mirroring the CLI's collection: the
+/// fetch closure resolves each import relative to the importing file's
+/// directory on disk, provides `.ifml` content under the walker's
+/// `(importer identity, import-as-written)` keys, and collects `.mox`
+/// domains (deduplicated by resolved path) as a side effect. Disk paths
+/// are tracked per identity here — the walker only sees identities.
 fn load(name: &str) -> Example {
     let source_path = Path::new(EXAMPLES_DIR).join(format!("{name}.ifml"));
     let source = fs::read_to_string(&source_path)
@@ -41,58 +42,44 @@ fn load(name: &str) -> Example {
         imports: IfmlImports::default(),
         domains: Vec::new(),
     };
-    collect(
-        &example.path,
-        &source_path,
-        &example.source,
-        &mut example.imports,
-        &mut example.domains,
-        &mut Vec::new(),
-    );
+    let mut disk_paths = std::collections::BTreeMap::new();
+    disk_paths.insert(example.path.clone(), source_path);
+    let dir_of = |path: &Path| -> PathBuf {
+        path.parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf()
+    };
+    let walk =
+        rex_ifml::walk_ifml_imports(&example.path, &example.source, &mut |importer, import| {
+            let importer_disk = disk_paths.get(importer)?;
+            let resolved = dir_of(importer_disk).join(import);
+            if import.ends_with(".ifml") {
+                let imported = fs::read_to_string(&resolved).unwrap_or_else(|error| {
+                    panic!("read imported file {}: {error}", resolved.display())
+                });
+                disk_paths.insert(import.to_string(), resolved);
+                example.imports.provide(importer, import, imported.clone());
+                Some(imported)
+            } else if import.ends_with(".mox") {
+                let resolved_path = resolved.display().to_string();
+                if !example
+                    .domains
+                    .iter()
+                    .any(|(existing, _)| existing == &resolved_path)
+                {
+                    let domain = fs::read_to_string(&resolved).unwrap_or_else(|error| {
+                        panic!("read imported file {}: {error}", resolved.display())
+                    });
+                    example.domains.push((resolved_path, domain));
+                }
+                None
+            } else {
+                None
+            }
+        });
+    assert_eq!(walk.sources[0].0, example.path);
     example
-}
-
-/// Depth-first import collection for one source file: `key` is the bundle
-/// key the resolver will look this file's own imports up under (the main
-/// file's path, or the import string that pulled the file in), while
-/// `source_path` is where the file lives on disk.
-fn collect(
-    key: &str,
-    source_path: &Path,
-    source: &str,
-    bundle: &mut IfmlImports,
-    domains: &mut Vec<(String, String)>,
-    stack: &mut Vec<String>,
-) {
-    if stack.iter().any(|seen| seen == key) {
-        return; // cycles are diagnosed by the resolver
-    }
-    stack.push(key.to_string());
-    let dir = source_path.parent().unwrap_or_else(|| Path::new("."));
-    let imports = rex_ifml::parse_ifml(source)
-        .map(|model| model.imports)
-        .unwrap_or_default();
-    for import in imports {
-        let resolved = dir.join(&import);
-        let resolved_path = resolved.display().to_string();
-        if import.ends_with(".ifml") {
-            let imported = fs::read_to_string(&resolved).unwrap_or_else(|error| {
-                panic!("read imported file {resolved_path} (imported by {key}): {error}")
-            });
-            bundle.provide(key, &import, imported.clone());
-            collect(&import, &resolved, &imported, bundle, domains, stack);
-        } else if import.ends_with(".mox")
-            && !domains
-                .iter()
-                .any(|(existing, _)| *existing == resolved_path)
-        {
-            let domain = fs::read_to_string(&resolved).unwrap_or_else(|error| {
-                panic!("read imported file {resolved_path} (imported by {key}): {error}")
-            });
-            domains.push((resolved_path, domain));
-        }
-    }
-    stack.pop();
 }
 
 fn render(diagnostics: &[IfmlDiagnostic]) -> String {
