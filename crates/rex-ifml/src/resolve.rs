@@ -491,11 +491,15 @@ fn validate_use(
 /// `String`, `Uuid`, and custom identifier types (mismatching only the
 /// non-string primitives `Int`/`Float`/`Boolean`/`DateTime`); numbers suit
 /// `Int`/`Float`; booleans suit `Boolean`.
+/// Whether a literal override structurally suits a declared input type:
+/// builtins go through the shared alias table (`crate::check::builtin_type`)
+/// so the resolver and the expression checker can never disagree; any other
+/// `type_ref` is a custom-identifier type, whose only literal shape is a
+/// string (entity handles are opaque text).
 fn literal_suits_type(type_ref: &str, literal: LiteralKind) -> bool {
-    match literal {
-        LiteralKind::Str => !matches!(type_ref, "Int" | "Float" | "Boolean" | "DateTime"),
-        LiteralKind::Num => matches!(type_ref, "Int" | "Float"),
-        LiteralKind::Bool => type_ref == "Boolean",
+    match crate::check::builtin_type(type_ref) {
+        Some(builtin) => builtin.suits(literal),
+        None => literal == LiteralKind::Str,
     }
 }
 

@@ -384,16 +384,20 @@ What is checked, and with which bindings:
 | Navigation binding pairs | same |
 | `use` override expressions | the enclosing view's params; expected type from the module input's `type_ref` |
 
-`type_ref` mapping for checking: `String`/`Uuid` → string, `Int` → int,
-`Boolean` → boolean; `Float`/`DateTime` and generic (identifier) input
-types are deferred — expressions relying on them are skipped, not
-errors. Constructs the shared expression language cannot type (bare
-calls such as `today()`, `%`, the `~=`/`!~` regex operators,
-non-integral numbers, array/object values) are also skipped silently:
-evaluation stays deferred to generation time, as below. Diagnostics
-`E0100`–`E0103` (unknown data entity, type mismatch, unknown feature,
-unknown name) name the site: `view 'X' component 'orders': …`. With
-`domains: None` the checker is a no-op.
+`type_ref` mapping for checking (one shared alias table in
+`crates/rex-ifml/src/check.rs`, used by both the checker and the
+resolver's override check): `String`/`Uuid` → string, `Int` → int,
+`Float` → float, `Boolean` → boolean, `DateTime` → the expression
+language's calendar `date` (a checking alias — no time-of-day
+reasoning). Generic (identifier) input types stay deferred — expressions
+relying on them are skipped, not errors. Constructs the shared
+expression language cannot type (bare calls other than
+`date("YYYY-MM-DD")`, `%`, the `~=`/`!~` regex operators, array/object
+values) are also skipped silently: evaluation stays deferred to
+generation time, as below. Diagnostics `E0100`–`E0103` (unknown data
+entity, type mismatch, unknown feature, unknown name) name the site:
+`view 'X' component 'orders': …`. With `domains: None` the checker is a
+no-op.
 
 ### Reference Pattern Library
 

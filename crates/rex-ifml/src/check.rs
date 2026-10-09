@@ -46,20 +46,25 @@
 //! A poisoned lowering or an untypeable context produces **no** diagnostic
 //! — one unmappable node disables the whole expression:
 //!
-//! - bare calls (`today()`, `score(...)`) — rex-expr has no free functions;
+//! - bare calls other than `date("YYYY-MM-DD")` (`today()`, `score(...)`)
+//!   — rex-expr has no free functions;
 //! - the `%`, `~=`, and `!~` operators — rex-expr has no such operators;
-//! - non-integral (or out-of-`i64`-range) numeric literals — rex-expr has
-//!   no float literal;
 //! - `Array`/`Object` literal property values;
 //! - expressions referencing event parameters, or parameters whose declared
-//!   type is `Float`/`DateTime` (both deferred in v1) or an unresolvable
-//!   domain name — those parameters get no binding, and any expression
-//!   naming one is skipped rather than mis-reported as unknown;
-//! - `Float`/`DateTime`-typed checks themselves (no float type in
-//!   rex-expr);
+//!   type is an unresolvable domain name — those parameters get no binding,
+//!   and any expression naming one is skipped rather than mis-reported as
+//!   unknown;
 //! - overrides the resolver left unresolved, overrides of module
 //!   *properties* (no declared type), and overrides of inputs whose type
 //!   maps to nothing checkable.
+//!
+//! Everything else checks: integral numbers become integer literals and
+//! fractional ones float literals (L1 and its float analogue), `Float`
+//! inputs bind the expression language's `float`, and `DateTime` inputs
+//! bind its calendar `date` — a **checking alias** (no time-of-day
+//! reasoning; `deadline > date("2026-01-01")` types on R7's date order).
+//! The alias table is [`builtin_type`], shared with the resolver's
+//! structural override check so the two can never disagree.
 //!
 //! Spans are best-effort: property assignments carry parse spans, everything
 //! else reports `(0, 0)`; spans never reach the wire artifact.
@@ -76,8 +81,9 @@ use rex_ir::ifml::{
     UnaryOp as IfmlUnaryOp, ValueExpression,
 };
 use rex_ir::Model;
+use rex_ir::{PrimitiveType, TypeRef};
 
-use crate::index::IfmlIndex;
+use crate::index::{IfmlIndex, LiteralKind};
 use crate::resolve::{IfmlCompilation, IfmlDiagnostic};
 
 /// A component's `data:` entity does not resolve to exactly one class in
@@ -223,24 +229,85 @@ impl<'a> DomainIndex<'a> {
         }
     }
 
-    /// Maps a declared `type_ref` onto an expression type. `Float` and
-    /// `DateTime` are deferred (v1 has no float type to check against);
-    /// any other non-builtin name is a domain type resolved by bare name.
+    /// Maps a declared `type_ref` onto an expression type: builtins through
+    /// the [alias table](builtin_type), any other name as a domain type
+    /// resolved by bare name.
     fn map_type_ref(&self, type_ref: &str) -> Option<Ty> {
-        match type_ref {
-            "String" | "Uuid" => Some(Ty::string()),
-            "Int" => Some(Ty::int()),
-            "Boolean" => Some(Ty::boolean()),
-            "Float" | "DateTime" => None,
-            other => {
-                if let Ok((package, class)) = self.resolve_class(other) {
-                    return Some(Ty::class(package, class));
-                }
-                match self.named.get(other).map(Vec::as_slice) {
-                    Some([(package, name, kind)]) => Some(Ty::named(*kind, *package, *name)),
-                    _ => None,
-                }
-            }
+        if let Some(builtin) = builtin_type(type_ref) {
+            return builtin.ty();
+        }
+        if let Ok((package, class)) = self.resolve_class(type_ref) {
+            return Some(Ty::class(package, class));
+        }
+        match self.named.get(type_ref).map(Vec::as_slice) {
+            Some([(package, name, kind)]) => Some(Ty::named(*kind, *package, *name)),
+            _ => None,
+        }
+    }
+}
+
+/// The `.ifml` surface's builtin parameter types, with what each means to
+/// the expression checker — the **single alias table** shared by the
+/// expression checker's `type_ref` mapping ([`DomainIndex::map_type_ref`])
+/// and the resolver's structural override check
+/// ([`crate::resolve::literal_suits_type`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BuiltinType {
+    /// `String` — text.
+    Str,
+    /// `Uuid` — checked as a string: identifiers are opaque text to
+    /// expressions.
+    Uuid,
+    /// `Int` — whole numbers.
+    Int,
+    /// `Float` — the expression language's float literal type.
+    Float,
+    /// `Boolean`.
+    Boolean,
+    /// `DateTime` — checked as the expression language's calendar `date`.
+    /// Checking alias only: there is no time-of-day reasoning, so
+    /// `order.createdAt > date("2026-01-01")` type-checks on the date
+    /// value's terms (R7 ordering). No literal override kind suits a
+    /// `DateTime` input — string/number literals are rejected, so such
+    /// inputs are expression-bound or defaulted at the declaration.
+    DateTime,
+}
+
+/// Classifies a declared `type_ref` as a surface builtin, or `None` when it
+/// is a domain type name.
+pub(crate) fn builtin_type(type_ref: &str) -> Option<BuiltinType> {
+    match type_ref {
+        "String" => Some(BuiltinType::Str),
+        "Uuid" => Some(BuiltinType::Uuid),
+        "Int" => Some(BuiltinType::Int),
+        "Float" => Some(BuiltinType::Float),
+        "Boolean" => Some(BuiltinType::Boolean),
+        "DateTime" => Some(BuiltinType::DateTime),
+        _ => None,
+    }
+}
+
+impl BuiltinType {
+    /// The expression type the checker binds for parameters of this
+    /// builtin.
+    pub(crate) fn ty(self) -> Option<Ty> {
+        match self {
+            BuiltinType::Str | BuiltinType::Uuid => Some(Ty::string()),
+            BuiltinType::Int => Some(Ty::int()),
+            BuiltinType::Float => Some(Ty::float()),
+            BuiltinType::Boolean => Some(Ty::boolean()),
+            BuiltinType::DateTime => Some(Ty::Primitive(PrimitiveType::Date)),
+        }
+    }
+
+    /// Whether a literal override of this kind structurally suits an input
+    /// of this builtin.
+    pub(crate) fn suits(self, literal: LiteralKind) -> bool {
+        match (self, literal) {
+            (BuiltinType::Str | BuiltinType::Uuid, LiteralKind::Str) => true,
+            (BuiltinType::Int | BuiltinType::Float, LiteralKind::Num) => true,
+            (BuiltinType::Boolean, LiteralKind::Bool) => true,
+            _ => false,
         }
     }
 }
@@ -733,7 +800,7 @@ fn lower(expr: &Expression) -> Option<Expr> {
         Expression::Ident(name) => ExprKind::Name(name.clone()),
         Expression::StringLit(text) => ExprKind::String(text.clone()),
         Expression::BoolLit(value) => ExprKind::Bool(*value),
-        Expression::NumLit(value) => ExprKind::Int(int_literal(value.value())?),
+        Expression::NumLit(value) => numeric_literal(value.value()),
         Expression::Group(inner) => return lower(inner),
         Expression::UnaryOp { op, operand } => ExprKind::Unary {
             op: lower_un_op(op),
@@ -752,8 +819,22 @@ fn lower(expr: &Expression) -> Option<Expr> {
             },
             optional_safe: false,
         },
-        // Bare calls (`today()`, `score(...)`) have no rex-expr shape.
-        Expression::Call { .. } => return None,
+        // The date constructor is expressible through the surface grammar
+        // (`date("2026-01-01")`): one string-literal argument. Every other
+        // bare call (`today()`, `score(...)`) has no rex-expr shape.
+        Expression::Call { name, args } => {
+            if name == "date" {
+                match args.as_slice() {
+                    [Expression::StringLit(text)] => ExprKind::Date {
+                        text: text.clone(),
+                        literal_span: no_span(),
+                    },
+                    _ => return None,
+                }
+            } else {
+                return None;
+            }
+        }
     };
     Some(Expr::new(kind, no_span()))
 }
@@ -764,7 +845,7 @@ fn lower_value(value: &ValueExpression) -> Option<Expr> {
     let kind = match value {
         ValueExpression::Identifier(name) => ExprKind::Name(name.clone()),
         ValueExpression::String(text) => ExprKind::String(text.clone()),
-        ValueExpression::Number(number) => ExprKind::Int(int_literal(number.value())?),
+        ValueExpression::Number(number) => numeric_literal(number.value()),
         ValueExpression::Bool(value) => ExprKind::Bool(*value),
         ValueExpression::Array(_) | ValueExpression::Object(_) | ValueExpression::Call(..) => {
             return None;
@@ -817,14 +898,16 @@ fn lower_un_op(op: &IfmlUnaryOp) -> ExprUnOp {
     }
 }
 
-/// The `i64` for an IR number literal, or `None` for a fractional or
-/// out-of-range value (rex-expr literals are `i64`-shaped; `NaN` and the
-/// infinities fail the `fract` test).
-fn int_literal(value: f64) -> Option<i64> {
-    if value.fract() != 0.0 || value < i64::MIN as f64 || value >= i64::MAX as f64 {
-        return None;
+/// The rex-expr literal for an IR number: integral values in `i64` range
+/// become integer literals (L1's default), everything else a float literal
+/// (the float analogue of L1). `NaN` and the infinities fail the `fract`
+/// test into the float arm, which preserves them as `f64` values.
+fn numeric_literal(value: f64) -> ExprKind {
+    if value.fract() == 0.0 && value >= i64::MIN as f64 && value < i64::MAX as f64 {
+        ExprKind::Int(value as i64)
+    } else {
+        ExprKind::Float(value)
     }
-    Some(value as i64)
 }
 
 /// Whether the lowered tree references any of `names`. Only the variants
@@ -1285,15 +1368,30 @@ view "Report" {
     }
 
     #[test]
-    fn untyped_datetime_param_condition_is_skipped() {
+    fn datetime_params_check_as_calendar_dates() {
+        // `DateTime` is a checking alias for the expression language's
+        // `date` (no time-of-day reasoning): comparisons against date
+        // literals type-check, mismatches report.
         let source = r#"
 view "Report" {
     params { deadline: DateTime };
 
-    if deadline == "x";
+    if deadline > date("2026-01-01");
 }
 "#;
         assert!(diags(source, &shop_model()).is_empty());
+
+        let mismatch = r#"
+view "Report" {
+    params { deadline: DateTime };
+
+    if deadline > "x";
+}
+"#;
+        assert!(
+            !diags(mismatch, &shop_model()).is_empty(),
+            "a date-vs-string comparison must be reported"
+        );
     }
 
     #[test]
@@ -1337,8 +1435,11 @@ view "Catalog" {
     }
 
     #[test]
-    fn lowering_poisons_unmappable_nodes() {
-        assert!(lower(&Expression::NumLit(1.5.into())).is_none());
+    fn lowering_splits_integral_and_fractional_numbers() {
+        assert_eq!(
+            lower(&Expression::NumLit(1.5.into())).map(|expr| expr.kind),
+            Some(ExprKind::Float(1.5))
+        );
         assert_eq!(
             lower(&Expression::NumLit(2.0.into())).map(|expr| expr.kind),
             Some(ExprKind::Int(2))
