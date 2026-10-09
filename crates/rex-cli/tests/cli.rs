@@ -2430,6 +2430,46 @@ fn ir_emits_ifml_artifact_json() {
 }
 
 #[test]
+fn ir_expand_inlines_module_uses_for_ifml() {
+    let _ = write_source("ifml-domain.mox", IFML_DOMAIN);
+    let _ = write_source("pager.ifml", PAGER_IFML);
+    let flow = write_source("good.ifml", GOOD_IFML);
+
+    // Without --expand the use stays a reference.
+    let plain = rexlang()
+        .args(["ir", flow.to_str().unwrap()])
+        .output()
+        .expect("run rexlang ir");
+    assert!(plain.status.success());
+    let plain_json = String::from_utf8_lossy(&plain.stdout);
+    assert!(
+        plain_json.contains("\"moduleUses\""),
+        "use kept: {plain_json}"
+    );
+
+    // With --expand the use is inlined: the module's component appears and
+    // the use is gone.
+    let expanded = rexlang()
+        .args(["ir", flow.to_str().unwrap(), "--expand"])
+        .output()
+        .expect("run rexlang ir --expand");
+    assert!(
+        expanded.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&expanded.stderr)
+    );
+    let expanded_json = String::from_utf8_lossy(&expanded.stdout);
+    assert!(
+        !expanded_json.contains("\"moduleUses\""),
+        "uses inlined: {expanded_json}"
+    );
+    assert!(
+        expanded_json.contains("\"PagerBody\"") || expanded_json.contains("pager"),
+        "the module's contents spliced: {expanded_json}"
+    );
+}
+
+#[test]
 fn fmt_check_passes_on_formatted_ifml() {
     let flow = write_source("formatted.ifml", GOOD_IFML);
     let output = rexlang()

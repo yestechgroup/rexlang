@@ -103,6 +103,15 @@ impl IfmlImports {
         );
     }
 
+    /// Every provided import as `((importing path, import path), text)`,
+    /// in insertion order — hosts that post-process the whole bundle (the
+    /// expansion's module table) walk it through here.
+    pub fn iter(&self) -> impl Iterator<Item = ((&str, &str), &str)> {
+        self.imports.iter().map(|((importing, import), text)| {
+            ((importing.as_str(), import.as_str()), text.as_str())
+        })
+    }
+
     /// The provided text for one import, or `None`.
     pub fn get(&self, importing_path: &str, import_path: &str) -> Option<&str> {
         self.imports
@@ -421,30 +430,40 @@ fn resolve_module_uses(index: &mut IfmlIndex, diags: &mut Vec<IfmlDiagnostic>) {
         }
     }
 
+    // Every use in the compilation resolves — imported files' uses too, so
+    // expansion and navigation see the full graph — but only the main
+    // file's uses are validated and diagnosed: an imported file's unknown
+    // target is that file's own compilation's report.
     for use_idx in 0..index.module_uses.len() {
-        let (target, span, overrides) = {
+        let (target, span, overrides, use_file) = {
             let site = &index.module_uses[use_idx];
-            if site.file != 0 {
-                continue;
-            }
-            (site.target.clone(), site.span, site.overrides.clone())
+            (
+                site.target.clone(),
+                site.span,
+                site.overrides.clone(),
+                site.file,
+            )
         };
         if ambiguous.contains(&target) {
             continue;
         }
-        let Some(&(file, decl_position)) = table.get(&target) else {
-            diags.push(IfmlDiagnostic {
-                code: E_UNKNOWN_MODULE,
-                message: format!("unknown module '{target}'"),
-                span,
-                file: main_path.clone(),
-            });
+        let Some(&(decl_file, decl_position)) = table.get(&target) else {
+            if use_file == 0 {
+                diags.push(IfmlDiagnostic {
+                    code: E_UNKNOWN_MODULE,
+                    message: format!("unknown module '{target}'"),
+                    span,
+                    file: main_path.clone(),
+                });
+            }
             continue;
         };
-        let global = decls_by_file[&file][decl_position];
+        let global = decls_by_file[&decl_file][decl_position];
         let decl = &index.module_decls[global];
-        validate_use(&target, decl, span, &overrides, &main_path, diags);
-        index.module_uses[use_idx].resolved_module = Some((file, decl_position));
+        if use_file == 0 {
+            validate_use(&target, decl, span, &overrides, &main_path, diags);
+        }
+        index.module_uses[use_idx].resolved_module = Some((decl_file, decl_position));
     }
 }
 

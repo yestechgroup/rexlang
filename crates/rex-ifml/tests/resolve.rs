@@ -534,5 +534,12 @@ view "Wrapped" {
     let compilation = compile_ok("app.ifml", "import \"wrapper.ifml\";", &imports);
     assert_eq!(compilation.index.module_uses.len(), 1);
     assert_eq!(compilation.index.module_uses[0].file, 1);
-    assert!(compilation.index.module_uses[0].resolved_module.is_none());
+    // Resolution is compilation-wide (expansion and navigation need the
+    // full graph); VALIDATION stays main-file only — the invalid overrides
+    // produced no diagnostics.
+    assert_eq!(
+        compilation.index.module_uses[0].resolved_module,
+        Some((2, 0)),
+        "wrapper's use resolves to Pagination in pager.ifml (file 2)"
+    );
 }

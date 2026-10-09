@@ -71,6 +71,10 @@ enum Command {
         /// Write the JSON to this path instead of stdout.
         #[arg(short, long, value_name = "FILE")]
         out: Option<PathBuf>,
+        /// `.ifml` only: inline every `use` into the resolved module's
+        /// contents (overrides applied) before emitting.
+        #[arg(long)]
+        expand: bool,
     },
     /// Code generation from compiled `.mox` files.
     Gen {
@@ -198,7 +202,7 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     match cli.command {
         Command::Check { files } => commands::check::run(files),
-        Command::Ir { files, out } => commands::ir::run(files, out),
+        Command::Ir { files, out, expand } => commands::ir::run(files, out, expand),
         Command::Gen { target } => commands::gen::run(target),
         Command::Fmt { check, files } => commands::fmt::run(check, files),
         Command::Artifact {
