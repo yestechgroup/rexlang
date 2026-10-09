@@ -119,6 +119,13 @@ where
     select! { Token::Int(value) => value }
 }
 
+fn float_lit<'src, I>() -> impl Parser<'src, I, f64, ExExtra<'src>> + Clone
+where
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
+{
+    select! { Token::Float(value) => value }
+}
+
 fn string_lit<'src, I>() -> impl Parser<'src, I, String, ExExtra<'src>> + Clone
 where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
@@ -299,6 +306,7 @@ where
     recursive(|expr| {
         let atom = choice((
             int_lit().map_with(|value, e| Expr::new(ExprKind::Int(value), e.span())),
+            float_lit().map_with(|value, e| Expr::new(ExprKind::Float(value), e.span())),
             string_lit().map_with(|value, e| Expr::new(ExprKind::String(value), e.span())),
             date_literal(&expr),
             just(Token::True).map_with(|_, e| Expr::new(ExprKind::Bool(true), e.span())),

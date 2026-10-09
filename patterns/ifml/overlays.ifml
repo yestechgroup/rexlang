@@ -1,0 +1,78 @@
+// rexlang reference pattern library — overlays.
+// Floating surfaces: modals, drawers, popovers, confirmations, and toasts.
+
+module "Modal" {
+    input { title: String = "Dialog", content: String = "" }
+    output { dismissed: Boolean }
+
+    container "surface" {
+        modal: true;
+
+        component "body" {
+            type: details;
+            data: Item;
+        }
+
+        on close -> stay;
+    }
+}
+
+module "Drawer" {
+    input { title: String = "Panel", side: String = "end" }
+    output { dismissed: Boolean }
+
+    container "panel" {
+        component "body" {
+            type: details;
+            data: Item;
+        }
+
+        on close -> stay;
+    }
+}
+
+module "Popover" {
+    input { anchor: String = "", placement: String = "bottom" }
+    output { dismissed: Boolean }
+
+    container "bubble" {
+        component "body" {
+            type: details;
+            data: Item;
+        }
+
+        on toggle -> stay;
+    }
+}
+
+module "Confirmation" {
+    input {
+        message: String = "Are you sure?",
+        confirmAction: String = "Confirm",
+        cancelAction: String = "Cancel"
+    }
+    output { confirmed: Boolean }
+
+    container "surface" {
+        modal: true;
+
+        component "message" {
+            type: details;
+            data: Item;
+        }
+
+        on confirm -> action("Confirm");
+        on cancel -> stay;
+    }
+}
+
+module "Toast" {
+    input { message: String = "", kind: String = "info" }
+    output { dismissed: Boolean }
+
+    component "notice" {
+        type: details;
+
+        on dismiss -> stay;
+    }
+}

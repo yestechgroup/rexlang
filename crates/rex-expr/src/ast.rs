@@ -42,6 +42,10 @@ pub enum ExprKind {
     /// leading `-` is [`ExprKind::Unary`] with [`UnOp::Neg`]. Literals are
     /// typed `int` by default, `long` in a long context (spec rule L1).
     Int(i64),
+    /// A float literal: digits, a `.`, digits (non-negative; `-` is unary).
+    /// Typed `double` by default, `float` in a float context (the float
+    /// analogue of rule L1). No exponent notation.
+    Float(f64),
     /// A string literal, unescaped.
     String(String),
     /// A boolean literal (`true`/`false`).

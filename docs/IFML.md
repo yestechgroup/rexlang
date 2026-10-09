@@ -231,7 +231,9 @@ productions.
   expr)? -> <action> ;` with `navigate_action`, `refresh_action`,
   `action_invocation`, or `stay_statement`.
 - **Actions and modules** — `action_declaration` (properties + events) and
-  `module_declaration` (required `input`/`output` parameter blocks).
+  `module_declaration` (required `input`/`output` parameter blocks; the body
+  may also contain `module_use_statement`s, composing other declared
+  modules).
 - **Expressions** — the C-like precedence chain `expression` → `logical_or`
   → `logical_and` → `comparison` → `addition` → `multiplication` → `unary`
   → `primary` (calls, field access, literals, groups).
@@ -306,6 +308,12 @@ pub enum UnaryOp { Not, Neg }
 
 ## Downstream Consumption
 
+The `rexlang` language server supports the surface: diagnostics (resolver
+`E0001`–`E0009` + typed-binding `E0100`–`E0103`), document symbols, hover
+(module signatures), go-to-definition on `use` sites (cross-file), and
+`textDocument/formatting` backed by the canonical formatter. Imports fetch
+from open editor buffers first, disk second.
+
 The `IfmlModel` artifact is the integration boundary. Consumers `parse_ifml_file` (or deserialize a serialized artifact with `IfmlModel::from_json`) and walk the model to build applications. codegraph, the primary consumer today, projects the artifact into its graph (ViewContainer/ViewComponent/Event/Action/ParameterDefinition/DataBinding/ModuleDefinition nodes, NavigationFlow/DataFlow/HasParameter/... edges) and generates behavior-wired UI plus Playwright tests from it.
 
 ### Expression Evaluation
@@ -329,15 +337,120 @@ Expression evaluation is **deferred to generation time** — the artifact stores
 crates/rex-ifml/
 ├── Cargo.toml
 ├── src/
-│   ├── lib.rs            # Public API: parse_ifml, parse_ifml_file + re-exports of rex_ir::ifml
+│   ├── lib.rs            # Public API: parse_ifml, parse_ifml_file, parse_ifml_indexed, compile_ifml_str, check_ifml, format_ifml + re-exports of rex_ir::ifml
 │   ├── parser.rs         # Pest parser wrapper + IfmlParseError
+│   ├── index.rs          # Span side-table (IfmlIndex): module decls/uses, views, actions, actors — never serialized
+│   ├── resolve.rs        # Cross-file module resolution: IfmlImports bundle, compile_ifml_str, IfmlDiagnostic (E0001–E0009)
+│   ├── check.rs          # Typed expression checking against a domain Model, via rex_expr::DomainTypes (E0100–E0103)
+│   ├── fmt.rs            # Comment-preserving canonical formatter
 │   └── grammar/
 │       └── ifml.pest     # Pest grammar file
 └── tests/
-    └── golden.rs         # Conformance golden (REX_UPDATE_FIXTURES=1 regenerates)
+    ├── golden.rs         # Conformance golden (REX_UPDATE_FIXTURES=1 regenerates)
+    ├── resolve.rs        # Resolver conformance tests
+    ├── patterns.rs       # patterns/ifml library compiles clean; composition + negative cases
+    └── examples.rs       # examples/*.ifml compile, type-check, and are fmt-canonical
 ```
 
+### Module Resolution
+
+`compile_ifml_str(path, text, &imports)` compiles a file plus its `.ifml`
+imports in one call. Imports resolve through the `IfmlImports` bundle
+(keyed `(importing path, import path)`, provided by the host — the resolver
+never touches the filesystem); imports not ending in `.ifml` pass through
+untouched. Local modules shadow imported ones; one name exported by two
+distinct imported files is ambiguous. Every `use` in the main file — in
+views, containers, and module bodies — is resolved and its overrides
+validated against the target module's inputs and properties. Results live
+in the `IfmlIndex` side-table (`ModuleUseSite::resolved_module`); the
+returned `IfmlModel` is the main file's own parse, unchanged, so wire
+artifacts stay byte-identical. See `crates/rex-ifml/src/resolve.rs` for the
+diagnostic-code table.
+
 Goldens live next to the other conformance fixtures: `tests/conformance/ifml/app.ifml` (canonical source) and `tests/conformance/ifml/app.ifml.json` (committed artifact).
+
+### Typed Bindings
+
+`check_ifml(&compilation, Option<&domain_model>)` type-checks every
+type-checkable expression in a compiled model against a domain model —
+the union `rex_ir::Model` every domain surface lowers into (`.mox`
+declarations, `import sigil` packages, `import schema` classes). It
+reuses `rex_expr`'s `DomainTypes`/`TypeChecker` — the same checker that
+validates `.mox` operation bodies — so navigation, operations, and the
+typing rules of `docs/EXPRESSIONS.md` behave identically.
+
+What is checked, and with which bindings:
+
+| Context | Bindings in scope |
+|---|---|
+| View/container `if` conditions | the view's `params` |
+| Component `filter:` / condition properties | view params + the `data:` entity's features (`with_self`) |
+| Table `column "L" -> expr …` | same as its component |
+| Event guards | same, minus event parameters (untyped — expressions naming them are skipped) |
+| Navigation binding pairs | same |
+| `use` override expressions | the enclosing view's params; expected type from the module input's `type_ref` |
+
+`type_ref` mapping for checking (one shared alias table in
+`crates/rex-ifml/src/check.rs`, used by both the checker and the
+resolver's override check): `String`/`Uuid` → string, `Int` → int,
+`Float` → float, `Boolean` → boolean, `DateTime` → the expression
+language's calendar `date` (a checking alias — no time-of-day
+reasoning). Generic (identifier) input types stay deferred — expressions
+relying on them are skipped, not errors. Constructs the shared
+expression language cannot type (bare calls other than
+`date("YYYY-MM-DD")`, `%`, the `~=`/`!~` regex operators, array/object
+values) are also skipped silently: evaluation stays deferred to
+generation time, as below. Diagnostics `E0100`–`E0103` (unknown data
+entity, type mismatch, unknown feature, unknown name) name the site:
+`view 'X' component 'orders': …`. With `domains: None` the checker is a
+no-op.
+
+### Reference Pattern Library
+
+`patterns/ifml/` ships a domain-agnostic library of 39 reusable modules —
+the spectrum of common experiences (feeds, inbox, search, commerce,
+workflow, overlays) — organized one file per category:
+
+| File | Modules |
+|---|---|
+| `navigation.ifml` | Pagination, Tabs, Breadcrumbs, Link |
+| `collections.ifml` | DataList, CardGrid, Card, Feed, Timeline, MasterDetail, MediaGallery |
+| `data.ifml` | Detail, Summary, Metric, SearchPanel, Calendar, Map |
+| `input.ifml` | FormPanel, ReferencePicker, Upload |
+| `workflow.ifml` | Wizard, WorkQueue, ApprovalQueue, Progress |
+| `communication.ifml` | Inbox, NotificationCenter, CommentThread |
+| `commerce.ifml` | Catalogue, ProductDetail, Cart, Checkout |
+| `social.ifml` | ReactionBar, SocialItem, ShareAction |
+| `overlays.ifml` | Modal, Drawer, Popover, Confirmation, Toast |
+
+Patterns compose: module bodies may contain `use` statements
+(`Checkout` composes `Wizard`; `Inbox` composes `SearchPanel` +
+`DataList`). They stay domain-agnostic through two conventions:
+
+- **Typed inputs** carry builtin types (`String`, `Int`, `Boolean`) or a
+  generic identifier type (`Item`, `Filter`) for entity handles; the
+  checker defers the generic ones and type-checks the builtin ones at
+  each use site.
+- **Slots** are plain module properties (e.g. `Card`'s
+  `eyebrow`/`title`/`subtitle`/`body`/`metadata`/`media`/`actions`), so
+  a consumer binds them with expressions against its own domain:
+  `use "Card" as card { title: product.name; };`.
+
+Import library files by relative path (the CLI and every host resolve
+imports relative to the importing file) and instantiate with `use`:
+
+```
+import "../patterns/ifml/commerce.ifml";
+
+view "Storefront" {
+    params { products: Product };
+
+    use "Catalogue" as catalogue { items: products; };
+}
+```
+
+`examples/ecommerce.ifml` and `examples/support.ifml` are the reference
+consumers.
 
 ---
 

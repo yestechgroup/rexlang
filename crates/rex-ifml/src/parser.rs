@@ -19,7 +19,7 @@ pub enum IfmlParseError {
 #[grammar = "grammar/ifml.pest"]
 pub struct IfmlParser;
 
-fn parse_string(pair: &Pair<Rule>) -> String {
+pub(crate) fn parse_string(pair: &Pair<Rule>) -> String {
     let s = pair.as_str();
     let inner = &s[1..s.len() - 1];
     let mut result = String::with_capacity(inner.len());
@@ -126,18 +126,17 @@ fn parse_value_primary(pair: Pair<Rule>) -> ValueExpression {
         }
         Rule::field_expr => {
             let mut inner = pair.clone().into_inner();
-            let object = inner
-                .next()
-                .map(|p| p.as_str().to_string())
-                .unwrap_or_default();
-            let field = inner
-                .next()
-                .map(|p| p.as_str().to_string())
-                .unwrap_or_default();
-            ValueExpression::FieldAccess {
-                object: Box::new(ValueExpression::Identifier(object)),
-                field,
+            let mut object = match inner.next() {
+                Some(p) => ValueExpression::Identifier(p.as_str().to_string()),
+                None => return ValueExpression::Identifier(String::new()),
+            };
+            for field_pair in inner {
+                object = ValueExpression::FieldAccess {
+                    object: Box::new(object),
+                    field: field_pair.as_str().to_string(),
+                };
             }
+            object
         }
         Rule::group_expr => {
             if let Some(inner) = pair.clone().into_inner().next() {
@@ -573,20 +572,21 @@ fn parse_expression(pair: Pair<Rule>) -> Expression {
             }
         }
         Rule::field_expr => {
-            let mut inner = pair.clone().into_inner();
-            if let Some(obj_pair) = inner.next() {
-                let object = obj_pair.as_str().to_string();
-                if let Some(field_pair) = inner.next() {
-                    let field = field_pair.as_str().to_string();
-                    Expression::FieldExpr {
-                        object: Box::new(Expression::Ident(object)),
-                        field,
-                    }
-                } else {
-                    Expression::Ident(object)
-                }
-            } else {
+            let mut inner = pair.clone().into_inner().peekable();
+            let Some(object) = inner.next() else {
+                return fallback_expr(&pair);
+            };
+            let mut object = Expression::Ident(object.as_str().to_string());
+            for field_pair in inner {
+                object = Expression::FieldExpr {
+                    object: Box::new(object),
+                    field: field_pair.as_str().to_string(),
+                };
+            }
+            if matches!(object, Expression::Ident(_)) {
                 fallback_expr(&pair)
+            } else {
+                object
             }
         }
         Rule::group_expr => {
@@ -623,21 +623,18 @@ fn parse_primary_expression(pair: Pair<Rule>) -> Expression {
             }
         }
         Rule::field_expr => {
-            let mut inner = pair.clone().into_inner();
-            if let Some(obj_pair) = inner.next() {
-                let object = obj_pair.as_str().to_string();
-                if let Some(field_pair) = inner.next() {
-                    let field = field_pair.as_str().to_string();
-                    Expression::FieldExpr {
-                        object: Box::new(Expression::Ident(object)),
-                        field,
-                    }
-                } else {
-                    Expression::Ident(object)
-                }
-            } else {
-                Expression::Ident(pair.as_str().to_string())
+            let mut inner = pair.clone().into_inner().peekable();
+            let Some(object) = inner.next() else {
+                return Expression::Ident(String::new());
+            };
+            let mut object = Expression::Ident(object.as_str().to_string());
+            for field_pair in inner {
+                object = Expression::FieldExpr {
+                    object: Box::new(object),
+                    field: field_pair.as_str().to_string(),
+                };
             }
+            object
         }
         Rule::group_expr => {
             if let Some(inner) = pair.clone().into_inner().next() {
@@ -1446,6 +1443,7 @@ fn parse_module_declaration(pair: Pair<Rule>) -> ModuleDeclaration {
     let mut containers = Vec::new();
     let mut components = Vec::new();
     let mut events = Vec::new();
+    let mut module_uses = Vec::new();
 
     for child in inner {
         match child.as_rule() {
@@ -1460,6 +1458,7 @@ fn parse_module_declaration(pair: Pair<Rule>) -> ModuleDeclaration {
             Rule::container_declaration => containers.push(parse_container_declaration(child)),
             Rule::component_declaration => components.push(parse_component_declaration(child)),
             Rule::event_handler => events.push(parse_event_handler(child)),
+            Rule::module_use_statement => module_uses.push(parse_module_use_statement(child)),
             _ => {}
         }
     }
@@ -1472,6 +1471,7 @@ fn parse_module_declaration(pair: Pair<Rule>) -> ModuleDeclaration {
         containers,
         components,
         events,
+        module_uses,
     }
 }
 
@@ -1501,7 +1501,7 @@ fn parse_import_declaration(pair: Pair<Rule>) -> String {
     inner.next().map(|p| parse_string(&p)).unwrap_or_default()
 }
 
-fn parse_ifml_model(pairs: Pairs<Rule>) -> Result<IfmlModel, IfmlParseError> {
+pub(crate) fn parse_ifml_model(pairs: Pairs<Rule>) -> Result<IfmlModel, IfmlParseError> {
     let mut domains = Vec::new();
     let mut views = Vec::new();
     let mut actions = Vec::new();
@@ -1533,8 +1533,10 @@ fn parse_ifml_model(pairs: Pairs<Rule>) -> Result<IfmlModel, IfmlParseError> {
     ))
 }
 
-/// Parse an IFML DSL string into an AST model.
-pub fn parse_ifml(input: &str) -> Result<IfmlModel, IfmlParseError> {
+/// Parses `input` and returns the top-level `ifml_model` pair (`None` for
+/// empty input), the shared entry for the model lowering and the span index
+/// walk.
+pub(crate) fn parse_ifml_top_pair(input: &str) -> Result<Option<Pair<'_, Rule>>, IfmlParseError> {
     let parsed = IfmlParser::parse(Rule::ifml_model, input).map_err(|e| IfmlParseError::Parse {
         position: "unknown".to_string(),
         message: format!("{}", e),
@@ -1542,7 +1544,7 @@ pub fn parse_ifml(input: &str) -> Result<IfmlModel, IfmlParseError> {
 
     let top_level_pairs: Vec<Pair<Rule>> = parsed.collect();
     if top_level_pairs.is_empty() {
-        return Ok(IfmlModel::default());
+        return Ok(None);
     }
 
     let top = &top_level_pairs[0];
@@ -1553,7 +1555,15 @@ pub fn parse_ifml(input: &str) -> Result<IfmlModel, IfmlParseError> {
         });
     }
 
-    parse_ifml_model(top.clone().into_inner())
+    Ok(Some(top.clone()))
+}
+
+/// Parse an IFML DSL string into an AST model.
+pub fn parse_ifml(input: &str) -> Result<IfmlModel, IfmlParseError> {
+    match parse_ifml_top_pair(input)? {
+        None => Ok(IfmlModel::default()),
+        Some(top) => parse_ifml_model(top.into_inner()),
+    }
 }
 
 /// Parse an IFML DSL file into an AST model.
@@ -2041,6 +2051,65 @@ module "Pagination" {
         assert_eq!(module.output_params.len(), 1);
         assert_eq!(module.output_params[0].name, "result");
         assert_eq!(module.components.len(), 1);
+    }
+
+    #[test]
+    fn test_module_internal_use() {
+        let input = r#"
+module "MasterDetail" {
+    input { entityId: Uuid, pageSize: Int = 20 }
+    output { selected: Uuid }
+
+    use "Pagination" as inner {
+        page_size: 50;
+    }
+
+    component "list" {
+        type: list;
+        data: Item;
+    }
+
+    use "Footer";
+}
+"#;
+        let model = parse_ifml(input).unwrap();
+        assert_eq!(model.modules.len(), 1);
+        let module = &model.modules[0];
+        assert_eq!(module.name, "MasterDetail");
+        assert_eq!(module.module_uses.len(), 2);
+
+        assert_eq!(module.module_uses[0].module, "Pagination");
+        assert_eq!(module.module_uses[0].alias.as_deref(), Some("inner"));
+        assert_eq!(module.module_uses[0].properties.len(), 1);
+        assert_eq!(module.module_uses[0].properties[0].key, "page_size");
+        assert_eq!(
+            module.module_uses[0].properties[0].value,
+            ValueExpression::Number(50.0.into())
+        );
+
+        assert_eq!(module.module_uses[1].module, "Footer");
+        assert_eq!(module.module_uses[1].alias, None);
+        assert!(module.module_uses[1].properties.is_empty());
+    }
+
+    /// A `use:` property assignment inside a module body still lowers as a
+    /// property, not a module use (the colon disambiguates), mirroring the
+    /// view-body rule.
+    #[test]
+    fn test_module_use_still_parses_as_property_name() {
+        let input = r#"
+module "M" {
+    input { page: Int }
+    output { total: Int }
+
+    use: "fallback";
+}
+"#;
+        let model = parse_ifml(input).unwrap();
+        let module = &model.modules[0];
+        assert!(module.module_uses.is_empty());
+        assert_eq!(module.properties.len(), 1);
+        assert_eq!(module.properties[0].key, "use");
     }
 
     #[test]
@@ -2873,6 +2942,52 @@ view "AdminDashboard" {
                 op: BinOp::Eq,
                 right: Box::new(Expression::StringLit("admin".to_string())),
             })
+        );
+    }
+
+    #[test]
+    fn test_deep_field_navigation_folds_left() {
+        let input = r#"
+view "Catalogue" {
+    component "grid" {
+        type: list;
+        data: Product;
+        filter: product.category.name == "tools" && product.brand.name != null;
+    }
+}
+"#;
+        let model = parse_ifml(input).unwrap();
+        let filter = model.views[0].components[0]
+            .properties
+            .iter()
+            .find(|p| p.key == "filter")
+            .unwrap();
+        let deep = |object: &ValueExpression, field: &str| ValueExpression::FieldAccess {
+            object: Box::new(object.clone()),
+            field: field.to_string(),
+        };
+        let product_category_name = deep(
+            &ValueExpression::Identifier("product".to_string()),
+            "category",
+        );
+        let product_category_name = deep(&product_category_name, "name");
+        let product_brand_name = deep(&ValueExpression::Identifier("product".to_string()), "brand");
+        let product_brand_name = deep(&product_brand_name, "name");
+        assert_eq!(
+            filter.value,
+            ValueExpression::BinOp {
+                left: Box::new(ValueExpression::BinOp {
+                    left: Box::new(product_category_name),
+                    op: BinOp::Eq,
+                    right: Box::new(ValueExpression::String("tools".to_string())),
+                }),
+                op: BinOp::And,
+                right: Box::new(ValueExpression::BinOp {
+                    left: Box::new(product_brand_name),
+                    op: BinOp::Ne,
+                    right: Box::new(ValueExpression::Identifier("null".to_string())),
+                }),
+            }
         );
     }
 

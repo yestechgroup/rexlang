@@ -11,10 +11,12 @@ workspace = true
 
 [dependencies]
 rex-ir = { workspace = true }
+rex-expr = { workspace = true }
 pest = { workspace = true }
 pest_derive = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
 pest = { workspace = true, features = ["pretty-print"] }
+rex-driver = { workspace = true }
 serde_json = { workspace = true }

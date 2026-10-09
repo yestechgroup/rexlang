@@ -1,0 +1,61 @@
+// rexlang reference pattern library — input.
+// Write-side patterns: form panels, reference pickers, and uploads.
+
+import "data.ifml";
+
+module "FormPanel" {
+    input { entity: Item, fields: String = "", submitAction: String = "Save" }
+    output { saved: Boolean }
+
+    component "form" {
+        type: form;
+        data: Item;
+        mode: edit;
+
+        on submit(values) -> action("Save", {
+            on success -> navigate("ItemDetail", {
+                id: values.id
+            });
+            on error -> stay;
+        });
+
+        on cancel -> stay;
+    }
+}
+
+module "ReferencePicker" {
+    input { entity: Item, filters: Filter, query: String = "" }
+    output { selected: Uuid }
+
+    use "SearchPanel" as search { filters: Filter; };
+
+    component "candidates" {
+        type: list;
+        data: Item;
+        fields: [name];
+
+        on select(row) -> navigate("Preview", {
+            id: row.id
+        });
+    }
+
+    component "preview" {
+        type: details;
+        data: Item;
+    }
+}
+
+module "Upload" {
+    input { target: String = "uploads", accept: String = "*/*" }
+    output { uploaded: Boolean }
+
+    component "dropzone" {
+        type: form;
+
+        field attachment -> input file { required: true; }
+
+        on upload(values) -> action("StoreFile", {
+            target: target;
+        });
+    }
+}

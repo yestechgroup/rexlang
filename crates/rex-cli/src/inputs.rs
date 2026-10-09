@@ -2,6 +2,7 @@
 //! compilations: input expansion, source reading, the `.actor`/`.ddd`/`.evt`
 //! readers, and the shared compile step over collected sources.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use rex_driver::{compile_files, compile_str, DomainImports, MultiCompilation, SchemaImports};
@@ -116,6 +117,177 @@ pub(crate) fn is_actor_file(file: &Path) -> bool {
 /// against the domain models it imports.
 pub(crate) fn is_evt_file(file: &Path) -> bool {
     file.extension().and_then(|extension| extension.to_str()) == Some("evt")
+}
+
+/// `true` for `.ifml` paths: the interaction-flow surface, compiled against
+/// the domain models it imports and the `.ifml` pattern libraries it pulls
+/// in.
+pub(crate) fn is_ifml_file(file: &Path) -> bool {
+    file.extension().and_then(|extension| extension.to_str()) == Some("ifml")
+}
+
+/// An `.ifml` file plus everything it imports, ready for
+/// [`rex_ifml::compile_ifml_str`] and [`rex_ifml::check_ifml`].
+pub(crate) struct IfmlInputs {
+    /// The interaction file's path as given on the command line.
+    pub(crate) path: String,
+    /// The interaction file's source text.
+    pub(crate) source: String,
+    /// Every transitively imported `.ifml` source, keyed
+    /// `(importing-file path, import path)` — the bundle
+    /// [`rex_ifml::compile_ifml_str`] resolves against.
+    pub(crate) ifml_imports: rex_ifml::IfmlImports,
+    /// Every `.ifml` file in the compilation as `(resolver identity,
+    /// source)` — the main file first, then each import under its as-written
+    /// path. Used to render diagnostics for files the resolver rejected
+    /// before building its index.
+    pub(crate) sources: Vec<(String, String)>,
+    /// The union of all imported `.mox` domain models, for typed binding.
+    /// `None` when the file imports no domains (binding checks are then
+    /// skipped).
+    pub(crate) domains: Option<rex_ir::Model>,
+}
+
+/// Reads an `.ifml` file plus every `.ifml` and `.mox` file it imports,
+/// transitively. Import paths resolve relative to the importing file's own
+/// directory on disk, while the resolver keys each import by the importing
+/// file's identity and the import string **as written** (the resolver is
+/// filesystem-free and sees only the strings). Imports with other extensions
+/// (`.actor`) pass through untouched. Imported `.mox` files are compiled to
+/// Core IR and unioned for typed expression binding; a domain that fails to
+/// compile is a hard error. A missing import file is a clean error naming
+/// the resolved path.
+pub(crate) fn read_ifml_inputs(file: &Path) -> anyhow::Result<IfmlInputs> {
+    let source = std::fs::read_to_string(file)
+        .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
+    let path = file.display().to_string();
+    let mut inputs = IfmlInputs {
+        sources: vec![(path.clone(), source.clone())],
+        path: path.clone(),
+        source,
+        ifml_imports: rex_ifml::IfmlImports::default(),
+        domains: None,
+    };
+    let mut domain_sources: Vec<(String, String)> = Vec::new();
+    collect_ifml_imports(
+        &path,
+        file,
+        &inputs.source,
+        &mut inputs.ifml_imports,
+        &mut inputs.sources,
+        &mut domain_sources,
+    )?;
+    if domain_sources.is_empty() {
+        return Ok(inputs);
+    }
+    let schemas = collect_schema_imports(&domain_sources)?;
+    let sigil = collect_sigil_imports(&domain_sources)?;
+    let imports = DomainImports {
+        schemas,
+        sigil: sigil.imports,
+    };
+    let mut union = rex_ir::Model::new();
+    for (domain_path, domain_source) in &domain_sources {
+        let compilation = compile_str(domain_path, domain_source, &imports);
+        if !compilation.diagnostics.is_empty() {
+            let rendered = diagnostics_preview(domain_path, domain_source, &compilation);
+            anyhow::bail!(
+                "imported domain {} does not compile:\n{rendered}",
+                domain_path
+            );
+        }
+        let Some(model) = compilation.model else {
+            anyhow::bail!("imported domain {} does not compile", domain_path);
+        };
+        union.packages.extend(model.packages);
+    }
+    inputs.domains = Some(union);
+    Ok(inputs)
+}
+
+fn diagnostics_preview(path: &str, source: &str, compilation: &rex_driver::Compilation) -> String {
+    rex_driver::render(path, source, &compilation.diagnostics)
+}
+
+/// Gathers the `.ifml` import tree of one interaction file through
+/// [`rex_ifml::walk_ifml_imports`]: the fetch closure resolves each import
+/// relative to its importer's location on disk, provides `.ifml` content to
+/// the bundle under the walker's `(importer identity, import-as-written)`
+/// keys (the identities the resolver itself uses), and collects `.mox`
+/// domains (deduplicated by resolved path) as a side effect. The first
+/// unreadable import surfaces as an error after the walk. Disk paths are
+/// tracked per identity here — the walker only ever sees identities.
+fn collect_ifml_imports(
+    identity: &str,
+    disk_path: &Path,
+    source: &str,
+    bundle: &mut rex_ifml::IfmlImports,
+    sources: &mut Vec<(String, String)>,
+    domains: &mut Vec<(String, String)>,
+) -> anyhow::Result<()> {
+    let mut disk_paths: BTreeMap<String, PathBuf> = BTreeMap::new();
+    disk_paths.insert(identity.to_string(), disk_path.to_path_buf());
+    let mut read_error: Option<anyhow::Error> = None;
+    let dir_of = |path: &Path| -> PathBuf {
+        path.parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf()
+    };
+    let walk = rex_ifml::walk_ifml_imports(identity, source, &mut |importer, import| {
+        let importer_disk = disk_paths.get(importer)?;
+        let resolved = dir_of(importer_disk).join(import);
+        if import.ends_with(".ifml") {
+            match std::fs::read_to_string(&resolved) {
+                Ok(text) => {
+                    disk_paths.insert(import.to_string(), resolved);
+                    bundle.provide(importer, import, text.clone());
+                    Some(text)
+                }
+                Err(error) => {
+                    if read_error.is_none() {
+                        read_error = Some(anyhow::anyhow!(
+                            "cannot read imported file {} (imported by {}): {error}",
+                            resolved.display(),
+                            importer
+                        ));
+                    }
+                    None
+                }
+            }
+        } else if import.ends_with(".mox") {
+            let resolved_path = resolved.display().to_string();
+            if domains
+                .iter()
+                .any(|(existing, _)| *existing == resolved_path)
+            {
+                return None;
+            }
+            match std::fs::read_to_string(&resolved) {
+                Ok(text) => {
+                    domains.push((resolved_path, text));
+                    None
+                }
+                Err(error) => {
+                    if read_error.is_none() {
+                        read_error = Some(anyhow::anyhow!(
+                            "cannot read imported file {} (imported by {}): {error}",
+                            resolved.display(),
+                            importer
+                        ));
+                    }
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    });
+    if let Some(error) = read_error {
+        return Err(error);
+    }
+    *sources = walk.sources;
+    Ok(())
 }
 
 /// An `.actor` file plus the domain sources it imports, ready for

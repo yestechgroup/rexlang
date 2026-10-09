@@ -34,6 +34,10 @@ algebra are in ["Rust lowering"](#rust-lowering).
 - **Integers**: decimal digits, non-negative in the token stream; a leading
   `-` is the unary minus *operator*, never part of the literal. A literal that
   does not fit in `i64` is a lex error.
+- **Floats**: `digits.digits` — one or more digits, a `.`, one or more digits,
+  non-negative in the token stream (a leading `-` is, again, the unary
+  operator). Digits are required on **both** sides of the dot, so member
+  access never lexes as a float. No exponent notation.
 - **Identifiers**: `[A-Za-z_][A-Za-z0-9_]*`. `if else let true false null` are
   reserved keywords. `first filter map any size sum` are **contextual**: they
   name the collection algebra only in `name("...")` position after a `.`
@@ -61,7 +65,7 @@ unary       := ("!" | "-") unary | postfix
 postfix     := primary ((("." | "?.") member))*
 member      := NAME ("(" args? ")")?
 args        := expr ("," expr)*
-primary     := INT | STRING | "true" | "false" | "null" | NAME
+primary     := INT | FLOAT | STRING | "true" | "false" | "null" | NAME
              | "date" "(" STRING ")"
              | "(" expr ")"
              | "[" (expr ("," expr)*)? "]"
@@ -124,14 +128,19 @@ Types (`Ty`):
 Booleans are `boolean` (`true`/`false` literals). Comparisons yield
 `boolean`.
 
-**L1 (integer-literal polymorphism).** An integer literal is typed `int` by
+**L1 (literal polymorphism).** An integer literal is typed `int` by
 default. In a context whose expected type is `long` — the other operand of an
 arithmetic/comparison operator, an operation argument, or a list element base
 — an integer literal is typed `long` instead (its value always fits `i64`).
-Everywhere else, and for everything that is not an integer *literal*, there
-are **no implicit conversions**: in particular there is no implicit
-`int → long` (see U1). A literal typed `int` whose value does not fit in 32
-bits is an R1 constant-overflow error.
+A float literal (`digits.digits`) is the float analogue: typed `double` by
+default, adapting to `float` in a float context — the other operand of an
+arithmetic/comparison operator, an operation argument, or a list element base
+— in either operand order (the feature's `float` type wins; see the float
+special cases of L2). Everywhere else, and for everything that is not a
+numeric *literal*, there are **no implicit conversions**: in particular there
+is no implicit `int → long` or `float ↔ double` (see U1). A literal typed
+`int` whose value does not fit in 32 bits is an R1 constant-overflow error;
+float literals have no compile-time range rule.
 
 **L2 (operand rule).** `+ - * /` require both operands to have the *same*
 numeric type and produce it — except `+`, which additionally admits two
@@ -268,7 +277,14 @@ panics.)
 behavior), for both `int` and `long`.
 
 Compile-time half: a **constant zero divisor** (any expression that folds to
-the integer constant `0`, including `-0`) is a **type-check error**.
+the integer constant `0`, including `-0`) is a **type-check error**. The
+constant-folding half of R1/R4 is integer-only: `const_of` never folds float
+literals, so float division is never compile-checked (IEEE semantics, per
+the parenthetical above).
+
+**Float literal lowering.** A float literal lowers with its L1-adapted type
+as the suffix — `1.5f64` by default, `1.5f32` in a float context (mirroring
+`2i32`/`2i64`).
 
 **Rust lowering.** Plain `/` — Rust integer division is already truncating
 toward zero and panics on a zero divisor, which is exactly the contract:

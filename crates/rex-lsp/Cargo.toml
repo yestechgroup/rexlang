@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 rex-driver = { workspace = true }
+rex-ifml = { workspace = true }
 rex-ir = { workspace = true }
 rex-syntax = { workspace = true }
 tower-lsp = { workspace = true }

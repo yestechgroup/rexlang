@@ -6,12 +6,12 @@ use std::process::ExitCode;
 use rex_driver::{compile_actors_str, compile_ddd_str, compile_evt_str};
 
 use crate::inputs::{
-    compile_sources, expand_inputs, is_actor_file, is_ddd_file, is_evt_file, read_actor_pair,
-    read_ddd_design, read_evt_pair, read_sources,
+    compile_sources, expand_inputs, is_actor_file, is_ddd_file, is_evt_file, is_ifml_file,
+    read_actor_pair, read_ddd_design, read_evt_pair, read_ifml_inputs, read_sources,
 };
 use crate::report::{
     report_actor_diagnostics, report_ddd_diagnostics, report_evt_diagnostics,
-    report_multi_diagnostics,
+    report_ifml_diagnostics, report_multi_diagnostics,
 };
 
 pub(crate) fn run(files: Vec<PathBuf>, out: Option<PathBuf>) -> anyhow::Result<ExitCode> {
@@ -43,6 +43,33 @@ pub(crate) fn run(files: Vec<PathBuf>, out: Option<PathBuf>) -> anyhow::Result<E
             return Ok(ExitCode::FAILURE);
         };
         let json = actor_model.to_json_pretty()?;
+        match out {
+            Some(out_path) => std::fs::write(out_path, json)?,
+            None => println!("{json}"),
+        }
+        Ok(ExitCode::SUCCESS)
+    } else if files.len() == 1 && is_ifml_file(&files[0]) {
+        let inputs = read_ifml_inputs(&files[0])?;
+        let compilation =
+            match rex_ifml::compile_ifml_str(&inputs.path, &inputs.source, &inputs.ifml_imports) {
+                Ok(compilation) => compilation,
+                Err(diagnostics) => {
+                    report_ifml_diagnostics(&inputs.sources, &diagnostics);
+                    return Ok(ExitCode::FAILURE);
+                }
+            };
+        let binding = rex_ifml::check_ifml(&compilation, inputs.domains.as_ref());
+        if !binding.is_empty() {
+            let sources: Vec<(String, String)> = compilation
+                .index
+                .files
+                .iter()
+                .map(|file| (file.path.clone(), file.text.clone()))
+                .collect();
+            report_ifml_diagnostics(&sources, &binding);
+            return Ok(ExitCode::FAILURE);
+        }
+        let json = compilation.model.to_json_pretty()?;
         match out {
             Some(out_path) => std::fs::write(out_path, json)?,
             None => println!("{json}"),

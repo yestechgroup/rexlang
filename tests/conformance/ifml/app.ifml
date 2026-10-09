@@ -105,7 +105,7 @@ module "Pagination" {
 view "Dashboard" {
     on load -> refresh("recentOrders");
 
-    use "Pagination" as pager { page_size: 25; };
+    use "Pagination" as pager { page: 1; pageSize: 25; };
 
     component "recentOrders" {
         type: list;

@@ -11,7 +11,7 @@
 //! Typical use:
 //!
 //! ```
-//! use rex_expr::{TypeChecker, TypeContext, parse};
+//! use rex_expr::{DomainTypes, TypeChecker, parse};
 //! use rex_ir::{ClassDef, Feature, FeatureKind, Multiplicity, Model, Package, PrimitiveType, TypeRef};
 //!
 //! let mut model = Model::new();
@@ -31,7 +31,7 @@
 //! let parsed = parse("book.pages + 1");
 //! assert!(parsed.errors.is_empty());
 //!
-//! let checker = TypeChecker::new(TypeContext::from_model(&model))
+//! let checker = TypeChecker::new(DomainTypes::from_model(&model))
 //!     .with_binding("book", rex_expr::Ty::class("demo", "Book"));
 //! let ty = checker.type_of(parsed.ast.as_ref().unwrap()).expect("well-typed");
 //! assert_eq!(ty, rex_expr::Ty::int());
@@ -47,7 +47,7 @@ pub mod parser;
 pub mod types;
 
 pub use ast::{AlgebraKind, BinOp, Expr, ExprKind, Span, Spanned, UnOp};
-pub use checker::{TypeChecker, TypeContext};
+pub use checker::{ClassInfo, DomainTypes, TypeChecker, TypeContext};
 pub use error::{ExprError, ParseResult};
 pub use parser::parse;
 pub use types::{NamedKind, Ty};

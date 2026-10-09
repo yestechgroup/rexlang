@@ -712,7 +712,14 @@
           "alias": "pager",
           "properties": [
             {
-              "key": "page_size",
+              "key": "page",
+              "value": {
+                "type": "number",
+                "value": 1.0
+              }
+            },
+            {
+              "key": "pageSize",
               "value": {
                 "type": "number",
                 "value": 25.0

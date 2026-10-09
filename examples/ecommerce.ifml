@@ -1,0 +1,77 @@
+// E-commerce storefront interaction flows: the reference pattern library
+// (patterns/ifml) composed into views and bound to the ecommerce domain
+// (ecommerce.mox). The library's generic Item/Filter inputs bind to the
+// shop's Product where the domain has no dedicated class.
+
+import "ecommerce.mox";
+import "../patterns/ifml/commerce.ifml";
+
+view "Storefront" {
+    params { products: Product, categories: Product, filters: Product };
+    label "Storefront";
+    landmark: true;
+
+    use "Catalogue" as catalogue {
+        products: products;
+        categories: categories;
+        filters: filters;
+    };
+
+    component "deals" {
+        type: list;
+        data: Product;
+        fields: [sku, listPrice];
+        filter: listPrice > 0;
+
+        on select(card) -> navigate("ProductPage", {
+            product: card.sku
+        });
+    }
+}
+
+view "ProductPage" {
+    params { product: Product };
+    label "Product Detail";
+
+    use "ProductDetail" as detail { product: product; };
+
+    use "Card" as card { title: product.sku; };
+
+    component "buy" {
+        type: form;
+        data: Product;
+
+        on addToCart -> navigate("CartPage", {
+            sku: product.sku
+        });
+    }
+}
+
+view "CartPage" {
+    params { lines: OrderLine, order: Order };
+    label "Cart";
+
+    use "Cart" as cart { lineItems: lines; };
+
+    use "Progress" as progress { value: 1; max: 4; };
+
+    component "items" {
+        type: table;
+        data: OrderLine;
+        fields: [sku, quantity, unitPrice];
+        filter: quantity > 0;
+
+        column "Total" -> expr quantity * unitPrice;
+
+        on checkout -> navigate("Checkout", {
+            order: order
+        });
+    }
+}
+
+view "Checkout" {
+    params { order: Order, customer: Customer };
+    label "Checkout Wizard";
+
+    use "Checkout" as wizard { cart: order; customer: customer; };
+}

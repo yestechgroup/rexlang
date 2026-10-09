@@ -1,0 +1,105 @@
+// rexlang reference pattern library — commerce.
+// Shopping patterns: catalogues, product detail pages, carts, and a
+// composable checkout wizard.
+
+import "collections.ifml";
+import "data.ifml";
+import "input.ifml";
+import "navigation.ifml";
+import "workflow.ifml";
+
+module "Catalogue" {
+    input { products: Item, categories: Item, filters: Filter }
+    output { selected: Uuid }
+
+    use "SearchPanel" as search { filters: Filter; };
+
+    use "CardGrid" as grid { items: Product; };
+
+    use "Pagination" as pager { page: 1; pageSize: 24; };
+
+    component "categories" {
+        type: menu;
+        data: Item;
+        fields: [name];
+
+        on select(category) -> navigate("Category", {
+            id: category.id
+        });
+    }
+}
+
+module "ProductDetail" {
+    input {
+        product: Item,
+        media: String = "gallery",
+        attributes: String = "",
+        price: String = "",
+        options: String = "",
+        addToCartAction: String = "AddToCart"
+    }
+    output { addedToCart: Boolean }
+
+    component "media" {
+        type: image;
+        data: Item;
+        fields: [url, alt];
+    }
+
+    component "attributes" {
+        type: details;
+        data: Item;
+    }
+
+    component "pricing" {
+        type: chart;
+        chart metric { label: price; values: [amount]; }
+
+        on addToCart(option) -> action("AddToCart", {
+            productId: product.id;
+        });
+    }
+}
+
+module "Cart" {
+    input { lineItems: Item }
+    output { total: Float }
+
+    component "items" {
+        type: list;
+        data: Item;
+        fields: [name, quantity, price];
+
+        field quantity -> input number { required: true; }
+
+        on checkout -> navigate("Checkout");
+    }
+
+    component "summary" {
+        type: chart;
+        chart metric { label: total; values: [total]; }
+    }
+}
+
+module "Checkout" {
+    input { cart: Item, customer: Item }
+    output { orderPlaced: Boolean }
+
+    use "Wizard" as flow {
+        steps: "customer, address, delivery, payment, review, confirmation";
+        entity: Item;
+    };
+
+    use "FormPanel" as customerForm {
+        entity: Item;
+        fields: "name, email";
+        submitAction: "SaveCustomer";
+    };
+
+    component "review" {
+        type: details;
+        data: Item;
+
+        on placeOrder -> action("PlaceOrder");
+    }
+}

@@ -1,0 +1,46 @@
+// rexlang reference pattern library — social.
+// Feed-item interaction: reactions, social cards, and sharing.
+
+module "ReactionBar" {
+    input { target: Item, reactions: String = "like" }
+    output { toggled: Boolean }
+
+    component "bar" {
+        type: menu;
+        data: Item;
+        fields: [kind, count];
+
+        on toggle(reaction) -> action("ToggleReaction", {
+            targetId: target.id;
+        });
+    }
+}
+
+module "SocialItem" {
+    input { author: Item, content: Item }
+    output { commented: Boolean }
+
+    use "ReactionBar" as reactions { target: Item; };
+
+    component "card" {
+        type: details;
+        data: Item;
+
+        on comment -> navigate("CommentThread", {
+            postId: content.id
+        });
+    }
+}
+
+module "ShareAction" {
+    input { target: Item, channels: String = "link" }
+    output { shared: Boolean }
+
+    component "share" {
+        type: button;
+
+        on share -> action("Share", {
+            targetId: target.id;
+        });
+    }
+}

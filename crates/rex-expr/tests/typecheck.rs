@@ -4,7 +4,7 @@
 //! a second operation). Test names cite the rule numbers of
 //! `docs/EXPRESSIONS.md` (R1–R4, L1–L2, U1, A1–A6, R9).
 
-use rex_expr::{parse, ExprKind, NamedKind, Ty, TypeChecker, TypeContext};
+use rex_expr::{parse, DomainTypes, ExprKind, NamedKind, Ty, TypeChecker, TypeContext};
 use rex_ir::{
     ClassDef, DatatypeDef, EnumDef, EnumLiteral, Feature, FeatureKind, Model, Multiplicity,
     Operation, OperationParam, Package, PrimitiveType, TypeRef,
@@ -808,4 +808,137 @@ fn r9_numeric_plus_is_untouched_by_the_string_path() {
     assert_ty("book.downloads + 2147483648", Ty::long()); // L1 adaptation
     assert_err("2147483647 + 1", "R1");
     assert_err("book.pages + book.downloads", "L2");
+}
+
+#[test]
+fn domain_types_is_assembled_incrementally_and_merges() {
+    // The generic binding seam: a DomainTypes built part-by-part (as a
+    // surface without a full Model would) behaves like one built from a
+    // model, and `merge` unions two indexes with right-hand precedence.
+    let model = library_model();
+    let from_model = DomainTypes::from_model(&model);
+
+    let mut assembled = DomainTypes::default();
+    for package in &model.packages {
+        for class in &package.classes {
+            assembled.insert_class(
+                &package.name,
+                &class.name,
+                class.extends.clone(),
+                class.features.clone(),
+                class.operations.clone(),
+            );
+        }
+        for enum_ in &package.enums {
+            assembled.insert_named(&package.name, &enum_.name, NamedKind::Enum);
+        }
+        for datatype in &package.datatypes {
+            assembled.insert_named(&package.name, &datatype.name, NamedKind::Datatype);
+        }
+    }
+    let mut extra = DomainTypes::default();
+    extra.insert_named(PKG, "Date", NamedKind::Vocabulary); // collision: other wins
+    assembled.merge(extra);
+
+    assert_eq!(assembled.named_kind(PKG, "Book"), Some(NamedKind::Class));
+    assert_eq!(
+        assembled.named_kind(PKG, "Date"),
+        Some(NamedKind::Vocabulary)
+    );
+    assert_eq!(assembled.named_kind(PKG, "Nope"), None);
+    let book = assembled.class(PKG, "Book").expect("Book registered");
+    assert!(book.features.iter().any(|f| f.name == "pages"));
+
+    // The class assembles into a checker-compatible index with the same
+    // members as `from_model`.
+    assert_eq!(
+        assembled.class(PKG, "Book").map(|c| c.features.len()),
+        from_model.class(PKG, "Book").map(|c| c.features.len()),
+    );
+    assert_eq!(
+        assembled.named_kind(PKG, "BookCategory"),
+        Some(NamedKind::Enum)
+    );
+}
+
+#[test]
+fn type_context_alias_remains_the_checker_entry_point() {
+    let checker = TypeChecker::new(TypeContext::from_model(&library_model()))
+        .with_binding("book", Ty::class(PKG, "Book"));
+    let parsed = parse("book.pages").ast.unwrap();
+    assert_eq!(checker.type_of(&parsed).unwrap(), Ty::int());
+}
+
+#[test]
+fn l1_float_literals_default_double_and_adapt_in_both_orders() {
+    // The library model has no float features, so a probe class adds float
+    // and double attributes to exercise the float path end to end.
+    let mut probe_model = library_model();
+    let mut package = Package::new(PKG);
+    let mut class = ClassDef::new("Probe", vec![], vec![]);
+    class.features.push(Feature::new(
+        "ratio",
+        FeatureKind::Attribute,
+        TypeRef::Primitive(PrimitiveType::Float),
+        Multiplicity::REQUIRED,
+    ));
+    class.features.push(Feature::new(
+        "weight",
+        FeatureKind::Attribute,
+        TypeRef::Primitive(PrimitiveType::Double),
+        Multiplicity::REQUIRED,
+    ));
+    package.classes.push(class);
+    probe_model.packages.push(package);
+    let probe = || TypeChecker::new(DomainTypes::from_model(&probe_model)).with_self(PKG, "Probe");
+
+    // The default is double.
+    assert_ty_probe(&probe(), "1.5", Ty::double());
+    assert_ty_probe(&probe(), "-1.5", Ty::double());
+
+    // Arithmetic adapts in either operand order (the double-typed float
+    // literal demotes when it meets a float feature); relational operators
+    // are feature-first — the same order asymmetry the long rule has
+    // (`2 > longVal` is a mismatch too).
+    assert_ty_probe(&probe(), "ratio + 1.5", Ty::float());
+    assert_ty_probe(&probe(), "1.5 + ratio", Ty::float());
+    assert_ty_probe(&probe(), "ratio > 1.5", Ty::boolean());
+    assert_err_probe(&probe(), "1.5 < ratio", "L2");
+
+    // Double features meet the default head-on.
+    assert_ty_probe(&probe(), "weight + 1.5", Ty::double());
+    assert_ty_probe(&probe(), "1.5 * 2.5", Ty::double());
+
+    // Strictness is preserved: float and double features do not mix, and
+    // float never mixes with int.
+    assert_err_probe(&probe(), "ratio + weight", "L2");
+    assert_err_probe(&probe(), "ratio + 1", "L2");
+    assert_err_probe(&probe(), "weight * 2", "L2");
+
+    // No constant folding across floats: division by a constant zero is
+    // IEEE semantics, not an R4 error.
+    assert_ty_probe(&probe(), "weight / 0.0", Ty::double());
+}
+
+fn assert_ty_probe(checker: &TypeChecker, source: &str, expected: Ty) {
+    let parsed = parse(source);
+    assert!(parsed.errors.is_empty(), "{source}: {:?}", parsed.errors);
+    let ty = checker
+        .clone()
+        .type_of(parsed.ast.as_ref().unwrap())
+        .unwrap_or_else(|_| panic!("{source} must type"));
+    assert_eq!(ty, expected, "{source}");
+}
+
+fn assert_err_probe(checker: &TypeChecker, source: &str, rule: &str) {
+    let parsed = parse(source);
+    assert!(parsed.errors.is_empty(), "{source}: {:?}", parsed.errors);
+    let error = checker
+        .clone()
+        .type_of(parsed.ast.as_ref().unwrap())
+        .expect_err(source);
+    assert!(
+        error.iter().any(|e| e.message.contains(rule)),
+        "{source}: {error:?}"
+    );
 }

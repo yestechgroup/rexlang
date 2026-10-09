@@ -30,6 +30,14 @@ pub enum Token<'src> {
     /// [`Token::Error`] (spec: lexical rules).
     #[regex("[0-9]+", |lexer| lexer.slice().parse::<i64>().map_err(|_| ()))]
     Int(i64),
+    /// A decimal float literal: one or more digits, a `.`, one or more
+    /// digits (non-negative; `-` is the unary operator). Digits are
+    /// required on **both** sides of the dot, so member access on an
+    /// integer lexes as [`Token::Int`] + [`Token::Dot`] unchanged. Logos
+    /// longest-match makes `0.25` a float even though its prefix `0` is a
+    /// valid int. No exponent notation yet (spec: lexical rules).
+    #[regex("[0-9]+\\.[0-9]+", |lexer| lexer.slice().parse::<f64>().map_err(|_| ()))]
+    Float(f64),
     /// A string literal payload: the raw text between the quotes, with
     /// escapes left intact (unescaping happens in the parser).
     #[regex(r#""([^"\\\n\r]|\\.)*""#, |lexer| {
@@ -118,6 +126,7 @@ impl std::fmt::Display for Token<'_> {
             Token::False => f.write_str("`false`"),
             Token::Null => f.write_str("`null`"),
             Token::Int(value) => write!(f, "`{value}`"),
+            Token::Float(value) => write!(f, "`{value}`"),
             Token::Str(_) => f.write_str("string literal"),
             Token::Ident(text) => write!(f, "`{text}`"),
             Token::Dot => f.write_str("`.`"),

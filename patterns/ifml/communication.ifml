@@ -1,0 +1,84 @@
+// rexlang reference pattern library — communication.
+// Messaging and notification patterns: inboxes, notification centers, and
+// comment threads.
+
+import "collections.ifml";
+import "data.ifml";
+
+module "Inbox" {
+    input { messages: Item, folders: Item, markReadAction: String = "MarkRead" }
+    output { selected: Uuid }
+
+    use "SearchPanel" as search { filters: Folder; };
+
+    component "folderList" {
+        type: menu;
+        data: Item;
+        fields: [name, unreadCount];
+
+        on select(folder) -> navigate("Folder", {
+            id: folder.id
+        });
+    }
+
+    use "DataList" as items {
+        items: Message;
+        fields: [subject, sender, receivedAt];
+    };
+
+    component "readingPane" {
+        type: details;
+        data: Item;
+
+        on select(message) if message.unread == true -> action("MarkRead", {
+            id: message.id;
+        });
+    }
+}
+
+module "NotificationCenter" {
+    input { notifications: Item }
+    output { unreadCount: Int }
+
+    component "badge" {
+        type: chart;
+        chart metric { label: unread; values: [unreadCount]; }
+    }
+
+    component "list" {
+        type: list;
+        data: Item;
+        fields: [title, createdAt, read];
+
+        on markAllRead -> action("MarkAllRead");
+    }
+}
+
+module "CommentThread" {
+    input { comments: Item, postAction: String = "PostComment" }
+    output { commented: Boolean }
+
+    component "thread" {
+        type: list;
+        data: Item;
+        fields: [author, body, createdAt];
+
+        on select(comment) -> navigate("CommentDetail", {
+            id: comment.id
+        });
+    }
+
+    component "reply" {
+        type: form;
+        data: Item;
+
+        field body -> input textarea { required: true; }
+
+        on post(values) -> action("PostComment", {
+            body: values.body;
+
+            on success -> refresh("thread");
+            on error -> stay;
+        });
+    }
+}

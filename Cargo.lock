@@ -2469,6 +2469,7 @@ dependencies = [
  "rex-backend-jsonschema",
  "rex-backend-rust",
  "rex-driver",
+ "rex-ifml",
  "rex-ir",
  "rex-lsp",
  "rex-runtime",
@@ -2512,6 +2513,8 @@ version = "0.1.0"
 dependencies = [
  "pest",
  "pest_derive",
+ "rex-driver",
+ "rex-expr",
  "rex-ir",
  "serde_json",
  "thiserror",
@@ -2532,6 +2535,7 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "rex-driver",
+ "rex-ifml",
  "rex-ir",
  "rex-syntax",
  "salsa",

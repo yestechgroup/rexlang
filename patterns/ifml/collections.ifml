@@ -1,0 +1,129 @@
+// rexlang reference pattern library — collections.
+// Browsing patterns over item collections: data lists, card grids, cards,
+// feeds, timelines, master-detail splits, and media galleries.
+
+import "navigation.ifml";
+
+module "DataList" {
+    input { items: Item, fields: String = "name", actions: String = "" }
+    output { selected: Uuid }
+
+    component "list" {
+        type: list;
+        data: Item;
+        fields: [name, status];
+
+        on select(row) -> navigate("ItemDetail", {
+            id: row.id
+        });
+    }
+}
+
+module "CardGrid" {
+    input { items: Item, columns: Int = 3 }
+    output { selected: Uuid }
+
+    component "grid" {
+        type: list;
+        data: Item;
+        fields: [title, subtitle];
+
+        on select(card) -> navigate("ItemDetail", {
+            id: card.id
+        });
+    }
+}
+
+module "Card" {
+    input {
+        eyebrow: String = "",
+        title: String = "Untitled",
+        subtitle: String = "",
+        body: String = "",
+        metadata: String = "",
+        media: String = "",
+        actions: String = ""
+    }
+    output { selected: Boolean }
+
+    component "face" {
+        type: details;
+        data: Item;
+
+        on click -> navigate("ItemDetail");
+    }
+}
+
+module "Feed" {
+    input { source: Item, ordering: String = "newest" }
+    output { refreshed: Boolean }
+
+    use "Pagination" as pager { page: 1; pageSize: 20; };
+
+    component "stream" {
+        type: list;
+        data: Item;
+        fields: [title, createdAt];
+
+        on load -> refresh("stream");
+    }
+}
+
+module "Timeline" {
+    input {
+        events: Item,
+        timestamp: String = "createdAt",
+        grouping: String = "day"
+    }
+    output { selected: Uuid }
+
+    component "track" {
+        type: list;
+        data: Item;
+        fields: [title, createdAt];
+        sort: "createdAt desc";
+
+        on select(entry) -> navigate("EntryDetail", {
+            id: entry.id
+        });
+    }
+}
+
+module "MasterDetail" {
+    input { items: Item, fields: String = "name" }
+    output { selected: Uuid }
+
+    container "split" {
+        component "master" {
+            type: list;
+            data: Item;
+            fields: [name];
+
+            on select(row) -> navigate("DetailPane", {
+                id: row.id
+            });
+        }
+
+        container "detailPane" {
+            component "preview" {
+                type: details;
+                data: Item;
+            }
+        }
+    }
+}
+
+module "MediaGallery" {
+    input { media: Item, columns: Int = 4 }
+    output { selected: Uuid }
+
+    component "gallery" {
+        type: image;
+        data: Item;
+        fields: [url, alt];
+
+        on select(picture) -> navigate("MediaViewer", {
+            id: picture.id
+        });
+    }
+}

@@ -1,0 +1,67 @@
+// rexlang reference pattern library — navigation.
+// Positioning patterns: paging, tab switchers, breadcrumb trails, and links.
+
+module "Pagination" {
+    input { page: Int = 1, pageSize: Int = 25, total: Int = 0 }
+    output { total: Int }
+
+    component "pager" {
+        type: list;
+        data: Item;
+        fields: [name];
+
+        on first -> navigate("FirstPage", {
+            page: 1
+        });
+        on previous if page > 1 -> navigate("PreviousPage", {
+            page: page - 1
+        });
+        on next if page * pageSize < total -> navigate("NextPage", {
+            page: page + 1
+        });
+        on last -> navigate("LastPage");
+    }
+}
+
+module "Tabs" {
+    input { items: Item, active: String = "" }
+    output { selected: String }
+
+    container "tabBar" {
+        component "tabs" {
+            type: list;
+            data: Item;
+            fields: [name, active];
+
+            on select(tab) -> navigate("Tab", {
+                name: tab.name
+            });
+        }
+    }
+}
+
+module "Breadcrumbs" {
+    input { trail: Item, current: String = "" }
+    output { current: String }
+
+    component "crumbs" {
+        type: menu;
+        data: Item;
+        fields: [name];
+
+        on select(crumb) -> navigate("Crumb", {
+            name: crumb.name
+        });
+    }
+}
+
+module "Link" {
+    input { label: String = "Open", target: String = "" }
+    output { clicked: Boolean }
+
+    component "link" {
+        type: link;
+
+        on click -> navigate("Destination");
+    }
+}

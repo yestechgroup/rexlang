@@ -32,69 +32,109 @@ type Checked = Result<Ty, ()>;
 /// binding (its initializer failed to check).
 type Scope = Vec<(String, Option<Ty>)>;
 
-/// The type universe of a model: classes with their features and operations,
-/// plus every named type.
+/// The resolvable members of one class.
 #[derive(Debug, Clone, Default)]
-pub struct TypeContext {
+pub struct ClassInfo {
+    pub extends: Vec<TypeRef>,
+    pub features: Vec<Feature>,
+    pub operations: Vec<Operation>,
+}
+
+/// The unified domain-object index: the generic binding seam every surface
+/// lowers into. Classes carry their resolvable members (features, operations,
+/// supertypes); every other named type is registered by kind. Built from a
+/// [`rex_ir::Model`] — which is what `.mox` compiles to and what sigil
+/// imports, schema imports, `.ddd`, and `.evt` all resolve against — or
+/// assembled incrementally with [`DomainTypes::insert_class`] and
+/// [`DomainTypes::insert_named`], so surfaces without a full `Model` can
+/// still contribute bindable domain objects.
+#[derive(Debug, Clone, Default)]
+pub struct DomainTypes {
     classes: BTreeMap<(String, String), ClassInfo>,
     named: BTreeMap<(String, String), NamedKind>,
 }
 
-/// The resolvable members of one class.
-#[derive(Debug, Clone, Default)]
-struct ClassInfo {
-    extends: Vec<TypeRef>,
-    features: Vec<Feature>,
-    operations: Vec<Operation>,
-}
+/// Compatibility alias: the type universe of a model, as consumed by
+/// [`TypeChecker`].
+pub type TypeContext = DomainTypes;
 
-impl TypeContext {
-    /// Builds a context from a resolved model.
+impl DomainTypes {
+    /// Builds a domain-type index from a resolved model.
     pub fn from_model(model: &Model) -> Self {
-        let mut context = TypeContext::default();
+        let mut context = DomainTypes::default();
         for package in &model.packages {
             for class in &package.classes {
-                context
-                    .named
-                    .insert((package.name.clone(), class.name.clone()), NamedKind::Class);
-                context.classes.insert(
-                    (package.name.clone(), class.name.clone()),
-                    ClassInfo {
-                        extends: class.extends.clone(),
-                        features: class.features.clone(),
-                        operations: class.operations.clone(),
-                    },
+                context.insert_class(
+                    &package.name,
+                    &class.name,
+                    class.extends.clone(),
+                    class.features.clone(),
+                    class.operations.clone(),
                 );
             }
             for enum_ in &package.enums {
-                context
-                    .named
-                    .insert((package.name.clone(), enum_.name.clone()), NamedKind::Enum);
+                context.insert_named(&package.name, &enum_.name, NamedKind::Enum);
             }
             for datatype in &package.datatypes {
-                context.named.insert(
-                    (package.name.clone(), datatype.name.clone()),
-                    NamedKind::Datatype,
-                );
+                context.insert_named(&package.name, &datatype.name, NamedKind::Datatype);
             }
             for interface in &package.interfaces {
-                context.named.insert(
-                    (package.name.clone(), interface.name.clone()),
-                    NamedKind::Interface,
-                );
+                context.insert_named(&package.name, &interface.name, NamedKind::Interface);
             }
             for vocabulary in &package.vocabularies {
-                context.named.insert(
-                    (package.name.clone(), vocabulary.name.clone()),
-                    NamedKind::Vocabulary,
-                );
+                context.insert_named(&package.name, &vocabulary.name, NamedKind::Vocabulary);
             }
         }
         context
     }
 
-    fn class(&self, package: &str, name: &str) -> Option<&ClassInfo> {
+    /// Registers one class with its resolvable members, replacing any
+    /// previous entry (and its kind) for the same (package, name).
+    pub fn insert_class(
+        &mut self,
+        package: &str,
+        name: &str,
+        extends: Vec<TypeRef>,
+        features: Vec<Feature>,
+        operations: Vec<Operation>,
+    ) {
+        let key = (package.to_string(), name.to_string());
+        self.named.insert(key.clone(), NamedKind::Class);
+        self.classes.insert(
+            key,
+            ClassInfo {
+                extends,
+                features,
+                operations,
+            },
+        );
+    }
+
+    /// Registers a non-class named type (enum, datatype, interface,
+    /// vocabulary) by kind.
+    pub fn insert_named(&mut self, package: &str, name: &str, kind: NamedKind) {
+        self.named
+            .insert((package.to_string(), name.to_string()), kind);
+    }
+
+    /// Merges `other` into `self`; `other`'s entries win on collision. This
+    /// is how domain unions are assembled: one [`DomainTypes`] per
+    /// contributing surface, combined before binding.
+    pub fn merge(&mut self, other: DomainTypes) {
+        self.classes.extend(other.classes);
+        self.named.extend(other.named);
+    }
+
+    /// Looks up a class's resolvable members.
+    pub fn class(&self, package: &str, name: &str) -> Option<&ClassInfo> {
         self.classes.get(&(package.to_string(), name.to_string()))
+    }
+
+    /// Looks up a named type's kind.
+    pub fn named_kind(&self, package: &str, name: &str) -> Option<NamedKind> {
+        self.named
+            .get(&(package.to_string(), name.to_string()))
+            .copied()
     }
 }
 
@@ -178,6 +218,7 @@ impl TypeChecker {
     ) -> Checked {
         match &expr.kind {
             ExprKind::Int(value) => self.int_literal(*value, expect, expr.span, errors),
+            ExprKind::Float(_) => self.float_literal(expect),
             ExprKind::String(_) => Ok(Ty::string()),
             ExprKind::Bool(_) => Ok(Ty::boolean()),
             ExprKind::Null => Ok(Ty::Null),
@@ -243,6 +284,19 @@ impl TypeChecker {
             return Err(());
         }
         Ok(Ty::int())
+    }
+
+    /// The float analogue of L1: a float literal is `double` by default and
+    /// adapts to `float` in a float context. Unlike integers there is no
+    /// range rule to enforce at compile time (R1 covers integer overflow;
+    /// float arithmetic follows IEEE semantics), and no constant folding —
+    /// `const_of` stays integer-only.
+    fn float_literal(&self, expect: Option<&Ty>) -> Checked {
+        if matches!(expect, Some(Ty::Primitive(PrimitiveType::Float))) {
+            Ok(Ty::float())
+        } else {
+            Ok(Ty::double())
+        }
     }
 
     /// Spec R6: the `date("…")` constructor's text must be a strict
@@ -343,8 +397,14 @@ impl TypeChecker {
         errors: &mut Vec<ExprError>,
     ) -> Checked {
         let long = Ty::long();
+        let float = Ty::float();
         match lhs_ty {
+            // L1 adaptation: an integer literal re-types to `long`, a float
+            // literal re-types to `float`, in the corresponding context —
+            // the same order asymmetry the long rule has (`2 > long` is a
+            // mismatch; the feature must come first).
             Ok(ty) if ty == &long => self.check(scope, rhs, Some(&long), errors),
+            Ok(ty) if ty == &float => self.check(scope, rhs, Some(&float), errors),
             _ => self.check(scope, rhs, None, errors),
         }
     }
@@ -455,12 +515,28 @@ impl TypeChecker {
         let lhs_ty = lhs_ty?;
         let rhs_ty = rhs_ty?;
 
+        let float = Ty::float();
+        let double = Ty::double();
         let result = if lhs_ty == Ty::long() || rhs_ty == Ty::long() {
             let int_literal_ok = |ty: &Ty, operand: &Expr| {
                 ty == &Ty::long() || (ty == &Ty::int() && is_int_literal(operand))
             };
             if int_literal_ok(&lhs_ty, lhs) && int_literal_ok(&rhs_ty, rhs) {
                 Ty::long()
+            } else {
+                errors.push(self.operand_mismatch(op, &lhs_ty, &rhs_ty, lhs.span));
+                return Err(());
+            }
+        } else if lhs_ty == float || rhs_ty == float {
+            // The float analogue of the long rule: a `double`-typed operand
+            // is acceptable only when it is a float literal (the L1 default),
+            // and the feature's `float` type wins — the literal demotes, in
+            // either operand order.
+            let float_literal_ok = |ty: &Ty, operand: &Expr| {
+                ty == &float || (ty == &double && is_float_literal(operand))
+            };
+            if float_literal_ok(&lhs_ty, lhs) && float_literal_ok(&rhs_ty, rhs) {
+                float
             } else {
                 errors.push(self.operand_mismatch(op, &lhs_ty, &rhs_ty, lhs.span));
                 return Err(());
@@ -552,11 +628,15 @@ impl TypeChecker {
         let rhs_ty = rhs_ty?;
 
         let long = Ty::long();
+        let float = Ty::float();
+        let double = Ty::double();
         let comparable = lhs_ty == Ty::Null
             || rhs_ty == Ty::Null
             || lhs_ty == rhs_ty
             || (lhs_ty == long && rhs_ty == Ty::int() && is_int_literal(lhs))
-            || (rhs_ty == long && lhs_ty == Ty::int() && is_int_literal(rhs));
+            || (rhs_ty == long && lhs_ty == Ty::int() && is_int_literal(rhs))
+            || (lhs_ty == float && rhs_ty == double && is_float_literal(rhs))
+            || (rhs_ty == float && lhs_ty == double && is_float_literal(lhs));
         if !comparable {
             errors.push(ExprError::new(
                 format!(
@@ -1116,6 +1196,20 @@ fn is_int_literal(expr: &Expr) -> bool {
             op: UnOp::Neg,
             expr: inner,
         } => matches!(inner.kind, ExprKind::Int(_)),
+        _ => false,
+    }
+}
+
+/// Whether an expression is a float literal — the one value the float
+/// analogue of L1 re-types (from its `double` default down to `float` in a
+/// float context).
+fn is_float_literal(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Float(_) => true,
+        ExprKind::Unary {
+            op: UnOp::Neg,
+            expr: inner,
+        } => matches!(inner.kind, ExprKind::Float(_)),
         _ => false,
     }
 }
