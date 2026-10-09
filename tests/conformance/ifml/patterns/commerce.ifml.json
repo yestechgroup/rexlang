@@ -1,0 +1,508 @@
+{
+  "formatVersion": 1,
+  "modules": [
+    {
+      "name": "Catalogue",
+      "inputParams": [
+        {
+          "name": "products",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "categories",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "filters",
+          "typeRef": "Filter",
+          "default": null
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "selected",
+          "typeRef": "Uuid",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "categories",
+          "componentType": {
+            "type": "menu"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            },
+            {
+              "key": "fields",
+              "value": {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "identifier",
+                    "value": "name"
+                  }
+                ]
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "select"
+              },
+              "params": [
+                "category"
+              ],
+              "condition": null,
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "Category",
+                  "binding": {
+                    "pairs": [
+                      [
+                        "id",
+                        {
+                          "type": "fieldExpr",
+                          "value": {
+                            "object": {
+                              "type": "ident",
+                              "value": "category"
+                            },
+                            "field": "id"
+                          }
+                        }
+                      ]
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ],
+      "moduleUses": [
+        {
+          "module": "SearchPanel",
+          "alias": "search",
+          "properties": [
+            {
+              "key": "filters",
+              "value": {
+                "type": "identifier",
+                "value": "Filter"
+              }
+            }
+          ]
+        },
+        {
+          "module": "CardGrid",
+          "alias": "grid",
+          "properties": [
+            {
+              "key": "items",
+              "value": {
+                "type": "identifier",
+                "value": "Product"
+              }
+            }
+          ]
+        },
+        {
+          "module": "Pagination",
+          "alias": "pager",
+          "properties": [
+            {
+              "key": "page",
+              "value": {
+                "type": "number",
+                "value": 1.0
+              }
+            },
+            {
+              "key": "pageSize",
+              "value": {
+                "type": "number",
+                "value": 24.0
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "ProductDetail",
+      "inputParams": [
+        {
+          "name": "product",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "media",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "gallery"
+          }
+        },
+        {
+          "name": "attributes",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": ""
+          }
+        },
+        {
+          "name": "price",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": ""
+          }
+        },
+        {
+          "name": "options",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": ""
+          }
+        },
+        {
+          "name": "addToCartAction",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "AddToCart"
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "addedToCart",
+          "typeRef": "Boolean",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "media",
+          "componentType": {
+            "type": "image"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            },
+            {
+              "key": "fields",
+              "value": {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "identifier",
+                    "value": "url"
+                  },
+                  {
+                    "type": "identifier",
+                    "value": "alt"
+                  }
+                ]
+              }
+            }
+          ],
+          "condition": null
+        },
+        {
+          "name": "attributes",
+          "componentType": {
+            "type": "details"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            }
+          ],
+          "condition": null
+        },
+        {
+          "name": "pricing",
+          "componentType": {
+            "type": "chart"
+          },
+          "spec": {
+            "type": "chart",
+            "value": {
+              "kind": "metric",
+              "labelField": "price",
+              "valueFields": [
+                "amount"
+              ]
+            }
+          },
+          "events": [
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "addToCart"
+              },
+              "params": [
+                "option"
+              ],
+              "condition": null,
+              "action": {
+                "type": "actionInvocation",
+                "value": {
+                  "name": "AddToCart",
+                  "body": {
+                    "properties": [
+                      {
+                        "key": "productId",
+                        "value": {
+                          "type": "fieldAccess",
+                          "value": {
+                            "object": {
+                              "type": "identifier",
+                              "value": "product"
+                            },
+                            "field": "id"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ]
+    },
+    {
+      "name": "Cart",
+      "inputParams": [
+        {
+          "name": "lineItems",
+          "typeRef": "Item",
+          "default": null
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "total",
+          "typeRef": "Float",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "items",
+          "componentType": {
+            "type": "list"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            },
+            {
+              "key": "fields",
+              "value": {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "identifier",
+                    "value": "name"
+                  },
+                  {
+                    "type": "identifier",
+                    "value": "quantity"
+                  },
+                  {
+                    "type": "identifier",
+                    "value": "price"
+                  }
+                ]
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "checkout"
+              },
+              "condition": null,
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "Checkout",
+                  "binding": null
+                }
+              }
+            }
+          ],
+          "condition": null
+        },
+        {
+          "name": "summary",
+          "componentType": {
+            "type": "chart"
+          },
+          "spec": {
+            "type": "chart",
+            "value": {
+              "kind": "metric",
+              "labelField": "total",
+              "valueFields": [
+                "total"
+              ]
+            }
+          },
+          "condition": null
+        }
+      ]
+    },
+    {
+      "name": "Checkout",
+      "inputParams": [
+        {
+          "name": "cart",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "customer",
+          "typeRef": "Item",
+          "default": null
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "orderPlaced",
+          "typeRef": "Boolean",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "review",
+          "componentType": {
+            "type": "details"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "placeOrder"
+              },
+              "condition": null,
+              "action": {
+                "type": "actionInvocation",
+                "value": {
+                  "name": "PlaceOrder",
+                  "body": null
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ],
+      "moduleUses": [
+        {
+          "module": "Wizard",
+          "alias": "flow",
+          "properties": [
+            {
+              "key": "steps",
+              "value": {
+                "type": "string",
+                "value": "customer, address, delivery, payment, review, confirmation"
+              }
+            },
+            {
+              "key": "entity",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            }
+          ]
+        },
+        {
+          "module": "FormPanel",
+          "alias": "customerForm",
+          "properties": [
+            {
+              "key": "entity",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            },
+            {
+              "key": "fields",
+              "value": {
+                "type": "string",
+                "value": "name, email"
+              }
+            },
+            {
+              "key": "submitAction",
+              "value": {
+                "type": "string",
+                "value": "SaveCustomer"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "imports": [
+    "collections.ifml",
+    "data.ifml",
+    "input.ifml",
+    "navigation.ifml",
+    "workflow.ifml"
+  ]
+}

@@ -1,0 +1,463 @@
+{
+  "formatVersion": 1,
+  "modules": [
+    {
+      "name": "Pagination",
+      "inputParams": [
+        {
+          "name": "page",
+          "typeRef": "Int",
+          "default": {
+            "type": "number",
+            "value": 1.0
+          }
+        },
+        {
+          "name": "pageSize",
+          "typeRef": "Int",
+          "default": {
+            "type": "number",
+            "value": 25.0
+          }
+        },
+        {
+          "name": "total",
+          "typeRef": "Int",
+          "default": {
+            "type": "number",
+            "value": 0.0
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "total",
+          "typeRef": "Int",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "pager",
+          "componentType": {
+            "type": "list"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            },
+            {
+              "key": "fields",
+              "value": {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "identifier",
+                    "value": "name"
+                  }
+                ]
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "first"
+              },
+              "condition": null,
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "FirstPage",
+                  "binding": {
+                    "pairs": [
+                      [
+                        "page",
+                        {
+                          "type": "numLit",
+                          "value": 1.0
+                        }
+                      ]
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "previous"
+              },
+              "condition": {
+                "type": "binOp",
+                "value": {
+                  "left": {
+                    "type": "ident",
+                    "value": "page"
+                  },
+                  "op": "gt",
+                  "right": {
+                    "type": "numLit",
+                    "value": 1.0
+                  }
+                }
+              },
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "PreviousPage",
+                  "binding": {
+                    "pairs": [
+                      [
+                        "page",
+                        {
+                          "type": "binOp",
+                          "value": {
+                            "left": {
+                              "type": "ident",
+                              "value": "page"
+                            },
+                            "op": "sub",
+                            "right": {
+                              "type": "numLit",
+                              "value": 1.0
+                            }
+                          }
+                        }
+                      ]
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "next"
+              },
+              "condition": {
+                "type": "binOp",
+                "value": {
+                  "left": {
+                    "type": "binOp",
+                    "value": {
+                      "left": {
+                        "type": "ident",
+                        "value": "page"
+                      },
+                      "op": "mul",
+                      "right": {
+                        "type": "ident",
+                        "value": "pageSize"
+                      }
+                    }
+                  },
+                  "op": "lt",
+                  "right": {
+                    "type": "ident",
+                    "value": "total"
+                  }
+                }
+              },
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "NextPage",
+                  "binding": {
+                    "pairs": [
+                      [
+                        "page",
+                        {
+                          "type": "binOp",
+                          "value": {
+                            "left": {
+                              "type": "ident",
+                              "value": "page"
+                            },
+                            "op": "add",
+                            "right": {
+                              "type": "numLit",
+                              "value": 1.0
+                            }
+                          }
+                        }
+                      ]
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "last"
+              },
+              "condition": null,
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "LastPage",
+                  "binding": null
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ]
+    },
+    {
+      "name": "Tabs",
+      "inputParams": [
+        {
+          "name": "items",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "active",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": ""
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "selected",
+          "typeRef": "String",
+          "default": null
+        }
+      ],
+      "containers": [
+        {
+          "name": "tabBar",
+          "label": null,
+          "isDefault": false,
+          "isXor": false,
+          "components": [
+            {
+              "name": "tabs",
+              "componentType": {
+                "type": "list"
+              },
+              "spec": null,
+              "properties": [
+                {
+                  "key": "data",
+                  "value": {
+                    "type": "identifier",
+                    "value": "Item"
+                  }
+                },
+                {
+                  "key": "fields",
+                  "value": {
+                    "type": "array",
+                    "value": [
+                      {
+                        "type": "identifier",
+                        "value": "name"
+                      },
+                      {
+                        "type": "identifier",
+                        "value": "active"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "eventType": {
+                    "type": "select"
+                  },
+                  "params": [
+                    "tab"
+                  ],
+                  "condition": null,
+                  "action": {
+                    "type": "navigate",
+                    "value": {
+                      "target": "Tab",
+                      "binding": {
+                        "pairs": [
+                          [
+                            "name",
+                            {
+                              "type": "fieldExpr",
+                              "value": {
+                                "object": {
+                                  "type": "ident",
+                                  "value": "tab"
+                                },
+                                "field": "name"
+                              }
+                            }
+                          ]
+                        ]
+                      }
+                    }
+                  }
+                }
+              ],
+              "condition": null
+            }
+          ],
+          "condition": null,
+          "position": null
+        }
+      ]
+    },
+    {
+      "name": "Breadcrumbs",
+      "inputParams": [
+        {
+          "name": "trail",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "current",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": ""
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "current",
+          "typeRef": "String",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "crumbs",
+          "componentType": {
+            "type": "menu"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            },
+            {
+              "key": "fields",
+              "value": {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "identifier",
+                    "value": "name"
+                  }
+                ]
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "select"
+              },
+              "params": [
+                "crumb"
+              ],
+              "condition": null,
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "Crumb",
+                  "binding": {
+                    "pairs": [
+                      [
+                        "name",
+                        {
+                          "type": "fieldExpr",
+                          "value": {
+                            "object": {
+                              "type": "ident",
+                              "value": "crumb"
+                            },
+                            "field": "name"
+                          }
+                        }
+                      ]
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ]
+    },
+    {
+      "name": "Link",
+      "inputParams": [
+        {
+          "name": "label",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "Open"
+          }
+        },
+        {
+          "name": "target",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": ""
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "clicked",
+          "typeRef": "Boolean",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "link",
+          "componentType": {
+            "type": "link"
+          },
+          "spec": null,
+          "events": [
+            {
+              "eventType": {
+                "type": "click"
+              },
+              "condition": null,
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "Destination",
+                  "binding": null
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ]
+    }
+  ]
+}

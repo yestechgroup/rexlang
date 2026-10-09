@@ -446,6 +446,25 @@ impl Printer {
             }
             match &info.tok {
                 t if is_comment(t) => {
+                    // An own-line comment stays on its own line even when a
+                    // preceding inline block left us mid-line; only genuine
+                    // trailing comments (no source newline) attach.
+                    if !self.at_line_start && info.newline_before {
+                        // Undo a caller's already-emitted indentation when
+                        // the current line carries nothing but it; a line
+                        // with real content breaks before the comment.
+                        let line_start = self.out.rfind('\n').map(|i| i + 1).unwrap_or(0);
+                        if self.out[line_start..]
+                            .chars()
+                            .all(|c| c == ' ' || c == '\t')
+                        {
+                            self.out.truncate(line_start);
+                            self.at_line_start = true;
+                            self.prev = None;
+                        } else {
+                            self.emit_newline();
+                        }
+                    }
                     self.emit_token(&info);
                     self.emit_newline();
                     emitted = true;

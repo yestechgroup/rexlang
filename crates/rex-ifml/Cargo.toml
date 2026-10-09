@@ -17,6 +17,7 @@ pest_derive = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+proptest = { workspace = true }
 pest = { workspace = true, features = ["pretty-print"] }
 rex-driver = { workspace = true }
 serde_json = { workspace = true }

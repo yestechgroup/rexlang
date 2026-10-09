@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 3379e5dbb208faf5b8ea90048f461d53ae8dc0f30009a6d53ee65abaf99c65a3 # shrinks to decls = [View("Aa", [])], seed = 0
+cc 35e08fbe60123fdd587313fbe571e76842630eea330d8fccfba7be9a6ea65630 # shrinks to decls = [View("Aa", [Component("Aa", [Property("type", "\"leaf\"")])])], seed = [0, 0, 1, 0, 0, 0, 22, 0, 16, 93, 0, 54, 0, 0, 49, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 103, 0, 0, 0, 0]
+cc a7b0f828c6f258f7f37303db2860438d3f1d431236c93b3eed0ce5456a480401 # shrinks to decls = [Module("Aa", [])], seed = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+cc 67d844d5e35f453f659430a800f741db96ae4ff7d31f245d0de99da392cbac95 # shrinks to decls = [View("Aa", [Event("Aa"), Container("Aa", [Container("Aa", [Property("type", "list")])])]), Module("Aa", [])], seed = [13, 88, 11, 99, 14, 152, 131, 143, 129, 59, 43, 43, 154, 74, 50, 196, 43, 195, 85, 17, 121, 33, 117, 12, 100, 65, 211, 27, 164, 151, 96, 2]

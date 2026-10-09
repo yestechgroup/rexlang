@@ -1,0 +1,469 @@
+{
+  "formatVersion": 1,
+  "modules": [
+    {
+      "name": "Detail",
+      "inputParams": [
+        {
+          "name": "entity",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "fields",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "name"
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "edited",
+          "typeRef": "Boolean",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "info",
+          "componentType": {
+            "type": "details"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "edit"
+              },
+              "condition": null,
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "ItemEdit",
+                  "binding": {
+                    "pairs": [
+                      [
+                        "id",
+                        {
+                          "type": "fieldExpr",
+                          "value": {
+                            "object": {
+                              "type": "ident",
+                              "value": "entity"
+                            },
+                            "field": "id"
+                          }
+                        }
+                      ]
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ]
+    },
+    {
+      "name": "Summary",
+      "inputParams": [
+        {
+          "name": "entity",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "sections",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": ""
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "expanded",
+          "typeRef": "Boolean",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "overview",
+          "componentType": {
+            "type": "details"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "expand"
+              },
+              "condition": null,
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "ItemDetail",
+                  "binding": {
+                    "pairs": [
+                      [
+                        "id",
+                        {
+                          "type": "fieldExpr",
+                          "value": {
+                            "object": {
+                              "type": "ident",
+                              "value": "entity"
+                            },
+                            "field": "id"
+                          }
+                        }
+                      ]
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ]
+    },
+    {
+      "name": "Metric",
+      "inputParams": [
+        {
+          "name": "label",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "Value"
+          }
+        },
+        {
+          "name": "value",
+          "typeRef": "Float",
+          "default": {
+            "type": "number",
+            "value": 0.0
+          }
+        },
+        {
+          "name": "delta",
+          "typeRef": "Float",
+          "default": {
+            "type": "number",
+            "value": 0.0
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "value",
+          "typeRef": "Float",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "figure",
+          "componentType": {
+            "type": "chart"
+          },
+          "spec": {
+            "type": "chart",
+            "value": {
+              "kind": "metric",
+              "labelField": "label",
+              "valueFields": [
+                "value"
+              ]
+            }
+          },
+          "condition": null
+        }
+      ]
+    },
+    {
+      "name": "SearchPanel",
+      "inputParams": [
+        {
+          "name": "query",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": ""
+          }
+        },
+        {
+          "name": "filters",
+          "typeRef": "Filter",
+          "default": null
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "query",
+          "typeRef": "String",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "panel",
+          "componentType": {
+            "type": "search"
+          },
+          "spec": null,
+          "events": [
+            {
+              "eventType": {
+                "type": "submit"
+              },
+              "params": [
+                "values"
+              ],
+              "condition": null,
+              "action": {
+                "type": "refresh",
+                "value": {
+                  "target": "results",
+                  "binding": {
+                    "pairs": [
+                      [
+                        "query",
+                        {
+                          "type": "fieldExpr",
+                          "value": {
+                            "object": {
+                              "type": "ident",
+                              "value": "values"
+                            },
+                            "field": "query"
+                          }
+                        }
+                      ]
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ]
+    },
+    {
+      "name": "Calendar",
+      "inputParams": [
+        {
+          "name": "events",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "view",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "month"
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "selected",
+          "typeRef": "Uuid",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "month",
+          "componentType": {
+            "type": "table"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            },
+            {
+              "key": "fields",
+              "value": {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "identifier",
+                    "value": "title"
+                  },
+                  {
+                    "type": "identifier",
+                    "value": "date"
+                  }
+                ]
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "select"
+              },
+              "params": [
+                "day"
+              ],
+              "condition": null,
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "DayView",
+                  "binding": {
+                    "pairs": [
+                      [
+                        "date",
+                        {
+                          "type": "fieldExpr",
+                          "value": {
+                            "object": {
+                              "type": "ident",
+                              "value": "day"
+                            },
+                            "field": "date"
+                          }
+                        }
+                      ]
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ]
+    },
+    {
+      "name": "Map",
+      "inputParams": [
+        {
+          "name": "points",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "center",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": ""
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "selected",
+          "typeRef": "Uuid",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "canvas",
+          "componentType": {
+            "type": "embedded"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            },
+            {
+              "key": "fields",
+              "value": {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "identifier",
+                    "value": "latitude"
+                  },
+                  {
+                    "type": "identifier",
+                    "value": "longitude"
+                  }
+                ]
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "select"
+              },
+              "params": [
+                "pin"
+              ],
+              "condition": null,
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "PointDetail",
+                  "binding": {
+                    "pairs": [
+                      [
+                        "id",
+                        {
+                          "type": "fieldExpr",
+                          "value": {
+                            "object": {
+                              "type": "ident",
+                              "value": "pin"
+                            },
+                            "field": "id"
+                          }
+                        }
+                      ]
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,735 @@
+{
+  "formatVersion": 1,
+  "modules": [
+    {
+      "name": "DataList",
+      "inputParams": [
+        {
+          "name": "items",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "fields",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "name"
+          }
+        },
+        {
+          "name": "actions",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": ""
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "selected",
+          "typeRef": "Uuid",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "list",
+          "componentType": {
+            "type": "list"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            },
+            {
+              "key": "fields",
+              "value": {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "identifier",
+                    "value": "name"
+                  },
+                  {
+                    "type": "identifier",
+                    "value": "status"
+                  }
+                ]
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "select"
+              },
+              "params": [
+                "row"
+              ],
+              "condition": null,
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "ItemDetail",
+                  "binding": {
+                    "pairs": [
+                      [
+                        "id",
+                        {
+                          "type": "fieldExpr",
+                          "value": {
+                            "object": {
+                              "type": "ident",
+                              "value": "row"
+                            },
+                            "field": "id"
+                          }
+                        }
+                      ]
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ]
+    },
+    {
+      "name": "CardGrid",
+      "inputParams": [
+        {
+          "name": "items",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "columns",
+          "typeRef": "Int",
+          "default": {
+            "type": "number",
+            "value": 3.0
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "selected",
+          "typeRef": "Uuid",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "grid",
+          "componentType": {
+            "type": "list"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            },
+            {
+              "key": "fields",
+              "value": {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "identifier",
+                    "value": "title"
+                  },
+                  {
+                    "type": "identifier",
+                    "value": "subtitle"
+                  }
+                ]
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "select"
+              },
+              "params": [
+                "card"
+              ],
+              "condition": null,
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "ItemDetail",
+                  "binding": {
+                    "pairs": [
+                      [
+                        "id",
+                        {
+                          "type": "fieldExpr",
+                          "value": {
+                            "object": {
+                              "type": "ident",
+                              "value": "card"
+                            },
+                            "field": "id"
+                          }
+                        }
+                      ]
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ]
+    },
+    {
+      "name": "Card",
+      "inputParams": [
+        {
+          "name": "eyebrow",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": ""
+          }
+        },
+        {
+          "name": "title",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "Untitled"
+          }
+        },
+        {
+          "name": "subtitle",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": ""
+          }
+        },
+        {
+          "name": "body",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": ""
+          }
+        },
+        {
+          "name": "metadata",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": ""
+          }
+        },
+        {
+          "name": "media",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": ""
+          }
+        },
+        {
+          "name": "actions",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": ""
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "selected",
+          "typeRef": "Boolean",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "face",
+          "componentType": {
+            "type": "details"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "click"
+              },
+              "condition": null,
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "ItemDetail",
+                  "binding": null
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ]
+    },
+    {
+      "name": "Feed",
+      "inputParams": [
+        {
+          "name": "source",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "ordering",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "newest"
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "refreshed",
+          "typeRef": "Boolean",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "stream",
+          "componentType": {
+            "type": "list"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            },
+            {
+              "key": "fields",
+              "value": {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "identifier",
+                    "value": "title"
+                  },
+                  {
+                    "type": "identifier",
+                    "value": "createdAt"
+                  }
+                ]
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "load"
+              },
+              "condition": null,
+              "action": {
+                "type": "refresh",
+                "value": {
+                  "target": "stream",
+                  "binding": null
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ],
+      "moduleUses": [
+        {
+          "module": "Pagination",
+          "alias": "pager",
+          "properties": [
+            {
+              "key": "page",
+              "value": {
+                "type": "number",
+                "value": 1.0
+              }
+            },
+            {
+              "key": "pageSize",
+              "value": {
+                "type": "number",
+                "value": 20.0
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Timeline",
+      "inputParams": [
+        {
+          "name": "events",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "timestamp",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "createdAt"
+          }
+        },
+        {
+          "name": "grouping",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "day"
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "selected",
+          "typeRef": "Uuid",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "track",
+          "componentType": {
+            "type": "list"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            },
+            {
+              "key": "fields",
+              "value": {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "identifier",
+                    "value": "title"
+                  },
+                  {
+                    "type": "identifier",
+                    "value": "createdAt"
+                  }
+                ]
+              }
+            },
+            {
+              "key": "sort",
+              "value": {
+                "type": "string",
+                "value": "createdAt desc"
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "select"
+              },
+              "params": [
+                "entry"
+              ],
+              "condition": null,
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "EntryDetail",
+                  "binding": {
+                    "pairs": [
+                      [
+                        "id",
+                        {
+                          "type": "fieldExpr",
+                          "value": {
+                            "object": {
+                              "type": "ident",
+                              "value": "entry"
+                            },
+                            "field": "id"
+                          }
+                        }
+                      ]
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ]
+    },
+    {
+      "name": "MasterDetail",
+      "inputParams": [
+        {
+          "name": "items",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "fields",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "name"
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "selected",
+          "typeRef": "Uuid",
+          "default": null
+        }
+      ],
+      "containers": [
+        {
+          "name": "split",
+          "label": null,
+          "isDefault": false,
+          "isXor": false,
+          "containers": [
+            {
+              "name": "detailPane",
+              "label": null,
+              "isDefault": false,
+              "isXor": false,
+              "components": [
+                {
+                  "name": "preview",
+                  "componentType": {
+                    "type": "details"
+                  },
+                  "spec": null,
+                  "properties": [
+                    {
+                      "key": "data",
+                      "value": {
+                        "type": "identifier",
+                        "value": "Item"
+                      }
+                    }
+                  ],
+                  "condition": null
+                }
+              ],
+              "condition": null,
+              "position": null
+            }
+          ],
+          "components": [
+            {
+              "name": "master",
+              "componentType": {
+                "type": "list"
+              },
+              "spec": null,
+              "properties": [
+                {
+                  "key": "data",
+                  "value": {
+                    "type": "identifier",
+                    "value": "Item"
+                  }
+                },
+                {
+                  "key": "fields",
+                  "value": {
+                    "type": "array",
+                    "value": [
+                      {
+                        "type": "identifier",
+                        "value": "name"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "eventType": {
+                    "type": "select"
+                  },
+                  "params": [
+                    "row"
+                  ],
+                  "condition": null,
+                  "action": {
+                    "type": "navigate",
+                    "value": {
+                      "target": "DetailPane",
+                      "binding": {
+                        "pairs": [
+                          [
+                            "id",
+                            {
+                              "type": "fieldExpr",
+                              "value": {
+                                "object": {
+                                  "type": "ident",
+                                  "value": "row"
+                                },
+                                "field": "id"
+                              }
+                            }
+                          ]
+                        ]
+                      }
+                    }
+                  }
+                }
+              ],
+              "condition": null
+            }
+          ],
+          "condition": null,
+          "position": null
+        }
+      ]
+    },
+    {
+      "name": "MediaGallery",
+      "inputParams": [
+        {
+          "name": "media",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "columns",
+          "typeRef": "Int",
+          "default": {
+            "type": "number",
+            "value": 4.0
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "selected",
+          "typeRef": "Uuid",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "gallery",
+          "componentType": {
+            "type": "image"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            },
+            {
+              "key": "fields",
+              "value": {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "identifier",
+                    "value": "url"
+                  },
+                  {
+                    "type": "identifier",
+                    "value": "alt"
+                  }
+                ]
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "select"
+              },
+              "params": [
+                "picture"
+              ],
+              "condition": null,
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "MediaViewer",
+                  "binding": {
+                    "pairs": [
+                      [
+                        "id",
+                        {
+                          "type": "fieldExpr",
+                          "value": {
+                            "object": {
+                              "type": "ident",
+                              "value": "picture"
+                            },
+                            "field": "id"
+                          }
+                        }
+                      ]
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ]
+    }
+  ],
+  "imports": [
+    "navigation.ifml"
+  ]
+}

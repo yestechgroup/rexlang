@@ -1,0 +1,344 @@
+{
+  "formatVersion": 1,
+  "modules": [
+    {
+      "name": "FormPanel",
+      "inputParams": [
+        {
+          "name": "entity",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "fields",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": ""
+          }
+        },
+        {
+          "name": "submitAction",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "Save"
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "saved",
+          "typeRef": "Boolean",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "form",
+          "componentType": {
+            "type": "form"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            },
+            {
+              "key": "mode",
+              "value": {
+                "type": "identifier",
+                "value": "edit"
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "submit"
+              },
+              "params": [
+                "values"
+              ],
+              "condition": null,
+              "action": {
+                "type": "actionInvocation",
+                "value": {
+                  "name": "Save",
+                  "body": {
+                    "handlers": [
+                      {
+                        "eventType": {
+                          "type": "custom",
+                          "value": "success"
+                        },
+                        "condition": null,
+                        "action": {
+                          "type": "navigate",
+                          "value": {
+                            "target": "ItemDetail",
+                            "binding": {
+                              "pairs": [
+                                [
+                                  "id",
+                                  {
+                                    "type": "fieldExpr",
+                                    "value": {
+                                      "object": {
+                                        "type": "ident",
+                                        "value": "values"
+                                      },
+                                      "field": "id"
+                                    }
+                                  }
+                                ]
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "eventType": {
+                          "type": "custom",
+                          "value": "error"
+                        },
+                        "condition": null,
+                        "action": {
+                          "type": "stay"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "eventType": {
+                "type": "cancel"
+              },
+              "condition": null,
+              "action": {
+                "type": "stay"
+              }
+            }
+          ],
+          "condition": null
+        }
+      ]
+    },
+    {
+      "name": "ReferencePicker",
+      "inputParams": [
+        {
+          "name": "entity",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "filters",
+          "typeRef": "Filter",
+          "default": null
+        },
+        {
+          "name": "query",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": ""
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "selected",
+          "typeRef": "Uuid",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "candidates",
+          "componentType": {
+            "type": "list"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            },
+            {
+              "key": "fields",
+              "value": {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "identifier",
+                    "value": "name"
+                  }
+                ]
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "select"
+              },
+              "params": [
+                "row"
+              ],
+              "condition": null,
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "Preview",
+                  "binding": {
+                    "pairs": [
+                      [
+                        "id",
+                        {
+                          "type": "fieldExpr",
+                          "value": {
+                            "object": {
+                              "type": "ident",
+                              "value": "row"
+                            },
+                            "field": "id"
+                          }
+                        }
+                      ]
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "condition": null
+        },
+        {
+          "name": "preview",
+          "componentType": {
+            "type": "details"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            }
+          ],
+          "condition": null
+        }
+      ],
+      "moduleUses": [
+        {
+          "module": "SearchPanel",
+          "alias": "search",
+          "properties": [
+            {
+              "key": "filters",
+              "value": {
+                "type": "identifier",
+                "value": "Filter"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Upload",
+      "inputParams": [
+        {
+          "name": "target",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "uploads"
+          }
+        },
+        {
+          "name": "accept",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "*/*"
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "uploaded",
+          "typeRef": "Boolean",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "dropzone",
+          "componentType": {
+            "type": "form"
+          },
+          "spec": {
+            "type": "form",
+            "value": {
+              "fields": [
+                {
+                  "name": "attachment",
+                  "input": {
+                    "type": "file"
+                  },
+                  "required": true
+                }
+              ]
+            }
+          },
+          "events": [
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "upload"
+              },
+              "params": [
+                "values"
+              ],
+              "condition": null,
+              "action": {
+                "type": "actionInvocation",
+                "value": {
+                  "name": "StoreFile",
+                  "body": {
+                    "properties": [
+                      {
+                        "key": "target",
+                        "value": {
+                          "type": "identifier",
+                          "value": "target"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ]
+    }
+  ],
+  "imports": [
+    "data.ifml"
+  ]
+}
