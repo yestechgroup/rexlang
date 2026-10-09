@@ -7,9 +7,11 @@
 //!   design files, `.evt` event-contract files, and `.ifml` interaction
 //!   flows (the latter four compile against the domain models and `.ifml`
 //!   pattern libraries they import; `.ifml` expressions are also type-checked
-//!   against the imported domains). Each input is a file or a
-//!   directory (scanned recursively for `*.mox`); several `.mox` inputs
-//!   compile as one multi-package model.
+//!   against the imported domains). Each input is a file or a directory —
+//!   a directory enters **batch mode**, checking every supported surface
+//!   under it independently (`.mox`, `.actor`, `.ddd`, `.evt`, `.ifml`);
+//!   several `.mox` files passed explicitly compile as one multi-package
+//!   model.
 //! * `rexlang ir <file>... [-o <out>]` — compile and emit the Core IR JSON
 //!   to stdout or to a file; exits `1` on errors. On `.actor` files the
 //!   standalone ActorModel artifact is emitted; on `.ddd` files the
@@ -53,8 +55,8 @@ enum Command {
     /// Parse, resolve, validate, and type-check `.mox`, `.actor`, `.ddd`,
     /// `.evt`, or `.ifml` files, rendering diagnostics grouped per file.
     Check {
-        /// Paths to compile: `.mox`/`.actor`/`.ddd`/`.evt` files, or
-        /// directories scanned recursively for `*.mox`.
+        /// Files to compile, or directories (batch mode: every supported
+        /// surface under them is checked independently).
         files: Vec<PathBuf>,
     },
     /// Compile `.mox`, `.actor`, `.ddd`, or `.evt` files and emit the
@@ -69,6 +71,10 @@ enum Command {
         /// Write the JSON to this path instead of stdout.
         #[arg(short, long, value_name = "FILE")]
         out: Option<PathBuf>,
+        /// `.ifml` only: inline every `use` into the resolved module's
+        /// contents (overrides applied) before emitting.
+        #[arg(long)]
+        expand: bool,
     },
     /// Code generation from compiled `.mox` files.
     Gen {
@@ -196,7 +202,7 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     match cli.command {
         Command::Check { files } => commands::check::run(files),
-        Command::Ir { files, out } => commands::ir::run(files, out),
+        Command::Ir { files, out, expand } => commands::ir::run(files, out, expand),
         Command::Gen { target } => commands::gen::run(target),
         Command::Fmt { check, files } => commands::fmt::run(check, files),
         Command::Artifact {

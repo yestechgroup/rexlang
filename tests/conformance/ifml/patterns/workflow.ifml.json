@@ -1,0 +1,579 @@
+{
+  "formatVersion": 1,
+  "modules": [
+    {
+      "name": "Wizard",
+      "inputParams": [
+        {
+          "name": "steps",
+          "typeRef": "String",
+          "default": null
+        },
+        {
+          "name": "entity",
+          "typeRef": "Item",
+          "default": null
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "completed",
+          "typeRef": "Boolean",
+          "default": null
+        }
+      ],
+      "containers": [
+        {
+          "name": "wizard",
+          "label": null,
+          "isDefault": false,
+          "isXor": true,
+          "properties": [
+            {
+              "key": "xor",
+              "value": {
+                "type": "bool",
+                "value": true
+              }
+            }
+          ],
+          "containers": [
+            {
+              "name": "stepOne",
+              "label": null,
+              "isDefault": true,
+              "isXor": false,
+              "properties": [
+                {
+                  "key": "default",
+                  "value": {
+                    "type": "bool",
+                    "value": true
+                  }
+                }
+              ],
+              "components": [
+                {
+                  "name": "entry",
+                  "componentType": {
+                    "type": "form"
+                  },
+                  "spec": null,
+                  "properties": [
+                    {
+                      "key": "data",
+                      "value": {
+                        "type": "identifier",
+                        "value": "Item"
+                      }
+                    }
+                  ],
+                  "events": [
+                    {
+                      "eventType": {
+                        "type": "custom",
+                        "value": "next"
+                      },
+                      "params": [
+                        "values"
+                      ],
+                      "condition": {
+                        "type": "binOp",
+                        "value": {
+                          "left": {
+                            "type": "fieldExpr",
+                            "value": {
+                              "object": {
+                                "type": "ident",
+                                "value": "values"
+                              },
+                              "field": "name"
+                            }
+                          },
+                          "op": "ne",
+                          "right": {
+                            "type": "stringLit",
+                            "value": ""
+                          }
+                        }
+                      },
+                      "action": {
+                        "type": "navigate",
+                        "value": {
+                          "target": "stepTwo",
+                          "binding": {
+                            "pairs": [
+                              [
+                                "draft",
+                                {
+                                  "type": "ident",
+                                  "value": "values"
+                                }
+                              ]
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "eventType": {
+                        "type": "cancel"
+                      },
+                      "condition": null,
+                      "action": {
+                        "type": "stay"
+                      }
+                    }
+                  ],
+                  "condition": null
+                }
+              ],
+              "condition": null,
+              "position": null
+            },
+            {
+              "name": "stepTwo",
+              "label": null,
+              "isDefault": false,
+              "isXor": false,
+              "components": [
+                {
+                  "name": "review",
+                  "componentType": {
+                    "type": "details"
+                  },
+                  "spec": null,
+                  "properties": [
+                    {
+                      "key": "data",
+                      "value": {
+                        "type": "identifier",
+                        "value": "Item"
+                      }
+                    }
+                  ],
+                  "events": [
+                    {
+                      "eventType": {
+                        "type": "custom",
+                        "value": "previous"
+                      },
+                      "condition": null,
+                      "action": {
+                        "type": "navigate",
+                        "value": {
+                          "target": "stepOne",
+                          "binding": null
+                        }
+                      }
+                    },
+                    {
+                      "eventType": {
+                        "type": "custom",
+                        "value": "next"
+                      },
+                      "condition": null,
+                      "action": {
+                        "type": "navigate",
+                        "value": {
+                          "target": "stepThree",
+                          "binding": null
+                        }
+                      }
+                    }
+                  ],
+                  "condition": null
+                }
+              ],
+              "condition": null,
+              "position": null
+            },
+            {
+              "name": "stepThree",
+              "label": null,
+              "isDefault": false,
+              "isXor": false,
+              "components": [
+                {
+                  "name": "confirm",
+                  "componentType": {
+                    "type": "details"
+                  },
+                  "spec": null,
+                  "properties": [
+                    {
+                      "key": "data",
+                      "value": {
+                        "type": "identifier",
+                        "value": "Item"
+                      }
+                    }
+                  ],
+                  "events": [
+                    {
+                      "eventType": {
+                        "type": "custom",
+                        "value": "previous"
+                      },
+                      "condition": null,
+                      "action": {
+                        "type": "navigate",
+                        "value": {
+                          "target": "stepTwo",
+                          "binding": null
+                        }
+                      }
+                    },
+                    {
+                      "eventType": {
+                        "type": "confirm"
+                      },
+                      "condition": null,
+                      "action": {
+                        "type": "actionInvocation",
+                        "value": {
+                          "name": "CompleteWizard",
+                          "body": null
+                        }
+                      }
+                    }
+                  ],
+                  "condition": null
+                }
+              ],
+              "condition": null,
+              "position": null
+            }
+          ],
+          "condition": {
+            "type": "binOp",
+            "value": {
+              "left": {
+                "type": "ident",
+                "value": "steps"
+              },
+              "op": "ne",
+              "right": {
+                "type": "stringLit",
+                "value": ""
+              }
+            }
+          },
+          "position": null
+        }
+      ]
+    },
+    {
+      "name": "WorkQueue",
+      "inputParams": [
+        {
+          "name": "queue",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "fields",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "name"
+          }
+        },
+        {
+          "name": "assignAction",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "Assign"
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "assigned",
+          "typeRef": "Boolean",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "backlog",
+          "componentType": {
+            "type": "table"
+          },
+          "spec": {
+            "type": "table",
+            "value": {
+              "columns": [
+                {
+                  "type": "field",
+                  "value": {
+                    "label": "Name",
+                    "field": {
+                      "entity": "Item",
+                      "property": "name"
+                    }
+                  }
+                },
+                {
+                  "type": "field",
+                  "value": {
+                    "label": "Status",
+                    "field": {
+                      "entity": "Item",
+                      "property": "status"
+                    }
+                  }
+                }
+              ],
+              "pagination": true
+            }
+          },
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            },
+            {
+              "key": "paginated",
+              "value": {
+                "type": "bool",
+                "value": true
+              }
+            },
+            {
+              "key": "fields",
+              "value": {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "identifier",
+                    "value": "name"
+                  },
+                  {
+                    "type": "identifier",
+                    "value": "status"
+                  },
+                  {
+                    "type": "identifier",
+                    "value": "assignee"
+                  }
+                ]
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "select"
+              },
+              "params": [
+                "row"
+              ],
+              "condition": null,
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "WorkItem",
+                  "binding": {
+                    "pairs": [
+                      [
+                        "id",
+                        {
+                          "type": "fieldExpr",
+                          "value": {
+                            "object": {
+                              "type": "ident",
+                              "value": "row"
+                            },
+                            "field": "id"
+                          }
+                        }
+                      ]
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "assign"
+              },
+              "params": [
+                "rows"
+              ],
+              "condition": null,
+              "action": {
+                "type": "actionInvocation",
+                "value": {
+                  "name": "Assign",
+                  "body": null
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ]
+    },
+    {
+      "name": "ApprovalQueue",
+      "inputParams": [
+        {
+          "name": "queue",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "fields",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "name"
+          }
+        },
+        {
+          "name": "assignAction",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "Assign"
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "approved",
+          "typeRef": "Boolean",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "decision",
+          "componentType": {
+            "type": "form"
+          },
+          "spec": null,
+          "events": [
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "approve"
+              },
+              "params": [
+                "row"
+              ],
+              "condition": null,
+              "action": {
+                "type": "actionInvocation",
+                "value": {
+                  "name": "Approve",
+                  "body": null
+                }
+              }
+            },
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "reject"
+              },
+              "params": [
+                "row"
+              ],
+              "condition": null,
+              "action": {
+                "type": "actionInvocation",
+                "value": {
+                  "name": "Reject",
+                  "body": null
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ],
+      "moduleUses": [
+        {
+          "module": "WorkQueue",
+          "alias": "queue",
+          "properties": [
+            {
+              "key": "queue",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            },
+            {
+              "key": "fields",
+              "value": {
+                "type": "string",
+                "value": "name, status"
+              }
+            },
+            {
+              "key": "assignAction",
+              "value": {
+                "type": "string",
+                "value": "Assign"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Progress",
+      "inputParams": [
+        {
+          "name": "value",
+          "typeRef": "Int",
+          "default": {
+            "type": "number",
+            "value": 0.0
+          }
+        },
+        {
+          "name": "max",
+          "typeRef": "Int",
+          "default": {
+            "type": "number",
+            "value": 100.0
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "value",
+          "typeRef": "Int",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "bar",
+          "componentType": {
+            "type": "chart"
+          },
+          "spec": {
+            "type": "chart",
+            "value": {
+              "kind": "metric",
+              "labelField": "progress",
+              "valueFields": [
+                "value"
+              ]
+            }
+          },
+          "condition": null
+        }
+      ]
+    }
+  ]
+}

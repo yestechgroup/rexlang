@@ -1,0 +1,504 @@
+{
+  "formatVersion": 1,
+  "modules": [
+    {
+      "name": "Inbox",
+      "inputParams": [
+        {
+          "name": "messages",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "folders",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "markReadAction",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "MarkRead"
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "selected",
+          "typeRef": "Uuid",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "folderList",
+          "componentType": {
+            "type": "menu"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            },
+            {
+              "key": "fields",
+              "value": {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "identifier",
+                    "value": "name"
+                  },
+                  {
+                    "type": "identifier",
+                    "value": "unreadCount"
+                  }
+                ]
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "select"
+              },
+              "params": [
+                "folder"
+              ],
+              "condition": null,
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "Folder",
+                  "binding": {
+                    "pairs": [
+                      [
+                        "id",
+                        {
+                          "type": "fieldExpr",
+                          "value": {
+                            "object": {
+                              "type": "ident",
+                              "value": "folder"
+                            },
+                            "field": "id"
+                          }
+                        }
+                      ]
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "condition": null
+        },
+        {
+          "name": "readingPane",
+          "componentType": {
+            "type": "details"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "select"
+              },
+              "params": [
+                "message"
+              ],
+              "condition": {
+                "type": "binOp",
+                "value": {
+                  "left": {
+                    "type": "fieldExpr",
+                    "value": {
+                      "object": {
+                        "type": "ident",
+                        "value": "message"
+                      },
+                      "field": "unread"
+                    }
+                  },
+                  "op": "eq",
+                  "right": {
+                    "type": "boolLit",
+                    "value": true
+                  }
+                }
+              },
+              "action": {
+                "type": "actionInvocation",
+                "value": {
+                  "name": "MarkRead",
+                  "body": {
+                    "properties": [
+                      {
+                        "key": "id",
+                        "value": {
+                          "type": "fieldAccess",
+                          "value": {
+                            "object": {
+                              "type": "identifier",
+                              "value": "message"
+                            },
+                            "field": "id"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ],
+      "moduleUses": [
+        {
+          "module": "SearchPanel",
+          "alias": "search",
+          "properties": [
+            {
+              "key": "filters",
+              "value": {
+                "type": "identifier",
+                "value": "Folder"
+              }
+            }
+          ]
+        },
+        {
+          "module": "DataList",
+          "alias": "items",
+          "properties": [
+            {
+              "key": "items",
+              "value": {
+                "type": "identifier",
+                "value": "Message"
+              }
+            },
+            {
+              "key": "fields",
+              "value": {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "identifier",
+                    "value": "subject"
+                  },
+                  {
+                    "type": "identifier",
+                    "value": "sender"
+                  },
+                  {
+                    "type": "identifier",
+                    "value": "receivedAt"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "NotificationCenter",
+      "inputParams": [
+        {
+          "name": "notifications",
+          "typeRef": "Item",
+          "default": null
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "unreadCount",
+          "typeRef": "Int",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "badge",
+          "componentType": {
+            "type": "chart"
+          },
+          "spec": {
+            "type": "chart",
+            "value": {
+              "kind": "metric",
+              "labelField": "unread",
+              "valueFields": [
+                "unreadCount"
+              ]
+            }
+          },
+          "condition": null
+        },
+        {
+          "name": "list",
+          "componentType": {
+            "type": "list"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            },
+            {
+              "key": "fields",
+              "value": {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "identifier",
+                    "value": "title"
+                  },
+                  {
+                    "type": "identifier",
+                    "value": "createdAt"
+                  },
+                  {
+                    "type": "identifier",
+                    "value": "read"
+                  }
+                ]
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "markAllRead"
+              },
+              "condition": null,
+              "action": {
+                "type": "actionInvocation",
+                "value": {
+                  "name": "MarkAllRead",
+                  "body": null
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ]
+    },
+    {
+      "name": "CommentThread",
+      "inputParams": [
+        {
+          "name": "comments",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "postAction",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "PostComment"
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "commented",
+          "typeRef": "Boolean",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "thread",
+          "componentType": {
+            "type": "list"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            },
+            {
+              "key": "fields",
+              "value": {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "identifier",
+                    "value": "author"
+                  },
+                  {
+                    "type": "identifier",
+                    "value": "body"
+                  },
+                  {
+                    "type": "identifier",
+                    "value": "createdAt"
+                  }
+                ]
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "select"
+              },
+              "params": [
+                "comment"
+              ],
+              "condition": null,
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "CommentDetail",
+                  "binding": {
+                    "pairs": [
+                      [
+                        "id",
+                        {
+                          "type": "fieldExpr",
+                          "value": {
+                            "object": {
+                              "type": "ident",
+                              "value": "comment"
+                            },
+                            "field": "id"
+                          }
+                        }
+                      ]
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "condition": null
+        },
+        {
+          "name": "reply",
+          "componentType": {
+            "type": "form"
+          },
+          "spec": {
+            "type": "form",
+            "value": {
+              "fields": [
+                {
+                  "name": "body",
+                  "input": {
+                    "type": "textArea"
+                  },
+                  "required": true
+                }
+              ]
+            }
+          },
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "post"
+              },
+              "params": [
+                "values"
+              ],
+              "condition": null,
+              "action": {
+                "type": "actionInvocation",
+                "value": {
+                  "name": "PostComment",
+                  "body": {
+                    "properties": [
+                      {
+                        "key": "body",
+                        "value": {
+                          "type": "fieldAccess",
+                          "value": {
+                            "object": {
+                              "type": "identifier",
+                              "value": "values"
+                            },
+                            "field": "body"
+                          }
+                        }
+                      }
+                    ],
+                    "handlers": [
+                      {
+                        "eventType": {
+                          "type": "custom",
+                          "value": "success"
+                        },
+                        "condition": null,
+                        "action": {
+                          "type": "refresh",
+                          "value": {
+                            "target": "thread",
+                            "binding": null
+                          }
+                        }
+                      },
+                      {
+                        "eventType": {
+                          "type": "custom",
+                          "value": "error"
+                        },
+                        "condition": null,
+                        "action": {
+                          "type": "stay"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ]
+    }
+  ],
+  "imports": [
+    "collections.ifml",
+    "data.ifml"
+  ]
+}

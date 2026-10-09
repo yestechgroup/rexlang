@@ -1,0 +1,369 @@
+{
+  "formatVersion": 1,
+  "modules": [
+    {
+      "name": "Modal",
+      "inputParams": [
+        {
+          "name": "title",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "Dialog"
+          }
+        },
+        {
+          "name": "content",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": ""
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "dismissed",
+          "typeRef": "Boolean",
+          "default": null
+        }
+      ],
+      "containers": [
+        {
+          "name": "surface",
+          "label": null,
+          "isDefault": false,
+          "isXor": false,
+          "properties": [
+            {
+              "key": "modal",
+              "value": {
+                "type": "bool",
+                "value": true
+              }
+            }
+          ],
+          "components": [
+            {
+              "name": "body",
+              "componentType": {
+                "type": "details"
+              },
+              "spec": null,
+              "properties": [
+                {
+                  "key": "data",
+                  "value": {
+                    "type": "identifier",
+                    "value": "Item"
+                  }
+                }
+              ],
+              "condition": null
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "close"
+              },
+              "condition": null,
+              "action": {
+                "type": "stay"
+              }
+            }
+          ],
+          "condition": null,
+          "position": null
+        }
+      ]
+    },
+    {
+      "name": "Drawer",
+      "inputParams": [
+        {
+          "name": "title",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "Panel"
+          }
+        },
+        {
+          "name": "side",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "end"
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "dismissed",
+          "typeRef": "Boolean",
+          "default": null
+        }
+      ],
+      "containers": [
+        {
+          "name": "panel",
+          "label": null,
+          "isDefault": false,
+          "isXor": false,
+          "components": [
+            {
+              "name": "body",
+              "componentType": {
+                "type": "details"
+              },
+              "spec": null,
+              "properties": [
+                {
+                  "key": "data",
+                  "value": {
+                    "type": "identifier",
+                    "value": "Item"
+                  }
+                }
+              ],
+              "condition": null
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "close"
+              },
+              "condition": null,
+              "action": {
+                "type": "stay"
+              }
+            }
+          ],
+          "condition": null,
+          "position": null
+        }
+      ]
+    },
+    {
+      "name": "Popover",
+      "inputParams": [
+        {
+          "name": "anchor",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": ""
+          }
+        },
+        {
+          "name": "placement",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "bottom"
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "dismissed",
+          "typeRef": "Boolean",
+          "default": null
+        }
+      ],
+      "containers": [
+        {
+          "name": "bubble",
+          "label": null,
+          "isDefault": false,
+          "isXor": false,
+          "components": [
+            {
+              "name": "body",
+              "componentType": {
+                "type": "details"
+              },
+              "spec": null,
+              "properties": [
+                {
+                  "key": "data",
+                  "value": {
+                    "type": "identifier",
+                    "value": "Item"
+                  }
+                }
+              ],
+              "condition": null
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "toggle"
+              },
+              "condition": null,
+              "action": {
+                "type": "stay"
+              }
+            }
+          ],
+          "condition": null,
+          "position": null
+        }
+      ]
+    },
+    {
+      "name": "Confirmation",
+      "inputParams": [
+        {
+          "name": "message",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "Are you sure?"
+          }
+        },
+        {
+          "name": "confirmAction",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "Confirm"
+          }
+        },
+        {
+          "name": "cancelAction",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "Cancel"
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "confirmed",
+          "typeRef": "Boolean",
+          "default": null
+        }
+      ],
+      "containers": [
+        {
+          "name": "surface",
+          "label": null,
+          "isDefault": false,
+          "isXor": false,
+          "properties": [
+            {
+              "key": "modal",
+              "value": {
+                "type": "bool",
+                "value": true
+              }
+            }
+          ],
+          "components": [
+            {
+              "name": "message",
+              "componentType": {
+                "type": "details"
+              },
+              "spec": null,
+              "properties": [
+                {
+                  "key": "data",
+                  "value": {
+                    "type": "identifier",
+                    "value": "Item"
+                  }
+                }
+              ],
+              "condition": null
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "confirm"
+              },
+              "condition": null,
+              "action": {
+                "type": "actionInvocation",
+                "value": {
+                  "name": "Confirm",
+                  "body": null
+                }
+              }
+            },
+            {
+              "eventType": {
+                "type": "cancel"
+              },
+              "condition": null,
+              "action": {
+                "type": "stay"
+              }
+            }
+          ],
+          "condition": null,
+          "position": null
+        }
+      ]
+    },
+    {
+      "name": "Toast",
+      "inputParams": [
+        {
+          "name": "message",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": ""
+          }
+        },
+        {
+          "name": "kind",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "info"
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "dismissed",
+          "typeRef": "Boolean",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "notice",
+          "componentType": {
+            "type": "details"
+          },
+          "spec": null,
+          "events": [
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "dismiss"
+              },
+              "condition": null,
+              "action": {
+                "type": "stay"
+              }
+            }
+          ],
+          "condition": null
+        }
+      ]
+    }
+  ]
+}

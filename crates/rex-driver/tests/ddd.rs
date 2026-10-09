@@ -8,7 +8,8 @@ use rex_ir::ddd::DDD_MODEL_FORMAT_VERSION;
 use rex_ir::{ActorModel, ActorsDef, CapabilityDef, TypeRef};
 
 /// One domain exercising resolution, containment (Library owns Books), an
-/// enum, and a spare value-object class.
+/// enum, and a spare value-object class (every feature `readonly`, per the
+/// value contract — rule 12).
 const DOMAIN: &str = r#"
 package nz.example.library
 
@@ -28,7 +29,7 @@ class Book {
 }
 
 class Money {
-    int cents
+    readonly int cents
 }
 "#;
 
@@ -48,6 +49,34 @@ class Book {
 
 class Chapter {
     container Book book opposite chapters
+}
+"#;
+
+/// A domain for the aggregate reference constraint (rule 13): Library owns
+/// Books, Books own Chapters, and PhysicalMedia sits *outside* the aggregate
+/// while referring to one of its non-root members.
+const AGGREGATE_DOMAIN: &str = r#"
+package nz.example.library
+
+class Library {
+    String name
+    contains Book[] books opposite library
+}
+
+class Book {
+    container Library library opposite books
+    String title
+    contains Chapter[] chapters opposite book
+}
+
+class Chapter {
+    container Book book opposite chapters
+    String heading
+}
+
+class PhysicalMedia {
+    String status
+    refers Chapter media
 }
 "#;
 
@@ -463,6 +492,200 @@ fn cache_is_allowed_on_any_design() {
     }
 }
 
+#[test]
+fn entity_flags_default_on_and_negation_opts_out() {
+    let source = concat!(
+        "import \"library.mox\"\n",
+        "application A {\n",
+        "    module m {\n",
+        "        entity Book\n",
+        "        entity Library !auditable !optimisticLocking\n",
+        "        value Money\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile_domain(source);
+    assert_clean(&compilation);
+    let designs = &compilation.model.expect("artifact").modules[0].designs;
+    let book = designs.iter().find(|d| d.class == "Book").unwrap();
+    assert!(book.flags.auditable, "auditable defaults on for entities");
+    assert!(
+        book.flags.optimistic_locking,
+        "optimisticLocking defaults on for entities"
+    );
+    let library = designs.iter().find(|d| d.class == "Library").unwrap();
+    assert!(!library.flags.auditable, "!auditable opts out");
+    assert!(
+        !library.flags.optimistic_locking,
+        "!optimisticLocking opts out"
+    );
+    let money = designs.iter().find(|d| d.class == "Money").unwrap();
+    assert!(
+        !money.flags.auditable && !money.flags.optimistic_locking,
+        "value designs carry no entity flag defaults"
+    );
+}
+
+#[test]
+fn negating_default_off_flags_is_rejected() {
+    for (design, flag) in [
+        ("entity Book !scaffold", "scaffold"),
+        ("entity Book !cache", "cache"),
+        ("value Money !nonPersistent", "nonPersistent"),
+    ] {
+        let source = format!("import \"library.mox\"\napplication A {{ module m {{ {design} }} }}");
+        let compilation = compile_domain(&source);
+        let diagnostic = single(
+            &compilation,
+            &format!("'!{flag}' is meaningless; '{flag}' defaults to off"),
+        );
+        assert_eq!(
+            diagnostic.span,
+            Some(span_of(&source, &format!("!{flag}"), 0))
+        );
+    }
+}
+
+#[test]
+fn negated_entity_flags_require_an_entity_design() {
+    let source = "import \"library.mox\"\napplication A { module m { value Money !auditable } }";
+    let compilation = compile_domain(source);
+    single(
+        &compilation,
+        "flag 'auditable' requires an entity design; 'Money' is designed as a value",
+    );
+    assert_eq!(
+        single(&compilation, "flag 'auditable'").span,
+        Some(span_of(source, "!auditable", 0))
+    );
+}
+
+// --- rule 14: scaffold ---------------------------------------------------------
+
+#[test]
+fn scaffold_requires_a_repository() {
+    let source = concat!(
+        "import \"library.mox\"\n",
+        "application A {\n",
+        "    module m {\n",
+        "        entity Book scaffold\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile_domain(source);
+    let diagnostic = single(
+        &compilation,
+        "scaffolded entity 'Book' declares no repository",
+    );
+    assert_eq!(diagnostic.span, Some(span_of(source, "scaffold", 0)));
+    assert!(
+        diagnostic
+            .help
+            .as_deref()
+            .unwrap_or_default()
+            .contains("add `repository BookRepository"),
+        "help shows the repository to declare: {:?}",
+        diagnostic.help
+    );
+    assert!(compilation.model.is_none());
+}
+
+#[test]
+fn scaffold_with_a_repository_is_clean() {
+    let source = concat!(
+        "import \"library.mox\"\n",
+        "application A {\n",
+        "    module m {\n",
+        "        entity Book scaffold repository BookRepository {\n",
+        "            findById;\n",
+        "            findAll;\n",
+        "            save;\n",
+        "            delete;\n",
+        "        }\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile_domain(source);
+    assert_clean(&compilation);
+    assert!(compilation.model.is_some());
+}
+
+// --- repository breadth: finders and protected operations ---------------------
+
+#[test]
+fn every_repository_builtin_lowers_with_its_wire_name() {
+    let source = concat!(
+        "import \"library.mox\"\n",
+        "application A {\n",
+        "    module m {\n",
+        "        entity Book repository BookRepository {\n",
+        "            findById;\n",
+        "            findAll;\n",
+        "            findByExample;\n",
+        "            findByKeys;\n",
+        "            save;\n",
+        "            delete;\n",
+        "        }\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile_domain(source);
+    assert_clean(&compilation);
+    let model = compilation.model.expect("artifact");
+    let operations = &model.modules[0].designs[0]
+        .repository
+        .as_ref()
+        .expect("repository")
+        .operations;
+    let builtins: Vec<_> = operations.iter().map(|op| op.builtin).collect();
+    assert_eq!(
+        builtins,
+        vec![
+            Some(rex_ir::ddd::BuiltinRepositoryOp::FindById),
+            Some(rex_ir::ddd::BuiltinRepositoryOp::FindAll),
+            Some(rex_ir::ddd::BuiltinRepositoryOp::FindByExample),
+            Some(rex_ir::ddd::BuiltinRepositoryOp::FindByKeys),
+            Some(rex_ir::ddd::BuiltinRepositoryOp::Save),
+            Some(rex_ir::ddd::BuiltinRepositoryOp::Delete),
+        ]
+    );
+}
+
+#[test]
+fn protected_modifiers_lower_into_the_artifact() {
+    let source = concat!(
+        "import \"library.mox\"\n",
+        "application A {\n",
+        "    module m {\n",
+        "        service BookService {\n",
+        "            inject BookRepository;\n",
+        "            protected lend => BookRepository.findById;\n",
+        "            boolean borrow(Book book);\n",
+        "        }\n",
+        "        entity Book repository BookRepository {\n",
+        "            findById;\n",
+        "            protected findByKeys;\n",
+        "            protected Book byTitle(String title);\n",
+        "            findAll;\n",
+        "        }\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile_domain(source);
+    assert_clean(&compilation);
+    let module = &compilation.model.expect("artifact").modules[0];
+    let operations = &module.services[0].operations;
+    assert!(operations[0].is_protected, "delegated op is protected");
+    assert!(!operations[1].is_protected, "declared op stays public");
+    let repository = module.designs[0].repository.as_ref().unwrap();
+    let protected: Vec<_> = repository
+        .operations
+        .iter()
+        .map(|op| op.is_protected)
+        .collect();
+    assert_eq!(protected, [false, true, true, false]);
+}
+
 // --- rule 5: repository placement --------------------------------------------
 
 #[test]
@@ -568,6 +791,151 @@ fn containment_without_an_entity_design_allows_a_repository() {
         "}\n",
     );
     let compilation = compile_domain(source);
+    assert_clean(&compilation);
+    assert!(compilation.model.is_some());
+}
+
+// --- rule 12: the value contract ----------------------------------------------
+
+#[test]
+fn value_design_rejects_mutable_features() {
+    let source = concat!(
+        "import \"library.mox\"\n",
+        "application A {\n",
+        "    module m {\n",
+        "        value Book\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile_domain(source);
+    let violations: Vec<_> = compilation
+        .diagnostics
+        .iter()
+        .filter(|(_, diagnostic)| diagnostic.message.contains("value design 'Book'"))
+        .collect();
+    assert_eq!(
+        violations.len(),
+        3,
+        "one violation per mutable stored feature: {:?}",
+        compilation.diagnostics
+    );
+    for feature in ["library", "title", "category"] {
+        assert!(
+            violations.iter().any(|(_, diagnostic)| diagnostic
+                .message
+                .contains(&format!("feature '{feature}' is not readonly"))),
+            "missing violation for '{feature}': {:?}",
+            violations
+        );
+    }
+    assert!(compilation.model.is_none());
+}
+
+#[test]
+fn value_design_accepts_readonly_and_derived_features() {
+    // `Money` is fully readonly in [`DOMAIN`]; the derived feature here is
+    // computed, never stored, so it needs no `readonly` modifier.
+    let domain = r#"
+package nz.example.library
+
+class Money {
+    readonly int cents
+    derived int doubled { expr { cents * 2 } }
+}
+"#;
+    let source = concat!(
+        "import \"library.mox\"\n",
+        "application A {\n",
+        "    module m {\n",
+        "        value Money\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile(source, &[("library.mox", domain)]);
+    assert_clean(&compilation);
+    assert!(compilation.model.is_some());
+}
+
+// --- rule 13: the aggregate reference constraint ------------------------------
+
+#[test]
+fn outside_cross_reference_to_a_contained_entity_is_rejected() {
+    let source = concat!(
+        "import \"library.mox\"\n",
+        "application A {\n",
+        "    base nz.example.library\n",
+        "\n",
+        "    module m {\n",
+        "        entity Library repository LibraryRepository { findById; }\n",
+        "        entity Book\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile(source, &[("library.mox", AGGREGATE_DOMAIN)]);
+    let diagnostic = single(&compilation, "escapes its aggregate rooted at 'Library'");
+    assert!(
+        diagnostic
+            .message
+            .contains("cross reference 'PhysicalMedia.media' to 'Chapter'"),
+        "names the referring feature and the target: {:?}",
+        diagnostic.message
+    );
+    assert!(
+        diagnostic
+            .help
+            .as_deref()
+            .unwrap_or_default()
+            .contains("only to the aggregate root"),
+        "help offers the two outs: {:?}",
+        diagnostic.help
+    );
+    assert!(compilation.model.is_none());
+}
+
+#[test]
+fn cross_reference_to_an_aggregate_root_is_allowed() {
+    // The same outside class referring to the *root* is the sanctioned
+    // outside access — Sculptor's DDD aggregate rule.
+    let domain = AGGREGATE_DOMAIN.replace("refers Chapter media", "refers Library media");
+    let source = concat!(
+        "import \"library.mox\"\n",
+        "application A {\n",
+        "    base nz.example.library\n",
+        "\n",
+        "    module m {\n",
+        "        entity Library repository LibraryRepository { findById; }\n",
+        "        entity Book\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile(source, &[("library.mox", &domain)]);
+    assert_clean(&compilation);
+    assert!(compilation.model.is_some());
+}
+
+#[test]
+fn cross_reference_inside_one_aggregate_is_allowed() {
+    // Book (an aggregate member) referring to Chapter (a member of the same
+    // aggregate) stays inside the boundary; the outside class's own
+    // reference is retargeted to the root so the domain is otherwise clean.
+    let domain = AGGREGATE_DOMAIN
+        .replace("refers Chapter media", "refers Library media")
+        .replace(
+            "contains Chapter[] chapters opposite book",
+            "contains Chapter[] chapters opposite book\n    refers Chapter note",
+        );
+    let source = concat!(
+        "import \"library.mox\"\n",
+        "application A {\n",
+        "    base nz.example.library\n",
+        "\n",
+        "    module m {\n",
+        "        entity Library repository LibraryRepository { findById; }\n",
+        "        entity Book\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile(source, &[("library.mox", &domain)]);
     assert_clean(&compilation);
     assert!(compilation.model.is_some());
 }
@@ -892,8 +1260,8 @@ fn capabilities_against_an_empty_actor_model_list_nothing() {
 
 // --- resolution semantics ----------------------------------------------------
 
-const PACKAGE_A: &str = "package a\n\nclass Money {\n    int cents\n}";
-const PACKAGE_B: &str = "package b\n\nclass Money {\n    int cents\n}";
+const PACKAGE_A: &str = "package a\n\nclass Money {\n    readonly int cents\n}";
+const PACKAGE_B: &str = "package b\n\nclass Money {\n    readonly int cents\n}";
 
 #[test]
 fn ambiguous_bare_names_require_qualification() {

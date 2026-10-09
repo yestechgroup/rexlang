@@ -18,8 +18,8 @@ classes the imported domains declare and records what the application makes
 of them. Downstream consumers ingest the artifact exactly like the
 `ActorModel` policy artifact; there is no in-tree backend yet.
 
-The normative contract — entry points, resolution semantics, the ten
-validation rules, the aggregate-derivation rule, and the capabilities
+The normative contract — entry points, resolution semantics, the validation
+rules, the aggregate-derivation rule, and the capabilities
 contract — is documented on `rex_driver::compile_ddd_str`; this page is the
 language reference.
 
@@ -38,8 +38,8 @@ docs):
 - All struct field names serialize as `camelCase` (`formatVersion`,
   `returnType`, `optimisticLocking`, ...). Unit-only enums serialize as bare
   strings: stereotypes lowercase (`"entity" | "value" | "dto"`), built-in
-  repository operations camelCase (`"findById"`, `"findAll"`, `"save"`,
-  `"delete"`).
+  repository operations camelCase (`"findById"`, `"findAll"`,
+  `"findByExample"`, `"findByKeys"`, `"save"`, `"delete"`).
 - Signatures reuse the domain IR's `TypeRef` (adjacent tagging:
   `{"type": "class", "value": {...}}`) and `OperationParam`
   (`{"name": ..., "type": ...}`) — there are no parallel wire-level
@@ -107,6 +107,12 @@ Lexical and structural rules:
   carry a `capability a, b` clause; declared repository operations take
   none (the wire artifact's repository operations carry no capabilities, so
   accepting one would silently drop data).
+- A service or repository operation may carry a leading `protected`
+  modifier (Sculptor's visibility): the operation stays off the public
+  interface. `protected` is contextual — in leading position it is the
+  modifier, anywhere else an ordinary name (`^protected` escapes).
+- The repository built-ins are `findById`, `findAll`, `findByExample`,
+  `findByKeys`, `save`, and `delete` — the consumer knows their signatures.
 - Multiplicity annotations on return types and parameters (`String[]`,
   `Book[0,3]`) lower into the artifact's cardinality slots
   (`returnMultiplicity` / parameter `multiplicity`).
@@ -153,7 +159,11 @@ consumers resolve against the domain model.
    in the domain model (entity, value, and dto designs all target classes).
 4. **Flag/stereotype compatibility** — `scaffold`, `auditable`, and
    `optimisticLocking` are entity-only; `nonPersistent` is value/dto-only;
-   `cache` is legal on any design.
+   `cache` is legal on any design. `auditable` and `optimisticLocking`
+   default **on** for entity designs (Sculptor's polarity): the artifact
+   lowers them to `true` unless the design opts out with the negated form
+   (`!auditable`, `!optimisticLocking`). Negating a flag that defaults off
+   (`!scaffold`, `!nonPersistent`, `!cache`) is rejected wherever written.
 5. **Repository placement** — only entity designs may declare a repository.
 6. **Aggregate boundary** — see the derivation rule below; an entity design
    derived as a non-root may not declare a repository.
@@ -192,6 +202,24 @@ consumers resolve against the domain model.
     type-checked with the entity as `self` (any value type is legal; the
     consumer decides the rendered form). Pagination bounds satisfy
     `1 ≤ limit ≤ max`.
+12. **Value contract** — a `value` design is an immutable value object
+    (Sculptor's ValueObject default, with no opt-out): every stored feature
+    of the resolved class (own and inherited, derived features excluded)
+    must carry the domain model's `readonly` modifier. A changeable class
+    designs as `entity` or `dto` instead.
+13. **Aggregate reference constraint** — an outside class may hold a cross
+    reference only to an aggregate's root: for every cross-reference
+    (`refers`) feature whose target sits under a containment chain (a
+    non-root aggregate member), the referring class must share the target's
+    containment root. Computed over the whole union like the
+    aggregate-derivation rule, and skipped when the verdict would be a
+    guess (the target or source sits under two distinct roots, or under a
+    containment cycle).
+14. **scaffold** — a scaffolded entity design must declare a repository:
+    `scaffold` stands for Sculptor's generated CRUD operations (which also
+    imply the service), and the artifact stays validation-only — nothing is
+    synthesized — so the author declares the repository the scaffolding
+    would hang off. The service remains the author's to declare.
 
 ## Aggregate derivation
 
@@ -244,8 +272,9 @@ rexlang artifact check library.ddd.json    # validate the serialized artifact
   analyzer pagination capability` (clause contents keep their source
   order; document expressions are re-emitted verbatim), and every
   operation/`inject` line ending in `;`.
-- Directory inputs stay `.mox`-only: designs are compiled by naming the
-  `.ddd` file explicitly.
+- Directory batch mode (`rexlang check <dir>`) picks `.ddd` files up like
+  every other surface: each design in the directory compiles independently,
+  imports resolved relative to it.
 
 ---
 
@@ -258,12 +287,50 @@ rexlang artifact check library.ddd.json    # validate the serialized artifact
 | BasicType | `.mox` datatype (referenced in signatures, never designed) |
 | Repository | `repository` block on an entity design |
 | Service (+ injected `=>` delegation) | `service` with `inject` lines and `name => target.operation` operations |
-| `scaffold` / `auditable` / `optimisticLocking` | design flags (entity-only) |
+| `scaffold` / `auditable` / `optimisticLocking` / `!aggregateRoot`-style negations | design flags (entity-only; `auditable`/`optimisticLocking` default on for entities, `!flag` opts out) |
 | `belongsTo` / `!aggregateRoot` | derived from the domain model's containment graph (see aggregate derivation) |
 | Module | `module` label grouping services and designs |
 | DTO | `dto` design |
 | `findByQuery` / `findByCondition` finders | `search` projection (intent only: text fields with boosts, filters, sorts, ranking, pagination, document projections) — the backend chooses the engine (Postgres FTS, Tantivy, OpenSearch, ...) |
 | generated `GET /things/search?q=` endpoints | consumer concern — the artifact is backend-independent |
+
+## Deliberate divergences
+
+Sculptor concepts rexlang intentionally does not carry, and why:
+
+- **Composite natural keys** — expressible already: several `id` features on
+  one class lower with `isId`, and the composite key is that set; the
+  Tier-1 backends give the group its meaning (docs/LANGUAGE.md keeps `id`
+  "carried; semantics land with Tier 1").
+- **Collection size constraints (`size`, `notEmpty`)** — expressible as the
+  multiplicity annotation (`String[1..10] tags`), which the JSON Schema
+  backend already lowers to `minItems`/`maxItems`; a constraint-block
+  spelling would duplicate it.
+- **Ordered collections (`orderby` / `orderColumn`, Set/List/Bag)** —
+  persistence-engine metadata (JPA `@OrderBy`/`@OrderColumn`); rexlang
+  features keep declaration order, and a backend that needs a different
+  ordering derives it from its own configuration, not from the artifact.
+- **Fetch / cascade** — JPA persistence knobs with aggregate-derived
+  defaults in Sculptor's generator; the artifact is backend-independent,
+  so persistence behavior belongs to the backend that owns the storage.
+- **Date validation (`past` / `future`) and custom validators** — runtime
+  validation semantics; rexlang's constraint system is deliberately
+  schema-only (the `unique` precedent), and there is no runtime validator
+  hook to hang them on.
+- **Gap classes** — Sculptor's generated-base/handwritten-subclass split is
+  a generation strategy; rexlang generates whole files, and a body-less
+  `op` stays an abstract hook implemented by hand in target code — the
+  same separation without a second class.
+- **Traits** — a mixin composition feature of Sculptor's Java generation;
+  no rexlang surface carries it yet. If a need lands, it belongs in the
+  `.mox` domain model (interface `extends` covers the signature-sharing
+  half today).
+- **Composite value types (BasicType)** — Sculptor's `BasicType` is a
+  multi-attribute embeddable (`Money{currency, amount}`); rexlang
+  datatypes wrap a single platform type opaquely. Model the composite as
+  a class designed `value` (rule 12 then requires its features
+  `readonly`); a true embeddable datatype awaits a deliberate `.mox`
+  language extension.
 
 ---
 
@@ -283,10 +350,12 @@ application Library {
             inject PhysicalMediaRepository;
             inject MovieRepository;
             inject PersonService;
+            inject MediaSearch;
             boolean borrow(String mediaId, Person borrower) capability BorrowMedia;
             PhysicalMedia registerMedia(String status);
-            save => PhysicalMediaRepository.save;
+            protected save => PhysicalMediaRepository.save;
             registerBorrower => PersonService.register;
+            findMedia => MediaSearch.search;
         }
         entity Library scaffold cache repository LibraryRepository {
             findById;
@@ -312,6 +381,32 @@ application Library {
             delete;
             PhysicalMedia findByStatus(String status);
         }
+        /// Full-text search over the movie catalogue.
+        search MediaSearch {
+            entity Movie
+            text {
+                title boost 3
+                synopsis analyzer "english"
+            }
+            filters {
+                genre
+            }
+            sort {
+                title
+            }
+            document {
+                headline = title;
+                blurb = title + " - " + synopsis;
+            }
+            ranking bm25
+            analyzer "english"
+            pagination {
+                limit 20
+                max 100
+                cursor
+            }
+            capability SearchMedia
+        }
     }
     module person {
         /// Keeps the member register current.
@@ -323,9 +418,31 @@ application Library {
         entity Person repository PersonRepository {
             findById;
             findAll;
+            findByExample;
+            findByKeys;
             save;
             delete;
-            Person findByName(String fullName);
+            protected Person findByName(String fullName);
+        }
+        search MemberDirectory {
+            entity Person
+            text {
+                fullName boost 2
+            }
+            filters {
+                joinedOn
+            }
+            sort {
+                fullName
+                joinedOn
+            }
+            document {
+                displayName = fullName;
+            }
+            ranking tfIdf
+            pagination {
+                limit 10
+            }
         }
     }
 }

@@ -1586,8 +1586,27 @@ fn directory_arguments_expand_recursively_in_sorted_order() {
 }
 
 #[test]
-fn directory_without_mox_files_is_a_clean_error() {
+fn directory_scan_covers_non_mox_surfaces() {
     let dir = scratch_dir().join(format!("empty-scan-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create dir");
+    std::fs::write(dir.join("notes.txt"), "nothing to compile").expect("write txt");
+    std::fs::write(dir.join("flow.ifml"), "view \"Home\" {\n}\n").expect("write ifml");
+
+    // A directory with no `.mox` at all still checks its other surfaces;
+    // unsupported extensions are ignored.
+    let output = rexlang()
+        .args(["check", dir.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check on a .mox-less directory");
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("flow.ifml"), "stdout was: {stdout}");
+}
+
+#[test]
+fn directory_without_any_model_files_is_a_clean_error() {
+    let dir = scratch_dir().join(format!("no-models-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create dir");
     std::fs::write(dir.join("notes.txt"), "nothing to compile").expect("write txt");
@@ -1595,11 +1614,14 @@ fn directory_without_mox_files_is_a_clean_error() {
     let output = rexlang()
         .args(["check", dir.to_str().unwrap()])
         .output()
-        .expect("run rexlang check on a .mox-less directory");
+        .expect("run rexlang check on a model-less directory");
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("no .mox files"), "stderr was: {stderr}");
-    assert!(stderr.contains("empty-scan"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("no model files found"),
+        "stderr was: {stderr}"
+    );
+    assert!(stderr.contains("no-models"), "stderr was: {stderr}");
 }
 
 #[test]
@@ -2408,6 +2430,46 @@ fn ir_emits_ifml_artifact_json() {
 }
 
 #[test]
+fn ir_expand_inlines_module_uses_for_ifml() {
+    let _ = write_source("ifml-domain.mox", IFML_DOMAIN);
+    let _ = write_source("pager.ifml", PAGER_IFML);
+    let flow = write_source("good.ifml", GOOD_IFML);
+
+    // Without --expand the use stays a reference.
+    let plain = rexlang()
+        .args(["ir", flow.to_str().unwrap()])
+        .output()
+        .expect("run rexlang ir");
+    assert!(plain.status.success());
+    let plain_json = String::from_utf8_lossy(&plain.stdout);
+    assert!(
+        plain_json.contains("\"moduleUses\""),
+        "use kept: {plain_json}"
+    );
+
+    // With --expand the use is inlined: the module's component appears and
+    // the use is gone.
+    let expanded = rexlang()
+        .args(["ir", flow.to_str().unwrap(), "--expand"])
+        .output()
+        .expect("run rexlang ir --expand");
+    assert!(
+        expanded.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&expanded.stderr)
+    );
+    let expanded_json = String::from_utf8_lossy(&expanded.stdout);
+    assert!(
+        !expanded_json.contains("\"moduleUses\""),
+        "uses inlined: {expanded_json}"
+    );
+    assert!(
+        expanded_json.contains("\"PagerBody\"") || expanded_json.contains("pager"),
+        "the module's contents spliced: {expanded_json}"
+    );
+}
+
+#[test]
 fn fmt_check_passes_on_formatted_ifml() {
     let flow = write_source("formatted.ifml", GOOD_IFML);
     let output = rexlang()
@@ -2438,4 +2500,47 @@ fn fmt_rewrites_scrambled_ifml() {
     assert!(format.status.success());
     let formatted = std::fs::read_to_string(&flow).unwrap();
     assert_eq!(formatted, "view \"A\" {\n    label \"x\";\n}\n");
+}
+
+// --- directory batch checking ---------------------------------------------------
+
+#[test]
+fn check_directory_batch_checks_every_surface_independently() {
+    let dir = scratch_dir().join("batch");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    std::fs::write(dir.join("good.mox"), GOOD).expect("write mox");
+    std::fs::write(dir.join("flow.ifml"), "view \"Home\" {\n}\n").expect("write ifml");
+    std::fs::write(
+        dir.join("team.actor"),
+        "import \"good.mox\"\n\nactors Team {\n    actor Member\n}\n",
+    )
+    .expect("write actor");
+    std::fs::write(
+        dir.join("broken.mox"),
+        "package a\n\nclass B {\n    Mystery oops\n}\n",
+    )
+    .expect("write broken");
+
+    let output = rexlang()
+        .args(["check", dir.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert!(!output.status.success(), "one broken file fails the batch");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("OK"), "healthy files report OK: {stdout}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("1 of 4 files failed"), "{stderr}");
+}
+
+#[test]
+fn check_empty_directory_is_a_clean_error() {
+    let dir = scratch_dir().join("empty-batch");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let output = rexlang()
+        .args(["check", dir.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("no model files found"), "{stderr}");
 }

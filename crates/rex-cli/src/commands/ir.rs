@@ -14,7 +14,11 @@ use crate::report::{
     report_ifml_diagnostics, report_multi_diagnostics,
 };
 
-pub(crate) fn run(files: Vec<PathBuf>, out: Option<PathBuf>) -> anyhow::Result<ExitCode> {
+pub(crate) fn run(
+    files: Vec<PathBuf>,
+    out: Option<PathBuf>,
+    expand: bool,
+) -> anyhow::Result<ExitCode> {
     let files = expand_inputs(&files)?;
     if files.len() == 1 && is_ddd_file(&files[0]) {
         let design = read_ddd_design(&files[0])?;
@@ -69,7 +73,12 @@ pub(crate) fn run(files: Vec<PathBuf>, out: Option<PathBuf>) -> anyhow::Result<E
             report_ifml_diagnostics(&sources, &binding);
             return Ok(ExitCode::FAILURE);
         }
-        let json = compilation.model.to_json_pretty()?;
+        let model = if expand {
+            rex_ifml::expand_ifml(&compilation, &inputs.ifml_imports)
+        } else {
+            compilation.model
+        };
+        let json = model.to_json_pretty()?;
         match out {
             Some(out_path) => std::fs::write(out_path, json)?,
             None => println!("{json}"),

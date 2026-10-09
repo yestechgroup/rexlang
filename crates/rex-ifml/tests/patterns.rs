@@ -182,3 +182,54 @@ fn unknown_override_names_e0007() {
     let (start, end) = diagnostics[0].span;
     assert_eq!(&BAD_OVERRIDE[start..end], "bogus: 1;");
 }
+
+// --- golden artifacts ----------------------------------------------------------
+
+/// The committed artifact for one pattern file pins the library's wire
+/// shape: any emitter change that alters a pattern's serialization is a
+/// loud golden diff. Regenerate with `REX_UPDATE_FIXTURES=1 cargo test -p
+/// rex-ifml`.
+#[test]
+fn pattern_artifacts_match_the_golden_files() {
+    let golden_dir = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/conformance/ifml/patterns"
+    ));
+    let entries: Vec<_> = fs::read_dir(PATTERNS_DIR)
+        .expect("read patterns dir")
+        .collect::<Result<_, _>>()
+        .expect("pattern dir entries");
+    let mut file_names: Vec<String> = entries
+        .iter()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_str().unwrap_or_default().to_string();
+            name.ends_with(".ifml").then_some(name)
+        })
+        .collect();
+    file_names.sort();
+
+    for file_name in &file_names {
+        let compilation = compile_pattern(file_name);
+        let json = compilation
+            .model
+            .to_json_pretty()
+            .expect("pattern artifact serializes");
+        let golden = golden_dir.join(format!("{file_name}.json"));
+        if std::env::var("REX_UPDATE_FIXTURES").is_ok() {
+            fs::create_dir_all(golden_dir).expect("mkdir goldens");
+            fs::write(&golden, &json).expect("write golden");
+            eprintln!("updated {}", golden.display());
+            continue;
+        }
+        let expected = fs::read_to_string(&golden).unwrap_or_else(|error| {
+            panic!(
+                "missing golden artifact {}; regenerate with REX_UPDATE_FIXTURES=1: {error}",
+                golden.display()
+            )
+        });
+        assert_eq!(
+            json, expected,
+            "pattern artifact for {file_name} drifted from the golden file"
+        );
+    }
+}

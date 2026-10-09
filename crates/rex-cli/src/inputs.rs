@@ -48,9 +48,45 @@ pub(crate) fn expand_inputs(files: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
     Ok(expanded)
 }
 
+/// Expands `rexlang check` inputs: directories scan recursively for **every
+/// supported surface** (`.mox`, `.actor`, `.ddd`, `.evt`, `.ifml`), not just
+/// `.mox`. Used by the directory batch mode, where each expanded file is
+/// checked independently; explicit file arguments pass through as-is.
+pub(crate) fn expand_check_inputs(files: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
+    let mut expanded = Vec::new();
+    for entry in files {
+        if entry.is_dir() {
+            collect_supported_files(entry, &mut expanded)?;
+        } else {
+            expanded.push(entry.clone());
+        }
+    }
+    if expanded.is_empty() {
+        let named = files
+            .iter()
+            .map(|file| file.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        anyhow::bail!("no model files found in {named}");
+    }
+    expanded.sort();
+    Ok(expanded)
+}
+
 /// Recursively collects `*.mox` files under `dir` (subdirectories first come
 /// out in name order; the caller sorts the final list anyway).
 fn collect_mox_files(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
+    collect_with_extensions(dir, &["mox"], out)
+}
+
+/// Recursively collects files under `dir` whose extension is one of
+/// `extensions` (subdirectories first come out in name order; the caller
+/// sorts the final list anyway).
+fn collect_with_extensions(
+    dir: &Path,
+    extensions: &[&str],
+    out: &mut Vec<PathBuf>,
+) -> anyhow::Result<()> {
     let read = |error: std::io::Error| anyhow::anyhow!("cannot read {}: {error}", dir.display());
     let mut entries: Vec<std::fs::DirEntry> = std::fs::read_dir(dir)
         .map_err(read)?
@@ -60,12 +96,21 @@ fn collect_mox_files(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
     for entry in entries {
         let path = entry.path();
         if path.is_dir() {
-            collect_mox_files(&path, out)?;
-        } else if path.extension().and_then(|extension| extension.to_str()) == Some("mox") {
+            collect_with_extensions(&path, extensions, out)?;
+        } else if path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extensions.contains(&extension))
+        {
             out.push(path);
         }
     }
     Ok(())
+}
+
+/// Recursively collects files of every supported surface under `dir`.
+fn collect_supported_files(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
+    collect_with_extensions(dir, &["mox", "actor", "ddd", "evt", "ifml"], out)
 }
 
 /// Compiles in-memory sources into one model: a single source keeps the

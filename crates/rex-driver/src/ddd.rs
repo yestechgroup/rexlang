@@ -3,7 +3,7 @@
 //!
 //! This module is salsa-free; the driver's tracked queries call into it via
 //! [`compile_ddd_file`]. The normative contract — entry points, resolution
-//! semantics, the ten validation rules, the aggregate-derivation rule, and
+//! semantics, the validation rules, the aggregate-derivation rule, and
 //! the capabilities contract — is documented on
 //! [`compile_ddd_str`](crate::compile_ddd_str).
 //!
@@ -297,6 +297,7 @@ pub(crate) fn compile_ddd_file(
                             target: delegation.target.full_name(),
                             operation: delegation.operation.text.clone(),
                         }),
+                        is_protected: op.is_protected,
                         capabilities,
                     });
                     delegation_checks.push(DelegationCheck {
@@ -343,6 +344,7 @@ pub(crate) fn compile_ddd_file(
                         return_multiplicity,
                         params,
                         delegation: None,
+                        is_protected: op.is_protected,
                         capabilities,
                     });
                 }
@@ -401,6 +403,62 @@ pub(crate) fn compile_ddd_file(
 
             // Rule 4 — flag/stereotype compatibility.
             check_flags(design, &mut local);
+
+            // Rule 12 — the value contract: a value design is an immutable
+            // value object (Sculptor's ValueObject default, with no
+            // `!immutable` opt-out), so every stored feature of the class
+            // must be `readonly` in the domain model. Feature-level checks
+            // run only against a fully lowered union (a failed domain may
+            // hide features; its diagnostics already block the artifact).
+            if design.stereotype == dsl::DddStereotype::Value {
+                if let (Some((package, class)), Some(union)) = (resolved.as_ref(), union.as_ref()) {
+                    if let Some(features) = class_features(union, package, class) {
+                        for feature in features {
+                            if !feature.is_derived && !feature.is_read_only {
+                                local.push(
+                                    Diagnostic::error(
+                                        format!(
+                                            "value design '{}': feature '{}' is not \
+                                             readonly; a value object is immutable",
+                                            design.class.text, feature.name
+                                        ),
+                                        Some(design.class.span),
+                                    )
+                                    .with_help(
+                                        "mark the feature `readonly` in the domain model, \
+                                         or design the class `entity` or `dto`",
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Rule 14 — scaffold materializes the CRUD operations (Sculptor
+            // auto-creates both the repository and the service); the
+            // artifact stays validation-only — nothing is synthesized — so
+            // `scaffold` audits that the author declared the repository it
+            // would scaffold around. The service remains the author's.
+            if design.flags.scaffold.is_some_and(|flag| !flag.negated)
+                && design.stereotype == dsl::DddStereotype::Entity
+                && design.repository.is_none()
+            {
+                local.push(
+                    Diagnostic::error(
+                        format!(
+                            "scaffolded entity '{}' declares no repository",
+                            design.class.text
+                        ),
+                        Some(design.flags.scaffold.expect("checked above").span),
+                    )
+                    .with_help(format!(
+                        "add `repository {}Repository {{ findById; findAll; save; \
+                         delete; }}` — scaffold generates the CRUD operations over it",
+                        design.class.text
+                    )),
+                );
+            }
 
             let mut design_out = Design::new(design.class.text.clone(), stereotype(design));
             design_out.is_abstract = design.is_abstract;
@@ -888,6 +946,54 @@ pub(crate) fn compile_ddd_file(
         }
     }
 
+    // Rule 13 — the aggregate reference constraint (Sculptor's validation
+    // of the DDD aggregate): an outside class may hold a cross reference
+    // only to an aggregate's root. A reference between two classes of one
+    // aggregate and a reference to a root are fine. Computed over the whole
+    // union (aggregates are domain structure, not design decisions), and
+    // only when every imported domain lowered — the rule-6 discipline.
+    if let Some(union) = &union {
+        let edges = containment_edges(union);
+        for (source, feature) in cross_references(union) {
+            let rex_ir::TypeRef::Class {
+                package: target_package,
+                name: target_name,
+            } = &feature.type_
+            else {
+                continue;
+            };
+            let target = (target_package.as_str(), target_name.as_str());
+            // Referencing the root is the sanctioned outside access.
+            let Some(root) = aggregate_root(&edges, target) else {
+                continue;
+            };
+            if target == (root.0.as_str(), root.1.as_str()) {
+                continue;
+            }
+            // Inside the same aggregate is fine too.
+            let Some(source_root) = aggregate_root(&edges, (&source.0, &source.1)) else {
+                continue;
+            };
+            if source_root == root {
+                continue;
+            }
+            local.push(
+                Diagnostic::error(
+                    format!(
+                        "cross reference '{}.{}' to '{}' escapes its aggregate rooted \
+                         at '{}'",
+                        source.1, feature.name, target.1, root.1
+                    ),
+                    None,
+                )
+                .with_help(
+                    "an outside class may hold references only to the aggregate root; \
+                     move the reference inside the aggregate or target the root",
+                ),
+            );
+        }
+    }
+
     // Rule 9 — every injected dependency names a service, repository, or
     // search of the application.
     for check in &inject_checks {
@@ -1077,21 +1183,49 @@ fn module_coupling_diagnostic(
     ))
 }
 
-/// The wire design flags of a parsed design.
+/// The wire design flags of a parsed design. `auditable` and
+/// `optimisticLocking` default **on** for entity designs (Sculptor's
+/// polarity): absence lowers to the stereotype default, `!flag` lowers to
+/// `false`, a positive occurrence to `true`. The remaining flags default
+/// off, so only a positive occurrence sets them.
 fn flags(design: &dsl::DddDesign) -> DesignFlags {
+    let entity = design.stereotype == dsl::DddStereotype::Entity;
+    let effective = |occurrence: Option<dsl::DddFlagUse>, default_on: bool| match occurrence {
+        Some(flag) => !flag.negated,
+        None => entity && default_on,
+    };
     DesignFlags {
-        scaffold: design.flags.scaffold.is_some(),
-        auditable: design.flags.auditable.is_some(),
-        optimistic_locking: design.flags.optimistic_locking.is_some(),
-        non_persistent: design.flags.non_persistent.is_some(),
-        cache: design.flags.cache.is_some(),
+        scaffold: design.flags.scaffold.is_some_and(|flag| !flag.negated),
+        auditable: effective(design.flags.auditable, true),
+        optimistic_locking: effective(design.flags.optimistic_locking, true),
+        non_persistent: design
+            .flags
+            .non_persistent
+            .is_some_and(|flag| !flag.negated),
+        cache: design.flags.cache.is_some_and(|flag| !flag.negated),
     }
 }
 
-/// Rule 4 — flag/stereotype compatibility: `scaffold`, `auditable`, and
-/// `optimisticLocking` belong to entity designs, `nonPersistent` to value
-/// and dto designs; `cache` is legal everywhere.
+/// Rule 4 — flag/stereotype compatibility plus negation legality:
+/// `scaffold`, `auditable`, and `optimisticLocking` belong to entity
+/// designs, `nonPersistent` to value and dto designs; `cache` is legal
+/// everywhere. A negated flag is only meaningful where the flag defaults
+/// on (`!auditable`/`!optimisticLocking` on an entity design) — negating a
+/// default-off flag is a written contradiction, and an entity-only flag is
+/// rejected on value/dto designs whatever its polarity.
 fn check_flags(design: &dsl::DddDesign, local: &mut Vec<Diagnostic>) {
+    for (occurrence, keyword) in [
+        (design.flags.scaffold, "scaffold"),
+        (design.flags.non_persistent, "nonPersistent"),
+        (design.flags.cache, "cache"),
+    ] {
+        if let Some(flag) = occurrence.filter(|flag| flag.negated) {
+            local.push(Diagnostic::error(
+                format!("'!{keyword}' is meaningless; '{keyword}' defaults to off"),
+                Some(flag.span),
+            ));
+        }
+    }
     let entity_only = [
         (design.flags.scaffold, "scaffold"),
         (design.flags.auditable, "auditable"),
@@ -1099,7 +1233,7 @@ fn check_flags(design: &dsl::DddDesign, local: &mut Vec<Diagnostic>) {
     ];
     match design.stereotype {
         dsl::DddStereotype::Entity => {
-            if let Some(span) = design.flags.non_persistent {
+            if let Some(span) = design.flags.non_persistent.map(|flag| flag.span) {
                 local.push(Diagnostic::error(
                     format!(
                         "flag 'nonPersistent' requires a value or dto design; '{}' is \
@@ -1111,8 +1245,8 @@ fn check_flags(design: &dsl::DddDesign, local: &mut Vec<Diagnostic>) {
             }
         }
         dsl::DddStereotype::Value | dsl::DddStereotype::Dto => {
-            for (span, flag) in entity_only {
-                if let Some(span) = span {
+            for (occurrence, flag) in entity_only {
+                if let Some(span) = occurrence.map(|flag| flag.span) {
                     local.push(Diagnostic::error(
                         format!(
                             "flag '{flag}' requires an entity design; '{}' is designed \
@@ -1158,15 +1292,20 @@ fn lower_repository_ops(
             ops.push(op.name.text.clone());
         }
         if let Some(builtin) = op.builtin {
-            operations.push(RepositoryOperation::builtin(
-                op.name.text.clone(),
-                match builtin {
-                    dsl::DddBuiltinOp::FindById => BuiltinRepositoryOp::FindById,
-                    dsl::DddBuiltinOp::FindAll => BuiltinRepositoryOp::FindAll,
-                    dsl::DddBuiltinOp::Save => BuiltinRepositoryOp::Save,
-                    dsl::DddBuiltinOp::Delete => BuiltinRepositoryOp::Delete,
-                },
-            ));
+            operations.push(
+                RepositoryOperation::builtin(
+                    op.name.text.clone(),
+                    match builtin {
+                        dsl::DddBuiltinOp::FindById => BuiltinRepositoryOp::FindById,
+                        dsl::DddBuiltinOp::FindAll => BuiltinRepositoryOp::FindAll,
+                        dsl::DddBuiltinOp::FindByExample => BuiltinRepositoryOp::FindByExample,
+                        dsl::DddBuiltinOp::FindByKeys => BuiltinRepositoryOp::FindByKeys,
+                        dsl::DddBuiltinOp::Save => BuiltinRepositoryOp::Save,
+                        dsl::DddBuiltinOp::Delete => BuiltinRepositoryOp::Delete,
+                    },
+                )
+                .with_protected(op.is_protected),
+            );
         } else {
             let (return_type, return_multiplicity) = op
                 .return_type
@@ -1195,7 +1334,8 @@ fn lower_repository_ops(
                 .collect();
             operations.push(
                 RepositoryOperation::declared(op.name.text.clone(), return_type, params)
-                    .with_return_multiplicity(return_multiplicity),
+                    .with_return_multiplicity(return_multiplicity)
+                    .with_protected(op.is_protected),
             );
         }
     }
@@ -1380,4 +1520,68 @@ fn reaches(
         }
     }
     false
+}
+
+/// The cross-reference (`refers`) features of the model, paired with their
+/// owning class's `(package, class)` key.
+fn cross_references(model: &rex_ir::Model) -> Vec<((String, String), &rex_ir::Feature)> {
+    let mut references = Vec::new();
+    for package in &model.packages {
+        for class in &package.classes {
+            for feature in &class.features {
+                if feature.kind == rex_ir::FeatureKind::CrossReference {
+                    references.push(((package.name.clone(), class.name.clone()), feature));
+                }
+            }
+        }
+    }
+    references
+}
+
+/// The aggregate root of a class: the unique class at the top of its
+/// containment chain, walking the containment edges backwards (cycle-safe).
+///
+/// `None` when the verdict would be a guess: the class sits under two
+/// distinct roots (an ambiguous placement never convicts), or under a
+/// containment cycle. A class with no container is its own root.
+fn aggregate_root(
+    edges: &HashMap<(String, String), Vec<(String, String)>>,
+    class: (&str, &str),
+) -> Option<(String, String)> {
+    let class = (class.0.to_string(), class.1.to_string());
+    let mut containers_of: HashMap<(String, String), Vec<(String, String)>> = HashMap::new();
+    for (owner, contained) in edges {
+        for child in contained {
+            containers_of
+                .entry(child.clone())
+                .or_default()
+                .push(owner.clone());
+        }
+    }
+    let mut roots: Vec<(String, String)> = Vec::new();
+    let mut visited: HashSet<(String, String)> = HashSet::new();
+    let mut stack = vec![class];
+    while let Some(current) = stack.pop() {
+        if !visited.insert(current.clone()) {
+            continue;
+        }
+        match containers_of.get(&current) {
+            None => {
+                // A top of the chain: a root. Distinct roots stay distinct.
+                if !roots.contains(&current) {
+                    roots.push(current);
+                }
+            }
+            Some(containers) => {
+                for container in containers {
+                    stack.push(container.clone());
+                }
+            }
+        }
+    }
+    if roots.len() == 1 {
+        roots.pop()
+    } else {
+        None
+    }
 }

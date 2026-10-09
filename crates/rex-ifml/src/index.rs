@@ -132,6 +132,22 @@ pub struct NamedSite {
     pub span: (usize, usize),
 }
 
+/// A navigation/action string reference inside an event handler —
+/// `navigate("View")`, `refresh("grid")`, `action("Update")`. `target` is
+/// the unescaped string; for `navigate` it names a view (rename/references
+/// follow it), for the others it is an opaque action id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TargetSite {
+    /// File the reference appears in (index into [`IfmlIndex::files`]).
+    pub file: usize,
+    /// The referenced name (the unescaped `"..."` string).
+    pub target: String,
+    /// The action keyword as written (`navigate`, `refresh`, `action`).
+    pub action: String,
+    /// Byte span of the `"..."` string token itself.
+    pub name_span: (usize, usize),
+}
+
 /// What [`IfmlIndex::at`] found at a byte offset: one of the site kinds
 /// the index tracks.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -158,6 +174,8 @@ pub struct IfmlIndex {
     /// Module use sites across all files, in compilation order (contiguous
     /// per file, source order within a file).
     pub module_uses: Vec<ModuleUseSite>,
+    /// Navigation/action string references, in compilation order.
+    pub action_targets: Vec<TargetSite>,
     /// View declaration sites.
     pub views: Vec<NamedSite>,
     /// Action declaration sites.
@@ -176,6 +194,7 @@ impl IfmlIndex {
             }],
             module_decls: Vec::new(),
             module_uses: Vec::new(),
+            action_targets: Vec::new(),
             views: Vec::new(),
             actions: Vec::new(),
             actors: Vec::new(),
@@ -205,6 +224,10 @@ impl IfmlIndex {
         for mut named in other.actors {
             named.file = file;
             self.actors.push(named);
+        }
+        for mut target in other.action_targets {
+            target.file = file;
+            self.action_targets.push(target);
         }
     }
 
@@ -312,6 +335,23 @@ fn index_top_pair(top: &Pair<'_, Rule>, file: usize, index: &mut IfmlIndex) {
 fn index_pair(pair: &Pair<'_, Rule>, file: usize, index: &mut IfmlIndex) {
     let span = pair_span(pair);
     match pair.as_rule() {
+        Rule::navigate_action | Rule::refresh_action | Rule::action_invocation => {
+            let action = pair
+                .as_str()
+                .split('(')
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            if let Some((target, name_span)) = first_string_site(pair) {
+                index.action_targets.push(TargetSite {
+                    file,
+                    target,
+                    action,
+                    name_span,
+                });
+            }
+            recurse(pair, file, index);
+        }
         Rule::view_declaration => {
             if let Some((name, name_span)) = first_string_site(pair) {
                 index.views.push(NamedSite {

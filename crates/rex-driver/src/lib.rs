@@ -33,6 +33,7 @@ pub(crate) mod lower;
 pub mod manifest;
 pub mod navigation;
 pub(crate) mod sigil;
+pub mod workspace_imports;
 
 pub use diagnostic::{render, Diagnostic, DiagnosticCode, Severity};
 pub use navigation::{
@@ -297,6 +298,15 @@ pub struct Compiled {
 #[salsa::tracked]
 pub fn compile(db: &dyn Db, file: SourceFile) -> Compiled {
     compile_file(db, file, &DomainImports::default())
+}
+
+/// [`compile`] with explicit import content — the salsa-tracked query the
+/// LSP and other hosts use after gathering imports with
+/// [`workspace_imports`]. Imports enter the memo key, so an edit to the
+/// document recompiles; import *content* changes are the host's
+/// responsibility to re-drive.
+pub fn compile_with_imports(db: &dyn Db, file: SourceFile, imports: &DomainImports) -> Compiled {
+    compile_file(db, file, imports)
 }
 
 /// The body of [`compile`], parameterized over the provided import content.
@@ -1082,7 +1092,11 @@ fn compile_evt_with(
 ///    classes).
 /// 4. **Flag/stereotype compatibility** — `scaffold`, `auditable`, and
 ///    `optimisticLocking` are entity-only; `nonPersistent` is
-///    value/dto-only; `cache` is legal on any design.
+///    value/dto-only; `cache` is legal on any design. A `!`-negated flag is
+///    only meaningful where the flag defaults on: `!auditable` and
+///    `!optimisticLocking` are the entity opt-outs, while `!scaffold`,
+///    `!nonPersistent`, and `!cache` negate flags that default off and are
+///    rejected wherever written.
 /// 5. **Repository placement** — only entity designs may declare a
 ///    repository.
 /// 6. **Aggregate boundary** — see the derivation rule below; an entity
@@ -1124,7 +1138,25 @@ fn compile_evt_with(
 ///     parsed and type-checked with the entity as `self` (any value type is
 ///     legal — the consumer decides the rendered form). Pagination bounds
 ///     must satisfy `1 ≤ limit ≤ max`.
-///
+/// 12. **Value contract** — a `value` design is an immutable value object
+///     (Sculptor's ValueObject default, with no opt-out): every stored
+///     feature of the resolved class (own and inherited, derived features
+///     excluded) must carry the domain model's `readonly` modifier. A
+///     changeable class designs as `entity` or `dto` instead.
+/// 13. **Aggregate reference constraint** — an outside class may hold a
+///     cross reference only to an aggregate's root: for every
+///     cross-reference (`refers`) feature whose target sits under a
+///     containment chain (a non-root aggregate member), the referring
+///     class must share the target's containment root. Computed over the
+///     whole union like the aggregate-derivation rule, and skipped when
+///     the verdict would be a guess (the target or source sits under two
+///     distinct roots, or under a containment cycle).
+/// 14. **scaffold** — a scaffolded entity design must declare a repository:
+///     `scaffold` stands for Sculptor's generated CRUD operations (which
+///     also imply the service), and the artifact stays validation-only —
+///     nothing is synthesized — so the author declares the repository the
+///     scaffolding would hang off. The service remains the author's to
+///     declare.
 /// ## Aggregate derivation
 ///
 /// The aggregate boundary derives from the domain model's containment

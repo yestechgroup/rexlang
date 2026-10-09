@@ -1,0 +1,255 @@
+{
+  "formatVersion": 1,
+  "modules": [
+    {
+      "name": "ReactionBar",
+      "inputParams": [
+        {
+          "name": "target",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "reactions",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "like"
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "toggled",
+          "typeRef": "Boolean",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "bar",
+          "componentType": {
+            "type": "menu"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            },
+            {
+              "key": "fields",
+              "value": {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "identifier",
+                    "value": "kind"
+                  },
+                  {
+                    "type": "identifier",
+                    "value": "count"
+                  }
+                ]
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "toggle"
+              },
+              "params": [
+                "reaction"
+              ],
+              "condition": null,
+              "action": {
+                "type": "actionInvocation",
+                "value": {
+                  "name": "ToggleReaction",
+                  "body": {
+                    "properties": [
+                      {
+                        "key": "targetId",
+                        "value": {
+                          "type": "fieldAccess",
+                          "value": {
+                            "object": {
+                              "type": "identifier",
+                              "value": "target"
+                            },
+                            "field": "id"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ]
+    },
+    {
+      "name": "SocialItem",
+      "inputParams": [
+        {
+          "name": "author",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "content",
+          "typeRef": "Item",
+          "default": null
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "commented",
+          "typeRef": "Boolean",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "card",
+          "componentType": {
+            "type": "details"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "comment"
+              },
+              "condition": null,
+              "action": {
+                "type": "navigate",
+                "value": {
+                  "target": "CommentThread",
+                  "binding": {
+                    "pairs": [
+                      [
+                        "postId",
+                        {
+                          "type": "fieldExpr",
+                          "value": {
+                            "object": {
+                              "type": "ident",
+                              "value": "content"
+                            },
+                            "field": "id"
+                          }
+                        }
+                      ]
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ],
+      "moduleUses": [
+        {
+          "module": "ReactionBar",
+          "alias": "reactions",
+          "properties": [
+            {
+              "key": "target",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "ShareAction",
+      "inputParams": [
+        {
+          "name": "target",
+          "typeRef": "Item",
+          "default": null
+        },
+        {
+          "name": "channels",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "link"
+          }
+        }
+      ],
+      "outputParams": [
+        {
+          "name": "shared",
+          "typeRef": "Boolean",
+          "default": null
+        }
+      ],
+      "components": [
+        {
+          "name": "share",
+          "componentType": {
+            "type": "button"
+          },
+          "spec": null,
+          "events": [
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "share"
+              },
+              "condition": null,
+              "action": {
+                "type": "actionInvocation",
+                "value": {
+                  "name": "Share",
+                  "body": {
+                    "properties": [
+                      {
+                        "key": "targetId",
+                        "value": {
+                          "type": "fieldAccess",
+                          "value": {
+                            "object": {
+                              "type": "identifier",
+                              "value": "target"
+                            },
+                            "field": "id"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ]
+    }
+  ]
+}

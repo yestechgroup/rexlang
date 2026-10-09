@@ -17,12 +17,14 @@ const SOURCE_NAME: &str = "rexlang";
 
 /// Which surface an open document belongs to, decided by URI extension at
 /// open time. `.mox` drives the salsa session; `.ifml` gets the rex-ifml
-/// one-shot compile; anything else publishes no diagnostics (an unknown
-/// file kind must never produce bogus `.mox` errors).
+/// one-shot compile; `.ddd` gets the one-shot design compile (diagnostics
+/// only — no navigation yet); anything else publishes no diagnostics (an
+/// unknown file kind must never produce bogus `.mox` errors).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Surface {
     Mox,
     Ifml,
+    Ddd,
     Other,
 }
 
@@ -30,8 +32,24 @@ fn surface_for(uri: &Url) -> Surface {
     match uri.path().rsplit('.').next() {
         Some("mox") => Surface::Mox,
         Some("ifml") => Surface::Ifml,
+        Some("ddd") => Surface::Ddd,
         _ => Surface::Other,
     }
+}
+
+/// The import closure of one `.ifml` document, gathered by
+/// [`RexBackend::import_closure`].
+#[derive(Default)]
+struct IfmlImportClosure {
+    /// The resolver bundle, keyed `(importer identity, import-as-written)`.
+    bundle: rex_ifml::IfmlImports,
+    /// Imported `.mox` domain sources, deduplicated by resolved path.
+    domains: Vec<(String, String)>,
+    /// Resolved disk path per import identity (the main file included).
+    disk_paths: std::collections::BTreeMap<String, std::path::PathBuf>,
+    /// URL (or identity string) of every fetched import — the transitive
+    /// import set.
+    import_urls: Vec<String>,
 }
 
 /// The compiled state of one open `.ifml` document for the navigation
@@ -41,6 +59,9 @@ fn surface_for(uri: &Url) -> Surface {
 struct IfmlSnapshot {
     compilation: rex_ifml::IfmlCompilation,
     file_urls: Vec<String>,
+    /// The union of imported `.mox` domains — feature completions resolve
+    /// against it. `None` when the flow imports no domains.
+    domains: Option<rex_ir::Model>,
 }
 
 /// One open document as the server sees it.
@@ -70,8 +91,19 @@ impl RexBackend {
         }
     }
 
-    /// Recompiles the document and publishes its diagnostics.
+    /// Recompiles the document and publishes its diagnostics, then
+    /// re-publishes every open `.ifml` document that imports it — an edit
+    /// to an imported file must refresh its consumers or their diagnostics
+    /// go stale.
     async fn publish(&self, uri: &Url, version: Option<i32>) {
+        self.publish_document(uri, version).await;
+        for dependent in self.dependents_of(uri) {
+            self.publish_document(&dependent, None).await;
+        }
+    }
+
+    /// Recompiles one document and publishes its diagnostics.
+    async fn publish_document(&self, uri: &Url, version: Option<i32>) {
         let snapshot = {
             let documents = self.documents.lock().unwrap();
             documents
@@ -87,8 +119,24 @@ impl RexBackend {
                 let Some(file) = file else {
                     return;
                 };
+                // Workspace-aware: `import schema`/`import sigil` resolve
+                // from disk like the CLI's, so models carrying them stop
+                // showing permanent false "not provided" errors. Documents
+                // key by URI; imports resolve relative to the file on disk.
+                let imports = uri
+                    .to_file_path()
+                    .ok()
+                    .and_then(|path| {
+                        rex_driver::workspace_imports::collect_for_source(
+                            uri.as_str(),
+                            &path,
+                            &text,
+                        )
+                        .ok()
+                    })
+                    .unwrap_or_default();
                 let db = self.db.lock().unwrap();
-                rex_driver::compile(&*db, file)
+                rex_driver::compile_with_imports(&*db, file, &imports)
                     .diagnostics
                     .iter()
                     .map(|diagnostic| to_lsp_diagnostic(diagnostic, &map))
@@ -100,6 +148,15 @@ impl RexBackend {
                     .iter()
                     .filter(|diagnostic| diagnostic.file == uri.as_str())
                     .map(|diagnostic| to_ifml_diagnostic(diagnostic, &map))
+                    .collect()
+            }
+            Surface::Ddd => {
+                let (domains, imports) = self.domain_sources_for_ddd(uri, &text);
+                rex_driver::compile_ddd_str(uri.as_str(), &text, &domains, &imports)
+                    .diagnostics
+                    .iter()
+                    .filter(|(file, _)| file == uri.as_str())
+                    .map(|(_, diagnostic)| to_lsp_diagnostic(diagnostic, &map))
                     .collect()
             }
             Surface::Other => Vec::new(),
@@ -120,65 +177,24 @@ impl RexBackend {
         uri: &Url,
         text: &str,
     ) -> (Option<IfmlSnapshot>, Vec<rex_ifml::IfmlDiagnostic>) {
+        let closure = self.import_closure(uri, text);
         let main_path = uri.to_string();
-        let mut disk_paths: std::collections::BTreeMap<String, std::path::PathBuf> =
-            std::collections::BTreeMap::new();
-        if let Ok(path) = uri.to_file_path() {
-            disk_paths.insert(main_path.clone(), path);
-        }
-        let mut domains: Vec<(String, String)> = Vec::new();
-        let mut bundle = rex_ifml::IfmlImports::default();
-        let dir_of = |path: &std::path::Path| -> std::path::PathBuf {
-            path.parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-                .unwrap_or_else(|| std::path::Path::new("."))
-                .to_path_buf()
-        };
-        let documents = self.documents.lock().unwrap();
-        let _walk = rex_ifml::walk_ifml_imports(&main_path, text, &mut |importer, import| {
-            let importer_disk = disk_paths.get(importer)?;
-            let resolved = dir_of(importer_disk).join(import);
-            // Open documents win: the editor's buffer is the truth; disk is
-            // the fallback.
-            let fetched = (|| {
-                if let Ok(url) = Url::from_file_path(&resolved) {
-                    if let Some(document) = documents.get(&url) {
-                        return Some(document.text.clone());
-                    }
-                }
-                std::fs::read_to_string(&resolved).ok()
-            })()?;
-            let resolved_path = resolved.display().to_string();
-            disk_paths.insert(import.to_string(), resolved);
-            if import.ends_with(".mox") {
-                if !domains
-                    .iter()
-                    .any(|(existing, _)| existing == &resolved_path)
-                {
-                    domains.push((resolved_path, fetched));
-                }
-                return None;
-            }
-            if import.ends_with(".ifml") {
-                bundle.provide(importer, import, fetched.clone());
-                return Some(fetched);
-            }
-            None
-        });
-        drop(documents);
-        let compilation = match rex_ifml::compile_ifml_str(&main_path, text, &bundle) {
-            Ok(compilation) => compilation,
-            Err(diagnostics) => return (None, diagnostics),
-        };
-        let domain_union = domain_union(&domains);
+        // Lenient: diagnostics ride along, the index stays navigable on
+        // broken code — completions and definitions must work while the
+        // user types.
+        let (compilation, mut diagnostics) =
+            rex_ifml::compile_ifml_lenient(&main_path, text, &closure.bundle);
+        let domain_union = domain_union(&closure.domains);
         let binding = rex_ifml::check_ifml(&compilation, domain_union.as_ref());
+        diagnostics.extend(binding);
         // Resolved URI per indexed file (same order as `index.files`), so
         // cross-file navigation can produce `Location`s. Unresolved
         // identities fall back to their as-written path, which `Url::join`
         // can still resolve relative to the importer.
         let mut file_urls = Vec::with_capacity(compilation.index.files.len());
         for file in &compilation.index.files {
-            let url = disk_paths
+            let url = closure
+                .disk_paths
                 .get(&file.path)
                 .and_then(|path| Url::from_file_path(path).ok())
                 .map(|url| url.to_string())
@@ -189,9 +205,172 @@ impl RexBackend {
             Some(IfmlSnapshot {
                 compilation,
                 file_urls,
+                domains: domain_union,
             }),
-            binding,
+            diagnostics,
         )
+    }
+
+    /// The imported domain sources of one open `.ddd` document, plus the
+    /// import bundle their `import schema`/`import sigil` declarations
+    /// need. Import paths resolve relative to the design file's directory
+    /// (the CLI's `read_ddd_design` semantics), and an open `.mox` document
+    /// at the resolved path is preferred over its disk copy — editing an
+    /// imported domain refreshes the design without a save. A missing
+    /// import file is skipped here: the driver reports the unprovided
+    /// import as a diagnostic.
+    fn domain_sources_for_ddd(
+        &self,
+        uri: &Url,
+        text: &str,
+    ) -> (Vec<(String, String)>, rex_driver::DomainImports) {
+        let mut domains: Vec<(String, String)> = Vec::new();
+        let dir = uri
+            .to_file_path()
+            .ok()
+            .and_then(|path| path.parent().map(std::path::Path::to_path_buf));
+        if let Some(dir) = dir {
+            if let Some(ast) = &rex_syntax::parse_ddd(text).ast {
+                for import in &ast.imports {
+                    if domains.iter().any(|(existing, _)| *existing == import.path) {
+                        continue;
+                    }
+                    let resolved = dir.join(&import.path);
+                    let open = {
+                        let documents = self.documents.lock().unwrap();
+                        documents.iter().find_map(|(open_uri, document)| {
+                            if document.surface != Surface::Mox {
+                                return None;
+                            }
+                            let open_path = open_uri.to_file_path().ok()?;
+                            (open_path == resolved).then(|| document.text.clone())
+                        })
+                    };
+                    let Some(source) = open.or_else(|| std::fs::read_to_string(&resolved).ok())
+                    else {
+                        continue;
+                    };
+                    domains.push((resolved.display().to_string(), source));
+                }
+            }
+        }
+        // The domains' own `import schema`/`import sigil` content resolves
+        // from disk relative to each domain file (the domains' driver paths
+        // are disk paths, so no re-keying is needed).
+        let schemas =
+            rex_driver::workspace_imports::collect_schema_imports(&domains).unwrap_or_default();
+        let sigil = rex_driver::workspace_imports::collect_sigil_imports(&domains).ok();
+        let imports = rex_driver::DomainImports {
+            schemas,
+            sigil: sigil.map(|sigil| sigil.imports).unwrap_or_default(),
+        };
+        (domains, imports)
+    }
+
+    /// The import closure of one `.ifml` document: the resolver bundle, the
+    /// imported `.mox` domain sources, every resolved disk path (identity →
+    /// path), and the URLs of all fetched imports — the transitive import
+    /// set that reverse-dependency lookups match against. Open documents
+    /// win over disk (the editor's buffer is the truth).
+    fn import_closure(&self, uri: &Url, text: &str) -> IfmlImportClosure {
+        let main_path = uri.to_string();
+        let mut closure = IfmlImportClosure::default();
+        if let Ok(path) = uri.to_file_path() {
+            closure.disk_paths.insert(main_path.clone(), path);
+        }
+        let dir_of = |path: &std::path::Path| -> std::path::PathBuf {
+            path.parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_path_buf()
+        };
+        let documents = self.documents.lock().unwrap();
+        let _walk = rex_ifml::walk_ifml_imports(&main_path, text, &mut |importer, import| {
+            let importer_disk = closure.disk_paths.get(importer)?;
+            let resolved = dir_of(importer_disk).join(import);
+            let fetched = (|| {
+                if let Ok(url) = Url::from_file_path(&resolved) {
+                    if let Some(document) = documents.get(&url) {
+                        return Some(document.text.clone());
+                    }
+                }
+                std::fs::read_to_string(&resolved).ok()
+            })()?;
+            let url = Url::from_file_path(&resolved)
+                .map(|url| url.to_string())
+                .unwrap_or_else(|_| resolved.display().to_string());
+            closure.import_urls.push(url);
+            let resolved_path = resolved.display().to_string();
+            closure.disk_paths.insert(import.to_string(), resolved);
+            if import.ends_with(".mox") {
+                if !closure
+                    .domains
+                    .iter()
+                    .any(|(existing, _)| existing == &resolved_path)
+                {
+                    closure.domains.push((resolved_path, fetched));
+                }
+                return None;
+            }
+            if import.ends_with(".ifml") {
+                closure.bundle.provide(importer, import, fetched.clone());
+                return Some(fetched);
+            }
+            None
+        });
+        closure
+    }
+
+    /// Open `.ifml` documents whose import closure contains `changed` —
+    /// the reverse-dependency set that must be re-published when `changed`
+    /// moves, or their diagnostics go stale.
+    fn dependents_of(&self, changed: &Url) -> Vec<Url> {
+        let changed_key = changed.to_string();
+        // Snapshot the open `.ifml` documents and drop the lock before
+        // walking: `import_closure` takes the same lock.
+        let candidates: Vec<(Url, String)> = {
+            let documents = self.documents.lock().unwrap();
+            documents
+                .iter()
+                .filter(|(url, document)| **url != *changed && document.surface == Surface::Ifml)
+                .map(|(url, document)| (url.clone(), document.text.clone()))
+                .collect()
+        };
+        let mut dependents = Vec::new();
+        for (url, text) in candidates {
+            let closure = self.import_closure(&url, &text);
+            if closure.import_urls.contains(&changed_key) {
+                dependents.push(url);
+            }
+        }
+        dependents
+    }
+
+    /// Whether `uri` is an open `.ifml` document.
+    fn open_ifml_document(&self, uri: &Url) -> bool {
+        self.documents
+            .lock()
+            .unwrap()
+            .get(uri)
+            .is_some_and(|document| document.surface == Surface::Ifml)
+    }
+
+    /// Compiles every open `.ifml` document into a snapshot. References
+    /// and rename match by NAME across snapshots: a module's uses live in
+    /// its dependents, which the focused document's import closure never
+    /// sees.
+    fn open_ifml_snapshots(&self) -> Vec<IfmlSnapshot> {
+        let docs: Vec<(Url, String)> = {
+            let documents = self.documents.lock().unwrap();
+            documents
+                .iter()
+                .filter(|(_, document)| document.surface == Surface::Ifml)
+                .map(|(url, document)| (url.clone(), document.text.clone()))
+                .collect()
+        };
+        docs.iter()
+            .filter_map(|(uri, text)| self.compile_ifml(uri, text).0)
+            .collect()
     }
 
     /// Runs `f` with the compiled `.ifml` snapshot of the document — the
@@ -289,10 +468,20 @@ fn domain_union(domains: &[(String, String)]) -> Option<rex_ir::Model> {
     if domains.is_empty() {
         return None;
     }
+    // The domains' own `import schema`/`import sigil` declarations resolve
+    // from disk, exactly like the CLI's; a collection failure degrades to
+    // no typed checking rather than errors against a partial union.
+    let imports = rex_driver::workspace_imports::collect_schema_imports(domains)
+        .ok()
+        .zip(rex_driver::workspace_imports::collect_sigil_imports(domains).ok())
+        .map(|(schemas, sigil)| rex_driver::DomainImports {
+            schemas,
+            sigil: sigil.imports,
+        })
+        .unwrap_or_default();
     let mut union = rex_ir::Model::new();
     for (path, source) in domains {
-        let compilation =
-            rex_driver::compile_str(path, source, &rex_driver::DomainImports::default());
+        let compilation = rex_driver::compile_str(path, source, &imports);
         if !compilation.diagnostics.is_empty() {
             return None;
         }
@@ -433,6 +622,384 @@ fn ifml_hover(snapshot: &IfmlSnapshot, position: Position) -> Option<Hover> {
     })
 }
 
+/// `.ifml` completions, by cursor context:
+///
+/// 1. inside a `use "…"` name token — the module names the compilation
+///    knows (local + imported);
+/// 2. inside a use body — the resolved module's inputs (defaults noted)
+///    and slot properties;
+/// 3. after `entity.` — the features of that entity, resolved from view
+///    params (`params { product: Product }`) or the enclosing component's
+///    `data:` declaration, against the imported domain union.
+fn ifml_completions(snapshot: &IfmlSnapshot, position: Position) -> Option<CompletionResponse> {
+    let index = &snapshot.compilation.index;
+    let text = &index.files[0].text;
+    let map = PositionMap::new(text);
+    let offset = map.offset_for(position);
+
+    // Feature access: the text before the cursor ends with `word.`.
+    let before = &text[..offset.min(text.len())];
+    if let Some(stripped) = before.strip_suffix('.') {
+        if let Some(word) = preceding_word(stripped) {
+            if let Some(items) = feature_completions(snapshot, word, offset) {
+                return Some(CompletionResponse::Array(items));
+            }
+        }
+        return None;
+    }
+
+    // Use-site contexts: the narrowest use whose name token or body
+    // contains the cursor.
+    let use_site = index.module_uses.iter().find(|use_site| {
+        use_site.file == 0
+            && (contains(use_site.name_span, offset) || contains(use_site.span, offset))
+    });
+    if let Some(use_site) = use_site {
+        if contains(use_site.name_span, offset) || offset <= use_site.name_span.1 {
+            let mut items: Vec<CompletionItem> = index
+                .module_decls
+                .iter()
+                .map(|decl| CompletionItem {
+                    label: decl.name.clone(),
+                    kind: Some(CompletionItemKind::MODULE),
+                    detail: Some("module".to_string()),
+                    ..CompletionItem::default()
+                })
+                .collect();
+            items.sort_by(|a, b| a.label.cmp(&b.label));
+            items.dedup_by(|a, b| a.label == b.label);
+            return Some(CompletionResponse::Array(items));
+        }
+        if let Some(resolved) = use_site
+            .resolved_module
+            .and_then(|reference| index.module_decl(reference))
+        {
+            let items = resolved
+                .input_params
+                .iter()
+                .map(|param| CompletionItem {
+                    label: param.name.clone(),
+                    kind: Some(CompletionItemKind::FIELD),
+                    detail: Some(if param.has_default {
+                        format!("input {}: {} = default", param.name, param.type_ref)
+                    } else {
+                        format!("input {}: {} (required)", param.name, param.type_ref)
+                    }),
+                    insert_text: Some(format!("{}: ", param.name)),
+                    ..CompletionItem::default()
+                })
+                .chain(resolved.properties.iter().map(|property| CompletionItem {
+                    label: property.clone(),
+                    kind: Some(CompletionItemKind::PROPERTY),
+                    detail: Some(format!("slot {property}")),
+                    ..CompletionItem::default()
+                }))
+                .collect::<Vec<_>>();
+            return Some(CompletionResponse::Array(items));
+        }
+    }
+    None
+}
+
+fn contains(span: (usize, usize), offset: usize) -> bool {
+    span.0 <= offset && offset <= span.1
+}
+
+/// The identifier immediately before the cursor, if the trailing
+/// characters form one.
+fn preceding_word(text: &str) -> Option<&str> {
+    let mut start = text.len();
+    for (index, c) in text.char_indices().rev() {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            start = index;
+        } else {
+            break;
+        }
+    }
+    if start == text.len() {
+        None
+    } else {
+        Some(&text[start..])
+    }
+}
+
+/// Feature completions for `word.`: `word` must resolve to a class-typed
+/// view parameter or the enclosing component's `data:` entity; the
+/// features come from the imported domain union.
+fn feature_completions(
+    snapshot: &IfmlSnapshot,
+    word: &str,
+    cursor: usize,
+) -> Option<Vec<CompletionItem>> {
+    let domains = snapshot.domains.as_ref()?;
+    let index = &snapshot.compilation.index;
+    let features_of = |package: &str, name: &str| -> Vec<CompletionItem> {
+        rex_expr::DomainTypes::from_model(domains)
+            .class(package, name)
+            .map(|info| {
+                info.features
+                    .iter()
+                    .map(|feature| CompletionItem {
+                        label: feature.name.clone(),
+                        kind: Some(CompletionItemKind::PROPERTY),
+                        detail: Some(format!("{} on {name}", feature_type_text(&feature.type_))),
+                        ..CompletionItem::default()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    // View parameters: `params { product: Product }`.
+    for view in &snapshot.compilation.model.views {
+        for param in &view.params {
+            if param.name == word {
+                let (package, class) = resolve_bare_class(domains, &param.type_ref)?;
+                return Some(features_of(&package, &class));
+            }
+        }
+    }
+    // The enclosing component's `data:` entity: the nearest `data:`
+    // declaration before the cursor.
+    let before = &index.files[0].text[..cursor.min(index.files[0].text.len())];
+    let data_entity = before.rfind("data: ").and_then(|position| {
+        let rest = &before[position + "data: ".len()..];
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        (!name.is_empty()).then_some(name)
+    })?;
+    let (package, class) = resolve_bare_class(domains, &data_entity)?;
+    Some(features_of(&package, &class))
+}
+
+/// Resolves a bare class name against the domain union (unique match).
+fn resolve_bare_class(model: &rex_ir::Model, name: &str) -> Option<(String, String)> {
+    let mut found: Option<(String, String)> = None;
+    for package in &model.packages {
+        for class in &package.classes {
+            if class.name == name {
+                if found.is_some() {
+                    return None; // ambiguous
+                }
+                found = Some((package.name.clone(), class.name.clone()));
+            }
+        }
+    }
+    found
+}
+
+fn feature_type_text(type_ref: &rex_ir::TypeRef) -> String {
+    match type_ref {
+        rex_ir::TypeRef::Primitive(primitive) => primitive.to_string(),
+        rex_ir::TypeRef::Class { name, .. }
+        | rex_ir::TypeRef::Enum { name, .. }
+        | rex_ir::TypeRef::Datatype { name, .. }
+        | rex_ir::TypeRef::Interface { name, .. }
+        | rex_ir::TypeRef::Vocabulary { name, .. } => name.clone(),
+    }
+}
+
+// --- `.ifml` references and rename ----------------------------------------------
+
+/// What a `.ifml` cursor position can reference or rename, matched **by
+/// name across every open `.ifml` snapshot**: a module's uses live in its
+/// dependents (never in the focused document's import closure), so
+/// resolution-local matching would miss them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IfmlTargetKind {
+    Module,
+    View,
+    Action,
+}
+
+/// A focused declaration: `(file index, name-span bytes)`.
+type DeclSite = (usize, (usize, usize));
+
+/// The target under the cursor: its kind, its name, and the focused
+/// declaration's site for the includeDeclaration / declaration-edit cases.
+fn ifml_target_at(
+    snapshot: &IfmlSnapshot,
+    position: Position,
+) -> Option<(IfmlTargetKind, String, DeclSite)> {
+    let index = &snapshot.compilation.index;
+    let map = PositionMap::new(&index.files[0].text);
+    let offset = map.offset_for(position);
+    match index.at(0, offset)? {
+        rex_ifml::AtSite::ModuleDecl(site) => Some((
+            IfmlTargetKind::Module,
+            site.name.clone(),
+            (site.file, site.name_span),
+        )),
+        rex_ifml::AtSite::Named(site) => {
+            let kind = if index.views.iter().any(|view| std::ptr::eq(view, site)) {
+                IfmlTargetKind::View
+            } else if index
+                .actions
+                .iter()
+                .any(|action| std::ptr::eq(action, site))
+            {
+                IfmlTargetKind::Action
+            } else {
+                return None; // actors carry no string references
+            };
+            Some((kind, site.name.clone(), (site.file, site.name_span)))
+        }
+        rex_ifml::AtSite::Use(use_site) => {
+            let decl = index.module_decl(use_site.resolved_module?)?;
+            Some((
+                IfmlTargetKind::Module,
+                decl.name.clone(),
+                (decl.file, decl.name_span),
+            ))
+        }
+    }
+}
+
+/// Every reference to `name` in one snapshot, as `(file index, name span)`
+/// — uses for modules, navigate/action strings for views and actions.
+fn ifml_reference_spans(
+    snapshot: &IfmlSnapshot,
+    kind: IfmlTargetKind,
+    name: &str,
+) -> Vec<(usize, (usize, usize))> {
+    let index = &snapshot.compilation.index;
+    match kind {
+        IfmlTargetKind::Module => index
+            .module_uses
+            .iter()
+            .filter(|use_site| use_site.target == name)
+            .map(|use_site| (use_site.file, use_site.name_span))
+            .collect(),
+        IfmlTargetKind::View => index
+            .action_targets
+            .iter()
+            .filter(|site| site.action == "navigate" && site.target == name)
+            .map(|site| (site.file, site.name_span))
+            .collect(),
+        IfmlTargetKind::Action => index
+            .action_targets
+            .iter()
+            .filter(|site| site.action == "action" && site.target == name)
+            .map(|site| (site.file, site.name_span))
+            .collect(),
+    }
+}
+
+fn ifml_references(
+    focused: &IfmlSnapshot,
+    snapshots: &[IfmlSnapshot],
+    position: Position,
+    include_declaration: bool,
+) -> Option<Option<Vec<Location>>> {
+    let (kind, name, decl) = ifml_target_at(focused, position)?;
+    let mut locations = Vec::new();
+    if include_declaration {
+        locations.push(location_of(focused, decl.0, decl.1));
+    }
+    for snapshot in snapshots {
+        for (file, span) in ifml_reference_spans(snapshot, kind, &name) {
+            locations.push(location_of(snapshot, file, span));
+        }
+    }
+    Some(Some(locations))
+}
+
+fn location_of(snapshot: &IfmlSnapshot, file: usize, span: (usize, usize)) -> Location {
+    let text = &snapshot.compilation.index.files[file].text;
+    let uri = snapshot
+        .file_urls
+        .get(file)
+        .and_then(|url| url.parse::<Url>().ok())
+        .unwrap_or_else(|| Url::parse("file:///unknown.ifml").expect("static uri"));
+    Location {
+        uri,
+        range: map_range(PositionMap::new(text), span),
+    }
+}
+
+/// `.ifml` names are free strings: non-empty, no quotes/backslashes/newlines.
+fn is_ifml_name(name: &str) -> bool {
+    !name.is_empty() && !name.chars().any(|c| matches!(c, '"' | '\\' | '\n' | '\r'))
+}
+
+fn ifml_prepare_rename(snapshot: &IfmlSnapshot, position: Position) -> Option<Option<Range>> {
+    let index = &snapshot.compilation.index;
+    let map = PositionMap::new(&index.files[0].text);
+    let offset = map.offset_for(position);
+    let span = match index.at(0, offset)? {
+        rex_ifml::AtSite::ModuleDecl(site) => site.name_span,
+        rex_ifml::AtSite::Named(site) => site.name_span,
+        rex_ifml::AtSite::Use(site) => site.name_span,
+    };
+    Some(Some(map_range(map, span)))
+}
+
+/// `.ifml` rename: view/module/action names are free strings (the fixture
+/// itself has `view "Customer List"`), so validity is "non-empty, no
+/// quotes/backslashes/newlines" — not identifier-shaped. The declaration
+/// plus every same-named reference across all open `.ifml` snapshots,
+/// grouped per file, latest position first.
+fn ifml_rename(
+    focused: &IfmlSnapshot,
+    snapshots: &[IfmlSnapshot],
+    uri: Url,
+    position: Position,
+    new_name: &str,
+) -> Option<WorkspaceEdit> {
+    if !is_ifml_name(new_name) {
+        return None;
+    }
+    let (kind, name, decl) = ifml_target_at(focused, position)?;
+    let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
+        std::collections::HashMap::new();
+    let mut push_edit = |snapshot: &IfmlSnapshot, file: usize, span: (usize, usize)| {
+        let text = &snapshot.compilation.index.files[file].text;
+        let map = PositionMap::new(text);
+        let target_uri = snapshot
+            .file_urls
+            .get(file)
+            .and_then(|url| url.parse::<Url>().ok())
+            .unwrap_or_else(|| uri.clone());
+        changes.entry(target_uri).or_default().push(TextEdit {
+            range: map_range(map, span),
+            new_text: new_name.to_string(),
+        });
+    };
+    push_edit(focused, decl.0, decl.1);
+    for snapshot in snapshots {
+        for (file, span) in ifml_reference_spans(snapshot, kind, &name) {
+            push_edit(snapshot, file, span);
+        }
+    }
+    for edits in changes.values_mut() {
+        edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+    }
+    Some(WorkspaceEdit {
+        changes: Some(changes),
+        document_changes: None,
+        change_annotations: None,
+    })
+}
+
+/// The snapshot whose main file is `uri`, if present among the compiled
+/// open documents.
+fn focused_snapshot<'a>(snapshots: &'a [IfmlSnapshot], uri: &Url) -> Option<&'a IfmlSnapshot> {
+    snapshots.iter().find(|snapshot| {
+        snapshot
+            .compilation
+            .index
+            .files
+            .first()
+            .is_some_and(|file| {
+                file.path == uri.as_str()
+                    || Url::from_file_path(&file.path)
+                        .map(|parsed| parsed == *uri)
+                        .unwrap_or(false)
+            })
+    })
+}
+
 /// The module hover body: name plus the input signature (with defaults).
 fn module_markdown(site: &rex_ifml::ModuleDeclSite) -> String {
     let inputs = site
@@ -505,6 +1072,7 @@ fn capabilities() -> ServerCapabilities {
             ..CodeActionOptions::default()
         })),
         definition_provider: Some(OneOf::Left(true)),
+        references_provider: Some(OneOf::Left(true)),
         rename_provider: Some(OneOf::Left(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
         ..ServerCapabilities::default()
@@ -536,7 +1104,7 @@ impl LanguageServer for RexBackend {
                     text_document.text.clone(),
                 ))
             }
-            Surface::Ifml | Surface::Other => None,
+            Surface::Ifml | Surface::Ddd | Surface::Other => None,
         };
         self.documents.lock().unwrap().insert(
             uri.clone(),
@@ -710,6 +1278,11 @@ impl LanguageServer for RexBackend {
     ) -> tower_lsp::jsonrpc::Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
+        if let Some(response) =
+            self.with_ifml(&uri, |snapshot| ifml_completions(snapshot, position))
+        {
+            return Ok(Some(response));
+        }
         let items = self.with_navigation(&uri, |map, index| {
             let text = map.text();
             let offset = map.offset_for(position);
@@ -767,17 +1340,71 @@ impl LanguageServer for RexBackend {
         Ok(actions)
     }
 
+    async fn references(
+        &self,
+        params: ReferenceParams,
+    ) -> tower_lsp::jsonrpc::Result<Option<Vec<Location>>> {
+        let uri = params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+        let include_declaration = params.context.include_declaration;
+        if self.open_ifml_document(&uri) {
+            let snapshots = self.open_ifml_snapshots();
+            if let Some(focused) = focused_snapshot(&snapshots, &uri) {
+                if let Some(locations) =
+                    ifml_references(focused, &snapshots, position, include_declaration)
+                {
+                    return Ok(locations);
+                }
+            }
+        }
+        // `.mox` references are served through rename's resolver; a
+        // standalone references handler for `.mox` is future work.
+        Ok(None)
+    }
+
+    async fn prepare_rename(
+        &self,
+        params: TextDocumentPositionParams,
+    ) -> tower_lsp::jsonrpc::Result<Option<PrepareRenameResponse>> {
+        let uri = params.text_document.uri;
+        let position = params.position;
+        if self.open_ifml_document(&uri) {
+            let snapshots = self.open_ifml_snapshots();
+            if let Some(focused) = focused_snapshot(&snapshots, &uri) {
+                if let Some(range) = ifml_prepare_rename(focused, position) {
+                    return Ok(range.map(PrepareRenameResponse::Range));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     async fn rename(
         &self,
         params: RenameParams,
     ) -> tower_lsp::jsonrpc::Result<Option<WorkspaceEdit>> {
-        if !is_identifier(&params.new_name) {
+        if !is_identifier(&params.new_name) && !is_ifml_name(&params.new_name) {
             return Err(tower_lsp::jsonrpc::Error::invalid_params(
                 "invalid identifier",
             ));
         }
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
+        if self.open_ifml_document(&uri) {
+            let snapshots = self.open_ifml_snapshots();
+            if let Some(focused) = focused_snapshot(&snapshots, &uri) {
+                if let Some(edit) =
+                    ifml_rename(focused, &snapshots, uri.clone(), position, &params.new_name)
+                {
+                    return Ok(Some(edit));
+                }
+            }
+        }
+        if !is_identifier(&params.new_name) {
+            return Err(tower_lsp::jsonrpc::Error::invalid_params(
+                "invalid identifier",
+            ));
+        }
         let edit = self.with_navigation(&uri, |map, index| {
             let offset = map.offset_for(position);
             let target = match index.at(offset) {
@@ -1136,6 +1763,7 @@ mod tests {
                 "documentSymbolProvider": true,
                 "codeActionProvider": {"codeActionKinds": ["quickfix"]},
                 "definitionProvider": true,
+                "referencesProvider": true,
                 "renameProvider": true,
                 "documentFormattingProvider": true,
             }),
@@ -2233,6 +2861,43 @@ view "App" {
     }
 
     #[tokio::test]
+    async fn ddd_open_publishes_design_diagnostics() {
+        let (mut service, mut socket) = initialized_service().await;
+        // No imports are provided (the file:// workspace has no domains on
+        // disk), so the design's class reference cannot resolve — the
+        // design surface's validation reaches the editor.
+        open_at(
+            &mut service,
+            &ifml_uri("design.ddd"),
+            "application A {\n    module m {\n        entity Book\n    }\n}\n",
+        )
+        .await;
+        let publish = next_publish(&mut socket, &ifml_uri("design.ddd"))
+            .await
+            .expect("publishDiagnostics for the design");
+        assert!(
+            publish
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("unknown type 'Book'")),
+            "design diagnostics publish: {publish:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ddd_open_clean_design_publishes_no_diagnostics() {
+        let (mut service, mut socket) = initialized_service().await;
+        open_at(&mut service, &ifml_uri("plain.ddd"), "application A {}\n").await;
+        let publish = next_publish(&mut socket, &ifml_uri("plain.ddd"))
+            .await
+            .expect("publishDiagnostics for the clean design");
+        assert!(
+            publish.diagnostics.is_empty(),
+            "no diagnostics: {publish:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn unknown_file_kinds_publish_no_bogus_mox_diagnostics() {
         let (mut service, mut socket) = initialized_service().await;
         // An `.actor`-shaped document and a plain text file: neither is a
@@ -2444,5 +3109,397 @@ module "Pager" {
         let (_, body) = response.into_parts();
         let value = body.expect("formatting must not error");
         assert!(value.is_null(), ".mox has no LSP formatter yet: {value:?}");
+    }
+
+    #[tokio::test]
+    async fn editing_an_imported_document_republishes_its_dependents() {
+        let (mut service, mut socket) = initialized_service().await;
+        open_at(&mut service, &ifml_uri("shop.mox"), SHOP_MOX).await;
+        drain_socket(&mut socket).await;
+        open_at(&mut service, &ifml_uri("pager.ifml"), PAGER_IFML).await;
+        drain_socket(&mut socket).await;
+        // A clean consumer: `product.price` exists before the rename, so
+        // the freshness signal is unambiguous — after it, the feature is
+        // gone and the consumer must pick up the NEW diagnostic.
+        let consumer = CATALOGUE_IFML.replace("product.pric > 1", "product.price > 1");
+        open_at(&mut service, &ifml_uri("use.ifml"), &consumer).await;
+        let initial = next_publish(&mut socket, &ifml_uri("use.ifml"))
+            .await
+            .expect("initial publish for the consumer");
+        assert!(
+            initial.diagnostics.is_empty(),
+            "the consumer is clean before the rename: {initial:?}"
+        );
+
+        // Rename the feature the consumer filters on: the consumer's
+        // diagnostics must refresh WITHOUT the consumer being edited. The
+        // change produces two publishes (shop, then its dependent) into a
+        // capacity-1 socket, so the read runs concurrently with the change.
+        let renamed = SHOP_MOX.replace("int price", "int cost");
+        let use_uri = ifml_uri("use.ifml");
+        let change_params = json!({
+            "textDocument": {"uri": ifml_uri("shop.mox").as_str(), "version": 2},
+            "contentChanges": [{"text": renamed}],
+        });
+        let change = jsonrpc::Request::build("textDocument/didChange")
+            .params(change_params)
+            .finish();
+        let ((), publish) = tokio::join!(
+            async {
+                // didChange is a notification: no response body.
+                service.ready().await.unwrap().call(change).await.unwrap();
+            },
+            next_publish(&mut socket, &use_uri),
+        );
+        let publish = publish.expect("the dependent must be re-published after its import moves");
+        assert!(
+            publish
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("unknown feature 'price'")),
+            "the renamed feature must surface in the consumer: {publish:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mox_with_import_schema_compiles_clean_against_disk() {
+        // The LSP resolves `import schema` from disk relative to the file,
+        // like the CLI — the document must NOT show the permanent
+        // "not provided" false error.
+        let dir = std::env::temp_dir().join(format!(
+            "rex-lsp-schema-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::fs::write(
+            dir.join("todo_item.json"),
+            r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TodoItem",
+  "type": "object",
+  "properties": {
+    "title": { "type": "string" }
+  }
+}"#,
+        )
+        .expect("write schema");
+        let model_uri = Url::from_file_path(dir.join("model.mox")).expect("file uri");
+        let (mut service, mut socket) = initialized_service().await;
+        open_at(
+            &mut service,
+            &model_uri,
+            r#"package demo
+
+import schema "todo_item.json" as TodoItem
+
+class Wrapper {
+    refers TodoItem item
+}
+"#,
+        )
+        .await;
+
+        let publish = next_publish(&mut socket, &model_uri)
+            .await
+            .expect("publish for the schema-importing model");
+        assert!(
+            publish.diagnostics.is_empty(),
+            "import schema resolves from disk: {publish:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn ifml_completion_inside_a_use_body_offers_module_inputs() {
+        let (mut service, mut socket) = initialized_service().await;
+        open_at(&mut service, &ifml_uri("pager.ifml"), PAGER_IFML).await;
+        drain_socket(&mut socket).await;
+        // Cursor just inside the use body, on the empty override line.
+        open_at(
+            &mut service,
+            &ifml_uri("use.ifml"),
+            r#"import "pager.ifml";
+
+view "Catalogue" {
+    use "Pager" as pager {
+    };
+}
+"#,
+        )
+        .await;
+
+        let labels = ifml_completion_labels(
+            &mut service,
+            &ifml_uri("use.ifml"),
+            3,
+            28, // inside `use "Pager" as pager { |`
+        )
+        .await;
+        assert!(
+            labels.iter().any(|label| label == "pageSize"),
+            "module inputs complete: {labels:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ifml_completion_after_use_quote_offers_module_names() {
+        let (mut service, mut socket) = initialized_service().await;
+        open_at(&mut service, &ifml_uri("pager.ifml"), PAGER_IFML).await;
+        drain_socket(&mut socket).await;
+        open_at(
+            &mut service,
+            &ifml_uri("use.ifml"),
+            r#"import "pager.ifml";
+
+view "Catalogue" {
+    use "" as pager { };
+}
+"#,
+        )
+        .await;
+
+        let labels = ifml_completion_labels(
+            &mut service,
+            &ifml_uri("use.ifml"),
+            3,
+            9, // inside the `use "|"` name token
+        )
+        .await;
+        assert!(
+            labels.iter().any(|label| label == "Pager"),
+            "module names complete: {labels:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ifml_completion_after_entity_dot_offers_features() {
+        let (mut service, mut socket) = initialized_service().await;
+        open_at(&mut service, &ifml_uri("shop.mox"), SHOP_MOX).await;
+        drain_socket(&mut socket).await;
+        open_at(
+            &mut service,
+            &ifml_uri("grid.ifml"),
+            r#"import "shop.mox";
+
+view "Catalogue" {
+    params { product: Product };
+
+    component "grid" {
+        type: list;
+        data: Product;
+        filter: product.name == "";
+    }
+}
+"#,
+        )
+        .await;
+        drain_socket(&mut socket).await;
+
+        // The caret right after `product.` (mid-expression, parses fine).
+        let labels = ifml_completion_labels(&mut service, &ifml_uri("grid.ifml"), 8, 24).await;
+        assert!(
+            labels.contains(&"name".to_string()) && labels.contains(&"price".to_string()),
+            "Product features complete: {labels:?}"
+        );
+    }
+
+    /// Runs completion and returns the item labels.
+    async fn ifml_completion_labels(
+        service: &mut LspService<RexBackend>,
+        uri: &Url,
+        line: u32,
+        character: u32,
+    ) -> Vec<String> {
+        let response = service
+            .call(
+                jsonrpc::Request::build("textDocument/completion")
+                    .params(json!({
+                        "textDocument": {"uri": uri.as_str()},
+                        "position": {"line": line, "character": character},
+                    }))
+                    .id(90)
+                    .finish(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, body) = response.into_parts();
+        let value = body.expect("completion must not error");
+        eprintln!("DBG completion raw: {value}");
+        if value.is_null() {
+            return Vec::new();
+        }
+        let items: Vec<CompletionItem> = serde_json::from_value(value).expect("completion items");
+        items.into_iter().map(|item| item.label).collect()
+    }
+
+    #[tokio::test]
+    async fn ifml_references_find_cross_file_use_sites() {
+        let (mut service, mut socket) = initialized_service().await;
+        open_at(&mut service, &ifml_uri("pager.ifml"), PAGER_IFML).await;
+        drain_socket(&mut socket).await;
+        open_at(&mut service, &ifml_uri("use.ifml"), CATALOGUE_IFML).await;
+        drain_socket(&mut socket).await;
+
+        // Cursor on the module declaration's name.
+        let response = service
+            .call(
+                jsonrpc::Request::build("textDocument/references")
+                    .params(json!({
+                        "textDocument": {"uri": ifml_uri("pager.ifml").as_str()},
+                        "position": {"line": 0, "character": 10},
+                        "context": {"includeDeclaration": true},
+                    }))
+                    .id(110)
+                    .finish(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, body) = response.into_parts();
+        let value = body.expect("references must not error");
+        let locations: Vec<Location> = serde_json::from_value(value).expect("locations");
+        let uris: Vec<&str> = locations
+            .iter()
+            .map(|location| location.uri.as_str())
+            .collect();
+        assert!(
+            uris.contains(&ifml_uri("pager.ifml").as_str())
+                && uris.contains(&ifml_uri("use.ifml").as_str()),
+            "declaration plus the cross-file use: {locations:?}"
+        );
+        assert_eq!(locations.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn ifml_rename_rewrites_use_targets_across_files() {
+        let (mut service, mut socket) = initialized_service().await;
+        open_at(&mut service, &ifml_uri("pager.ifml"), PAGER_IFML).await;
+        drain_socket(&mut socket).await;
+        open_at(&mut service, &ifml_uri("use.ifml"), CATALOGUE_IFML).await;
+        drain_socket(&mut socket).await;
+
+        let response = service
+            .call(
+                jsonrpc::Request::build("textDocument/rename")
+                    .params(json!({
+                        "textDocument": {"uri": ifml_uri("pager.ifml").as_str()},
+                        "position": {"line": 0, "character": 10},
+                        "newName": "Paginator",
+                    }))
+                    .id(120)
+                    .finish(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, body) = response.into_parts();
+        let value = body.expect("rename must not error");
+        let changes = value["changes"].as_object().expect("per-file changes");
+        assert_eq!(changes.len(), 2, "both files receive edits: {value}");
+        let declaration_edit = &changes[ifml_uri("pager.ifml").as_str()][0];
+        assert_eq!(declaration_edit["newText"], "Paginator");
+        let use_edit = &changes[ifml_uri("use.ifml").as_str()][0];
+        assert_eq!(use_edit["newText"], "Paginator");
+    }
+
+    #[tokio::test]
+    async fn ifml_rename_rewrites_navigate_targets_for_views() {
+        let (mut service, _socket) = initialized_service().await;
+        open_at(
+            &mut service,
+            &ifml_uri("flow.ifml"),
+            r#"view "Home" {
+    component "g" {
+        type: list;
+
+        on select(row) -> navigate("Detail", { id: row.id });
+    }
+}
+
+view "Detail" {
+    component "d" {
+        type: list;
+    }
+}
+"#,
+        )
+        .await;
+
+        // Cursor on `view "Detail"`.
+        let response = service
+            .call(
+                jsonrpc::Request::build("textDocument/rename")
+                    .params(json!({
+                        "textDocument": {"uri": ifml_uri("flow.ifml").as_str()},
+                        "position": {"line": 9, "character": 8},
+                        "newName": "Details",
+                    }))
+                    .id(130)
+                    .finish(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, body) = response.into_parts();
+        let value = body.expect("rename must not error");
+        let edits = value["changes"][ifml_uri("flow.ifml").as_str()]
+            .as_array()
+            .expect("edits for the flow");
+        assert_eq!(edits.len(), 2, "declaration + the navigate target: {value}");
+        assert!(
+            edits.iter().all(|edit| edit["newText"] == "Details"),
+            "{value}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ifml_prepare_rename_rejects_junk_names_early() {
+        let (mut service, _socket) = initialized_service().await;
+        open_at(&mut service, &ifml_uri("pager.ifml"), PAGER_IFML).await;
+
+        let response = service
+            .call(
+                jsonrpc::Request::build("textDocument/prepareRename")
+                    .params(json!({
+                        "textDocument": {"uri": ifml_uri("pager.ifml").as_str()},
+                        "position": {"line": 0, "character": 10},
+                    }))
+                    .id(140)
+                    .finish(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, body) = response.into_parts();
+        let value = body.expect("prepareRename must not error");
+        assert!(value.is_object(), "a range for a renamable name: {value}");
+
+        // Renaming to a string with a quote fails the validity check.
+        let response = service
+            .call(
+                jsonrpc::Request::build("textDocument/rename")
+                    .params(json!({
+                        "textDocument": {"uri": ifml_uri("pager.ifml").as_str()},
+                        "position": {"line": 0, "character": 10},
+                        "newName": "Pa\"ger",
+                    }))
+                    .id(150)
+                    .finish(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, body) = response.into_parts();
+        // A quote inside the new name is invalid params for the string
+        // surface (names are quoted strings).
+        assert!(
+            body.is_err(),
+            "invalid names are rejected as invalid params: {body:?}"
+        );
     }
 }

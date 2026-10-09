@@ -2482,6 +2482,7 @@ dependencies = [
 name = "rex-driver"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "ariadne",
  "rex-expr",
  "rex-ir",
@@ -2513,6 +2514,7 @@ version = "0.1.0"
 dependencies = [
  "pest",
  "pest_derive",
+ "proptest",
  "rex-driver",
  "rex-expr",
  "rex-ir",
@@ -2535,6 +2537,7 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "rex-driver",
+ "rex-expr",
  "rex-ifml",
  "rex-ir",
  "rex-syntax",
