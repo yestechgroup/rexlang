@@ -113,8 +113,24 @@ impl RexBackend {
                 let Some(file) = file else {
                     return;
                 };
+                // Workspace-aware: `import schema`/`import sigil` resolve
+                // from disk like the CLI's, so models carrying them stop
+                // showing permanent false "not provided" errors. Documents
+                // key by URI; imports resolve relative to the file on disk.
+                let imports = uri
+                    .to_file_path()
+                    .ok()
+                    .and_then(|path| {
+                        rex_driver::workspace_imports::collect_for_source(
+                            uri.as_str(),
+                            &path,
+                            &text,
+                        )
+                        .ok()
+                    })
+                    .unwrap_or_default();
                 let db = self.db.lock().unwrap();
-                rex_driver::compile(&*db, file)
+                rex_driver::compile_with_imports(&*db, file, &imports)
                     .diagnostics
                     .iter()
                     .map(|diagnostic| to_lsp_diagnostic(diagnostic, &map))
@@ -351,10 +367,20 @@ fn domain_union(domains: &[(String, String)]) -> Option<rex_ir::Model> {
     if domains.is_empty() {
         return None;
     }
+    // The domains' own `import schema`/`import sigil` declarations resolve
+    // from disk, exactly like the CLI's; a collection failure degrades to
+    // no typed checking rather than errors against a partial union.
+    let imports = rex_driver::workspace_imports::collect_schema_imports(domains)
+        .ok()
+        .zip(rex_driver::workspace_imports::collect_sigil_imports(domains).ok())
+        .map(|(schemas, sigil)| rex_driver::DomainImports {
+            schemas,
+            sigil: sigil.imports,
+        })
+        .unwrap_or_default();
     let mut union = rex_ir::Model::new();
     for (path, source) in domains {
-        let compilation =
-            rex_driver::compile_str(path, source, &rex_driver::DomainImports::default());
+        let compilation = rex_driver::compile_str(path, source, &imports);
         if !compilation.diagnostics.is_empty() {
             return None;
         }
@@ -2556,5 +2582,57 @@ module "Pager" {
                 .any(|diagnostic| diagnostic.message.contains("unknown feature 'price'")),
             "the renamed feature must surface in the consumer: {publish:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn mox_with_import_schema_compiles_clean_against_disk() {
+        // The LSP resolves `import schema` from disk relative to the file,
+        // like the CLI — the document must NOT show the permanent
+        // "not provided" false error.
+        let dir = std::env::temp_dir().join(format!(
+            "rex-lsp-schema-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::fs::write(
+            dir.join("todo_item.json"),
+            r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TodoItem",
+  "type": "object",
+  "properties": {
+    "title": { "type": "string" }
+  }
+}"#,
+        )
+        .expect("write schema");
+        let model_uri = Url::from_file_path(dir.join("model.mox")).expect("file uri");
+        let (mut service, mut socket) = initialized_service().await;
+        open_at(
+            &mut service,
+            &model_uri,
+            r#"package demo
+
+import schema "todo_item.json" as TodoItem
+
+class Wrapper {
+    refers TodoItem item
+}
+"#,
+        )
+        .await;
+
+        let publish = next_publish(&mut socket, &model_uri)
+            .await
+            .expect("publish for the schema-importing model");
+        assert!(
+            publish.diagnostics.is_empty(),
+            "import schema resolves from disk: {publish:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

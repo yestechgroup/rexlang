@@ -33,6 +33,7 @@ pub(crate) mod lower;
 pub mod manifest;
 pub mod navigation;
 pub(crate) mod sigil;
+pub mod workspace_imports;
 
 pub use diagnostic::{render, Diagnostic, DiagnosticCode, Severity};
 pub use navigation::{
@@ -297,6 +298,15 @@ pub struct Compiled {
 #[salsa::tracked]
 pub fn compile(db: &dyn Db, file: SourceFile) -> Compiled {
     compile_file(db, file, &DomainImports::default())
+}
+
+/// [`compile`] with explicit import content — the salsa-tracked query the
+/// LSP and other hosts use after gathering imports with
+/// [`workspace_imports`]. Imports enter the memo key, so an edit to the
+/// document recompiles; import *content* changes are the host's
+/// responsibility to re-drive.
+pub fn compile_with_imports(db: &dyn Db, file: SourceFile, imports: &DomainImports) -> Compiled {
+    compile_file(db, file, imports)
 }
 
 /// The body of [`compile`], parameterized over the provided import content.
