@@ -74,7 +74,7 @@ fn arb_view_stmt() -> impl Strategy<Value = Stmt> {
         (arb_name(), arb_name()).prop_map(|(target, alias)| Stmt::Use(target, Some(alias))),
         arb_name().prop_map(|target| Stmt::Use(target, None)),
         Just(Stmt::Condition),
-        arb_name().prop_map(|target| Stmt::Event(target)),
+        arb_name().prop_map(Stmt::Event),
     ]
 }
 
@@ -85,16 +85,13 @@ fn arb_module_stmt() -> impl Strategy<Value = Stmt> {
         arb_property(),
         (arb_name(), arb_name()).prop_map(|(target, alias)| Stmt::Use(target, Some(alias))),
         arb_name().prop_map(|target| Stmt::Use(target, None)),
-        arb_name().prop_map(|target| Stmt::Event(target)),
+        arb_name().prop_map(Stmt::Event),
     ]
 }
 
 /// Statements legal in an `action` body: properties and events.
 fn arb_action_stmt() -> impl Strategy<Value = Stmt> {
-    prop_oneof![
-        arb_property(),
-        arb_name().prop_map(|target| Stmt::Event(target)),
-    ]
+    prop_oneof![arb_property(), arb_name().prop_map(Stmt::Event),]
 }
 
 /// Statements legal in a `component` body — components are FLAT: no `use`,
@@ -103,7 +100,7 @@ fn arb_component_stmt() -> impl Strategy<Value = Stmt> {
     prop_oneof![
         arb_property(),
         Just(Stmt::Condition),
-        arb_name().prop_map(|target| Stmt::Event(target)),
+        arb_name().prop_map(Stmt::Event),
     ]
 }
 
@@ -224,24 +221,24 @@ fn scramble(source: &str, rng: &mut proptest::test_runner::TestRng) -> String {
             continue;
         }
         // Random blank lines before statements.
-        if index > 0 && rng.gen_bool(0.2) {
+        if index > 0 && rng.random_bool(0.2) {
             scrambled.push('\n');
         }
         // Random comment lines.
-        if rng.gen_bool(0.1) {
+        if rng.random_bool(0.1) {
             scrambled.push_str("// scattered\n");
         }
         // Random indentation widths (including tabs).
         let indent = line.len() - trimmed.len();
-        let pad = if rng.gen_bool(0.15) {
+        let pad = if rng.random_bool(0.15) {
             "\t".repeat(indent / 4 + 1)
         } else {
-            " ".repeat(indent + rng.gen_range(0..=4usize))
+            " ".repeat(indent + rng.random_range(0..=4usize))
         };
         scrambled.push_str(&pad);
         scrambled.push_str(trimmed);
         // Random trailing spaces after `{` and `;`.
-        if (trimmed.ends_with('{') || trimmed.ends_with(';')) && rng.gen_bool(0.25) {
+        if (trimmed.ends_with('{') || trimmed.ends_with(';')) && rng.random_bool(0.25) {
             scrambled.push_str("  ");
         }
         scrambled.push('\n');
