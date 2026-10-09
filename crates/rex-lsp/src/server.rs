@@ -745,13 +745,15 @@ enum IfmlTargetKind {
     Action,
 }
 
+/// A focused declaration: `(file index, name-span bytes)`.
+type DeclSite = (usize, (usize, usize));
+
 /// The target under the cursor: its kind, its name, and the focused
-/// declaration's `(file index, name span)` for the includeDeclaration /
-/// declaration-edit cases.
+/// declaration's site for the includeDeclaration / declaration-edit cases.
 fn ifml_target_at(
     snapshot: &IfmlSnapshot,
     position: Position,
-) -> Option<(IfmlTargetKind, String, (usize, (usize, usize)))> {
+) -> Option<(IfmlTargetKind, String, DeclSite)> {
     let index = &snapshot.compilation.index;
     let map = PositionMap::new(&index.files[0].text);
     let offset = map.offset_for(position);
