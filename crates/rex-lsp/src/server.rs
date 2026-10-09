@@ -506,6 +506,7 @@ fn capabilities() -> ServerCapabilities {
         })),
         definition_provider: Some(OneOf::Left(true)),
         rename_provider: Some(OneOf::Left(true)),
+        document_formatting_provider: Some(OneOf::Left(true)),
         ..ServerCapabilities::default()
     }
 }
@@ -582,6 +583,42 @@ impl LanguageServer for RexBackend {
 
     async fn shutdown(&self) -> tower_lsp::jsonrpc::Result<()> {
         Ok(())
+    }
+
+    async fn formatting(
+        &self,
+        params: DocumentFormattingParams,
+    ) -> tower_lsp::jsonrpc::Result<Option<Vec<TextEdit>>> {
+        let uri = params.text_document.uri;
+        let formatted = {
+            let documents = self.documents.lock().unwrap();
+            documents
+                .get(&uri)
+                .filter(|document| document.surface == Surface::Ifml)
+                .map(|document| rex_ifml::format_ifml(&document.text))
+        };
+        let Some(formatted) = formatted else {
+            return Ok(None);
+        };
+        let documents = self.documents.lock().unwrap();
+        let Some(document) = documents.get(&uri) else {
+            return Ok(None);
+        };
+        let map = PositionMap::new(&document.text);
+        let end = map.position_for(document.text.len());
+        if formatted == document.text {
+            return Ok(None);
+        }
+        Ok(Some(vec![TextEdit {
+            range: Range {
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end,
+            },
+            new_text: formatted,
+        }]))
     }
 
     async fn goto_definition(
@@ -1100,6 +1137,7 @@ mod tests {
                 "codeActionProvider": {"codeActionKinds": ["quickfix"]},
                 "definitionProvider": true,
                 "renameProvider": true,
+                "documentFormattingProvider": true,
             }),
             "capabilities must match the rexlang feature set exactly"
         );
@@ -2331,5 +2369,80 @@ module "Pager" {
         );
         // The declaration's name token: `module "Pager"` on line 0.
         assert_eq!(location.range.start.line, 0);
+    }
+
+    #[tokio::test]
+    async fn ifml_formatting_returns_one_whole_document_edit() {
+        let (mut service, _socket) = initialized_service().await;
+        let scrambled = "view   \"A\"  {\n      label \"x\";\n}\n";
+        open_at(&mut service, &ifml_uri("scrambled.ifml"), scrambled).await;
+
+        let response = service
+            .call(
+                jsonrpc::Request::build("textDocument/formatting")
+                    .params(json!({
+                        "textDocument": {"uri": ifml_uri("scrambled.ifml").as_str()},
+                        "options": {"tabSize": 4, "insertSpaces": true},
+                    }))
+                    .id(60)
+                    .finish(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, body) = response.into_parts();
+        let value = body.expect("formatting must not error");
+        let edits: Vec<TextEdit> = serde_json::from_value(value).expect("text edits");
+        assert_eq!(edits.len(), 1, "one whole-document edit");
+        assert_eq!(edits[0].new_text, "view \"A\" {\n    label \"x\";\n}\n");
+    }
+
+    #[tokio::test]
+    async fn formatting_a_clean_ifml_document_returns_no_edits() {
+        let (mut service, _socket) = initialized_service().await;
+        open_at(&mut service, &ifml_uri("clean.ifml"), CATALOGUE_IFML).await;
+
+        let response = service
+            .call(
+                jsonrpc::Request::build("textDocument/formatting")
+                    .params(json!({
+                        "textDocument": {"uri": ifml_uri("clean.ifml").as_str()},
+                        "options": {"tabSize": 4, "insertSpaces": true},
+                    }))
+                    .id(70)
+                    .finish(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, body) = response.into_parts();
+        let value = body.expect("formatting must not error");
+        assert!(
+            value.is_null(),
+            "no edits for a formatted document: {value:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn formatting_a_mox_document_returns_no_edits() {
+        let (mut service, _socket) = initialized_service().await;
+        open(&mut service, BROKEN).await;
+
+        let response = service
+            .call(
+                jsonrpc::Request::build("textDocument/formatting")
+                    .params(json!({
+                        "textDocument": {"uri": uri().as_str()},
+                        "options": {"tabSize": 4, "insertSpaces": true},
+                    }))
+                    .id(80)
+                    .finish(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, body) = response.into_parts();
+        let value = body.expect("formatting must not error");
+        assert!(value.is_null(), ".mox has no LSP formatter yet: {value:?}");
     }
 }

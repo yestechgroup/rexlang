@@ -308,6 +308,12 @@ pub enum UnaryOp { Not, Neg }
 
 ## Downstream Consumption
 
+The `rexlang` language server supports the surface: diagnostics (resolver
+`E0001`–`E0009` + typed-binding `E0100`–`E0103`), document symbols, hover
+(module signatures), go-to-definition on `use` sites (cross-file), and
+`textDocument/formatting` backed by the canonical formatter. Imports fetch
+from open editor buffers first, disk second.
+
 The `IfmlModel` artifact is the integration boundary. Consumers `parse_ifml_file` (or deserialize a serialized artifact with `IfmlModel::from_json`) and walk the model to build applications. codegraph, the primary consumer today, projects the artifact into its graph (ViewContainer/ViewComponent/Event/Action/ParameterDefinition/DataBinding/ModuleDefinition nodes, NavigationFlow/DataFlow/HasParameter/... edges) and generates behavior-wired UI plus Playwright tests from it.
 
 ### Expression Evaluation
