@@ -6,8 +6,8 @@ use std::process::ExitCode;
 use rex_driver::{compile_actors_str, compile_ddd_str, compile_evt_str};
 
 use crate::inputs::{
-    compile_sources, expand_inputs, is_actor_file, is_ddd_file, is_evt_file, is_ifml_file,
-    read_actor_pair, read_ddd_design, read_evt_pair, read_ifml_inputs, read_sources,
+    compile_sources, expand_check_inputs, expand_inputs, is_actor_file, is_ddd_file, is_evt_file,
+    is_ifml_file, read_actor_pair, read_ddd_design, read_evt_pair, read_ifml_inputs, read_sources,
 };
 use crate::report::{
     report_actor_diagnostics, report_ddd_diagnostics, report_evt_diagnostics,
@@ -15,7 +15,34 @@ use crate::report::{
 };
 
 pub(crate) fn run(files: Vec<PathBuf>) -> anyhow::Result<ExitCode> {
-    let files = expand_inputs(&files)?;
+    // Directory inputs enter batch mode: every supported surface under the
+    // directory is checked **independently** (per-file pipeline). Pass
+    // several `.mox` files explicitly to compile them as one multi-package
+    // model instead.
+    if files.iter().any(|file| file.is_dir()) {
+        let expanded = expand_check_inputs(&files)?;
+        let mut failed = 0usize;
+        for file in &expanded {
+            match check_one(std::slice::from_ref(file)) {
+                Ok(ExitCode::SUCCESS) => {}
+                Ok(_) => failed += 1,
+                Err(error) => {
+                    eprintln!("Error: {error:#}");
+                    failed += 1;
+                }
+            }
+        }
+        if failed > 0 {
+            eprintln!("{failed} of {} files failed", expanded.len());
+            return Ok(ExitCode::FAILURE);
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+    check_one(&expand_inputs(&files)?)
+}
+
+fn check_one(files: &[PathBuf]) -> anyhow::Result<ExitCode> {
+    let files = files.to_vec();
     if files.len() == 1 && is_ifml_file(&files[0]) {
         let inputs = read_ifml_inputs(&files[0])?;
         let sources = |compilation: &rex_ifml::IfmlCompilation| -> Vec<(String, String)> {
