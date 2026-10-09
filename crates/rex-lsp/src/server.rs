@@ -15,12 +15,33 @@ use crate::position::PositionMap;
 /// The `source` field stamped on every diagnostic this server publishes.
 const SOURCE_NAME: &str = "rexlang";
 
+/// Which surface an open document belongs to, decided by URI extension at
+/// open time. `.mox` drives the salsa session; `.ifml` gets the rex-ifml
+/// one-shot compile; anything else publishes no diagnostics (an unknown
+/// file kind must never produce bogus `.mox` errors).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Surface {
+    Mox,
+    Ifml,
+    Other,
+}
+
+fn surface_for(uri: &Url) -> Surface {
+    match uri.path().rsplit('.').next() {
+        Some("mox") => Surface::Mox,
+        Some("ifml") => Surface::Ifml,
+        _ => Surface::Other,
+    }
+}
+
 /// One open document as the server sees it.
 #[derive(Clone)]
 struct Document {
+    surface: Surface,
     text: String,
     version: i32,
-    file: SourceFile,
+    /// The salsa-tracked `.mox` source; `None` for every other surface.
+    file: Option<SourceFile>,
 }
 
 /// The rexlang language server backend.
@@ -42,23 +63,106 @@ impl RexBackend {
 
     /// Recompiles the document and publishes its diagnostics.
     async fn publish(&self, uri: &Url, version: Option<i32>) {
-        let (diagnostics, text) = {
+        let snapshot = {
             let documents = self.documents.lock().unwrap();
-            let db = self.db.lock().unwrap();
-            let Some(document) = documents.get(uri) else {
-                return;
-            };
-            let compiled = rex_driver::compile(&*db, document.file);
-            (compiled.diagnostics, document.text.clone())
+            documents.get(uri).map(|document| {
+                (
+                    document.surface,
+                    document.text.clone(),
+                    document.file.clone(),
+                )
+            })
+        };
+        let Some((surface, text, file)) = snapshot else {
+            return;
         };
         let map = PositionMap::new(&text);
-        let lsp_diagnostics = diagnostics
-            .iter()
-            .map(|diagnostic| to_lsp_diagnostic(diagnostic, &map))
-            .collect();
+        let lsp_diagnostics = match surface {
+            Surface::Mox => {
+                let Some(file) = file else {
+                    return;
+                };
+                let db = self.db.lock().unwrap();
+                rex_driver::compile(&*db, file)
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| to_lsp_diagnostic(diagnostic, &map))
+                    .collect()
+            }
+            Surface::Ifml => self
+                .compile_ifml(uri, &text)
+                .iter()
+                .filter(|diagnostic| diagnostic.file == uri.as_str())
+                .map(|diagnostic| to_ifml_diagnostic(diagnostic, &map))
+                .collect(),
+            Surface::Other => Vec::new(),
+        };
         self.client
             .publish_diagnostics(uri.clone(), lsp_diagnostics, version)
             .await;
+    }
+
+    /// Compiles one open `.ifml` document: its import tree is fetched
+    /// through [`rex_ifml::walk_ifml_imports`] — open documents first, then
+    /// disk relative to the importing file — the imported `.mox` files are
+    /// compiled and unioned into the typed-binding domain, and the file is
+    /// compiled and checked in one pass. Diagnostics referencing other
+    /// files are dropped here (they surface when that file is opened).
+    fn compile_ifml(&self, uri: &Url, text: &str) -> Vec<rex_ifml::IfmlDiagnostic> {
+        let main_path = uri.to_string();
+        let mut disk_paths: std::collections::BTreeMap<String, std::path::PathBuf> =
+            std::collections::BTreeMap::new();
+        if let Ok(path) = uri.to_file_path() {
+            disk_paths.insert(main_path.clone(), path);
+        }
+        let mut domains: Vec<(String, String)> = Vec::new();
+        let mut bundle = rex_ifml::IfmlImports::default();
+        let dir_of = |path: &std::path::Path| -> std::path::PathBuf {
+            path.parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_path_buf()
+        };
+        let documents = self.documents.lock().unwrap();
+        let _walk = rex_ifml::walk_ifml_imports(&main_path, text, &mut |importer, import| {
+            let Some(importer_disk) = disk_paths.get(importer) else {
+                return None;
+            };
+            let resolved = dir_of(importer_disk).join(import);
+            // Open documents win: the editor's buffer is the truth; disk is
+            // the fallback.
+            let fetched = (|| {
+                if let Ok(url) = Url::from_file_path(&resolved) {
+                    if let Some(document) = documents.get(&url) {
+                        return Some(document.text.clone());
+                    }
+                }
+                std::fs::read_to_string(&resolved).ok()
+            })()?;
+            let resolved_path = resolved.display().to_string();
+            disk_paths.insert(import.to_string(), resolved);
+            if import.ends_with(".mox") {
+                if !domains
+                    .iter()
+                    .any(|(existing, _)| existing == &resolved_path)
+                {
+                    domains.push((resolved_path, fetched));
+                }
+                return None;
+            }
+            if import.ends_with(".ifml") {
+                bundle.provide(importer, import, fetched.clone());
+                return Some(fetched);
+            }
+            None
+        });
+        drop(documents);
+        let compilation = match rex_ifml::compile_ifml_str(&main_path, text, &bundle) {
+            Ok(compilation) => compilation,
+            Err(diagnostics) => return diagnostics,
+        };
+        let domain_union = domain_union(&domains);
+        rex_ifml::check_ifml(&compilation, domain_union.as_ref())
     }
 
     /// Runs `f` with the navigation index of the document's current text.
@@ -113,6 +217,43 @@ fn to_lsp_diagnostic(diagnostic: &rex_driver::Diagnostic, map: &PositionMap) -> 
     }
 }
 
+/// Converts an `.ifml` diagnostic into its LSP shape: the code string as
+/// `code`, the span mapped through the position map. The resolver's
+/// byte-offset spans convert directly.
+fn to_ifml_diagnostic(diagnostic: &rex_ifml::IfmlDiagnostic, map: &PositionMap) -> Diagnostic {
+    Diagnostic {
+        range: map.range_for((diagnostic.span.0..diagnostic.span.1).into()),
+        severity: Some(DiagnosticSeverity::ERROR),
+        code: Some(NumberOrString::String(diagnostic.code.to_string())),
+        code_description: None,
+        source: Some(SOURCE_NAME.to_string()),
+        message: diagnostic.message.clone(),
+        related_information: None,
+        tags: None,
+        data: None,
+    }
+}
+
+/// Unions every imported `.mox` domain into one model for typed binding.
+/// `None` when there are no domains — or any fails to compile, in which
+/// case the LSP degrades to structural checks rather than reporting
+/// binding errors against a partial union.
+fn domain_union(domains: &[(String, String)]) -> Option<rex_ir::Model> {
+    if domains.is_empty() {
+        return None;
+    }
+    let mut union = rex_ir::Model::new();
+    for (path, source) in domains {
+        let compilation =
+            rex_driver::compile_str(path, source, &rex_driver::DomainImports::default());
+        if !compilation.diagnostics.is_empty() {
+            return None;
+        }
+        union.packages.extend(compilation.model?.packages);
+    }
+    Some(union)
+}
+
 /// The exact capability set rexlang declares.
 fn capabilities() -> ServerCapabilities {
     ServerCapabilities {
@@ -148,13 +289,22 @@ impl LanguageServer for RexBackend {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let text_document = params.text_document;
         let uri = text_document.uri;
-        let file = {
-            let db = self.db.lock().unwrap();
-            SourceFile::new(&*db, uri.to_string(), text_document.text.clone())
+        let surface = surface_for(&uri);
+        let file = match surface {
+            Surface::Mox => {
+                let db = self.db.lock().unwrap();
+                Some(SourceFile::new(
+                    &*db,
+                    uri.to_string(),
+                    text_document.text.clone(),
+                ))
+            }
+            Surface::Ifml | Surface::Other => None,
         };
         self.documents.lock().unwrap().insert(
             uri.clone(),
             Document {
+                surface,
                 text: text_document.text,
                 version: text_document.version,
                 file,
@@ -176,8 +326,10 @@ impl LanguageServer for RexBackend {
             document.text = change.text;
             let version = params.text_document.version;
             document.version = version;
-            let mut db = self.db.lock().unwrap();
-            document.file.set_text(&mut *db).to(document.text.clone());
+            if let Some(file) = &mut document.file {
+                let mut db = self.db.lock().unwrap();
+                file.set_text(&mut *db).to(document.text.clone());
+            }
         }
         self.publish(&uri, Some(params.text_document.version)).await;
     }
@@ -645,6 +797,25 @@ mod tests {
                         "textDocument": {
                             "uri": uri(),
                             "languageId": "mox",
+                            "version": 1,
+                            "text": text,
+                        }
+                    }))
+                    .finish(),
+            )
+            .await
+            .unwrap();
+    }
+
+    /// Opens a document at an arbitrary URI (extension decides the surface).
+    async fn open_at(service: &mut LspService<RexBackend>, uri: &Url, text: &str) {
+        service
+            .call(
+                jsonrpc::Request::build("textDocument/didOpen")
+                    .params(json!({
+                        "textDocument": {
+                            "uri": uri.as_str(),
+                            "languageId": "plaintext",
                             "version": 1,
                             "text": text,
                         }
@@ -1657,5 +1828,145 @@ class Writer {
             rename_at(&mut service, line, character + 1, "Tome").await,
             Err("null".to_string())
         );
+    }
+
+    // --- `.ifml` surface -------------------------------------------------------
+
+    fn ifml_uri(name: &str) -> Url {
+        Url::parse(&format!("file:///workspace/{name}")).unwrap()
+    }
+
+    const SHOP_MOX: &str = r#"package shop
+
+class Product {
+    String name
+    int price
+}
+"#;
+
+    const PAGER_IFML: &str = r#"module "Pager" {
+    input { pageSize: Int = 25 }
+    output { total: Int }
+
+    component "pager" {
+        type: list;
+        data: Item;
+    }
+}
+"#;
+
+    const CATALOGUE_IFML: &str = r#"import "shop.mox";
+import "pager.ifml";
+
+view "Catalogue" {
+    params { product: Product };
+
+    use "Pager" as pager { pageSize: 10; };
+
+    component "grid" {
+        type: list;
+        data: Product;
+        filter: product.pric > 1;
+    }
+}
+"#;
+
+    #[tokio::test]
+    async fn ifml_open_publishes_resolver_diagnostics_with_codes() {
+        let (mut service, mut socket) = initialized_service().await;
+        open_at(
+            &mut service,
+            &ifml_uri("app.ifml"),
+            r#"
+view "App" {
+    use "Missing" as gone { };
+}
+"#,
+        )
+        .await;
+
+        let publish = next_publish(&mut socket, &ifml_uri("app.ifml"))
+            .await
+            .expect("publishDiagnostics for the .ifml document");
+        assert_eq!(publish.diagnostics.len(), 1, "one resolver error");
+        let diagnostic = &publish.diagnostics[0];
+        assert_eq!(diagnostic.severity, Some(DiagnosticSeverity::ERROR));
+        assert_eq!(
+            diagnostic.code,
+            Some(NumberOrString::String("E0006".to_string()))
+        );
+        assert!(diagnostic.message.contains("unknown module 'Missing'"));
+    }
+
+    #[tokio::test]
+    async fn ifml_open_type_checks_against_open_domain_documents() {
+        let (mut service, mut socket) = initialized_service().await;
+        // The imported domain and the pattern module, opened (and drained)
+        // before the flow that imports them.
+        open_at(&mut service, &ifml_uri("shop.mox"), SHOP_MOX).await;
+        drain_socket(&mut socket).await;
+        open_at(&mut service, &ifml_uri("pager.ifml"), PAGER_IFML).await;
+        drain_socket(&mut socket).await;
+        open_at(&mut service, &ifml_uri("catalogue.ifml"), CATALOGUE_IFML).await;
+        let publish = next_publish(&mut socket, &ifml_uri("catalogue.ifml"))
+            .await
+            .expect("publishDiagnostics for the typed flow");
+        assert!(
+            !publish.diagnostics.is_empty(),
+            "the unknown feature must be reported"
+        );
+        let diagnostic = &publish.diagnostics[0];
+        assert_eq!(
+            diagnostic.code,
+            Some(NumberOrString::String("E0102".to_string()))
+        );
+        assert!(diagnostic.message.contains("unknown feature 'pric'"));
+    }
+
+    #[tokio::test]
+    async fn ifml_open_clean_document_publishes_no_diagnostics() {
+        let (mut service, mut socket) = initialized_service().await;
+        open_at(
+            &mut service,
+            &ifml_uri("plain.ifml"),
+            r#"view "Home" {
+    component "grid" {
+        type: list;
+        data: Item;
+    }
+}
+"#,
+        )
+        .await;
+        let publish = next_publish(&mut socket, &ifml_uri("plain.ifml"))
+            .await
+            .expect("publishDiagnostics for the clean flow");
+        assert!(
+            publish.diagnostics.is_empty(),
+            "no diagnostics: {publish:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_file_kinds_publish_no_bogus_mox_diagnostics() {
+        let (mut service, mut socket) = initialized_service().await;
+        // An `.actor`-shaped document and a plain text file: neither is a
+        // `.mox` model, and neither may produce `.mox` parse errors. The
+        // socket is bounded, so each open is read before the next.
+        for name in ["team.actor", "notes.txt"] {
+            open_at(
+                &mut service,
+                &ifml_uri(name),
+                "import \"missing.mox\"\n\nthis is not a mox model {",
+            )
+            .await;
+            let publish = next_publish(&mut socket, &ifml_uri(name))
+                .await
+                .expect("a publish per opened document");
+            assert!(
+                publish.diagnostics.is_empty(),
+                "{name} must publish no diagnostics: {publish:?}"
+            );
+        }
     }
 }

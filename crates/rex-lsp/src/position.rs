@@ -306,3 +306,22 @@ mod tests {
         assert_eq!(map.span_for(range), café);
     }
 }
+
+#[cfg(test)]
+mod edge_tests {
+    use super::*;
+
+    #[test]
+    fn maps_text_without_trailing_newline() {
+        let map = PositionMap::new("import \"missing.mox\"\n\nthis is not a mox model {");
+        let range = map.range_for((0..8).into());
+        assert_eq!(range.start.line, 0);
+    }
+
+    #[test]
+    fn maps_text_with_trailing_newline() {
+        let map = PositionMap::new("view \"A\" {\n}\n");
+        let range = map.range_for((0..4).into());
+        assert_eq!(range.start.line, 0);
+    }
+}
