@@ -544,8 +544,8 @@ fn ifml_completions(snapshot: &IfmlSnapshot, position: Position) -> Option<Compl
 
     // Feature access: the text before the cursor ends with `word.`.
     let before = &text[..offset.min(text.len())];
-    if before.ends_with('.') {
-        if let Some(word) = preceding_word(&before[..before.len() - 1]) {
+    if let Some(stripped) = before.strip_suffix('.') {
+        if let Some(word) = preceding_word(stripped) {
             if let Some(items) = feature_completions(snapshot, word, offset) {
                 return Some(CompletionResponse::Array(items));
             }
@@ -666,20 +666,14 @@ fn feature_completions(
     // The enclosing component's `data:` entity: the nearest `data:`
     // declaration before the cursor.
     let before = &index.files[0].text[..cursor.min(index.files[0].text.len())];
-    let data_entity = before
-        .rfind("data: ")
-        .and_then(|position| {
-            let rest = &before[position + "data: ".len()..];
-            let name: String = rest
-                .chars()
-                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-                .collect();
-            (!name.is_empty()).then_some(name)
-        })
-        .or_else(|| {
-            // No `data:` before the cursor: a bare domain class named `word`.
-            None
-        })?;
+    let data_entity = before.rfind("data: ").and_then(|position| {
+        let rest = &before[position + "data: ".len()..];
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        (!name.is_empty()).then_some(name)
+    })?;
     let (package, class) = resolve_bare_class(domains, &data_entity)?;
     Some(features_of(&package, &class))
 }
