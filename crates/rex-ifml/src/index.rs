@@ -81,6 +81,9 @@ pub struct ModuleDeclSite {
     pub file: usize,
     /// Module name (the unescaped `module "..."` string).
     pub name: String,
+    /// Byte span of the `"..."` name token itself — the precise hover /
+    /// selection range.
+    pub name_span: (usize, usize),
     /// Byte span of the whole `module_declaration` in the file's text.
     pub span: (usize, usize),
     /// The module's `input` parameters, in source order.
@@ -98,6 +101,9 @@ pub struct ModuleUseSite {
     pub file: usize,
     /// The targeted module name (the `use "..."` string).
     pub target: String,
+    /// Byte span of the `"..."` target token itself — the precise
+    /// hover / selection range.
+    pub name_span: (usize, usize),
     /// The `as` alias, when present.
     pub alias: Option<String>,
     /// Byte span of the whole `module_use_statement` in the file's text.
@@ -119,8 +125,23 @@ pub struct NamedSite {
     pub file: usize,
     /// Declaration name (the unescaped `"..."` string).
     pub name: String,
+    /// Byte span of the `"..."` name token itself — the precise hover /
+    /// selection range.
+    pub name_span: (usize, usize),
     /// Byte span of the whole declaration in the file's text.
     pub span: (usize, usize),
+}
+
+/// What [`IfmlIndex::at`] found at a byte offset: one of the site kinds
+/// the index tracks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AtSite<'a> {
+    /// A `module "Name" { ... }` declaration.
+    ModuleDecl(&'a ModuleDeclSite),
+    /// A named `view`/`action`/`actor` declaration.
+    Named(&'a NamedSite),
+    /// A `use "Target" ...` statement site.
+    Use(&'a ModuleUseSite),
 }
 
 /// The span side-table for one compilation: every file, every module
@@ -192,6 +213,49 @@ impl IfmlIndex {
         self.files.get(file).map(|f| f.path.as_str())
     }
 
+    /// The declaration or use site whose span contains `offset` in `file`'s
+    /// text, if any — the single lookup behind hover and go-to-definition.
+    /// The narrowest containing span wins, so a `use` inside a view
+    /// resolves to the use, not the view.
+    pub fn at(&self, file: usize, offset: usize) -> Option<AtSite<'_>> {
+        let mut best: Option<AtSite<'_>> = None;
+        let mut best_width = usize::MAX;
+        for site in &self.module_decls {
+            if site.file == file {
+                consider_site(
+                    &mut best,
+                    &mut best_width,
+                    AtSite::ModuleDecl(site),
+                    site.span,
+                    offset,
+                );
+            }
+        }
+        for site in self.views.iter().chain(&self.actions).chain(&self.actors) {
+            if site.file == file {
+                consider_site(
+                    &mut best,
+                    &mut best_width,
+                    AtSite::Named(site),
+                    site.span,
+                    offset,
+                );
+            }
+        }
+        for site in &self.module_uses {
+            if site.file == file {
+                consider_site(
+                    &mut best,
+                    &mut best_width,
+                    AtSite::Use(site),
+                    site.span,
+                    offset,
+                );
+            }
+        }
+        best
+    }
+
     /// Maps a resolution reference — `(file index, decl index within that
     /// file)` — back to the module declaration site, or `None` when the
     /// reference is out of bounds.
@@ -249,14 +313,24 @@ fn index_pair(pair: &Pair<'_, Rule>, file: usize, index: &mut IfmlIndex) {
     let span = pair_span(pair);
     match pair.as_rule() {
         Rule::view_declaration => {
-            if let Some(name) = first_string_child(pair) {
-                index.views.push(NamedSite { file, name, span });
+            if let Some((name, name_span)) = first_string_site(pair) {
+                index.views.push(NamedSite {
+                    file,
+                    name,
+                    name_span,
+                    span,
+                });
             }
             recurse(pair, file, index);
         }
         Rule::action_declaration | Rule::actor_declaration => {
-            if let Some(name) = first_string_child(pair) {
-                let site = NamedSite { file, name, span };
+            if let Some((name, name_span)) = first_string_site(pair) {
+                let site = NamedSite {
+                    file,
+                    name,
+                    name_span,
+                    span,
+                };
                 if pair.as_rule() == Rule::action_declaration {
                     index.actions.push(site);
                 } else {
@@ -266,7 +340,7 @@ fn index_pair(pair: &Pair<'_, Rule>, file: usize, index: &mut IfmlIndex) {
             recurse(pair, file, index);
         }
         Rule::module_declaration => {
-            let name = first_string_child(pair).unwrap_or_default();
+            let (name, name_span) = first_string_site(pair).unwrap_or_default();
             let input_params = first_parameter_block(pair);
             let properties: Vec<String> = pair
                 .clone()
@@ -278,6 +352,7 @@ fn index_pair(pair: &Pair<'_, Rule>, file: usize, index: &mut IfmlIndex) {
             index.module_decls.push(ModuleDeclSite {
                 file,
                 name,
+                name_span,
                 span,
                 input_params,
                 properties,
@@ -285,7 +360,7 @@ fn index_pair(pair: &Pair<'_, Rule>, file: usize, index: &mut IfmlIndex) {
             recurse(pair, file, index);
         }
         Rule::module_use_statement => {
-            let target = first_string_child(pair).unwrap_or_default();
+            let (target, name_span) = first_string_site(pair).unwrap_or_default();
             let alias = pair
                 .clone()
                 .into_inner()
@@ -318,6 +393,7 @@ fn index_pair(pair: &Pair<'_, Rule>, file: usize, index: &mut IfmlIndex) {
             index.module_uses.push(ModuleUseSite {
                 file,
                 target,
+                name_span,
                 alias,
                 span,
                 overrides,
@@ -325,6 +401,20 @@ fn index_pair(pair: &Pair<'_, Rule>, file: usize, index: &mut IfmlIndex) {
             });
         }
         _ => recurse(pair, file, index),
+    }
+}
+
+/// `at`'s merge step: keeps the narrowest containing span.
+fn consider_site<'a>(
+    best: &mut Option<AtSite<'a>>,
+    best_width: &mut usize,
+    site: AtSite<'a>,
+    span: (usize, usize),
+    offset: usize,
+) {
+    if span.0 <= offset && offset < span.1 && span.1 - span.0 < *best_width {
+        *best = Some(site);
+        *best_width = span.1 - span.0;
     }
 }
 
@@ -339,11 +429,12 @@ fn pair_span(pair: &Pair<'_, Rule>) -> (usize, usize) {
     (span.start(), span.end())
 }
 
-fn first_string_child(pair: &Pair<'_, Rule>) -> Option<String> {
+/// The first `string` child as `(unescaped text, byte span of the token)`.
+fn first_string_site(pair: &Pair<'_, Rule>) -> Option<(String, (usize, usize))> {
     pair.clone()
         .into_inner()
         .find(|child| child.as_rule() == Rule::string)
-        .map(|child| parse_string(&child))
+        .map(|child| (parse_string(&child), pair_span(&child)))
 }
 
 /// The module's first (input) `parameter_block`, lowered to [`IndexParam`]s.
@@ -525,5 +616,42 @@ module "Pagination" {
         assert_eq!(index.module_decl((0, 1)).unwrap().name, "B");
         assert!(index.module_decl((0, 2)).is_none());
         assert!(index.module_decl((1, 0)).is_none());
+    }
+}
+
+#[cfg(test)]
+mod at_tests {
+    use super::*;
+
+    #[test]
+    fn at_finds_narrowest_site_and_name_spans() {
+        let source = r#"import "pager.ifml";
+
+view "Catalogue" {
+    use "Pager" as pager { };
+}
+
+module "Pager" {
+    input { pageSize: Int = 25 }
+    output { total: Int }
+}
+"#;
+        let (_model, index) = parse_ifml_indexed(source).unwrap();
+        assert_eq!(index.views.len(), 1, "views indexed");
+        assert_eq!(index.module_decls.len(), 1, "modules indexed");
+        assert_eq!(index.module_uses.len(), 1, "uses indexed");
+        let view = &index.views[0];
+        assert_eq!(view.file, 0);
+        assert_eq!(view.name, "Catalogue");
+        assert!(view.name_span.0 < view.name_span.1);
+        // The use site is inside the view span.
+        let use_site = &index.module_uses[0];
+        assert!(use_site.span.0 >= view.span.0 && use_site.span.1 <= view.span.1);
+        // `at` picks the use (narrower) inside the view.
+        let mid_use = (use_site.span.0 + use_site.span.1) / 2;
+        assert!(matches!(index.at(0, mid_use), Some(AtSite::Use(_))));
+        // `at` picks the view outside the use but inside the view span.
+        let view_name_mid = (view.name_span.0 + view.name_span.1) / 2;
+        assert!(matches!(index.at(0, view_name_mid), Some(AtSite::Named(_))));
     }
 }

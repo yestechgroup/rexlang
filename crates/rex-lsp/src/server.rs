@@ -34,6 +34,15 @@ fn surface_for(uri: &Url) -> Surface {
     }
 }
 
+/// The compiled state of one open `.ifml` document for the navigation
+/// handlers: the compilation (its index carries resolver-populated
+/// `resolved_module` links) plus the resolved URI of every indexed file,
+/// in [`rex_ifml::IfmlIndex::files`] order.
+struct IfmlSnapshot {
+    compilation: rex_ifml::IfmlCompilation,
+    file_urls: Vec<String>,
+}
+
 /// One open document as the server sees it.
 #[derive(Clone)]
 struct Document {
@@ -65,13 +74,9 @@ impl RexBackend {
     async fn publish(&self, uri: &Url, version: Option<i32>) {
         let snapshot = {
             let documents = self.documents.lock().unwrap();
-            documents.get(uri).map(|document| {
-                (
-                    document.surface,
-                    document.text.clone(),
-                    document.file,
-                )
-            })
+            documents
+                .get(uri)
+                .map(|document| (document.surface, document.text.clone(), document.file))
         };
         let Some((surface, text, file)) = snapshot else {
             return;
@@ -89,12 +94,14 @@ impl RexBackend {
                     .map(|diagnostic| to_lsp_diagnostic(diagnostic, &map))
                     .collect()
             }
-            Surface::Ifml => self
-                .compile_ifml(uri, &text)
-                .iter()
-                .filter(|diagnostic| diagnostic.file == uri.as_str())
-                .map(|diagnostic| to_ifml_diagnostic(diagnostic, &map))
-                .collect(),
+            Surface::Ifml => {
+                let (_snapshot, diagnostics) = self.compile_ifml(uri, &text);
+                diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.file == uri.as_str())
+                    .map(|diagnostic| to_ifml_diagnostic(diagnostic, &map))
+                    .collect()
+            }
             Surface::Other => Vec::new(),
         };
         self.client
@@ -108,7 +115,11 @@ impl RexBackend {
     /// compiled and unioned into the typed-binding domain, and the file is
     /// compiled and checked in one pass. Diagnostics referencing other
     /// files are dropped here (they surface when that file is opened).
-    fn compile_ifml(&self, uri: &Url, text: &str) -> Vec<rex_ifml::IfmlDiagnostic> {
+    fn compile_ifml(
+        &self,
+        uri: &Url,
+        text: &str,
+    ) -> (Option<IfmlSnapshot>, Vec<rex_ifml::IfmlDiagnostic>) {
         let main_path = uri.to_string();
         let mut disk_paths: std::collections::BTreeMap<String, std::path::PathBuf> =
             std::collections::BTreeMap::new();
@@ -157,10 +168,48 @@ impl RexBackend {
         drop(documents);
         let compilation = match rex_ifml::compile_ifml_str(&main_path, text, &bundle) {
             Ok(compilation) => compilation,
-            Err(diagnostics) => return diagnostics,
+            Err(diagnostics) => return (None, diagnostics),
         };
         let domain_union = domain_union(&domains);
-        rex_ifml::check_ifml(&compilation, domain_union.as_ref())
+        let binding = rex_ifml::check_ifml(&compilation, domain_union.as_ref());
+        // Resolved URI per indexed file (same order as `index.files`), so
+        // cross-file navigation can produce `Location`s. Unresolved
+        // identities fall back to their as-written path, which `Url::join`
+        // can still resolve relative to the importer.
+        let mut file_urls = Vec::with_capacity(compilation.index.files.len());
+        for file in &compilation.index.files {
+            let url = disk_paths
+                .get(&file.path)
+                .and_then(|path| Url::from_file_path(path).ok())
+                .map(|url| url.to_string())
+                .unwrap_or_else(|| file.path.clone());
+            file_urls.push(url);
+        }
+        (
+            Some(IfmlSnapshot {
+                compilation,
+                file_urls,
+            }),
+            binding,
+        )
+    }
+
+    /// Runs `f` with the compiled `.ifml` snapshot of the document — the
+    /// resolution-populated index plus per-file URIs. Recompiles per
+    /// request, consistent with [`Self::with_navigation`].
+    fn with_ifml<T>(&self, uri: &Url, f: impl FnOnce(&IfmlSnapshot) -> Option<T>) -> Option<T> {
+        let snapshot = {
+            let documents = self.documents.lock().unwrap();
+            let document = documents.get(uri)?;
+            (document.text.clone(), document.surface == Surface::Ifml)
+        };
+        let (text, is_ifml) = snapshot;
+        if !is_ifml {
+            return None;
+        }
+        let (snapshot, _diagnostics) = self.compile_ifml(uri, &text);
+        let snapshot = snapshot?;
+        f(&snapshot)
     }
 
     /// Runs `f` with the navigation index of the document's current text.
@@ -250,6 +299,195 @@ fn domain_union(domains: &[(String, String)]) -> Option<rex_ir::Model> {
         union.packages.extend(compilation.model?.packages);
     }
     Some(union)
+}
+
+/// Builds the `.ifml` document outline: every view/action/actor/module
+/// declared in the main file as a root, module uses nested under the
+/// declaration whose span contains them.
+#[allow(deprecated)] // `DocumentSymbol::deprecated` must be set explicitly
+fn ifml_document_symbols(snapshot: &IfmlSnapshot) -> Option<DocumentSymbolResponse> {
+    let index = &snapshot.compilation.index;
+    let map = PositionMap::new(&index.files[0].text);
+    let uses_under = |span: (usize, usize)| -> Vec<DocumentSymbol> {
+        index
+            .module_uses
+            .iter()
+            .filter(|use_site| {
+                use_site.file == 0 && use_site.span.0 >= span.0 && use_site.span.1 <= span.1
+            })
+            .map(|use_site| DocumentSymbol {
+                name: match &use_site.alias {
+                    Some(alias) => alias.clone(),
+                    None => use_site.target.clone(),
+                },
+                detail: Some(format!("use \"{}\"", use_site.target)),
+                kind: tower_lsp::lsp_types::SymbolKind::PACKAGE,
+                tags: None,
+                deprecated: None,
+                range: map_range(map.clone(), use_site.span),
+                selection_range: map_range(map.clone(), use_site.name_span),
+                children: None,
+            })
+            .collect()
+    };
+    let mut roots: Vec<DocumentSymbol> = Vec::new();
+    for site in index
+        .views
+        .iter()
+        .chain(&index.actions)
+        .chain(&index.actors)
+        .filter(|site| site.file == 0)
+    {
+        let kind = if index.views.iter().any(|view| std::ptr::eq(view, site)) {
+            tower_lsp::lsp_types::SymbolKind::CLASS
+        } else if index
+            .actions
+            .iter()
+            .any(|action| std::ptr::eq(action, site))
+        {
+            tower_lsp::lsp_types::SymbolKind::FUNCTION
+        } else {
+            tower_lsp::lsp_types::SymbolKind::OBJECT
+        };
+        roots.push(DocumentSymbol {
+            name: site.name.clone(),
+            detail: None,
+            kind,
+            tags: None,
+            deprecated: None,
+            range: map_range(map.clone(), site.span),
+            selection_range: map_range(map.clone(), site.name_span),
+            children: Some(uses_under(site.span)),
+        });
+    }
+    for site in index.module_decls.iter().filter(|site| site.file == 0) {
+        roots.push(DocumentSymbol {
+            name: site.name.clone(),
+            detail: Some("module".to_string()),
+            kind: tower_lsp::lsp_types::SymbolKind::MODULE,
+            tags: None,
+            deprecated: None,
+            range: map_range(map.clone(), site.span),
+            selection_range: map_range(map.clone(), site.name_span),
+            children: Some(uses_under(site.span)),
+        });
+    }
+    Some(DocumentSymbolResponse::Nested(roots))
+}
+
+/// Renders the `.ifml` hover: the module's name and input signature, the
+/// named declaration's kind and name, or — at a use site — the resolved
+/// target module's signature.
+fn ifml_hover(snapshot: &IfmlSnapshot, position: Position) -> Option<Hover> {
+    let index = &snapshot.compilation.index;
+    let map = PositionMap::new(&index.files[0].text);
+    let offset = map.offset_for(position);
+    let site = index.at(0, offset)?;
+    let name_span = match &site {
+        rex_ifml::AtSite::ModuleDecl(site) => site.name_span,
+        rex_ifml::AtSite::Named(site) => site.name_span,
+        rex_ifml::AtSite::Use(site) => site.name_span,
+    };
+    let range = map_range(map.clone(), name_span);
+    let value = match site {
+        rex_ifml::AtSite::ModuleDecl(site) => module_markdown(site),
+        rex_ifml::AtSite::Named(site) => {
+            let kind = if index.views.iter().any(|view| std::ptr::eq(view, site)) {
+                "view"
+            } else if index
+                .actions
+                .iter()
+                .any(|action| std::ptr::eq(action, site))
+            {
+                "action"
+            } else {
+                "actor"
+            };
+            format!("**{kind} \"{name}\"**", name = site.name)
+        }
+        rex_ifml::AtSite::Use(site) => {
+            let resolved = site
+                .resolved_module
+                .and_then(|reference| index.module_decl(reference));
+            match resolved {
+                Some(decl) => format!(
+                    "use **module \"{}\"**\n\n{}",
+                    site.target,
+                    module_markdown(decl)
+                ),
+                None => {
+                    format!(
+                        "use **module \"{target}\"** (unresolved)",
+                        target = site.target
+                    )
+                }
+            }
+        }
+    };
+    Some(Hover {
+        contents: HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value,
+        }),
+        range: Some(range),
+    })
+}
+
+/// The module hover body: name plus the input signature (with defaults).
+fn module_markdown(site: &rex_ifml::ModuleDeclSite) -> String {
+    let inputs = site
+        .input_params
+        .iter()
+        .map(|param| {
+            if param.has_default {
+                format!("{}: {} = …", param.name, param.type_ref)
+            } else {
+                format!("{}: {}", param.name, param.type_ref)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut value = format!("**module \"{name}\"**", name = site.name);
+    if !inputs.is_empty() {
+        value.push_str(&format!("\n\ninput: {inputs}"));
+    }
+    if !site.properties.is_empty() {
+        value.push_str(&format!("\n\nslots: {}", site.properties.join(", ")));
+    }
+    value
+}
+
+/// Go-to-definition from a `.ifml` use site to its resolved module
+/// declaration — potentially in another file, via the snapshot's per-file
+/// URIs.
+fn ifml_goto_definition(
+    snapshot: &IfmlSnapshot,
+    uri: Url,
+    position: Position,
+) -> Option<GotoDefinitionResponse> {
+    let index = &snapshot.compilation.index;
+    let map = PositionMap::new(&index.files[0].text);
+    let offset = map.offset_for(position);
+    let rex_ifml::AtSite::Use(use_site) = index.at(0, offset)? else {
+        return None;
+    };
+    let decl = index.module_decl(use_site.resolved_module?)?;
+    let target_url = snapshot
+        .file_urls
+        .get(decl.file)
+        .and_then(|url| url.parse::<Url>().ok())
+        .unwrap_or(uri);
+    Some(GotoDefinitionResponse::Scalar(Location {
+        uri: target_url,
+        range: map_range(
+            PositionMap::new(&index.files[decl.file].text),
+            decl.name_span,
+        ),
+    }))
+}
+
+fn map_range(map: PositionMap, span: (usize, usize)) -> Range {
+    map.range_for((span.0..span.1).into())
 }
 
 /// The exact capability set rexlang declares.
@@ -352,6 +590,11 @@ impl LanguageServer for RexBackend {
     ) -> tower_lsp::jsonrpc::Result<Option<GotoDefinitionResponse>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
+        if let Some(location) = self.with_ifml(&uri, |snapshot| {
+            ifml_goto_definition(snapshot, uri.clone(), position)
+        }) {
+            return Ok(Some(location));
+        }
         let location = self.with_navigation(&uri, |map, index| {
             let offset = map.offset_for(position);
             let target = match index.at(offset) {
@@ -370,6 +613,9 @@ impl LanguageServer for RexBackend {
     async fn hover(&self, params: HoverParams) -> tower_lsp::jsonrpc::Result<Option<Hover>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
+        if let Some(hover) = self.with_ifml(&uri, |snapshot| ifml_hover(snapshot, position)) {
+            return Ok(Some(hover));
+        }
         let hover = self.with_navigation(&uri, |map, index| {
             let offset = map.offset_for(position);
             match index.at(offset) {
@@ -392,6 +638,9 @@ impl LanguageServer for RexBackend {
         params: DocumentSymbolParams,
     ) -> tower_lsp::jsonrpc::Result<Option<DocumentSymbolResponse>> {
         let uri = params.text_document.uri;
+        if let Some(symbols) = self.with_ifml(&uri, ifml_document_symbols) {
+            return Ok(Some(symbols));
+        }
         let symbols = self.with_navigation(&uri, |map, index| {
             let roots: Vec<DocumentSymbol> = index
                 .definitions()
@@ -1966,5 +2215,121 @@ view "App" {
                 "{name} must publish no diagnostics: {publish:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn ifml_document_symbols_outline_views_and_modules() {
+        let (mut service, mut socket) = initialized_service().await;
+        // The import must resolve for the snapshot (and its index) to
+        // exist at all — an unresolved import falls back to an empty mox
+        // outline.
+        open_at(&mut service, &ifml_uri("pager.ifml"), PAGER_IFML).await;
+        drain_socket(&mut socket).await;
+        open_at(
+            &mut service,
+            &ifml_uri("outline.ifml"),
+            r#"import "pager.ifml";
+
+view "Catalogue" {
+    use "Pager" as pager { };
+}
+
+module "Pager" {
+    input { pageSize: Int = 25 }
+    output { total: Int }
+}
+"#,
+        )
+        .await;
+
+        let response = service
+            .call(
+                jsonrpc::Request::build("textDocument/documentSymbol")
+                    .params(json!({
+                        "textDocument": {"uri": ifml_uri("outline.ifml").as_str()},
+                    }))
+                    .id(30)
+                    .finish(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, body) = response.into_parts();
+        let value = body.expect("documentSymbol must not error");
+        let symbols: Vec<DocumentSymbol> = serde_json::from_value(value).expect("nested symbols");
+        let names: Vec<&str> = symbols.iter().map(|symbol| symbol.name.as_str()).collect();
+        assert_eq!(names, vec!["Catalogue", "Pager"], "roots in source order");
+        let view = &symbols[0];
+        assert_eq!(view.kind, tower_lsp::lsp_types::SymbolKind::CLASS);
+        let children = view
+            .children
+            .as_ref()
+            .expect("the use nests under its view");
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].name, "pager");
+        assert_eq!(children[0].detail.as_deref(), Some("use \"Pager\""));
+        assert_eq!(symbols[1].kind, tower_lsp::lsp_types::SymbolKind::MODULE);
+    }
+
+    #[tokio::test]
+    async fn ifml_hover_on_a_use_shows_the_resolved_module_signature() {
+        let (mut service, mut socket) = initialized_service().await;
+        open_at(&mut service, &ifml_uri("pager.ifml"), PAGER_IFML).await;
+        drain_socket(&mut socket).await;
+        open_at(&mut service, &ifml_uri("use.ifml"), CATALOGUE_IFML).await;
+        drain_socket(&mut socket).await;
+
+        let response = service
+            .call(
+                jsonrpc::Request::build("textDocument/hover")
+                    .params(json!({
+                        "textDocument": {"uri": ifml_uri("use.ifml").as_str()},
+                        "position": {"line": 6, "character": 14}, // inside `use "Pager" as pager`
+                    }))
+                    .id(40)
+                    .finish(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, body) = response.into_parts();
+        let value = body.expect("hover must not error");
+        assert!(value.is_object(), "a hover: {value}");
+        let markdown = value["contents"]["value"].as_str().expect("markdown");
+        assert!(markdown.contains("module \"Pager\""), "{markdown}");
+        assert!(markdown.contains("pageSize: Int"), "{markdown}");
+    }
+
+    #[tokio::test]
+    async fn ifml_goto_definition_jumps_to_the_imported_module() {
+        let (mut service, mut socket) = initialized_service().await;
+        open_at(&mut service, &ifml_uri("pager.ifml"), PAGER_IFML).await;
+        drain_socket(&mut socket).await;
+        open_at(&mut service, &ifml_uri("use.ifml"), CATALOGUE_IFML).await;
+        drain_socket(&mut socket).await;
+
+        let response = service
+            .call(
+                jsonrpc::Request::build("textDocument/definition")
+                    .params(json!({
+                        "textDocument": {"uri": ifml_uri("use.ifml").as_str()},
+                        "position": {"line": 6, "character": 14}, // inside `use "Pager" as pager`
+                    }))
+                    .id(50)
+                    .finish(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, body) = response.into_parts();
+        let value = body.expect("definition must not error");
+        let location: Location = serde_json::from_value(value).expect("a Location");
+        assert_eq!(
+            location.uri.as_str(),
+            ifml_uri("pager.ifml").as_str(),
+            "cross-file jump"
+        );
+        // The declaration's name token: `module "Pager"` on line 0.
+        assert_eq!(location.range.start.line, 0);
     }
 }
