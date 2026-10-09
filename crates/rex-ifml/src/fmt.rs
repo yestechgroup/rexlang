@@ -619,11 +619,8 @@ impl Printer {
             }
             self.emit_newline();
             first_in_run = false;
-            if let Some(next) = self.peek() {
-                if next.blank_before > 0 && next.tok != Tok::Punct("}".to_string()) {
-                    self.out.push('\n');
-                }
-            }
+            // Blank handling after the run is the caller's: the enclosing
+            // loop applies the same blank policy it uses for any statement.
         }
     }
 

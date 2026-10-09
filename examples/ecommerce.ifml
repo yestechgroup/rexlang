@@ -63,7 +63,6 @@ view "CartPage" {
 
         column "Total" -> expr quantity * unitPrice;
 
-
         on checkout -> navigate("Checkout", {
             order: order
         });

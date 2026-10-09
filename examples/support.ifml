@@ -40,7 +40,6 @@ view "Queue" {
 
         column "Refund" -> expr refundCents / 100;
 
-
         on approve(row) if agent.active -> action("ApproveRefund", {
             ticket: queue.ticketNo;
         });
