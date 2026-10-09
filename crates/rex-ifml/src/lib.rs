@@ -69,7 +69,7 @@ pub use check::check_ifml;
 pub use fmt::format_ifml;
 pub use index::{
     parse_ifml_indexed, AtSite, IfmlIndex, IndexFile, IndexParam, LiteralKind, ModuleDeclSite,
-    ModuleUseSite, NamedSite, UseOverride,
+    ModuleUseSite, NamedSite, TargetSite, UseOverride,
 };
 pub use parser::*;
 pub use resolve::{

@@ -278,6 +278,33 @@ impl RexBackend {
         dependents
     }
 
+    /// Whether `uri` is an open `.ifml` document.
+    fn open_ifml_document(&self, uri: &Url) -> bool {
+        self.documents
+            .lock()
+            .unwrap()
+            .get(uri)
+            .is_some_and(|document| document.surface == Surface::Ifml)
+    }
+
+    /// Compiles every open `.ifml` document into a snapshot. References
+    /// and rename match by NAME across snapshots: a module's uses live in
+    /// its dependents, which the focused document's import closure never
+    /// sees.
+    fn open_ifml_snapshots(&self) -> Vec<IfmlSnapshot> {
+        let docs: Vec<(Url, String)> = {
+            let documents = self.documents.lock().unwrap();
+            documents
+                .iter()
+                .filter(|(_, document)| document.surface == Surface::Ifml)
+                .map(|(url, document)| (url.clone(), document.text.clone()))
+                .collect()
+        };
+        docs.iter()
+            .filter_map(|(uri, text)| self.compile_ifml(uri, text).0)
+            .collect()
+    }
+
     /// Runs `f` with the compiled `.ifml` snapshot of the document — the
     /// resolution-populated index plus per-file URIs. Recompiles per
     /// request, consistent with [`Self::with_navigation`].
@@ -705,6 +732,204 @@ fn feature_type_text(type_ref: &rex_ir::TypeRef) -> String {
     }
 }
 
+// --- `.ifml` references and rename ----------------------------------------------
+
+/// What a `.ifml` cursor position can reference or rename, matched **by
+/// name across every open `.ifml` snapshot**: a module's uses live in its
+/// dependents (never in the focused document's import closure), so
+/// resolution-local matching would miss them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IfmlTargetKind {
+    Module,
+    View,
+    Action,
+}
+
+/// The target under the cursor: its kind, its name, and the focused
+/// declaration's `(file index, name span)` for the includeDeclaration /
+/// declaration-edit cases.
+fn ifml_target_at(
+    snapshot: &IfmlSnapshot,
+    position: Position,
+) -> Option<(IfmlTargetKind, String, (usize, (usize, usize)))> {
+    let index = &snapshot.compilation.index;
+    let map = PositionMap::new(&index.files[0].text);
+    let offset = map.offset_for(position);
+    match index.at(0, offset)? {
+        rex_ifml::AtSite::ModuleDecl(site) => Some((
+            IfmlTargetKind::Module,
+            site.name.clone(),
+            (site.file, site.name_span),
+        )),
+        rex_ifml::AtSite::Named(site) => {
+            let kind = if index.views.iter().any(|view| std::ptr::eq(view, site)) {
+                IfmlTargetKind::View
+            } else if index
+                .actions
+                .iter()
+                .any(|action| std::ptr::eq(action, site))
+            {
+                IfmlTargetKind::Action
+            } else {
+                return None; // actors carry no string references
+            };
+            Some((kind, site.name.clone(), (site.file, site.name_span)))
+        }
+        rex_ifml::AtSite::Use(use_site) => {
+            let decl = index.module_decl(use_site.resolved_module?)?;
+            Some((
+                IfmlTargetKind::Module,
+                decl.name.clone(),
+                (decl.file, decl.name_span),
+            ))
+        }
+    }
+}
+
+/// Every reference to `name` in one snapshot, as `(file index, name span)`
+/// — uses for modules, navigate/action strings for views and actions.
+fn ifml_reference_spans(
+    snapshot: &IfmlSnapshot,
+    kind: IfmlTargetKind,
+    name: &str,
+) -> Vec<(usize, (usize, usize))> {
+    let index = &snapshot.compilation.index;
+    match kind {
+        IfmlTargetKind::Module => index
+            .module_uses
+            .iter()
+            .filter(|use_site| use_site.target == name)
+            .map(|use_site| (use_site.file, use_site.name_span))
+            .collect(),
+        IfmlTargetKind::View => index
+            .action_targets
+            .iter()
+            .filter(|site| site.action == "navigate" && site.target == name)
+            .map(|site| (site.file, site.name_span))
+            .collect(),
+        IfmlTargetKind::Action => index
+            .action_targets
+            .iter()
+            .filter(|site| site.action == "action" && site.target == name)
+            .map(|site| (site.file, site.name_span))
+            .collect(),
+    }
+}
+
+fn ifml_references(
+    focused: &IfmlSnapshot,
+    snapshots: &[IfmlSnapshot],
+    position: Position,
+    include_declaration: bool,
+) -> Option<Option<Vec<Location>>> {
+    let (kind, name, decl) = ifml_target_at(focused, position)?;
+    let mut locations = Vec::new();
+    if include_declaration {
+        locations.push(location_of(focused, decl.0, decl.1));
+    }
+    for snapshot in snapshots {
+        for (file, span) in ifml_reference_spans(snapshot, kind, &name) {
+            locations.push(location_of(snapshot, file, span));
+        }
+    }
+    Some(Some(locations))
+}
+
+fn location_of(snapshot: &IfmlSnapshot, file: usize, span: (usize, usize)) -> Location {
+    let text = &snapshot.compilation.index.files[file].text;
+    let uri = snapshot
+        .file_urls
+        .get(file)
+        .and_then(|url| url.parse::<Url>().ok())
+        .unwrap_or_else(|| Url::parse("file:///unknown.ifml").expect("static uri"));
+    Location {
+        uri,
+        range: map_range(PositionMap::new(text), span),
+    }
+}
+
+/// `.ifml` names are free strings: non-empty, no quotes/backslashes/newlines.
+fn is_ifml_name(name: &str) -> bool {
+    !name.is_empty() && !name.chars().any(|c| matches!(c, '"' | '\\' | '\n' | '\r'))
+}
+
+fn ifml_prepare_rename(snapshot: &IfmlSnapshot, position: Position) -> Option<Option<Range>> {
+    let index = &snapshot.compilation.index;
+    let map = PositionMap::new(&index.files[0].text);
+    let offset = map.offset_for(position);
+    let span = match index.at(0, offset)? {
+        rex_ifml::AtSite::ModuleDecl(site) => site.name_span,
+        rex_ifml::AtSite::Named(site) => site.name_span,
+        rex_ifml::AtSite::Use(site) => site.name_span,
+    };
+    Some(Some(map_range(map, span)))
+}
+
+/// `.ifml` rename: view/module/action names are free strings (the fixture
+/// itself has `view "Customer List"`), so validity is "non-empty, no
+/// quotes/backslashes/newlines" — not identifier-shaped. The declaration
+/// plus every same-named reference across all open `.ifml` snapshots,
+/// grouped per file, latest position first.
+fn ifml_rename(
+    focused: &IfmlSnapshot,
+    snapshots: &[IfmlSnapshot],
+    uri: Url,
+    position: Position,
+    new_name: &str,
+) -> Option<WorkspaceEdit> {
+    if !is_ifml_name(new_name) {
+        return None;
+    }
+    let (kind, name, decl) = ifml_target_at(focused, position)?;
+    let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
+        std::collections::HashMap::new();
+    let mut push_edit = |snapshot: &IfmlSnapshot, file: usize, span: (usize, usize)| {
+        let text = &snapshot.compilation.index.files[file].text;
+        let map = PositionMap::new(text);
+        let target_uri = snapshot
+            .file_urls
+            .get(file)
+            .and_then(|url| url.parse::<Url>().ok())
+            .unwrap_or_else(|| uri.clone());
+        changes.entry(target_uri).or_default().push(TextEdit {
+            range: map_range(map, span),
+            new_text: new_name.to_string(),
+        });
+    };
+    push_edit(focused, decl.0, decl.1);
+    for snapshot in snapshots {
+        for (file, span) in ifml_reference_spans(snapshot, kind, &name) {
+            push_edit(snapshot, file, span);
+        }
+    }
+    for edits in changes.values_mut() {
+        edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+    }
+    Some(WorkspaceEdit {
+        changes: Some(changes),
+        document_changes: None,
+        change_annotations: None,
+    })
+}
+
+/// The snapshot whose main file is `uri`, if present among the compiled
+/// open documents.
+fn focused_snapshot<'a>(snapshots: &'a [IfmlSnapshot], uri: &Url) -> Option<&'a IfmlSnapshot> {
+    snapshots.iter().find(|snapshot| {
+        snapshot
+            .compilation
+            .index
+            .files
+            .first()
+            .is_some_and(|file| {
+                file.path == uri.as_str()
+                    || Url::from_file_path(&file.path)
+                        .map(|parsed| parsed == *uri)
+                        .unwrap_or(false)
+            })
+    })
+}
+
 /// The module hover body: name plus the input signature (with defaults).
 fn module_markdown(site: &rex_ifml::ModuleDeclSite) -> String {
     let inputs = site
@@ -777,6 +1002,7 @@ fn capabilities() -> ServerCapabilities {
             ..CodeActionOptions::default()
         })),
         definition_provider: Some(OneOf::Left(true)),
+        references_provider: Some(OneOf::Left(true)),
         rename_provider: Some(OneOf::Left(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
         ..ServerCapabilities::default()
@@ -1044,17 +1270,71 @@ impl LanguageServer for RexBackend {
         Ok(actions)
     }
 
+    async fn references(
+        &self,
+        params: ReferenceParams,
+    ) -> tower_lsp::jsonrpc::Result<Option<Vec<Location>>> {
+        let uri = params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+        let include_declaration = params.context.include_declaration;
+        if self.open_ifml_document(&uri) {
+            let snapshots = self.open_ifml_snapshots();
+            if let Some(focused) = focused_snapshot(&snapshots, &uri) {
+                if let Some(locations) =
+                    ifml_references(focused, &snapshots, position, include_declaration)
+                {
+                    return Ok(locations);
+                }
+            }
+        }
+        // `.mox` references are served through rename's resolver; a
+        // standalone references handler for `.mox` is future work.
+        Ok(None)
+    }
+
+    async fn prepare_rename(
+        &self,
+        params: TextDocumentPositionParams,
+    ) -> tower_lsp::jsonrpc::Result<Option<PrepareRenameResponse>> {
+        let uri = params.text_document.uri;
+        let position = params.position;
+        if self.open_ifml_document(&uri) {
+            let snapshots = self.open_ifml_snapshots();
+            if let Some(focused) = focused_snapshot(&snapshots, &uri) {
+                if let Some(range) = ifml_prepare_rename(focused, position) {
+                    return Ok(range.map(PrepareRenameResponse::Range));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     async fn rename(
         &self,
         params: RenameParams,
     ) -> tower_lsp::jsonrpc::Result<Option<WorkspaceEdit>> {
-        if !is_identifier(&params.new_name) {
+        if !is_identifier(&params.new_name) && !is_ifml_name(&params.new_name) {
             return Err(tower_lsp::jsonrpc::Error::invalid_params(
                 "invalid identifier",
             ));
         }
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
+        if self.open_ifml_document(&uri) {
+            let snapshots = self.open_ifml_snapshots();
+            if let Some(focused) = focused_snapshot(&snapshots, &uri) {
+                if let Some(edit) =
+                    ifml_rename(focused, &snapshots, uri.clone(), position, &params.new_name)
+                {
+                    return Ok(Some(edit));
+                }
+            }
+        }
+        if !is_identifier(&params.new_name) {
+            return Err(tower_lsp::jsonrpc::Error::invalid_params(
+                "invalid identifier",
+            ));
+        }
         let edit = self.with_navigation(&uri, |map, index| {
             let offset = map.offset_for(position);
             let target = match index.at(offset) {
@@ -1413,6 +1693,7 @@ mod tests {
                 "documentSymbolProvider": true,
                 "codeActionProvider": {"codeActionKinds": ["quickfix"]},
                 "definitionProvider": true,
+                "referencesProvider": true,
                 "renameProvider": true,
                 "documentFormattingProvider": true,
             }),
@@ -2947,5 +3228,171 @@ view "Catalogue" {
         }
         let items: Vec<CompletionItem> = serde_json::from_value(value).expect("completion items");
         items.into_iter().map(|item| item.label).collect()
+    }
+
+    #[tokio::test]
+    async fn ifml_references_find_cross_file_use_sites() {
+        let (mut service, mut socket) = initialized_service().await;
+        open_at(&mut service, &ifml_uri("pager.ifml"), PAGER_IFML).await;
+        drain_socket(&mut socket).await;
+        open_at(&mut service, &ifml_uri("use.ifml"), CATALOGUE_IFML).await;
+        drain_socket(&mut socket).await;
+
+        // Cursor on the module declaration's name.
+        let response = service
+            .call(
+                jsonrpc::Request::build("textDocument/references")
+                    .params(json!({
+                        "textDocument": {"uri": ifml_uri("pager.ifml").as_str()},
+                        "position": {"line": 0, "character": 10},
+                        "context": {"includeDeclaration": true},
+                    }))
+                    .id(110)
+                    .finish(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, body) = response.into_parts();
+        let value = body.expect("references must not error");
+        let locations: Vec<Location> = serde_json::from_value(value).expect("locations");
+        let uris: Vec<&str> = locations
+            .iter()
+            .map(|location| location.uri.as_str())
+            .collect();
+        assert!(
+            uris.contains(&ifml_uri("pager.ifml").as_str())
+                && uris.contains(&ifml_uri("use.ifml").as_str()),
+            "declaration plus the cross-file use: {locations:?}"
+        );
+        assert_eq!(locations.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn ifml_rename_rewrites_use_targets_across_files() {
+        let (mut service, mut socket) = initialized_service().await;
+        open_at(&mut service, &ifml_uri("pager.ifml"), PAGER_IFML).await;
+        drain_socket(&mut socket).await;
+        open_at(&mut service, &ifml_uri("use.ifml"), CATALOGUE_IFML).await;
+        drain_socket(&mut socket).await;
+
+        let response = service
+            .call(
+                jsonrpc::Request::build("textDocument/rename")
+                    .params(json!({
+                        "textDocument": {"uri": ifml_uri("pager.ifml").as_str()},
+                        "position": {"line": 0, "character": 10},
+                        "newName": "Paginator",
+                    }))
+                    .id(120)
+                    .finish(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, body) = response.into_parts();
+        let value = body.expect("rename must not error");
+        let changes = value["changes"].as_object().expect("per-file changes");
+        assert_eq!(changes.len(), 2, "both files receive edits: {value}");
+        let declaration_edit = &changes[ifml_uri("pager.ifml").as_str()][0];
+        assert_eq!(declaration_edit["newText"], "Paginator");
+        let use_edit = &changes[ifml_uri("use.ifml").as_str()][0];
+        assert_eq!(use_edit["newText"], "Paginator");
+    }
+
+    #[tokio::test]
+    async fn ifml_rename_rewrites_navigate_targets_for_views() {
+        let (mut service, _socket) = initialized_service().await;
+        open_at(
+            &mut service,
+            &ifml_uri("flow.ifml"),
+            r#"view "Home" {
+    component "g" {
+        type: list;
+
+        on select(row) -> navigate("Detail", { id: row.id });
+    }
+}
+
+view "Detail" {
+    component "d" {
+        type: list;
+    }
+}
+"#,
+        )
+        .await;
+
+        // Cursor on `view "Detail"`.
+        let response = service
+            .call(
+                jsonrpc::Request::build("textDocument/rename")
+                    .params(json!({
+                        "textDocument": {"uri": ifml_uri("flow.ifml").as_str()},
+                        "position": {"line": 9, "character": 8},
+                        "newName": "Details",
+                    }))
+                    .id(130)
+                    .finish(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, body) = response.into_parts();
+        let value = body.expect("rename must not error");
+        let edits = value["changes"][ifml_uri("flow.ifml").as_str()]
+            .as_array()
+            .expect("edits for the flow");
+        assert_eq!(edits.len(), 2, "declaration + the navigate target: {value}");
+        assert!(
+            edits.iter().all(|edit| edit["newText"] == "Details"),
+            "{value}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ifml_prepare_rename_rejects_junk_names_early() {
+        let (mut service, _socket) = initialized_service().await;
+        open_at(&mut service, &ifml_uri("pager.ifml"), PAGER_IFML).await;
+
+        let response = service
+            .call(
+                jsonrpc::Request::build("textDocument/prepareRename")
+                    .params(json!({
+                        "textDocument": {"uri": ifml_uri("pager.ifml").as_str()},
+                        "position": {"line": 0, "character": 10},
+                    }))
+                    .id(140)
+                    .finish(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, body) = response.into_parts();
+        let value = body.expect("prepareRename must not error");
+        assert!(value.is_object(), "a range for a renamable name: {value}");
+
+        // Renaming to a string with a quote fails the validity check.
+        let response = service
+            .call(
+                jsonrpc::Request::build("textDocument/rename")
+                    .params(json!({
+                        "textDocument": {"uri": ifml_uri("pager.ifml").as_str()},
+                        "position": {"line": 0, "character": 10},
+                        "newName": "Pa\"ger",
+                    }))
+                    .id(150)
+                    .finish(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, body) = response.into_parts();
+        // A quote inside the new name is invalid params for the string
+        // surface (names are quoted strings).
+        assert!(
+            body.is_err(),
+            "invalid names are rejected as invalid params: {body:?}"
+        );
     }
 }
