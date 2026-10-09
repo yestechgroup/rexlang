@@ -34,6 +34,21 @@ fn surface_for(uri: &Url) -> Surface {
     }
 }
 
+/// The import closure of one `.ifml` document, gathered by
+/// [`RexBackend::import_closure`].
+#[derive(Default)]
+struct IfmlImportClosure {
+    /// The resolver bundle, keyed `(importer identity, import-as-written)`.
+    bundle: rex_ifml::IfmlImports,
+    /// Imported `.mox` domain sources, deduplicated by resolved path.
+    domains: Vec<(String, String)>,
+    /// Resolved disk path per import identity (the main file included).
+    disk_paths: std::collections::BTreeMap<String, std::path::PathBuf>,
+    /// URL (or identity string) of every fetched import — the transitive
+    /// import set.
+    import_urls: Vec<String>,
+}
+
 /// The compiled state of one open `.ifml` document for the navigation
 /// handlers: the compilation (its index carries resolver-populated
 /// `resolved_module` links) plus the resolved URI of every indexed file,
@@ -70,8 +85,19 @@ impl RexBackend {
         }
     }
 
-    /// Recompiles the document and publishes its diagnostics.
+    /// Recompiles the document and publishes its diagnostics, then
+    /// re-publishes every open `.ifml` document that imports it — an edit
+    /// to an imported file must refresh its consumers or their diagnostics
+    /// go stale.
     async fn publish(&self, uri: &Url, version: Option<i32>) {
+        self.publish_document(uri, version).await;
+        for dependent in self.dependents_of(uri) {
+            self.publish_document(&dependent, None).await;
+        }
+    }
+
+    /// Recompiles one document and publishes its diagnostics.
+    async fn publish_document(&self, uri: &Url, version: Option<i32>) {
         let snapshot = {
             let documents = self.documents.lock().unwrap();
             documents
@@ -120,57 +146,13 @@ impl RexBackend {
         uri: &Url,
         text: &str,
     ) -> (Option<IfmlSnapshot>, Vec<rex_ifml::IfmlDiagnostic>) {
+        let closure = self.import_closure(uri, text);
         let main_path = uri.to_string();
-        let mut disk_paths: std::collections::BTreeMap<String, std::path::PathBuf> =
-            std::collections::BTreeMap::new();
-        if let Ok(path) = uri.to_file_path() {
-            disk_paths.insert(main_path.clone(), path);
-        }
-        let mut domains: Vec<(String, String)> = Vec::new();
-        let mut bundle = rex_ifml::IfmlImports::default();
-        let dir_of = |path: &std::path::Path| -> std::path::PathBuf {
-            path.parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-                .unwrap_or_else(|| std::path::Path::new("."))
-                .to_path_buf()
-        };
-        let documents = self.documents.lock().unwrap();
-        let _walk = rex_ifml::walk_ifml_imports(&main_path, text, &mut |importer, import| {
-            let importer_disk = disk_paths.get(importer)?;
-            let resolved = dir_of(importer_disk).join(import);
-            // Open documents win: the editor's buffer is the truth; disk is
-            // the fallback.
-            let fetched = (|| {
-                if let Ok(url) = Url::from_file_path(&resolved) {
-                    if let Some(document) = documents.get(&url) {
-                        return Some(document.text.clone());
-                    }
-                }
-                std::fs::read_to_string(&resolved).ok()
-            })()?;
-            let resolved_path = resolved.display().to_string();
-            disk_paths.insert(import.to_string(), resolved);
-            if import.ends_with(".mox") {
-                if !domains
-                    .iter()
-                    .any(|(existing, _)| existing == &resolved_path)
-                {
-                    domains.push((resolved_path, fetched));
-                }
-                return None;
-            }
-            if import.ends_with(".ifml") {
-                bundle.provide(importer, import, fetched.clone());
-                return Some(fetched);
-            }
-            None
-        });
-        drop(documents);
-        let compilation = match rex_ifml::compile_ifml_str(&main_path, text, &bundle) {
+        let compilation = match rex_ifml::compile_ifml_str(&main_path, text, &closure.bundle) {
             Ok(compilation) => compilation,
             Err(diagnostics) => return (None, diagnostics),
         };
-        let domain_union = domain_union(&domains);
+        let domain_union = domain_union(&closure.domains);
         let binding = rex_ifml::check_ifml(&compilation, domain_union.as_ref());
         // Resolved URI per indexed file (same order as `index.files`), so
         // cross-file navigation can produce `Location`s. Unresolved
@@ -178,7 +160,8 @@ impl RexBackend {
         // can still resolve relative to the importer.
         let mut file_urls = Vec::with_capacity(compilation.index.files.len());
         for file in &compilation.index.files {
-            let url = disk_paths
+            let url = closure
+                .disk_paths
                 .get(&file.path)
                 .and_then(|path| Url::from_file_path(path).ok())
                 .map(|url| url.to_string())
@@ -192,6 +175,85 @@ impl RexBackend {
             }),
             binding,
         )
+    }
+
+    /// The import closure of one `.ifml` document: the resolver bundle, the
+    /// imported `.mox` domain sources, every resolved disk path (identity →
+    /// path), and the URLs of all fetched imports — the transitive import
+    /// set that reverse-dependency lookups match against. Open documents
+    /// win over disk (the editor's buffer is the truth).
+    fn import_closure(&self, uri: &Url, text: &str) -> IfmlImportClosure {
+        let main_path = uri.to_string();
+        let mut closure = IfmlImportClosure::default();
+        if let Ok(path) = uri.to_file_path() {
+            closure.disk_paths.insert(main_path.clone(), path);
+        }
+        let dir_of = |path: &std::path::Path| -> std::path::PathBuf {
+            path.parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_path_buf()
+        };
+        let documents = self.documents.lock().unwrap();
+        let _walk = rex_ifml::walk_ifml_imports(&main_path, text, &mut |importer, import| {
+            let importer_disk = closure.disk_paths.get(importer)?;
+            let resolved = dir_of(importer_disk).join(import);
+            let fetched = (|| {
+                if let Ok(url) = Url::from_file_path(&resolved) {
+                    if let Some(document) = documents.get(&url) {
+                        return Some(document.text.clone());
+                    }
+                }
+                std::fs::read_to_string(&resolved).ok()
+            })()?;
+            let url = Url::from_file_path(&resolved)
+                .map(|url| url.to_string())
+                .unwrap_or_else(|_| resolved.display().to_string());
+            closure.import_urls.push(url);
+            let resolved_path = resolved.display().to_string();
+            closure.disk_paths.insert(import.to_string(), resolved);
+            if import.ends_with(".mox") {
+                if !closure
+                    .domains
+                    .iter()
+                    .any(|(existing, _)| existing == &resolved_path)
+                {
+                    closure.domains.push((resolved_path, fetched));
+                }
+                return None;
+            }
+            if import.ends_with(".ifml") {
+                closure.bundle.provide(importer, import, fetched.clone());
+                return Some(fetched);
+            }
+            None
+        });
+        closure
+    }
+
+    /// Open `.ifml` documents whose import closure contains `changed` —
+    /// the reverse-dependency set that must be re-published when `changed`
+    /// moves, or their diagnostics go stale.
+    fn dependents_of(&self, changed: &Url) -> Vec<Url> {
+        let changed_key = changed.to_string();
+        // Snapshot the open `.ifml` documents and drop the lock before
+        // walking: `import_closure` takes the same lock.
+        let candidates: Vec<(Url, String)> = {
+            let documents = self.documents.lock().unwrap();
+            documents
+                .iter()
+                .filter(|(url, document)| **url != *changed && document.surface == Surface::Ifml)
+                .map(|(url, document)| (url.clone(), document.text.clone()))
+                .collect()
+        };
+        let mut dependents = Vec::new();
+        for (url, text) in candidates {
+            let closure = self.import_closure(&url, &text);
+            if closure.import_urls.iter().any(|url| *url == changed_key) {
+                dependents.push(url);
+            }
+        }
+        dependents
     }
 
     /// Runs `f` with the compiled `.ifml` snapshot of the document — the
@@ -2444,5 +2506,55 @@ module "Pager" {
         let (_, body) = response.into_parts();
         let value = body.expect("formatting must not error");
         assert!(value.is_null(), ".mox has no LSP formatter yet: {value:?}");
+    }
+
+    #[tokio::test]
+    async fn editing_an_imported_document_republishes_its_dependents() {
+        let (mut service, mut socket) = initialized_service().await;
+        open_at(&mut service, &ifml_uri("shop.mox"), SHOP_MOX).await;
+        drain_socket(&mut socket).await;
+        open_at(&mut service, &ifml_uri("pager.ifml"), PAGER_IFML).await;
+        drain_socket(&mut socket).await;
+        // A clean consumer: `product.price` exists before the rename, so
+        // the freshness signal is unambiguous — after it, the feature is
+        // gone and the consumer must pick up the NEW diagnostic.
+        let consumer = CATALOGUE_IFML.replace("product.pric > 1", "product.price > 1");
+        open_at(&mut service, &ifml_uri("use.ifml"), &consumer).await;
+        let initial = next_publish(&mut socket, &ifml_uri("use.ifml"))
+            .await
+            .expect("initial publish for the consumer");
+        assert!(
+            initial.diagnostics.is_empty(),
+            "the consumer is clean before the rename: {initial:?}"
+        );
+
+        // Rename the feature the consumer filters on: the consumer's
+        // diagnostics must refresh WITHOUT the consumer being edited. The
+        // change produces two publishes (shop, then its dependent) into a
+        // capacity-1 socket, so the read runs concurrently with the change.
+        let renamed = SHOP_MOX.replace("int price", "int cost");
+        let use_uri = ifml_uri("use.ifml");
+        let change_params = json!({
+            "textDocument": {"uri": ifml_uri("shop.mox").as_str(), "version": 2},
+            "contentChanges": [{"text": renamed}],
+        });
+        let change = jsonrpc::Request::build("textDocument/didChange")
+            .params(change_params)
+            .finish();
+        let ((), publish) = tokio::join!(
+            async {
+                // didChange is a notification: no response body.
+                service.ready().await.unwrap().call(change).await.unwrap();
+            },
+            next_publish(&mut socket, &use_uri),
+        );
+        let publish = publish.expect("the dependent must be re-published after its import moves");
+        assert!(
+            publish
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("unknown feature 'price'")),
+            "the renamed feature must surface in the consumer: {publish:?}"
+        );
     }
 }
