@@ -69,7 +69,7 @@ impl RexBackend {
                 (
                     document.surface,
                     document.text.clone(),
-                    document.file.clone(),
+                    document.file,
                 )
             })
         };
@@ -125,9 +125,7 @@ impl RexBackend {
         };
         let documents = self.documents.lock().unwrap();
         let _walk = rex_ifml::walk_ifml_imports(&main_path, text, &mut |importer, import| {
-            let Some(importer_disk) = disk_paths.get(importer) else {
-                return None;
-            };
+            let importer_disk = disk_paths.get(importer)?;
             let resolved = dir_of(importer_disk).join(import);
             // Open documents win: the editor's buffer is the truth; disk is
             // the fallback.
