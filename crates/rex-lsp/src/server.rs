@@ -249,7 +249,7 @@ impl RexBackend {
         let mut dependents = Vec::new();
         for (url, text) in candidates {
             let closure = self.import_closure(&url, &text);
-            if closure.import_urls.iter().any(|url| *url == changed_key) {
+            if closure.import_urls.contains(&changed_key) {
                 dependents.push(url);
             }
         }
