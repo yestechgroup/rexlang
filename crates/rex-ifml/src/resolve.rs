@@ -241,16 +241,41 @@ pub fn compile_ifml_str(
     text: &str,
     imports: &IfmlImports,
 ) -> Result<IfmlCompilation, Vec<IfmlDiagnostic>> {
+    let (compilation, diagnostics) = compile_ifml_lenient(path, text, imports);
+    if diagnostics.is_empty() {
+        Ok(compilation)
+    } else {
+        Err(diagnostics)
+    }
+}
+
+/// [`compile_ifml_str`] without the all-or-nothing contract: the
+/// compilation (possibly failing validation, with its import index intact —
+/// module declarations from imported files are present even when their
+/// resolution failed) always comes back alongside its diagnostics. Hosts
+/// that degrade gracefully — the LSP navigating broken code — navigate the
+/// index even while diagnostics are live.
+pub fn compile_ifml_lenient(
+    path: &str,
+    text: &str,
+    imports: &IfmlImports,
+) -> (IfmlCompilation, Vec<IfmlDiagnostic>) {
     let mut diags = Vec::new();
     let (model, mut index) = match parse_ifml_indexed_with_path(path, text) {
         Ok(parsed) => parsed,
         Err(error) => {
-            return Err(vec![IfmlDiagnostic {
-                code: E_PARSE,
-                message: error.to_string(),
-                span: (0, 0),
-                file: path.to_string(),
-            }]);
+            return (
+                IfmlCompilation {
+                    model: IfmlModel::default(),
+                    index: IfmlIndex::single_file(path, text),
+                },
+                vec![IfmlDiagnostic {
+                    code: E_PARSE,
+                    message: error.to_string(),
+                    span: (0, 0),
+                    file: path.to_string(),
+                }],
+            );
         }
     };
 
@@ -268,11 +293,7 @@ pub fn compile_ifml_str(
 
     resolve_module_uses(&mut index, &mut diags);
 
-    if diags.is_empty() {
-        Ok(IfmlCompilation { model, index })
-    } else {
-        Err(diags)
-    }
+    (IfmlCompilation { model, index }, diags)
 }
 
 /// Depth-first, source-order import resolution: parse each `.ifml` import's

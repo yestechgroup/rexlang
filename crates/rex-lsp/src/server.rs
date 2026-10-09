@@ -56,6 +56,9 @@ struct IfmlImportClosure {
 struct IfmlSnapshot {
     compilation: rex_ifml::IfmlCompilation,
     file_urls: Vec<String>,
+    /// The union of imported `.mox` domains — feature completions resolve
+    /// against it. `None` when the flow imports no domains.
+    domains: Option<rex_ir::Model>,
 }
 
 /// One open document as the server sees it.
@@ -164,12 +167,14 @@ impl RexBackend {
     ) -> (Option<IfmlSnapshot>, Vec<rex_ifml::IfmlDiagnostic>) {
         let closure = self.import_closure(uri, text);
         let main_path = uri.to_string();
-        let compilation = match rex_ifml::compile_ifml_str(&main_path, text, &closure.bundle) {
-            Ok(compilation) => compilation,
-            Err(diagnostics) => return (None, diagnostics),
-        };
+        // Lenient: diagnostics ride along, the index stays navigable on
+        // broken code — completions and definitions must work while the
+        // user types.
+        let (compilation, mut diagnostics) =
+            rex_ifml::compile_ifml_lenient(&main_path, text, &closure.bundle);
         let domain_union = domain_union(&closure.domains);
         let binding = rex_ifml::check_ifml(&compilation, domain_union.as_ref());
+        diagnostics.extend(binding);
         // Resolved URI per indexed file (same order as `index.files`), so
         // cross-file navigation can produce `Location`s. Unresolved
         // identities fall back to their as-written path, which `Url::join`
@@ -188,8 +193,9 @@ impl RexBackend {
             Some(IfmlSnapshot {
                 compilation,
                 file_urls,
+                domains: domain_union,
             }),
-            binding,
+            diagnostics,
         )
     }
 
@@ -521,6 +527,190 @@ fn ifml_hover(snapshot: &IfmlSnapshot, position: Position) -> Option<Hover> {
     })
 }
 
+/// `.ifml` completions, by cursor context:
+///
+/// 1. inside a `use "…"` name token — the module names the compilation
+///    knows (local + imported);
+/// 2. inside a use body — the resolved module's inputs (defaults noted)
+///    and slot properties;
+/// 3. after `entity.` — the features of that entity, resolved from view
+///    params (`params { product: Product }`) or the enclosing component's
+///    `data:` declaration, against the imported domain union.
+fn ifml_completions(snapshot: &IfmlSnapshot, position: Position) -> Option<CompletionResponse> {
+    let index = &snapshot.compilation.index;
+    let text = &index.files[0].text;
+    let map = PositionMap::new(text);
+    let offset = map.offset_for(position);
+
+    // Feature access: the text before the cursor ends with `word.`.
+    let before = &text[..offset.min(text.len())];
+    if before.ends_with('.') {
+        if let Some(word) = preceding_word(&before[..before.len() - 1]) {
+            if let Some(items) = feature_completions(snapshot, word, offset) {
+                return Some(CompletionResponse::Array(items));
+            }
+        }
+        return None;
+    }
+
+    // Use-site contexts: the narrowest use whose name token or body
+    // contains the cursor.
+    let use_site = index.module_uses.iter().find(|use_site| {
+        use_site.file == 0
+            && (contains(use_site.name_span, offset) || contains(use_site.span, offset))
+    });
+    if let Some(use_site) = use_site {
+        if contains(use_site.name_span, offset) || offset <= use_site.name_span.1 {
+            let mut items: Vec<CompletionItem> = index
+                .module_decls
+                .iter()
+                .map(|decl| CompletionItem {
+                    label: decl.name.clone(),
+                    kind: Some(CompletionItemKind::MODULE),
+                    detail: Some("module".to_string()),
+                    ..CompletionItem::default()
+                })
+                .collect();
+            items.sort_by(|a, b| a.label.cmp(&b.label));
+            items.dedup_by(|a, b| a.label == b.label);
+            return Some(CompletionResponse::Array(items));
+        }
+        if let Some(resolved) = use_site
+            .resolved_module
+            .and_then(|reference| index.module_decl(reference))
+        {
+            let items = resolved
+                .input_params
+                .iter()
+                .map(|param| CompletionItem {
+                    label: param.name.clone(),
+                    kind: Some(CompletionItemKind::FIELD),
+                    detail: Some(if param.has_default {
+                        format!("input {}: {} = default", param.name, param.type_ref)
+                    } else {
+                        format!("input {}: {} (required)", param.name, param.type_ref)
+                    }),
+                    insert_text: Some(format!("{}: ", param.name)),
+                    ..CompletionItem::default()
+                })
+                .chain(resolved.properties.iter().map(|property| CompletionItem {
+                    label: property.clone(),
+                    kind: Some(CompletionItemKind::PROPERTY),
+                    detail: Some(format!("slot {property}")),
+                    ..CompletionItem::default()
+                }))
+                .collect::<Vec<_>>();
+            return Some(CompletionResponse::Array(items));
+        }
+    }
+    None
+}
+
+fn contains(span: (usize, usize), offset: usize) -> bool {
+    span.0 <= offset && offset <= span.1
+}
+
+/// The identifier immediately before the cursor, if the trailing
+/// characters form one.
+fn preceding_word(text: &str) -> Option<&str> {
+    let mut start = text.len();
+    for (index, c) in text.char_indices().rev() {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            start = index;
+        } else {
+            break;
+        }
+    }
+    if start == text.len() {
+        None
+    } else {
+        Some(&text[start..])
+    }
+}
+
+/// Feature completions for `word.`: `word` must resolve to a class-typed
+/// view parameter or the enclosing component's `data:` entity; the
+/// features come from the imported domain union.
+fn feature_completions(
+    snapshot: &IfmlSnapshot,
+    word: &str,
+    cursor: usize,
+) -> Option<Vec<CompletionItem>> {
+    let domains = snapshot.domains.as_ref()?;
+    let index = &snapshot.compilation.index;
+    let features_of = |package: &str, name: &str| -> Vec<CompletionItem> {
+        rex_expr::DomainTypes::from_model(domains)
+            .class(package, name)
+            .map(|info| {
+                info.features
+                    .iter()
+                    .map(|feature| CompletionItem {
+                        label: feature.name.clone(),
+                        kind: Some(CompletionItemKind::PROPERTY),
+                        detail: Some(format!("{} on {name}", feature_type_text(&feature.type_))),
+                        ..CompletionItem::default()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    // View parameters: `params { product: Product }`.
+    for view in &snapshot.compilation.model.views {
+        for param in &view.params {
+            if param.name == word {
+                let (package, class) = resolve_bare_class(domains, &param.type_ref)?;
+                return Some(features_of(&package, &class));
+            }
+        }
+    }
+    // The enclosing component's `data:` entity: the nearest `data:`
+    // declaration before the cursor.
+    let before = &index.files[0].text[..cursor.min(index.files[0].text.len())];
+    let data_entity = before
+        .rfind("data: ")
+        .and_then(|position| {
+            let rest = &before[position + "data: ".len()..];
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            (!name.is_empty()).then_some(name)
+        })
+        .or_else(|| {
+            // No `data:` before the cursor: a bare domain class named `word`.
+            None
+        })?;
+    let (package, class) = resolve_bare_class(domains, &data_entity)?;
+    Some(features_of(&package, &class))
+}
+
+/// Resolves a bare class name against the domain union (unique match).
+fn resolve_bare_class(model: &rex_ir::Model, name: &str) -> Option<(String, String)> {
+    let mut found: Option<(String, String)> = None;
+    for package in &model.packages {
+        for class in &package.classes {
+            if class.name == name {
+                if found.is_some() {
+                    return None; // ambiguous
+                }
+                found = Some((package.name.clone(), class.name.clone()));
+            }
+        }
+    }
+    found
+}
+
+fn feature_type_text(type_ref: &rex_ir::TypeRef) -> String {
+    match type_ref {
+        rex_ir::TypeRef::Primitive(primitive) => primitive.to_string(),
+        rex_ir::TypeRef::Class { name, .. }
+        | rex_ir::TypeRef::Enum { name, .. }
+        | rex_ir::TypeRef::Datatype { name, .. }
+        | rex_ir::TypeRef::Interface { name, .. }
+        | rex_ir::TypeRef::Vocabulary { name, .. } => name.clone(),
+    }
+}
+
 /// The module hover body: name plus the input signature (with defaults).
 fn module_markdown(site: &rex_ifml::ModuleDeclSite) -> String {
     let inputs = site
@@ -798,6 +988,11 @@ impl LanguageServer for RexBackend {
     ) -> tower_lsp::jsonrpc::Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
+        if let Some(response) =
+            self.with_ifml(&uri, |snapshot| ifml_completions(snapshot, position))
+        {
+            return Ok(Some(response));
+        }
         let items = self.with_navigation(&uri, |map, index| {
             let text = map.text();
             let offset = map.offset_for(position);
@@ -2634,5 +2829,129 @@ class Wrapper {
             "import schema resolves from disk: {publish:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn ifml_completion_inside_a_use_body_offers_module_inputs() {
+        let (mut service, mut socket) = initialized_service().await;
+        open_at(&mut service, &ifml_uri("pager.ifml"), PAGER_IFML).await;
+        drain_socket(&mut socket).await;
+        // Cursor just inside the use body, on the empty override line.
+        open_at(
+            &mut service,
+            &ifml_uri("use.ifml"),
+            r#"import "pager.ifml";
+
+view "Catalogue" {
+    use "Pager" as pager {
+    };
+}
+"#,
+        )
+        .await;
+
+        let labels = ifml_completion_labels(
+            &mut service,
+            &ifml_uri("use.ifml"),
+            3,
+            28, // inside `use "Pager" as pager { |`
+        )
+        .await;
+        assert!(
+            labels.iter().any(|label| label == "pageSize"),
+            "module inputs complete: {labels:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ifml_completion_after_use_quote_offers_module_names() {
+        let (mut service, mut socket) = initialized_service().await;
+        open_at(&mut service, &ifml_uri("pager.ifml"), PAGER_IFML).await;
+        drain_socket(&mut socket).await;
+        open_at(
+            &mut service,
+            &ifml_uri("use.ifml"),
+            r#"import "pager.ifml";
+
+view "Catalogue" {
+    use "" as pager { };
+}
+"#,
+        )
+        .await;
+
+        let labels = ifml_completion_labels(
+            &mut service,
+            &ifml_uri("use.ifml"),
+            3,
+            9, // inside the `use "|"` name token
+        )
+        .await;
+        assert!(
+            labels.iter().any(|label| label == "Pager"),
+            "module names complete: {labels:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ifml_completion_after_entity_dot_offers_features() {
+        let (mut service, mut socket) = initialized_service().await;
+        open_at(&mut service, &ifml_uri("shop.mox"), SHOP_MOX).await;
+        drain_socket(&mut socket).await;
+        open_at(
+            &mut service,
+            &ifml_uri("grid.ifml"),
+            r#"import "shop.mox";
+
+view "Catalogue" {
+    params { product: Product };
+
+    component "grid" {
+        type: list;
+        data: Product;
+        filter: product.name == "";
+    }
+}
+"#,
+        )
+        .await;
+        drain_socket(&mut socket).await;
+
+        // The caret right after `product.` (mid-expression, parses fine).
+        let labels = ifml_completion_labels(&mut service, &ifml_uri("grid.ifml"), 8, 24).await;
+        assert!(
+            labels.contains(&"name".to_string()) && labels.contains(&"price".to_string()),
+            "Product features complete: {labels:?}"
+        );
+    }
+
+    /// Runs completion and returns the item labels.
+    async fn ifml_completion_labels(
+        service: &mut LspService<RexBackend>,
+        uri: &Url,
+        line: u32,
+        character: u32,
+    ) -> Vec<String> {
+        let response = service
+            .call(
+                jsonrpc::Request::build("textDocument/completion")
+                    .params(json!({
+                        "textDocument": {"uri": uri.as_str()},
+                        "position": {"line": line, "character": character},
+                    }))
+                    .id(90)
+                    .finish(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, body) = response.into_parts();
+        let value = body.expect("completion must not error");
+        eprintln!("DBG completion raw: {value}");
+        if value.is_null() {
+            return Vec::new();
+        }
+        let items: Vec<CompletionItem> = serde_json::from_value(value).expect("completion items");
+        items.into_iter().map(|item| item.label).collect()
     }
 }
