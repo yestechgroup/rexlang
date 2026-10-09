@@ -868,3 +868,77 @@ fn type_context_alias_remains_the_checker_entry_point() {
     let parsed = parse("book.pages").ast.unwrap();
     assert_eq!(checker.type_of(&parsed).unwrap(), Ty::int());
 }
+
+#[test]
+fn l1_float_literals_default_double_and_adapt_in_both_orders() {
+    // The library model has no float features, so a probe class adds float
+    // and double attributes to exercise the float path end to end.
+    let mut probe_model = library_model();
+    let mut package = Package::new(PKG);
+    let mut class = ClassDef::new("Probe", vec![], vec![]);
+    class.features.push(Feature::new(
+        "ratio",
+        FeatureKind::Attribute,
+        TypeRef::Primitive(PrimitiveType::Float),
+        Multiplicity::REQUIRED,
+    ));
+    class.features.push(Feature::new(
+        "weight",
+        FeatureKind::Attribute,
+        TypeRef::Primitive(PrimitiveType::Double),
+        Multiplicity::REQUIRED,
+    ));
+    package.classes.push(class);
+    probe_model.packages.push(package);
+    let probe = || TypeChecker::new(DomainTypes::from_model(&probe_model)).with_self(PKG, "Probe");
+
+    // The default is double.
+    assert_ty_probe(&probe(), "1.5", Ty::double());
+    assert_ty_probe(&probe(), "-1.5", Ty::double());
+
+    // Arithmetic adapts in either operand order (the double-typed float
+    // literal demotes when it meets a float feature); relational operators
+    // are feature-first — the same order asymmetry the long rule has
+    // (`2 > longVal` is a mismatch too).
+    assert_ty_probe(&probe(), "ratio + 1.5", Ty::float());
+    assert_ty_probe(&probe(), "1.5 + ratio", Ty::float());
+    assert_ty_probe(&probe(), "ratio > 1.5", Ty::boolean());
+    assert_err_probe(&probe(), "1.5 < ratio", "L2");
+
+    // Double features meet the default head-on.
+    assert_ty_probe(&probe(), "weight + 1.5", Ty::double());
+    assert_ty_probe(&probe(), "1.5 * 2.5", Ty::double());
+
+    // Strictness is preserved: float and double features do not mix, and
+    // float never mixes with int.
+    assert_err_probe(&probe(), "ratio + weight", "L2");
+    assert_err_probe(&probe(), "ratio + 1", "L2");
+    assert_err_probe(&probe(), "weight * 2", "L2");
+
+    // No constant folding across floats: division by a constant zero is
+    // IEEE semantics, not an R4 error.
+    assert_ty_probe(&probe(), "weight / 0.0", Ty::double());
+}
+
+fn assert_ty_probe(checker: &TypeChecker, source: &str, expected: Ty) {
+    let parsed = parse(source);
+    assert!(parsed.errors.is_empty(), "{source}: {:?}", parsed.errors);
+    let ty = checker
+        .clone()
+        .type_of(parsed.ast.as_ref().unwrap())
+        .unwrap_or_else(|_| panic!("{source} must type"));
+    assert_eq!(ty, expected, "{source}");
+}
+
+fn assert_err_probe(checker: &TypeChecker, source: &str, rule: &str) {
+    let parsed = parse(source);
+    assert!(parsed.errors.is_empty(), "{source}: {:?}", parsed.errors);
+    let error = checker
+        .clone()
+        .type_of(parsed.ast.as_ref().unwrap())
+        .expect_err(source);
+    assert!(
+        error.iter().any(|e| e.message.contains(rule)),
+        "{source}: {error:?}"
+    );
+}

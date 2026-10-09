@@ -218,6 +218,7 @@ impl TypeChecker {
     ) -> Checked {
         match &expr.kind {
             ExprKind::Int(value) => self.int_literal(*value, expect, expr.span, errors),
+            ExprKind::Float(_) => self.float_literal(expect),
             ExprKind::String(_) => Ok(Ty::string()),
             ExprKind::Bool(_) => Ok(Ty::boolean()),
             ExprKind::Null => Ok(Ty::Null),
@@ -283,6 +284,19 @@ impl TypeChecker {
             return Err(());
         }
         Ok(Ty::int())
+    }
+
+    /// The float analogue of L1: a float literal is `double` by default and
+    /// adapts to `float` in a float context. Unlike integers there is no
+    /// range rule to enforce at compile time (R1 covers integer overflow;
+    /// float arithmetic follows IEEE semantics), and no constant folding —
+    /// `const_of` stays integer-only.
+    fn float_literal(&self, expect: Option<&Ty>) -> Checked {
+        if matches!(expect, Some(Ty::Primitive(PrimitiveType::Float))) {
+            Ok(Ty::float())
+        } else {
+            Ok(Ty::double())
+        }
     }
 
     /// Spec R6: the `date("…")` constructor's text must be a strict
@@ -383,8 +397,14 @@ impl TypeChecker {
         errors: &mut Vec<ExprError>,
     ) -> Checked {
         let long = Ty::long();
+        let float = Ty::float();
         match lhs_ty {
+            // L1 adaptation: an integer literal re-types to `long`, a float
+            // literal re-types to `float`, in the corresponding context —
+            // the same order asymmetry the long rule has (`2 > long` is a
+            // mismatch; the feature must come first).
             Ok(ty) if ty == &long => self.check(scope, rhs, Some(&long), errors),
+            Ok(ty) if ty == &float => self.check(scope, rhs, Some(&float), errors),
             _ => self.check(scope, rhs, None, errors),
         }
     }
@@ -495,12 +515,28 @@ impl TypeChecker {
         let lhs_ty = lhs_ty?;
         let rhs_ty = rhs_ty?;
 
+        let float = Ty::float();
+        let double = Ty::double();
         let result = if lhs_ty == Ty::long() || rhs_ty == Ty::long() {
             let int_literal_ok = |ty: &Ty, operand: &Expr| {
                 ty == &Ty::long() || (ty == &Ty::int() && is_int_literal(operand))
             };
             if int_literal_ok(&lhs_ty, lhs) && int_literal_ok(&rhs_ty, rhs) {
                 Ty::long()
+            } else {
+                errors.push(self.operand_mismatch(op, &lhs_ty, &rhs_ty, lhs.span));
+                return Err(());
+            }
+        } else if lhs_ty == float || rhs_ty == float {
+            // The float analogue of the long rule: a `double`-typed operand
+            // is acceptable only when it is a float literal (the L1 default),
+            // and the feature's `float` type wins — the literal demotes, in
+            // either operand order.
+            let float_literal_ok = |ty: &Ty, operand: &Expr| {
+                ty == &float || (ty == &double && is_float_literal(operand))
+            };
+            if float_literal_ok(&lhs_ty, lhs) && float_literal_ok(&rhs_ty, rhs) {
+                float
             } else {
                 errors.push(self.operand_mismatch(op, &lhs_ty, &rhs_ty, lhs.span));
                 return Err(());
@@ -592,11 +628,15 @@ impl TypeChecker {
         let rhs_ty = rhs_ty?;
 
         let long = Ty::long();
+        let float = Ty::float();
+        let double = Ty::double();
         let comparable = lhs_ty == Ty::Null
             || rhs_ty == Ty::Null
             || lhs_ty == rhs_ty
             || (lhs_ty == long && rhs_ty == Ty::int() && is_int_literal(lhs))
-            || (rhs_ty == long && lhs_ty == Ty::int() && is_int_literal(rhs));
+            || (rhs_ty == long && lhs_ty == Ty::int() && is_int_literal(rhs))
+            || (lhs_ty == float && rhs_ty == double && is_float_literal(rhs))
+            || (rhs_ty == float && lhs_ty == double && is_float_literal(lhs));
         if !comparable {
             errors.push(ExprError::new(
                 format!(
@@ -1156,6 +1196,20 @@ fn is_int_literal(expr: &Expr) -> bool {
             op: UnOp::Neg,
             expr: inner,
         } => matches!(inner.kind, ExprKind::Int(_)),
+        _ => false,
+    }
+}
+
+/// Whether an expression is a float literal — the one value the float
+/// analogue of L1 re-types (from its `double` default down to `float` in a
+/// float context).
+fn is_float_literal(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Float(_) => true,
+        ExprKind::Unary {
+            op: UnOp::Neg,
+            expr: inner,
+        } => matches!(inner.kind, ExprKind::Float(_)),
         _ => false,
     }
 }

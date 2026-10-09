@@ -319,6 +319,10 @@ impl Lowerer<'_, '_> {
                 Ty::Primitive(PrimitiveType::Long) => format!("{value}i64"),
                 _ => format!("{value}i32"),
             }),
+            ExprKind::Float(value) => Ok(match ty {
+                Ty::Primitive(PrimitiveType::Float) => format!("{value}f32"),
+                _ => format!("{value}f64"),
+            }),
             ExprKind::String(text) => Ok(format!("{text:?}.to_string()")),
             ExprKind::Date { text, .. } => {
                 // R6 was enforced at check time, so the parse cannot fail;

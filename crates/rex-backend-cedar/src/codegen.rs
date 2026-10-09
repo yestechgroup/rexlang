@@ -385,6 +385,10 @@ fn emit_condition(expr: &Expr, capability: &str, class: &ClassDef) -> anyhow::Re
     };
     match &expr.kind {
         ExprKind::Int(value) => Ok(value.to_string()),
+        // Float literals have no Cedar mapping: Cedar policy numbers are
+        // integers/strings, and float-typed attributes are already refused
+        // at the `Name` arm below.
+        ExprKind::Float(_) => Err(reject("a float literal")),
         ExprKind::String(text) => Ok(cedar_string_literal(text)),
         ExprKind::Bool(value) => Ok(value.to_string()),
         ExprKind::Null => Err(reject("`null`")),

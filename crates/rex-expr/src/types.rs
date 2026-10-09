@@ -67,6 +67,16 @@ impl Ty {
         Ty::Primitive(PrimitiveType::Long)
     }
 
+    /// The primitive `float` type.
+    pub fn float() -> Self {
+        Ty::Primitive(PrimitiveType::Float)
+    }
+
+    /// The primitive `double` type.
+    pub fn double() -> Self {
+        Ty::Primitive(PrimitiveType::Double)
+    }
+
     /// The primitive `boolean` type.
     pub fn boolean() -> Self {
         Ty::Primitive(PrimitiveType::Boolean)

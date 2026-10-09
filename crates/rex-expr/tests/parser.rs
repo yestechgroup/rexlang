@@ -24,6 +24,7 @@ fn plain(expr: &Expr) -> Expr {
     let zero = span;
     let kind = match &expr.kind {
         ExprKind::Int(value) => ExprKind::Int(*value),
+        ExprKind::Float(value) => ExprKind::Float(*value),
         ExprKind::String(value) => ExprKind::String(value.clone()),
         ExprKind::Bool(value) => ExprKind::Bool(*value),
         ExprKind::Null => ExprKind::Null,
@@ -769,5 +770,32 @@ fn date_stays_a_contextual_word() {
     assert!(
         matches!(&result.ast.expect("parses").kind, ExprKind::Date { .. }),
         "whitespace before the parenthesis still forms the constructor"
+    );
+}
+
+#[test]
+fn float_literals_parse_with_int_member_access_untouched() {
+    let parsed = parse("1.5");
+    assert!(parsed.errors.is_empty());
+    assert!(matches!(
+        parsed.ast.as_ref().unwrap().kind,
+        ExprKind::Float(value) if value == 1.5
+    ));
+
+    // Negation stays unary.
+    let neg = parse("-2.5");
+    assert!(neg.errors.is_empty());
+    assert!(matches!(
+        neg.ast.as_ref().unwrap().kind,
+        ExprKind::Unary { op: UnOp::Neg, .. }
+    ));
+
+    // Digits on both sides are required: member access on an integer
+    // lexes as int + dot, not a float.
+    let member = parse("1.size()");
+    assert!(
+        member.errors.is_empty(),
+        "1.size() must parse: {:?}",
+        member.errors
     );
 }
