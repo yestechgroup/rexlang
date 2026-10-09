@@ -81,7 +81,7 @@ use rex_ir::ifml::{
     UnaryOp as IfmlUnaryOp, ValueExpression,
 };
 use rex_ir::Model;
-use rex_ir::{PrimitiveType, TypeRef};
+use rex_ir::PrimitiveType;
 
 use crate::index::{IfmlIndex, LiteralKind};
 use crate::resolve::{IfmlCompilation, IfmlDiagnostic};
@@ -303,12 +303,12 @@ impl BuiltinType {
     /// Whether a literal override of this kind structurally suits an input
     /// of this builtin.
     pub(crate) fn suits(self, literal: LiteralKind) -> bool {
-        match (self, literal) {
-            (BuiltinType::Str | BuiltinType::Uuid, LiteralKind::Str) => true,
-            (BuiltinType::Int | BuiltinType::Float, LiteralKind::Num) => true,
-            (BuiltinType::Boolean, LiteralKind::Bool) => true,
-            _ => false,
-        }
+        matches!(
+            (self, literal),
+            (BuiltinType::Str | BuiltinType::Uuid, LiteralKind::Str)
+                | (BuiltinType::Int | BuiltinType::Float, LiteralKind::Num)
+                | (BuiltinType::Boolean, LiteralKind::Bool)
+        )
     }
 }
 
