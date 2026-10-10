@@ -27,6 +27,7 @@
 //! [salsa]: https://crates.io/crates/salsa
 
 mod ddd;
+pub(crate) mod deploy;
 pub mod diagnostic;
 pub(crate) mod events;
 pub(crate) mod lower;
@@ -441,13 +442,14 @@ pub struct ActorCompilation {
     pub diagnostics: Vec<(String, Diagnostic)>,
 }
 
-/// Matches an actor-file import against a provided domain file: the exact
-/// import string wins (the historical contract — [`compile_actors_str`]
+/// Matches an origin-file import against a provided file: the exact import
+/// string wins (the historical contract — [`compile_actors_str`]
 /// callers pass the paths they were given), with a lexical resolution of the
-/// import relative to the actor file's directory as the fallback (the CLI
+/// import relative to the origin file's directory as the fallback (the CLI
 /// passes resolved paths so vocabulary snapshots locate the declaring
-/// file's `vocab/` directory regardless of the process CWD).
-fn import_matches(import: &str, actor_path: &str, candidate: &str) -> bool {
+/// file's `vocab/` directory regardless of the process CWD). Shared by the
+/// actor pipeline and the `.deploy` binding resolution.
+pub(crate) fn import_matches(import: &str, origin_path: &str, candidate: &str) -> bool {
     fn normalize(path: impl AsRef<std::path::Path>) -> std::path::PathBuf {
         let mut out = std::path::PathBuf::new();
         for component in path.as_ref().components() {
@@ -464,7 +466,7 @@ fn import_matches(import: &str, actor_path: &str, candidate: &str) -> bool {
     if candidate == import {
         return true;
     }
-    let base = std::path::Path::new(actor_path)
+    let base = std::path::Path::new(origin_path)
         .parent()
         .unwrap_or_else(|| std::path::Path::new(""));
     normalize(base.join(import)) == normalize(candidate)
@@ -1329,4 +1331,187 @@ pub fn compile_evt_str(
         .map(|(path, source)| SourceFile::new(&db, path.clone(), source.clone()))
         .collect();
     compile_evt_with(&db, contract, files, imports)
+}
+
+/// The outcome of parsing a [`SourceFile`] as a `.deploy` file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeployParseOutput {
+    /// The recovered deployment file, or `None` when nothing could be
+    /// produced.
+    pub ast: Option<rex_syntax::DeployFile>,
+    /// All syntax errors, as diagnostics.
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Lexes and parses a [`SourceFile`] as a `.deploy` file (memoized by
+/// salsa).
+#[salsa::tracked]
+pub fn parse_deploy_query(db: &dyn Db, file: SourceFile) -> DeployParseOutput {
+    let source = file.text(db);
+    let parsed = rex_syntax::parse_deploy(&source);
+    DeployParseOutput {
+        ast: parsed.ast,
+        diagnostics: parsed
+            .errors
+            .into_iter()
+            .map(|error| Diagnostic::error(error.message, Some(error.span)))
+            .collect(),
+    }
+}
+
+/// The result of compiling a `.deploy` deployment file against its imported
+/// design and flow artifacts. Mirrors [`EventCompilation`] (without the
+/// domain lowering — a deployment consumes pre-compiled artifacts).
+///
+/// Diagnostics are all tagged with the deploy file's path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeployCompilation {
+    /// The deployment artifact, or `None` when any error-severity
+    /// diagnostic was produced. Warnings do not block lowering.
+    pub model: Option<rex_ir::deploy::DeployModel>,
+    /// Diagnostics from the `.deploy` file, each tagged with its path, in
+    /// compilation order.
+    pub diagnostics: Vec<(String, Diagnostic)>,
+}
+
+/// Compiles a `.deploy` deployment file in one call.
+///
+/// Each `import` in the file must resolve to a provided entry:
+/// `designs` holds the imported `.ddd` designs and `flows` the imported
+/// `.ifml` flows, each as `(path, artifact)` pairs. An import matches a
+/// provided entry by exact path or by lexical resolution relative to the
+/// deploy file's directory (the same rule
+/// [`compile_actors_str`](crate::compile_actors_str) applies) — the CLI
+/// passes resolved paths, so bindings written as `"../ddd/library.ddd"`
+/// match the file that import resolves to. Extra pairs no import names are
+/// ignored; an import no provided pair names is the error
+/// ``imported file "<path>" was not provided``.
+///
+/// ```
+/// let designs: Vec<(String, rex_ir::ddd::DddModel)> = Vec::new();
+/// let flows: Vec<(String, rex_ir::ifml::IfmlModel)> = Vec::new();
+/// let source = concat!(
+///     "application Svc {\n",
+///     "    component api: api { replicas: 2 }\n",
+///     "    component db: database { engine: sqlite }\n",
+///     "    connects api -> db\n",
+///     "}\n",
+///     "\n",
+///     "profile local {\n",
+///     "    target: standalone\n",
+///     "    require (api.replicas >= 1)\n",
+///     "}\n",
+///     "\n",
+///     "deployment dev for Svc {\n",
+///     "    use local\n",
+///     "}\n",
+/// );
+/// let compilation = rex_driver::compile_deploy_str("svc.deploy", source, &designs, &flows);
+/// assert!(compilation.diagnostics.is_empty());
+/// assert_eq!(compilation.model.unwrap().applications.len(), 1);
+/// ```
+///
+/// # Normative contract
+///
+/// ## Entry points
+///
+/// - [`compile_deploy_str`] — parse and validate in one call; there is no
+///   domain lowering to memoize, so the salsa layer is parse-only
+///   ([`parse_deploy_query`]).
+/// - [`compile_deploy_file`](crate::deploy) — the salsa-free engine the
+///   entry point calls.
+///
+/// ## Resolution semantics
+///
+/// A deployment file is **self-contained for names** (applications,
+/// profiles, components, deployments resolve within the file) and
+/// **composition-open for content**: `import "<path>.ddd"` /
+/// `import "<path>.ifml"` pull in pre-compiled design and flow artifacts
+/// the host provides, and component bindings (`design "...#Module"` /
+/// `flow "...#Module"`) reference them by the import path *as written*,
+/// split at the last `#`. Targets are never authored: a profile names one
+/// of the implementation-provided targets, whose capability, engine, and
+/// setting tables live in the driver.
+///
+/// Resolution is **validation-only**: the artifact keeps every name,
+/// setting, and policy expression exactly as authored (component baseline
+/// settings stay single-segment, unqualified). The effective settings of a
+/// deployment — component baselines ⊕ profile defaults ⊕ deployment
+/// overrides — are computed for validation and never serialized back.
+///
+/// ## Validation rules
+///
+/// Any error-severity diagnostic drops the artifact.
+///
+/// 1. **Syntax** — parse errors are reported against the `.deploy` file.
+/// 2. **Imports** — every `import "<path>"` must name a provided `.ddd`
+///    design or `.ifml` flow, else `imported file "<path>" was not
+///    provided`; other extensions are `unsupported import`.
+/// 3. **Kinds** — a component's kind must be in the closed vocabulary
+///    (`api`, `worker`, `database`, `queue`, `objectStore`, `frontend`).
+/// 4. **Capabilities** — a `requires` name must be in the closed
+///    capability vocabulary (`longRunningProcess`, `persistentFilesystem`,
+///    `sqlDatabase`, `container`, `backgroundWorker`,
+///    `horizontalScaling`, `edgeExecution`, `statefulProcess`).
+/// 5. **Settings** — component baselines are single-segment
+///    `name: value` lines from the kind's vocabulary; defaults and
+///    overrides are two-segment `component.setting: value` lines naming a
+///    component of the deployed application; word values must be in their
+///    list (`engine: sqlite|postgres|d1`, ...); integer and text settings
+///    take the matching literal kind; a path is declared once per level.
+/// 6. **Bindings** — a binding's path must match one of the file's
+///    imports, and a `#<Module>` suffix must name a module of the imported
+///    design/flow.
+/// 7. **Targets** — a profile must carry a `target:` line naming a known
+///    target (`standalone`, `dockerCompose`, `kubernetes`,
+///    `cloudflareWorkers`).
+/// 8. **Uniqueness** — application, profile, and deployment names are
+///    unique within the file; component names within their application.
+/// 9. **References** — `connects` endpoints name components of their
+///    application; `deployment ... for` names an application and `use`
+///    names a profile of this file.
+/// 10. **Effective settings** — computed per deployment as component
+///     baselines ⊕ profile defaults ⊕ overrides (later levels win), then
+///     the target rules run against them.
+/// 11. **Capabilities** — each component's intrinsic requirements (a
+///     `worker` needs `longRunningProcess`, a `database`
+///     `sqlDatabase`), conditional requirements (`engine: sqlite` adds
+///     `persistentFilesystem`; `runtime: container` adds `container`),
+///     and declared `requires` must all be provided by the target, else
+///     the error names the component and target.
+/// 12. **Engines** — a database's effective engine must be one the target
+///     hosts (standalone: `sqlite`; compose: `sqlite`, `postgres`;
+///     kubernetes: `postgres`; cloudflare-workers: `d1`) — a postgres
+///     database is never silently mapped onto D1.
+/// 13. **Policies** — every profile policy is parsed with rex-expr, typed
+///     as `boolean` against the application's components (the synthetic
+///     settings universe: one class per component holding its setting
+///     vocabulary, the application as the root), and evaluated against the
+///     deployment's effective settings with rules R1 (checked arithmetic)
+///     and R4 (no zero divisor). A `require` condition that evaluates
+///     false — including through a deployment's overrides — or a
+///     `prohibit` condition that evaluates true is an error naming the
+///     deployment and the policy.
+///
+/// Diagnostics are ordered deterministically: the file's parse diagnostics
+/// first, then its semantic diagnostics in declaration order
+/// (applications, profiles, deployments — each in source order).
+pub fn compile_deploy_str(
+    path: &str,
+    source: &str,
+    designs: &[(String, rex_ir::ddd::DddModel)],
+    flows: &[(String, rex_ir::ifml::IfmlModel)],
+) -> DeployCompilation {
+    let db = Database::new();
+    let file = SourceFile::new(&db, path.to_string(), source.to_string());
+    let parsed = parse_deploy_query(&db, file);
+    let (model, diagnostics) = deploy::compile_deploy_file(
+        path,
+        source,
+        parsed.ast.as_ref(),
+        &parsed.diagnostics,
+        designs,
+        flows,
+    );
+    DeployCompilation { model, diagnostics }
 }

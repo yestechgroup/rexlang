@@ -4,20 +4,21 @@
 //!
 //! * `rexlang check <file>...` — compile and render diagnostics; exits `1`
 //!   on errors. Accepts `.mox` models, `.actor` policy files, `.ddd`
-//!   design files, `.evt` event-contract files, and `.ifml` interaction
-//!   flows (the latter four compile against the domain models and `.ifml`
-//!   pattern libraries they import; `.ifml` expressions are also type-checked
-//!   against the imported domains). Each input is a file or a directory —
+//!   design files, `.evt` event-contract files, `.deploy` deployment
+//!   files, and `.ifml` interaction flows (the latter five compile against
+//!   the domain models, `.ddd` designs, and `.ifml` flows they import;
+//!   `.ifml` expressions are also type-checked against the imported
+//!   domains). Each input is a file or a directory —
 //!   a directory enters **batch mode**, checking every supported surface
-//!   under it independently (`.mox`, `.actor`, `.ddd`, `.evt`, `.ifml`);
-//!   several `.mox` files passed explicitly compile as one multi-package
-//!   model.
+//!   under it independently (`.mox`, `.actor`, `.ddd`, `.evt`, `.ifml`,
+//!   `.deploy`); several `.mox` files passed explicitly compile as one
+//!   multi-package model.
 //! * `rexlang ir <file>... [-o <out>]` — compile and emit the Core IR JSON
 //!   to stdout or to a file; exits `1` on errors. On `.actor` files the
 //!   standalone ActorModel artifact is emitted; on `.ddd` files the
 //!   standalone DDD design artifact; on `.evt` files the standalone
-//!   EventModel artifact; on `.ifml` files the standalone IfmlModel
-//!   artifact.
+//!   EventModel artifact; on `.deploy` files the standalone DeployModel
+//!   artifact; on `.ifml` files the standalone IfmlModel artifact.
 //! * `rexlang artifact check <artifact.json>...` — validate wire-format
 //!   artifacts (Core IR, standalone actor policy, DDD design, canonical
 //!   instance) without the originating model; exits `1` on any violation.
@@ -53,20 +54,22 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Parse, resolve, validate, and type-check `.mox`, `.actor`, `.ddd`,
-    /// `.evt`, or `.ifml` files, rendering diagnostics grouped per file.
+    /// `.evt`, `.deploy`, or `.ifml` files, rendering diagnostics grouped
+    /// per file.
     Check {
         /// Files to compile, or directories (batch mode: every supported
         /// surface under them is checked independently).
         files: Vec<PathBuf>,
     },
-    /// Compile `.mox`, `.actor`, `.ddd`, or `.evt` files and emit the
-    /// artifact as JSON (`.actor` files emit the standalone ActorModel
-    /// artifact, `.ddd` files the standalone DDD design artifact, `.evt`
-    /// files the standalone EventModel artifact; several `.mox` files emit
+    /// Compile `.mox`, `.actor`, `.ddd`, `.evt`, or `.deploy` files and
+    /// emit the artifact as JSON (`.actor` files emit the standalone
+    /// ActorModel artifact, `.ddd` files the standalone DDD design
+    /// artifact, `.evt` files the standalone EventModel artifact, `.deploy`
+    /// files the standalone DeployModel artifact; several `.mox` files emit
     /// one multi-package model).
     Ir {
-        /// Paths to compile: `.mox`/`.actor`/`.ddd`/`.evt` files, or
-        /// directories scanned recursively for `*.mox`.
+        /// Paths to compile: `.mox`/`.actor`/`.ddd`/`.evt`/`.deploy` files,
+        /// or directories scanned recursively for `*.mox`.
         files: Vec<PathBuf>,
         /// Write the JSON to this path instead of stdout.
         #[arg(short, long, value_name = "FILE")]
@@ -81,8 +84,8 @@ enum Command {
         #[command(subcommand)]
         target: GenTarget,
     },
-    /// Format `.mox`, `.actor`, `.ddd`, `.evt`, or `.ifml` files in place,
-    /// preserving comments.
+    /// Format `.mox`, `.actor`, `.ddd`, `.evt`, `.deploy`, or `.ifml`
+    /// files in place, preserving comments.
     Fmt {
         /// List files whose formatting would change instead of rewriting
         /// them; exits `1` when any file is unformatted.

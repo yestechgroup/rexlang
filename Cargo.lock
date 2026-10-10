@@ -2485,6 +2485,7 @@ dependencies = [
  "anyhow",
  "ariadne",
  "rex-expr",
+ "rex-ifml",
  "rex-ir",
  "rex-syntax",
  "rex-vocab",

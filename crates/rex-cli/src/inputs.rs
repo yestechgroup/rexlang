@@ -110,7 +110,7 @@ fn collect_with_extensions(
 
 /// Recursively collects files of every supported surface under `dir`.
 fn collect_supported_files(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
-    collect_with_extensions(dir, &["mox", "actor", "ddd", "evt", "ifml"], out)
+    collect_with_extensions(dir, &["mox", "actor", "ddd", "evt", "ifml", "deploy"], out)
 }
 
 /// Compiles in-memory sources into one model: a single source keeps the
@@ -162,6 +162,12 @@ pub(crate) fn is_actor_file(file: &Path) -> bool {
 /// against the domain models it imports.
 pub(crate) fn is_evt_file(file: &Path) -> bool {
     file.extension().and_then(|extension| extension.to_str()) == Some("evt")
+}
+
+/// `true` for `.deploy` paths: the deployment surface, compiled against the
+/// `.ddd` designs and `.ifml` flows it imports.
+pub(crate) fn is_deploy_file(file: &Path) -> bool {
+    file.extension().and_then(|extension| extension.to_str()) == Some("deploy")
 }
 
 /// `true` for `.ifml` paths: the interaction-flow surface, compiled against
@@ -613,4 +619,128 @@ pub(crate) fn read_evt_pair(file: &Path) -> anyhow::Result<EvtPair> {
         schemas,
         sigil,
     })
+}
+
+/// A `.deploy` file plus the pre-compiled design and flow artifacts its
+/// imports resolve to, ready for [`rex_driver::compile_deploy_str`].
+pub(crate) struct DeployPair {
+    /// The deployment file's path as given on the command line.
+    pub(crate) path: String,
+    /// The deployment file's source text.
+    pub(crate) source: String,
+    /// Each imported `.ddd` design, compiled, keyed by its resolved path;
+    /// the driver matches a deploy import by exact string or by lexical
+    /// resolution relative to the deploy file's directory (the `.actor`
+    /// rule), so resolved paths work wherever the process runs from.
+    pub(crate) designs: Vec<(String, rex_ir::ddd::DddModel)>,
+    /// Each imported `.ifml` flow, compiled, keyed by its resolved path.
+    pub(crate) flows: Vec<(String, rex_ir::ifml::IfmlModel)>,
+}
+
+impl DeployPair {
+    /// The source text of the file with the given driver path — the deploy
+    /// file itself (import artifacts arrive pre-compiled, so their
+    /// diagnostics were rendered when they were gathered).
+    pub(crate) fn source_of(&self, path: &str) -> Option<&str> {
+        (path == self.path).then_some(self.source.as_str())
+    }
+}
+
+/// Reads a `.deploy` file plus every `.ddd` design and `.ifml` flow it
+/// imports, each compiled to its artifact. Import paths resolve relative to
+/// the deploy file's own directory; the **resolved** path is passed to the
+/// driver. A missing or non-compiling import is a clean error. Duplicate
+/// imports are read once.
+pub(crate) fn read_deploy_pair(file: &Path) -> anyhow::Result<DeployPair> {
+    let source = std::fs::read_to_string(file)
+        .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
+    let path = file.display().to_string();
+    let mut designs: Vec<(String, rex_ir::ddd::DddModel)> = Vec::new();
+    let mut flows: Vec<(String, rex_ir::ifml::IfmlModel)> = Vec::new();
+    if let Some(ast) = &rex_syntax::parse_deploy(&source).ast {
+        let dir = file
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        for import in &ast.imports {
+            let resolved = dir.join(&import.path);
+            let resolved_path = resolved.display().to_string();
+            if import.path.ends_with(".ddd") {
+                if designs
+                    .iter()
+                    .any(|(existing, _)| *existing == resolved_path)
+                {
+                    continue;
+                }
+                let model = read_design_model(&resolved)?;
+                designs.push((resolved_path, model));
+            } else if import.path.ends_with(".ifml") {
+                if flows.iter().any(|(existing, _)| *existing == resolved_path) {
+                    continue;
+                }
+                let model = read_flow_model(&resolved)?;
+                flows.push((resolved_path, model));
+            }
+        }
+    }
+    Ok(DeployPair {
+        path,
+        source,
+        designs,
+        flows,
+    })
+}
+
+/// Reads and compiles one imported `.ddd` design (its own domain imports
+/// resolve relative to it, exactly like `rexlang check` on the design).
+fn read_design_model(file: &Path) -> anyhow::Result<rex_ir::ddd::DddModel> {
+    let design = read_ddd_design(file)?;
+    let compilation = rex_driver::compile_ddd_str(
+        &design.path,
+        &design.source,
+        &design.domains,
+        &design.imports(),
+    );
+    let Some(model) = compilation.model else {
+        let messages: Vec<String> = compilation
+            .diagnostics
+            .iter()
+            .filter(|(_, diagnostic)| diagnostic.is_error())
+            .map(|(path, diagnostic)| format!("{path}: {}", diagnostic.message))
+            .collect();
+        anyhow::bail!(
+            "imported design {} does not compile{}",
+            file.display(),
+            if messages.is_empty() {
+                String::new()
+            } else {
+                format!(":\n  {}", messages.join("\n  "))
+            }
+        );
+    };
+    Ok(model)
+}
+
+/// Reads and compiles one imported `.ifml` flow (its `.ifml` imports walk
+/// relative to it, exactly like `rexlang check` on the flow; domain typing
+/// is not needed for binding-name validation).
+fn read_flow_model(file: &Path) -> anyhow::Result<rex_ir::ifml::IfmlModel> {
+    let source = std::fs::read_to_string(file)
+        .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
+    let path = file.display().to_string();
+    let mut imports = rex_ifml::IfmlImports::default();
+    let mut sources = Vec::new();
+    let mut domains = Vec::new();
+    collect_ifml_imports(
+        &path,
+        file,
+        &source,
+        &mut imports,
+        &mut sources,
+        &mut domains,
+    )?;
+    match rex_ifml::compile_ifml_str(&path, &source, &imports) {
+        Ok(compilation) => Ok(compilation.model),
+        Err(_) => anyhow::bail!("imported flow {} does not compile", file.display()),
+    }
 }
