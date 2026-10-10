@@ -285,6 +285,66 @@
 //!   list, so a missing `]` never swallows the consumer line. A body item
 //!   that cannot start a field/entry at all fails the whole declaration
 //!   into file-level junk (the `actors_block` coarseness).
+//!
+//! ## `.deploy` deployment sources ([`parse_deploy`])
+//!
+//! ```text
+//! deploy_file       := (deploy_import | application_decl | profile_decl
+//!                      | deployment_decl)*
+//! deploy_import     := "import" string
+//! application_decl  := "application" name "{" application_item* "}"
+//! application_item  := component_decl | connects_decl
+//! component_decl    := "component" name ":" name component_body?
+//! component_body    := "{" component_member* "}"
+//! component_member  := requires_clause | design_binding | flow_binding
+//!                    | setting_line
+//! requires_clause   := "requires" name ("," name)*
+//! design_binding    := "design" string
+//! flow_binding      := "flow" string
+//! setting_line      := name ":" setting_value
+//! setting_value     := string | int | name
+//! connects_decl     := "connects" name "->" name
+//! profile_decl      := "profile" name "{" profile_member* "}"
+//! profile_member    := target_line | defaults_block | mappings_block
+//!                    | policy_decl
+//! target_line       := "target" ":" name
+//! defaults_block    := "defaults" "{" path_setting* "}"
+//! configure_block   := "configure" "{" path_setting* "}"
+//! path_setting      := qualified_name ":" setting_value
+//! mappings_block    := "mappings" "{" mapping_entry* "}"
+//! mapping_entry     := name "->" qualified_name
+//! policy_decl       := ("require" | "prohibit") raw_parens
+//! deployment_decl   := "deployment" name "for" name "{" use_line
+//!                      configure_block? "}"
+//! use_line          := "use" name
+//! ```
+//!
+//! * Every `.deploy` word above is a **contextual identifier** (the `.ddd`
+//!   discipline): special only in the grammar position noted, an ordinary
+//!   name everywhere else, escapable with `^`. The tables in
+//!   `crate::deploy` are the keyword authority shared by the parser and the
+//!   formatter. The `->` arrow is a real lexer token ([`Token::Arrow`]).
+//! * The component-kind and target *vocabularies* (`api`, `kubernetes`,
+//!   `cloudflareWorkers`, ...) are deliberately **not** syntax: both
+//!   positions are plain `name`s and the driver validates them against its
+//!   closed tables, so the word lists live in the driver, not here. Policy
+//!   expressions are [`raw_parens`] spans — the driver slices strictly
+//!   inside the parens (the `when`-condition convention) and parses, types,
+//!   and evaluates the text with rex-expr.
+//! * A binding's string is `"<path>"` or `"<path>#<Module>"`, split at its
+//!   last `#`; the path must match one of the file's imports *as written*.
+//! * Imports must precede the first declaration; a later `import` is an
+//!   error (recovered, and the misplaced import is dropped), mirroring the
+//!   `.actor`/`.evt` rule. Duplicate imports are a driver concern.
+//! * The three declaration kinds may be **interleaved** in any order; the
+//!   AST folds them into per-kind lists, and the formatter canonicalizes to
+//!   import → application → profile → deployment order.
+//! * Recovery: a component's kind or body, a `requires` clause's comma
+//!   list, a setting's `:`/value, a `connects` entry's halves, a profile's
+//!   `target` line, a policy's parens, a mapping entry, a deployment's
+//!   `for`/`use` halves, and a `configure` block are each committed once
+//!   their leading word matched — missing pieces are reported errors and
+//!   the declaration still recovers.
 
 use std::iter::once;
 use std::ops::{Range, RangeFrom};
@@ -294,6 +354,7 @@ use chumsky::prelude::*;
 
 use crate::ast::*;
 use crate::ddd;
+use crate::deploy;
 use crate::lexer::{lex, lex_with_comments, Token};
 
 /// Parser input: a token slice paired with a custom [`chumsky::Input`]
@@ -3261,6 +3322,670 @@ pub fn parse_ddd(source: &str) -> DddParseResult {
     }
 }
 
+// --- .deploy files ------------------------------------------------------------
+
+/// A contextual `.deploy` keyword: an ordinary identifier that is special
+/// only in the grammar position it is parsed here in (the `.ddd`
+/// discipline). Escaped forms (`^component`) are different token variants
+/// and never match.
+fn deploy_keyword<'src>(
+    keyword: &'static str,
+) -> impl Parser<'src, Tokens<'src>, Span, MoxExtra<'src>> + Clone {
+    select! { Token::Ident(text) = e if text == keyword => e.span() }
+}
+
+/// The `->` arrow of `connects` entries and mapping entries.
+fn deploy_arrow<'src>() -> impl Parser<'src, Tokens<'src>, Span, MoxExtra<'src>> + Clone {
+    kw(Token::Arrow)
+}
+
+/// The outcome of parsing a `.deploy` source: as much of the file as could
+/// be recovered, plus all encountered errors. Parsing never panics and
+/// always produces a result.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeployParseResult {
+    /// The recovered deployment file, or `None` if no output could be
+    /// produced at all.
+    pub ast: Option<DeployFile>,
+    /// All errors encountered during lexing and parsing.
+    pub errors: Vec<ParseError>,
+}
+
+/// Lex and parse a `.deploy` source text: `import` declarations followed by
+/// `application`, `profile`, and `deployment` declarations (which may be
+/// interleaved; imports must come first).
+///
+/// This function never panics and always recovers as much of the AST as
+/// possible; check [`DeployParseResult::errors`] for syntax problems.
+pub fn parse_deploy(source: &str) -> DeployParseResult {
+    let tokens = match lex(source) {
+        Ok(tokens) => tokens,
+        Err(error) => {
+            return DeployParseResult {
+                ast: None,
+                errors: vec![ParseError {
+                    message: error.to_string(),
+                    span: error.span,
+                }],
+            }
+        }
+    };
+    let (ast, errors) = deploy_file()
+        .parse(Tokens::new(&tokens))
+        .into_output_errors();
+    DeployParseResult {
+        ast,
+        errors: errors
+            .into_iter()
+            .map(|error| ParseError {
+                message: error.to_string(),
+                span: *error.span(),
+            })
+            .collect(),
+    }
+}
+
+/// One `path: value` setting line. `path` is the qualified name as written
+/// (a single segment inside a component body, a `component.setting` pair
+/// inside `defaults`/`configure`). Committed once the path matched: a
+/// missing `:` or value is a reported error and the line still recovers.
+/// A bare-word value may be any keyword token (`container` is a `.mox`
+/// keyword but an ordinary word in value position — the qname-segment
+/// rule: keywords are names outside statement position).
+fn deploy_setting<'src>(
+) -> impl Parser<'src, Tokens<'src>, DeploySettingDecl, MoxExtra<'src>> + Clone {
+    let word = name().or(
+        any().try_map(|token: Token<'src>, span| match token.keyword() {
+            Some(keyword) => Ok(Name {
+                text: keyword.to_string(),
+                span,
+                escaped: false,
+            }),
+            None => Err(Rich::custom(span, "expected a setting value")),
+        }),
+    );
+    let value = string_lit()
+        .map(DeploySettingValue::Str)
+        .or(int_lit().map(DeploySettingValue::Int))
+        .or(word.map(DeploySettingValue::Word));
+    qname()
+        .then(kw(Token::Other(':')).or_not())
+        .then(value.or_not())
+        .map_with(|((path, colon), value), e| (path, colon, value, e.span()))
+        .validate(|(path, colon, value, span), _e, emitter| {
+            if colon.is_none() {
+                emitter.emit(Rich::custom(
+                    path.span,
+                    "expected `:` after the setting path",
+                ));
+            }
+            if value.is_none() {
+                emitter.emit(Rich::custom(span, "expected a setting value"));
+            }
+            DeploySettingDecl {
+                path,
+                value: value.unwrap_or(DeploySettingValue::Word(Name {
+                    text: String::new(),
+                    span,
+                    escaped: false,
+                })),
+                span,
+            }
+        })
+}
+
+/// A `requires <capability> (, <capability>)*` clause of a component body.
+/// Committed once `requires` matched (the `capability`-clause precedent):
+/// a missing name list is a reported error.
+fn deploy_requires<'src>() -> impl Parser<'src, Tokens<'src>, Vec<Name>, MoxExtra<'src>> + Clone {
+    deploy_keyword(deploy::REQUIRES)
+        .ignore_then(name().or_not())
+        .then(
+            kw(Token::Comma)
+                .ignore_then(name())
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .map_with(|(first, rest), e| (first, rest, e.span()))
+        .validate(|(first, rest, span), _e, emitter| {
+            if first.is_none() {
+                emitter.emit(Rich::custom(
+                    span,
+                    "`requires` requires at least one capability name",
+                ));
+            }
+            first.into_iter().chain(rest).collect::<Vec<_>>()
+        })
+}
+
+/// A `design "<path>[#<Module>]"` or `flow "<path>[#<Module>]"` binding of
+/// a component body. The reference is kept verbatim (escapes applied);
+/// splitting at `#` is the driver's job.
+fn deploy_binding<'src>(
+    is_design: bool,
+) -> impl Parser<'src, Tokens<'src>, DeployBindingDecl, MoxExtra<'src>> + Clone {
+    let keyword = if is_design {
+        deploy_keyword(deploy::DESIGN)
+    } else {
+        deploy_keyword(deploy::FLOW)
+    };
+    keyword
+        .ignore_then(string_lit().or_not())
+        .map_with(|reference, e| (reference, e.span()))
+        .validate(move |(reference, span), _e, emitter| {
+            if reference.is_none() {
+                emitter.emit(Rich::custom(
+                    span,
+                    if is_design {
+                        "expected a design path string after `design`"
+                    } else {
+                        "expected a flow path string after `flow`"
+                    },
+                ));
+            }
+            DeployBindingDecl {
+                reference: reference.unwrap_or_default(),
+                is_design,
+                span,
+            }
+        })
+}
+
+/// One member of a component body: a `requires` clause, a design/flow
+/// binding, or a setting line. The dedicated members are tried first, so
+/// their words (`requires`, `design`, `flow`) are never mistaken for
+/// setting names — escaping (`^requires`) is the way out, like every
+/// contextual word.
+fn deploy_component_member<'src>(
+) -> impl Parser<'src, Tokens<'src>, DeployComponentMember, MoxExtra<'src>> + Clone {
+    choice((
+        deploy_requires().map(DeployComponentMember::Requires),
+        deploy_binding(true).map(DeployComponentMember::Design),
+        deploy_binding(false).map(DeployComponentMember::Flow),
+        deploy_setting().map(DeployComponentMember::Setting),
+    ))
+}
+
+/// One member of a component body (the [`deploy_component_member`]
+/// alternatives).
+#[derive(Debug, Clone)]
+enum DeployComponentMember {
+    Requires(Vec<Name>),
+    Design(DeployBindingDecl),
+    Flow(DeployBindingDecl),
+    Setting(DeploySettingDecl),
+}
+
+/// A `component <name>: <kind> { ... }` declaration. Committed once the
+/// name matched: a missing kind is a reported error; the body is optional.
+fn deploy_component_decl<'src>(
+) -> impl Parser<'src, Tokens<'src>, DeployComponentDecl, MoxExtra<'src>> + Clone {
+    deploy_keyword(deploy::COMPONENT)
+        .ignore_then(name())
+        .then(kw(Token::Other(':')).or_not())
+        .then(name().or_not())
+        .then(
+            kw(Token::LBrace)
+                .ignore_then(deploy_component_member().repeated().collect::<Vec<_>>())
+                .then_ignore(kw(Token::RBrace))
+                .map_with(|members, e| (members, e.span()))
+                .or_not(),
+        )
+        .map_with(|(((name, colon), kind), body), e| (name, colon, kind, body, e.span()))
+        .validate(|(name, colon, kind, body, span), _e, emitter| {
+            if colon.is_none() {
+                emitter.emit(Rich::custom(
+                    name.span,
+                    "expected `:` after the component name",
+                ));
+            }
+            let kind = match kind {
+                Some(kind) => kind,
+                None => {
+                    emitter.emit(Rich::custom(name.span, "expected a component kind"));
+                    Name {
+                        text: String::new(),
+                        span,
+                        escaped: false,
+                    }
+                }
+            };
+            let (members,) = match body {
+                Some((members, _body_span)) => (members,),
+                None => (Vec::new(),),
+            };
+            let mut component = DeployComponentDecl {
+                name,
+                kind,
+                requires: Vec::new(),
+                settings: Vec::new(),
+                designs: Vec::new(),
+                flows: Vec::new(),
+                span,
+            };
+            for member in members {
+                match member {
+                    DeployComponentMember::Requires(names) => component.requires.extend(names),
+                    DeployComponentMember::Design(binding) => component.designs.push(binding),
+                    DeployComponentMember::Flow(binding) => component.flows.push(binding),
+                    DeployComponentMember::Setting(setting) => component.settings.push(setting),
+                }
+            }
+            component
+        })
+}
+
+/// A `connects <from> -> <to>` entry of an application body. Committed once
+/// `connects` matched: missing halves are reported errors and the entry
+/// still recovers.
+fn deploy_connects_decl<'src>(
+) -> impl Parser<'src, Tokens<'src>, DeployConnectionDecl, MoxExtra<'src>> + Clone {
+    deploy_keyword(deploy::CONNECTS)
+        .ignore_then(name().or_not())
+        .then(deploy_arrow().or_not())
+        .then(name().or_not())
+        .map_with(|((from, arrow), to), e| (from, arrow, to, e.span()))
+        .validate(|(from, arrow, to, span), _e, emitter| {
+            let missing = |span: Span| Name {
+                text: String::new(),
+                span,
+                escaped: false,
+            };
+            let from = from.unwrap_or_else(|| missing(span));
+            if from.text.is_empty() {
+                emitter.emit(Rich::custom(
+                    span,
+                    "expected a component name after `connects`",
+                ));
+            }
+            if arrow.is_none() {
+                emitter.emit(Rich::custom(
+                    span,
+                    "expected `->` after the `connects` source",
+                ));
+            }
+            let to = to.unwrap_or_else(|| missing(span));
+            if to.text.is_empty() {
+                emitter.emit(Rich::custom(span, "expected a component name after `->`"));
+            }
+            DeployConnectionDecl { from, to, span }
+        })
+}
+
+/// One item of an application body.
+#[derive(Debug, Clone)]
+enum DeployApplicationItem {
+    Component(DeployComponentDecl),
+    Connects(DeployConnectionDecl),
+}
+
+/// An `application <name> { ... }` declaration.
+fn deploy_application_decl<'src>(
+) -> impl Parser<'src, Tokens<'src>, DeployApplicationDecl, MoxExtra<'src>> + Clone {
+    let item = choice((
+        deploy_component_decl().map(DeployApplicationItem::Component),
+        deploy_connects_decl().map(DeployApplicationItem::Connects),
+    ));
+    deploy_keyword(deploy::APPLICATION)
+        .ignore_then(name())
+        .then_ignore(kw(Token::LBrace))
+        .then(item.repeated().collect::<Vec<_>>())
+        .then_ignore(kw(Token::RBrace))
+        .map_with(|(name, items), e| {
+            let mut application = DeployApplicationDecl {
+                name,
+                components: Vec::new(),
+                connections: Vec::new(),
+                span: e.span(),
+            };
+            for item in items {
+                match item {
+                    DeployApplicationItem::Component(component) => {
+                        application.components.push(component)
+                    }
+                    DeployApplicationItem::Connects(connection) => {
+                        application.connections.push(connection)
+                    }
+                }
+            }
+            application
+        })
+}
+
+/// A `target: <name>` line of a profile body. Committed once `target`
+/// matched: a missing `:` or target name is a reported error.
+fn deploy_target_line<'src>() -> impl Parser<'src, Tokens<'src>, Name, MoxExtra<'src>> + Clone {
+    deploy_keyword(deploy::TARGET)
+        .ignore_then(kw(Token::Other(':')).or_not())
+        .then(name().or_not())
+        .map_with(|(colon, name), e| (colon, name, e.span()))
+        .validate(|(colon, name, span), _e, emitter| {
+            if colon.is_none() {
+                emitter.emit(Rich::custom(span, "expected `:` after `target`"));
+            }
+            match name {
+                Some(name) => name,
+                None => {
+                    emitter.emit(Rich::custom(span, "expected a target name after `target:`"));
+                    Name {
+                        text: String::new(),
+                        span,
+                        escaped: false,
+                    }
+                }
+            }
+        })
+}
+
+/// A `require (...)`/`prohibit (...)` policy of a profile body. Committed
+/// once the keyword matched: missing parens are a reported error. The
+/// parenthesized condition is captured raw (the `when`-condition
+/// convention); the driver slices strictly inside.
+fn deploy_policy_decl<'src>(
+) -> impl Parser<'src, Tokens<'src>, DeployPolicyDecl, MoxExtra<'src>> + Clone {
+    deploy_keyword(deploy::REQUIRE)
+        .map(|span| (false, span))
+        .or(deploy_keyword(deploy::PROHIBIT).map(|span| (true, span)))
+        .then(raw_parens().or_not())
+        .map_with(|((prohibit, keyword), expr), e| (prohibit, keyword, expr, e.span()))
+        .validate(|(prohibit, keyword, expr, span), _e, emitter| {
+            if expr.is_none() {
+                emitter.emit(Rich::custom(
+                    keyword,
+                    if prohibit {
+                        "expected a parenthesized condition after `prohibit`"
+                    } else {
+                        "expected a parenthesized condition after `require`"
+                    },
+                ));
+            }
+            DeployPolicyDecl {
+                prohibit,
+                expr: expr.unwrap_or((keyword.end..keyword.end).into()),
+                span,
+            }
+        })
+}
+
+/// Consumes a run of tokens that cannot start or continue a profile member,
+/// stopping before the body's closing `}` and before identifiers (which
+/// could begin the next member). The recovery alternative that keeps a
+/// malformed member (e.g. a policy without parens) from failing the whole
+/// profile. Always consumes at least one token.
+fn junk_deploy_profile_member<'src>() -> impl Parser<'src, Tokens<'src>, (), MoxExtra<'src>> + Clone
+{
+    let first = select! { t if !matches!(t, Token::RBrace) => () };
+    let rest = select! {
+        t if !matches!(t, Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_)) => ()
+    };
+    first
+        .ignore_then(rest.repeated().ignored())
+        .validate(|(), e, emitter| {
+            emitter.emit(Rich::custom(
+                e.span(),
+                "expected a target, defaults, mappings, or policy member",
+            ));
+        })
+}
+
+/// A `<kind> -> <platform.resource>` entry of a `mappings` block. Committed
+/// once the kind matched: a missing arrow or resource is a reported error.
+fn deploy_mapping_decl<'src>(
+) -> impl Parser<'src, Tokens<'src>, DeployMappingDecl, MoxExtra<'src>> + Clone {
+    name()
+        .then(deploy_arrow().or_not())
+        .then(qname().or_not())
+        .map_with(|((kind, arrow), resource), e| (kind, arrow, resource, e.span()))
+        .validate(|(kind, arrow, resource, span), _e, emitter| {
+            if arrow.is_none() {
+                emitter.emit(Rich::custom(
+                    kind.span,
+                    "expected `->` after the mapping kind",
+                ));
+            }
+            let resource = match resource {
+                Some(resource) => resource,
+                None => {
+                    emitter.emit(Rich::custom(span, "expected a resource after `->`"));
+                    QualifiedName {
+                        segments: Vec::new(),
+                        span: (span.end..span.end).into(),
+                    }
+                }
+            };
+            DeployMappingDecl {
+                kind,
+                resource,
+                span,
+            }
+        })
+}
+
+/// One member of a profile body.
+#[derive(Debug, Clone)]
+enum DeployProfileMember {
+    Target(Name),
+    Defaults(Vec<DeploySettingDecl>),
+    Mappings(Vec<DeployMappingDecl>),
+    Policy(DeployPolicyDecl),
+    Junk,
+}
+
+/// A `profile <name> { ... }` declaration.
+fn deploy_profile_decl<'src>(
+) -> impl Parser<'src, Tokens<'src>, DeployProfileDecl, MoxExtra<'src>> + Clone {
+    let defaults = deploy_keyword(deploy::DEFAULTS)
+        .ignore_then(
+            kw(Token::LBrace)
+                .ignore_then(deploy_setting().repeated().collect::<Vec<_>>())
+                .then_ignore(kw(Token::RBrace)),
+        )
+        .map(DeployProfileMember::Defaults);
+    let mappings = deploy_keyword(deploy::MAPPINGS)
+        .ignore_then(
+            kw(Token::LBrace)
+                .ignore_then(deploy_mapping_decl().repeated().collect::<Vec<_>>())
+                .then_ignore(kw(Token::RBrace)),
+        )
+        .map(DeployProfileMember::Mappings);
+    let member = choice((
+        deploy_target_line().map(DeployProfileMember::Target),
+        defaults,
+        mappings,
+        deploy_policy_decl().map(DeployProfileMember::Policy),
+    ))
+    .or(junk_deploy_profile_member().to(DeployProfileMember::Junk));
+    deploy_keyword(deploy::PROFILE)
+        .ignore_then(name())
+        .then_ignore(kw(Token::LBrace))
+        .then(member.repeated().collect::<Vec<_>>())
+        .then_ignore(kw(Token::RBrace))
+        .map_with(|(name, members), e| (name, members, e.span()))
+        .validate(|(name, members, span), _e, _emitter| {
+            let mut profile = DeployProfileDecl {
+                name,
+                target: None,
+                defaults: Vec::new(),
+                policies: Vec::new(),
+                mappings: Vec::new(),
+                span,
+            };
+            for member in members {
+                match member {
+                    DeployProfileMember::Target(target) => profile.target = Some(target),
+                    DeployProfileMember::Defaults(defaults) => profile.defaults = defaults,
+                    DeployProfileMember::Mappings(mappings) => profile.mappings = mappings,
+                    DeployProfileMember::Policy(policy) => profile.policies.push(policy),
+                    DeployProfileMember::Junk => {}
+                }
+            }
+            profile
+        })
+}
+
+/// A `deployment <name> for <application> { use <profile> ... }`
+/// declaration. Committed once the `for` clause matched: a missing
+/// application name is a reported error.
+fn deploy_deployment_decl<'src>(
+) -> impl Parser<'src, Tokens<'src>, DeployDeploymentDecl, MoxExtra<'src>> + Clone {
+    let use_line = deploy_keyword(deploy::USE)
+        .ignore_then(name().or_not())
+        .map_with(|name, e| (name, e.span()))
+        .validate(|(name, span), _e, emitter| match name {
+            Some(name) => Some(name),
+            None => {
+                emitter.emit(Rich::custom(span, "expected a profile name after `use`"));
+                None
+            }
+        });
+    let configure = deploy_keyword(deploy::CONFIGURE).ignore_then(
+        kw(Token::LBrace)
+            .ignore_then(deploy_setting().repeated().collect::<Vec<_>>())
+            .then_ignore(kw(Token::RBrace)),
+    );
+    deploy_keyword(deploy::DEPLOYMENT)
+        .ignore_then(name())
+        .then(deploy_keyword(deploy::FOR).or_not())
+        .then(name().or_not())
+        .then_ignore(kw(Token::LBrace))
+        .then(use_line.or_not())
+        .then(configure.or_not())
+        .then_ignore(kw(Token::RBrace))
+        .map_with(
+            |((((name, for_kw), application), use_line), configure), e| {
+                (name, for_kw, application, use_line, configure, e.span())
+            },
+        )
+        .validate(
+            |(name, for_kw, application, use_line, configure, span), _e, emitter| {
+                if for_kw.is_none() {
+                    emitter.emit(Rich::custom(
+                        name.span,
+                        "expected `for` after the deployment name",
+                    ));
+                }
+                let application = match application {
+                    Some(application) => application,
+                    None => {
+                        emitter.emit(Rich::custom(
+                            name.span,
+                            "expected an application after `for`",
+                        ));
+                        Name {
+                            text: String::new(),
+                            span,
+                            escaped: false,
+                        }
+                    }
+                };
+                if use_line.is_none() {
+                    emitter.emit(Rich::custom(span, "expected a `use <profile>` line"));
+                }
+                DeployDeploymentDecl {
+                    name,
+                    application,
+                    profile: use_line.flatten(),
+                    configure: configure.unwrap_or_default(),
+                    span,
+                }
+            },
+        )
+}
+
+/// Consumes a run of tokens up to the next `import` keyword or the
+/// contextual `application`/`profile`/`deployment` words (or end of input).
+/// Declaration-level recovery for `.deploy` files: always consumes at least
+/// one token (guaranteeing progress) and emits an error for the skipped
+/// region.
+fn junk_deploy_file<'src>() -> impl Parser<'src, Tokens<'src>, (), MoxExtra<'src>> + Clone {
+    let rest = select! {
+        t if !matches!(
+            t,
+            Token::Import
+                | Token::Ident(deploy::APPLICATION)
+                | Token::Ident(deploy::PROFILE)
+                | Token::Ident(deploy::DEPLOYMENT)
+        ) =>
+        ()
+    };
+    any()
+        .ignore_then(rest.repeated().ignored())
+        .validate(|(), e, emitter| {
+            emitter.emit(Rich::custom(
+                e.span(),
+                "expected an import, application, profile, or deployment declaration",
+            ));
+        })
+}
+
+/// One top-level item of a `.deploy` file.
+#[derive(Clone)]
+enum DeployFileItem {
+    Import(ImportDecl),
+    Application(DeployApplicationDecl),
+    Profile(DeployProfileDecl),
+    Deployment(DeployDeploymentDecl),
+    Junk,
+}
+
+fn fold_deploy_file(items: Vec<DeployFileItem>) -> (DeployFile, Option<Span>) {
+    let mut imports = Vec::new();
+    let mut applications = Vec::new();
+    let mut profiles = Vec::new();
+    let mut deployments = Vec::new();
+    // Span of the first `import` that follows a declaration (a syntax error
+    // reported by the caller's `validate`).
+    let mut late_import = None;
+    for item in items {
+        match item {
+            DeployFileItem::Import(decl) => {
+                if applications.is_empty() && profiles.is_empty() && deployments.is_empty() {
+                    imports.push(decl);
+                } else if late_import.is_none() {
+                    late_import = Some(decl.span);
+                }
+            }
+            DeployFileItem::Application(decl) => applications.push(decl),
+            DeployFileItem::Profile(decl) => profiles.push(decl),
+            DeployFileItem::Deployment(decl) => deployments.push(decl),
+            DeployFileItem::Junk => {}
+        }
+    }
+    (
+        DeployFile {
+            imports,
+            applications,
+            profiles,
+            deployments,
+        },
+        late_import,
+    )
+}
+
+fn deploy_file<'src>() -> impl Parser<'src, Tokens<'src>, DeployFile, MoxExtra<'src>> + Clone {
+    let item = choice((
+        import_decl().map(DeployFileItem::Import),
+        deploy_application_decl().map(DeployFileItem::Application),
+        deploy_profile_decl().map(DeployFileItem::Profile),
+        deploy_deployment_decl().map(DeployFileItem::Deployment),
+    ))
+    .or(junk_deploy_file().to(DeployFileItem::Junk));
+
+    item.repeated()
+        .collect::<Vec<_>>()
+        .then_ignore(end())
+        .map(fold_deploy_file)
+        .validate(|(file, late_import), _, emitter| {
+            if let Some(span) = late_import {
+                emitter.emit(Rich::custom(
+                    span,
+                    "`import` after an application, profile, or deployment declaration",
+                ));
+            }
+            file
+        })
+}
+
 /// Keeps the normative grammar in this module's docs in sync with the code.
 ///
 /// The grammar authority lives as EBNF blocks in the `//!` docs above (see
@@ -3274,6 +3999,7 @@ pub fn parse_ddd(source: &str) -> DddParseResult {
 #[cfg(test)]
 mod grammar_doc_tests {
     use crate::ddd;
+    use crate::deploy;
     use crate::lexer::lex;
 
     /// This file's source; the leading `//!` lines are the module docs that
@@ -3422,6 +4148,26 @@ mod grammar_doc_tests {
             if let Some(keyword) = keyword {
                 words.push(keyword);
             }
+        }
+        for word in [
+            deploy::APPLICATION,
+            deploy::COMPONENT,
+            deploy::CONNECTS,
+            deploy::PROFILE,
+            deploy::DEPLOYMENT,
+            deploy::TARGET,
+            deploy::DEFAULTS,
+            deploy::MAPPINGS,
+            deploy::REQUIRE,
+            deploy::PROHIBIT,
+            deploy::REQUIRES,
+            deploy::DESIGN,
+            deploy::FLOW,
+            deploy::USE,
+            deploy::CONFIGURE,
+            deploy::FOR,
+        ] {
+            words.push(word);
         }
         words
     }

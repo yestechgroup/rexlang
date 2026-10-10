@@ -24,6 +24,8 @@ consumes the IR — in or out of tree — start with
                                                     -> DddModel (.ddd.json)
                                     .evt contract file -> resolve & validate
                                                     -> EventModel (orders.evt.json)
+                                    .deploy deployment file -> resolve & validate
+                                                    -> DeployModel (svc.deploy.json)
                                     .ifml flow file   -> parse
                                                     -> IfmlModel (.ifml.json)
 ```
@@ -34,7 +36,8 @@ Front-end, Core IR, wire format, Rust backend, canonical JSON instances,
 JSON Schema (wire/api), the Tier-2 expression language, hermetic
 vocabularies, the `.actor` authorization dimension with Cedar policy
 generation, the `.ddd` Sculptor-style design layer over imported domains,
-the `.evt` event-contract surface, the `.ifml` interaction-flow surface,
+the `.evt` event-contract surface, the `.deploy` deployment-projection
+surface, the `.ifml` interaction-flow surface,
 and structural `import schema` /
 `import sigil` (Rune DSL) imports — implemented and CI-enforced. C#/Java
 backends and filter/query predicates are future work.
@@ -123,7 +126,8 @@ empty `DomainImports::default()` is the no-import compilation).
 
 Normative contracts: the language in [docs/LANGUAGE.md](docs/LANGUAGE.md),
 the design layer in [docs/DDD.md](docs/DDD.md), event contracts in
-[docs/EVENTS.md](docs/EVENTS.md), interaction flows in
+[docs/EVENTS.md](docs/EVENTS.md), deployment models in
+[docs/DEPLOY.md](docs/DEPLOY.md), interaction flows in
 [docs/IFML.md](docs/IFML.md), expression rules in
 [docs/EXPRESSIONS.md](docs/EXPRESSIONS.md), and the out-of-tree backend
 contract in [docs/BACKENDS.md](docs/BACKENDS.md).

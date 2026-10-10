@@ -1,0 +1,197 @@
+{
+  "formatVersion": 1,
+  "applications": [
+    {
+      "name": "Svc",
+      "components": [
+        {
+          "name": "api",
+          "kind": "api",
+          "settings": [
+            {
+              "path": "scaling",
+              "value": {
+                "type": "word",
+                "value": "autoscaled"
+              }
+            }
+          ]
+        },
+        {
+          "name": "lending",
+          "kind": "api",
+          "designs": [
+            {
+              "source": "../ddd/library.ddd",
+              "module": "media"
+            }
+          ]
+        },
+        {
+          "name": "web",
+          "kind": "frontend",
+          "settings": [
+            {
+              "path": "entrypoint",
+              "value": {
+                "type": "text",
+                "value": "src/web.ts"
+              }
+            }
+          ],
+          "flows": [
+            {
+              "source": "../ifml/app.ifml",
+              "module": "Pagination"
+            }
+          ]
+        },
+        {
+          "name": "search",
+          "kind": "worker",
+          "requires": [
+            "longRunningProcess"
+          ]
+        },
+        {
+          "name": "db",
+          "kind": "database",
+          "settings": [
+            {
+              "path": "engine",
+              "value": {
+                "type": "word",
+                "value": "postgres"
+              }
+            },
+            {
+              "path": "storage",
+              "value": {
+                "type": "word",
+                "value": "managed"
+              }
+            }
+          ]
+        }
+      ],
+      "connections": [
+        {
+          "from": "web",
+          "to": "api"
+        },
+        {
+          "from": "lending",
+          "to": "db"
+        }
+      ]
+    }
+  ],
+  "profiles": [
+    {
+      "name": "production_k8s",
+      "target": "kubernetes",
+      "defaults": [
+        {
+          "path": "api.runtime",
+          "value": {
+            "type": "word",
+            "value": "container"
+          }
+        },
+        {
+          "path": "api.replicas",
+          "value": {
+            "type": "int",
+            "value": 3
+          }
+        },
+        {
+          "path": "db.storage",
+          "value": {
+            "type": "word",
+            "value": "external"
+          }
+        }
+      ],
+      "policies": [
+        {
+          "prohibit": false,
+          "expression": "api.replicas >= 3"
+        },
+        {
+          "prohibit": true,
+          "expression": "db.storage == \"local\""
+        }
+      ],
+      "mappings": [
+        {
+          "kind": "api",
+          "resource": "kubernetes.deployment"
+        },
+        {
+          "kind": "api",
+          "resource": "kubernetes.service"
+        },
+        {
+          "kind": "database",
+          "resource": "external.postgres"
+        }
+      ]
+    },
+    {
+      "name": "local_standalone",
+      "target": "standalone",
+      "defaults": [
+        {
+          "path": "api.runtime",
+          "value": {
+            "type": "word",
+            "value": "embedded"
+          }
+        },
+        {
+          "path": "api.replicas",
+          "value": {
+            "type": "int",
+            "value": 1
+          }
+        },
+        {
+          "path": "db.engine",
+          "value": {
+            "type": "word",
+            "value": "sqlite"
+          }
+        },
+        {
+          "path": "db.storage",
+          "value": {
+            "type": "word",
+            "value": "local"
+          }
+        }
+      ]
+    }
+  ],
+  "deployments": [
+    {
+      "name": "production",
+      "application": "Svc",
+      "profile": "production_k8s",
+      "configure": [
+        {
+          "path": "api.replicas",
+          "value": {
+            "type": "int",
+            "value": 4
+          }
+        }
+      ]
+    },
+    {
+      "name": "local",
+      "application": "Svc",
+      "profile": "local_standalone"
+    }
+  ]
+}

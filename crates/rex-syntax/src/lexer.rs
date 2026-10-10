@@ -108,6 +108,14 @@ pub enum Token<'src> {
     #[token("import")]
     Import,
 
+    /// The `->` arrow of the `.deploy` surface (`connects a -> b`, mapping
+    /// entries). A real token (not the `Other` catch-all) so the deploy
+    /// parser can match it positionally; it never appears inside a parsed
+    /// grammar position of the other surfaces (raw bodies are span-sliced
+    /// verbatim, so `->` in Rust op bodies is unaffected).
+    #[token("->")]
+    Arrow,
+
     /// An identifier: `[A-Za-z_][A-Za-z0-9_]*`.
     #[regex("[A-Za-z_][A-Za-z0-9_]*", |lexer| lexer.slice())]
     Ident(&'src str),
@@ -251,6 +259,7 @@ impl fmt::Display for Token<'_> {
             Token::RBracket => f.write_str("`]`"),
             Token::Eq => f.write_str("`=`"),
             Token::FatArrow => f.write_str("`=>`"),
+            Token::Arrow => f.write_str("`->`"),
             Token::Star => f.write_str("`*`"),
             Token::Error => f.write_str("invalid token"),
             // Keyword variants are handled by the `keyword()` early return;

@@ -833,6 +833,11 @@ const GOLDENS: &[(&str, &str, Formatter)] = &[
         "tests/conformance/fmt/events.fmt.evt",
         rex_syntax::fmt::format_evt,
     ),
+    (
+        "tests/conformance/models/deploy.deploy",
+        "tests/conformance/fmt/deploy.fmt.deploy",
+        rex_syntax::fmt::format_deploy,
+    ),
 ];
 
 /// Workspace root (two levels above the rex-syntax crate).
