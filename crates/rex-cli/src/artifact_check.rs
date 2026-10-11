@@ -2,14 +2,15 @@
 //! test kit behind `rexlang artifact check`.
 //!
 //! Third-party backends consume [`rex_ir::Model`] / [`rex_ir::ActorModel`]
-//! / [`rex_ir::ddd::DddModel`] / [`rex_ir::events::EventModel`] (or read the
-//! serialized artifact directly) and emit canonical instance JSON. This
-//! module checks the *format* invariants of those documents without needing
-//! the originating model:
+//! / [`rex_ir::ddd::DddModel`] / [`rex_ir::events::EventModel`]
+//! / [`rex_ir::deploy::DeployModel`] (or read the serialized artifact
+//! directly) and emit canonical instance JSON. This module checks the
+//! *format* invariants of those documents without needing the originating
+//! model:
 //!
 //! * the root shape matches a known artifact kind (IR artifact, standalone
-//!   actor-policy artifact, DDD design artifact, event-contract artifact, or
-//!   canonical instance),
+//!   actor-policy artifact, DDD design artifact, event-contract artifact,
+//!   deployment artifact, or canonical instance),
 //! * `formatVersion` is present and supported — a higher version is rejected
 //!   with an error naming it, mirroring the readers' version gate
 //!   ([`rex_ir::IrError::UnsupportedFormatVersion`]),
@@ -53,6 +54,10 @@ pub enum ArtifactKind {
     /// (`rex_ir::events::EventModel`): root carries an `events`,
     /// `channels`, or `subscriptions` array (all omitted when empty).
     EventModel,
+    /// A standalone deployment artifact (`rex_ir::deploy::DeployModel`):
+    /// root carries an `applications`, `profiles`, or `deployments` array
+    /// (all omitted when empty).
+    DeployModel,
     /// A canonical instance document: root `$type` is `rex.instance`.
     Instance,
 }
@@ -92,12 +97,18 @@ pub fn check_str(path: &str, text: &str) -> Result<ArtifactKind, Vec<String>> {
 ///    runs *before* the actor fallback (the keys exist on no other
 ///    artifact), and after the DDD rule only for documentation symmetry —
 ///    the key sets are disjoint, so rules 3 and 4 can never both match.
-/// 5. **`blocks` or exactly `{"formatVersion": N}` → actor artifact.** The
+/// 5. **`applications`/`profiles`/`deployments` → deployment artifact.** A
+///    `formatVersion`-bearing root that carries any of those arrays
+///    validates as an [`ArtifactKind::DeployModel`]. The keys are disjoint
+///    from every earlier rule (`application` on a DDD design is a singular
+///    object, not these plural arrays), so the ordering is documentation
+///    symmetry again.
+/// 6. **`blocks` or exactly `{"formatVersion": N}` → actor artifact.** The
 ///    canonical block-less [`rex_ir::ActorModel`] is exactly the version
 ///    marker, and the marker alone can only be an ActorModel (a Model always
 ///    emits `packages`; a DddModel always carries the design keys), so the
 ///    minimal-empty document falls here.
-/// 6. **Anything else** is rejected as `unrecognized artifact`.
+/// 7. **Anything else** is rejected as `unrecognized artifact`.
 ///
 /// Known limitations, same root cause: the minimal-empty artifact is exactly
 /// `{"formatVersion":1}` for several kinds, and shape-sniffing cannot tell
@@ -105,9 +116,11 @@ pub fn check_str(path: &str, text: &str) -> Result<ArtifactKind, Vec<String>> {
 ///
 /// - [`rex_ir::events::EventModel`] is empty-form-collided: an empty event
 ///   artifact serializes as exactly `{"formatVersion":1}` and classifies as
-///   an ActorModel via rule 5 (only a non-empty one reaches rule 4).
+///   an ActorModel via rule 6 (only a non-empty one reaches rule 4).
+/// - [`rex_ir::deploy::DeployModel`] is empty-form-collided the same way
+///   (rule 6; only a non-empty one reaches rule 5).
 /// - [`rex_ir::ifml::IfmlModel`] is *not* a classified kind at all: an empty
-///   IFML model is the same `{"formatVersion":1}` bytes (rule 5), and a
+///   IFML model is the same `{"formatVersion":1}` bytes (rule 6), and a
 ///   module-bearing one carries `modules` (rule 3); only a view-bearing one
 ///   is unrecognized.
 ///
@@ -153,7 +166,7 @@ pub fn check(text: &str) -> Result<ArtifactKind, Vec<String>> {
     // validate as an EventModel, never as a (block-less) ActorModel. The
     // empty event artifact serializes as exactly `{"formatVersion":1}` and
     // therefore falls through to the actor fallback (the documented
-    // empty-form limitation, shared with IFML).
+    // empty-form limitation, shared with IFML and deployments).
     if root.get("formatVersion").is_some_and(Value::is_u64)
         && (root.get("events").is_some_and(Value::is_array)
             || root.get("channels").is_some_and(Value::is_array)
@@ -161,11 +174,25 @@ pub fn check(text: &str) -> Result<ArtifactKind, Vec<String>> {
     {
         return check_event_model(root);
     }
+    // A deployment artifact carries an `applications`, `profiles`, or
+    // `deployments` array — keys no other artifact has (`application` on a
+    // DDD design is a singular *object*, not these plural arrays) — so its
+    // check runs before the actor fallback. The empty deployment artifact
+    // serializes as exactly `{"formatVersion":1}` and falls through to the
+    // actor fallback like the event/IFML empty forms.
+    if root.get("formatVersion").is_some_and(Value::is_u64)
+        && (root.get("applications").is_some_and(Value::is_array)
+            || root.get("profiles").is_some_and(Value::is_array)
+            || root.get("deployments").is_some_and(Value::is_array))
+    {
+        return check_deploy_model(root);
+    }
     // No `packages`/`rexVersion`, no DDD design shape, no event-contract
-    // shape: the canonical block-less ActorModel is exactly
-    // `{"formatVersion": N}` — a Model always emits `packages`, a DddModel
-    // always carries the design keys, an EventModel always carries one of
-    // the event arrays. Anything else has no known root shape.
+    // shape, no deployment shape: the canonical block-less ActorModel is
+    // exactly `{"formatVersion": N}` — a Model always emits `packages`, a
+    // DddModel always carries the design keys, an EventModel always carries
+    // one of the event arrays, a DeployModel always carries one of the
+    // deployment arrays. Anything else has no known root shape.
     if root.contains_key("blocks") || (root.len() == 1 && root.contains_key("formatVersion")) {
         return check_actor_model(root);
     }
@@ -173,6 +200,7 @@ pub fn check(text: &str) -> Result<ArtifactKind, Vec<String>> {
         "unrecognized artifact: no known root shape (IR artifacts carry \"packages\", \
          actor artifacts \"blocks\", DDD design artifacts \"application\"/\"modules\", \
          event artifacts \"events\"/\"channels\"/\"subscriptions\", \
+         deployment artifacts \"applications\"/\"profiles\"/\"deployments\", \
          instances declare $type {:?})",
         rex_runtime::INSTANCE_TYPE
     )])
@@ -262,6 +290,29 @@ fn check_event_model(root: &serde_json::Map<String, Value>) -> Result<ArtifactKi
     }
     scan_snake_case_keys(&Value::Object(root.clone()), &mut errors);
     finish(ArtifactKind::EventModel, errors)
+}
+
+/// Validates a deployment artifact exactly like the other kinds: the
+/// version gate mirrors `rex_ir::deploy::DeployModel::from_json` (only
+/// [`rex_ir::deploy::DEPLOY_MODEL_FORMAT_VERSION`] passes), and
+/// `applications`, `profiles`, and `deployments` must be arrays of named
+/// objects.
+fn check_deploy_model(root: &serde_json::Map<String, Value>) -> Result<ArtifactKind, Vec<String>> {
+    let mut errors = Vec::new();
+    if let Some(error) = format_version_error(
+        root,
+        rex_ir::deploy::DEPLOY_MODEL_FORMAT_VERSION,
+        "deployment artifact",
+    ) {
+        errors.push(error);
+    }
+    for key in ["applications", "profiles", "deployments"] {
+        if let Some(array) = root.get(key) {
+            check_named_array(array, key, &mut errors);
+        }
+    }
+    scan_snake_case_keys(&Value::Object(root.clone()), &mut errors);
+    finish(ArtifactKind::DeployModel, errors)
 }
 
 fn check_instance(root: &serde_json::Map<String, Value>) -> Result<ArtifactKind, Vec<String>> {
@@ -692,6 +743,33 @@ mod tests {
                 .expect("serialize EventModel"),
                 expected: Ok(ArtifactKind::EventModel),
             },
+            ClassificationCase {
+                name: "deployment artifact (serialized DeployModel)",
+                json: serde_json::to_string(
+                    &rex_ir::deploy::DeployModel::new()
+                        .application(rex_ir::deploy::DeployApplication::new("Svc").component(
+                            rex_ir::deploy::DeployComponent::new(
+                                "db",
+                                rex_ir::deploy::ComponentKind::Database,
+                            ),
+                        ))
+                        .profile(rex_ir::deploy::DeployProfile::new(
+                            "edge",
+                            rex_ir::deploy::DeployTarget::CloudflareWorkers,
+                        ))
+                        .deployment(rex_ir::deploy::DeployDeployment::new("prod", "Svc", "edge")),
+                )
+                .expect("serialize DeployModel"),
+                expected: Ok(ArtifactKind::DeployModel),
+            },
+            // Misclassification guard: a malformed deployment-shaped
+            // document must be reported by the DeployModel check, never
+            // fall through to the actor fallback.
+            ClassificationCase {
+                name: "malformed deployment shape is reported as a DeployModel, not an ActorModel",
+                json: r#"{"formatVersion": 1, "applications": [{"oops": true}]}"#.to_string(),
+                expected: Err("applications[0]"),
+            },
             // Misclassification guard: a malformed event-shaped document
             // must be reported by the EventModel check, never fall through
             // to the actor fallback (whose "missing formatVersion"-style
@@ -720,6 +798,26 @@ mod tests {
                          byte-identical on the wire"
                     );
                     empty_event_json.clone()
+                },
+                expected: Ok(ArtifactKind::ActorModel),
+            },
+            // Empty-form limitation, shared with the empty EventModel and
+            // IfmlModel: an empty DeployModel serializes as exactly
+            // `{"formatVersion":1}`, so shape-sniffing classifies it as the
+            // block-less ActorModel. Pinned here so any future $type
+            // discriminator must update the four kinds consciously.
+            ClassificationCase {
+                name: "empty deployment artifact serializes as the same minimal-empty bytes",
+                json: {
+                    let empty_deploy_json =
+                        serde_json::to_string(&rex_ir::deploy::DeployModel::new())
+                            .expect("serialize DeployModel");
+                    assert_eq!(
+                        empty_deploy_json, block_less_actor_json,
+                        "an empty DeployModel and an empty ActorModel are \
+                         byte-identical on the wire"
+                    );
+                    empty_deploy_json
                 },
                 expected: Ok(ArtifactKind::ActorModel),
             },

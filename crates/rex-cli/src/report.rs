@@ -4,7 +4,7 @@
 
 use rex_driver::{render, ActorCompilation};
 
-use crate::inputs::{ActorPair, DddDesignPair, EvtPair};
+use crate::inputs::{ActorPair, DddDesignPair, DeployPair, EvtPair};
 
 /// Renders a compilation's diagnostics grouped per file: each file's
 /// diagnostics are ariadne-rendered against that file's own source, the way
@@ -107,6 +107,33 @@ pub(crate) fn report_ddd_diagnostics(
 /// diagnostics are ariadne-rendered against that file's own source, the way
 /// `check` renders single-model diagnostics.
 pub(crate) fn report_evt_diagnostics(pair: &EvtPair, compilation: &rex_driver::EventCompilation) {
+    if compilation.diagnostics.is_empty() {
+        return;
+    }
+    let mut groups: Vec<(&str, Vec<rex_driver::Diagnostic>)> = Vec::new();
+    for (path, diagnostic) in &compilation.diagnostics {
+        match groups.last_mut() {
+            Some((group_path, group)) if *group_path == path.as_str() => {
+                group.push(diagnostic.clone())
+            }
+            _ => groups.push((path.as_str(), vec![diagnostic.clone()])),
+        }
+    }
+    for (path, group) in groups {
+        let Some(source) = pair.source_of(path) else {
+            continue;
+        };
+        eprint!("{}", render(path, source, &group));
+    }
+}
+
+/// Renders a `.deploy` compilation's diagnostics (all tagged with the deploy
+/// file's path; its imports arrive pre-compiled and their diagnostics were
+/// rendered when gathered).
+pub(crate) fn report_deploy_diagnostics(
+    pair: &DeployPair,
+    compilation: &rex_driver::DeployCompilation,
+) {
     if compilation.diagnostics.is_empty() {
         return;
     }

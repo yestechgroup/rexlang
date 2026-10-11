@@ -24,3 +24,6 @@ ariadne = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+rex-ifml = { workspace = true }

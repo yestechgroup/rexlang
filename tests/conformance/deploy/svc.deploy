@@ -1,0 +1,64 @@
+// Deployment models for the sample service: one logical application,
+// composed of the imported .ddd design and .ifml flow, projected onto a
+// standalone and a Kubernetes target.
+import "../ddd/library.ddd"
+import "../ifml/app.ifml"
+
+application Svc {
+    component api: api {
+        scaling: autoscaled
+    }
+    component lending: api {
+        design "../ddd/library.ddd#media"
+    }
+    component web: frontend {
+        flow "../ifml/app.ifml#Pagination"
+        entrypoint: "src/web.ts"
+    }
+    component search: worker {
+        requires longRunningProcess
+    }
+    component db: database {
+        engine: postgres
+        storage: managed
+    }
+    connects web -> api
+    connects lending -> db
+}
+
+profile production_k8s {
+    target: kubernetes
+    defaults {
+        api.runtime: container
+        api.replicas: 3
+        db.storage: external
+    }
+    mappings {
+        api -> kubernetes.deployment
+        api -> kubernetes.service
+        database -> external.postgres
+    }
+    require (api.replicas >= 3)
+    prohibit (db.storage == "local")
+}
+
+profile local_standalone {
+    target: standalone
+    defaults {
+        api.runtime: embedded
+        api.replicas: 1
+        db.engine: sqlite
+        db.storage: local
+    }
+}
+
+deployment production for Svc {
+    use production_k8s
+    configure {
+        api.replicas: 4
+    }
+}
+
+deployment local for Svc {
+    use local_standalone
+}

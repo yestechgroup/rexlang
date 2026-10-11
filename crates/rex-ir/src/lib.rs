@@ -117,8 +117,9 @@
 //!     `"date"`) requires a reader that knows the tag. Values surface on the
 //!     wire (instance JSON) as ISO-8601 `YYYY-MM-DD` strings.
 //! 14. **Equality policy.** Every artifact root — [`Model`],
-//!     [`ActorModel`], [`ddd::DddModel`], [`events::EventModel`], and
-//!     [`ifml::IfmlModel`] — and every type nested inside them derives
+//!     [`ActorModel`], [`ddd::DddModel`], [`events::EventModel`],
+//!     [`deploy::DeployModel`], and [`ifml::IfmlModel`] — and every type
+//!     nested inside them derives
 //!     [`Eq`] (structural value equality). The artifacts' only floating-point
 //!     values are wrapped in ordered newtypes: [`ddd::Boost`] (the
 //!     search-field relevance weight) and [`ifml::Float`] (IFML layout
@@ -137,6 +138,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 pub mod ddd;
+pub mod deploy;
 pub mod events;
 pub mod ifml;
 

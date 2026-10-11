@@ -1,0 +1,23 @@
+// Deployment models for the sample service.
+// (Deliberately non-canonical source: the formatter golden compares against
+// the canonical layout; do not "fix" the spacing here. The imports are real
+// relative paths so the batch check compiles this file like any model.)
+import   "../ddd/library.ddd"
+import "../ifml/app.ifml"
+
+application  Svc {
+    component  api : api { replicas : 2 scaling: autoscaled }
+    component web : frontend {
+        flow  "../ifml/app.ifml#Pagination"
+        entrypoint : "src/web.ts"
+    }
+    component  db : database { engine : postgres storage : managed }
+    connects web->api
+    connects  api -> db
+}
+
+profile  prod { target : kubernetes defaults { api.runtime : container api.replicas : 3 }
+mappings { api -> kubernetes.deployment api -> kubernetes.service database -> external.postgres }
+require ( api.replicas>=3 ) prohibit( db.storage == "local" ) }
+
+deployment dev for  Svc { use prod configure { api.replicas : 4 } }

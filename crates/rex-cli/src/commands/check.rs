@@ -3,15 +3,16 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use rex_driver::{compile_actors_str, compile_ddd_str, compile_evt_str};
+use rex_driver::{compile_actors_str, compile_ddd_str, compile_deploy_str, compile_evt_str};
 
 use crate::inputs::{
-    compile_sources, expand_check_inputs, expand_inputs, is_actor_file, is_ddd_file, is_evt_file,
-    is_ifml_file, read_actor_pair, read_ddd_design, read_evt_pair, read_ifml_inputs, read_sources,
+    compile_sources, expand_check_inputs, expand_inputs, is_actor_file, is_ddd_file,
+    is_deploy_file, is_evt_file, is_ifml_file, read_actor_pair, read_ddd_design, read_deploy_pair,
+    read_evt_pair, read_ifml_inputs, read_sources,
 };
 use crate::report::{
-    report_actor_diagnostics, report_ddd_diagnostics, report_evt_diagnostics,
-    report_ifml_diagnostics, report_multi_diagnostics,
+    report_actor_diagnostics, report_ddd_diagnostics, report_deploy_diagnostics,
+    report_evt_diagnostics, report_ifml_diagnostics, report_multi_diagnostics,
 };
 
 pub(crate) fn run(files: Vec<PathBuf>) -> anyhow::Result<ExitCode> {
@@ -98,6 +99,16 @@ fn check_one(files: &[PathBuf]) -> anyhow::Result<ExitCode> {
         let pair = read_evt_pair(&files[0])?;
         let compilation = compile_evt_str(&pair.path, &pair.source, &pair.domains, &pair.imports());
         report_evt_diagnostics(&pair, &compilation);
+        if compilation.model.is_some() {
+            println!("OK {}", pair.path);
+            Ok(ExitCode::SUCCESS)
+        } else {
+            Ok(ExitCode::FAILURE)
+        }
+    } else if files.len() == 1 && is_deploy_file(&files[0]) {
+        let pair = read_deploy_pair(&files[0])?;
+        let compilation = compile_deploy_str(&pair.path, &pair.source, &pair.designs, &pair.flows);
+        report_deploy_diagnostics(&pair, &compilation);
         if compilation.model.is_some() {
             println!("OK {}", pair.path);
             Ok(ExitCode::SUCCESS)
