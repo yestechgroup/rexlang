@@ -1,6 +1,7 @@
 //! Turning command-line inputs into in-memory sources and driver
-//! compilations: input expansion, source reading, the `.actor`/`.ddd`/`.evt`
-//! readers, and the shared compile step over collected sources.
+//! compilations: input expansion, source reading, the
+//! `.actor`/`.ddd`/`.evt`/`.deploy`/`.uc` readers, and the shared compile
+//! step over collected sources.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -49,9 +50,10 @@ pub(crate) fn expand_inputs(files: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
 }
 
 /// Expands `rexlang check` inputs: directories scan recursively for **every
-/// supported surface** (`.mox`, `.actor`, `.ddd`, `.evt`, `.ifml`), not just
-/// `.mox`. Used by the directory batch mode, where each expanded file is
-/// checked independently; explicit file arguments pass through as-is.
+/// supported surface** (`.mox`, `.actor`, `.ddd`, `.evt`, `.uc`, `.ifml`),
+/// not just `.mox`. Used by the directory batch mode, where each expanded
+/// file is checked independently; explicit file arguments pass through
+/// as-is.
 pub(crate) fn expand_check_inputs(files: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
     let mut expanded = Vec::new();
     for entry in files {
@@ -110,7 +112,11 @@ fn collect_with_extensions(
 
 /// Recursively collects files of every supported surface under `dir`.
 fn collect_supported_files(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
-    collect_with_extensions(dir, &["mox", "actor", "ddd", "evt", "ifml", "deploy"], out)
+    collect_with_extensions(
+        dir,
+        &["mox", "actor", "ddd", "evt", "uc", "ifml", "deploy"],
+        out,
+    )
 }
 
 /// Compiles in-memory sources into one model: a single source keeps the
@@ -162,6 +168,13 @@ pub(crate) fn is_actor_file(file: &Path) -> bool {
 /// against the domain models it imports.
 pub(crate) fn is_evt_file(file: &Path) -> bool {
     file.extension().and_then(|extension| extension.to_str()) == Some("evt")
+}
+
+/// `true` for `.uc` paths: the use case surface, compiled against the
+/// domain models it imports and the pre-compiled `.ddd`/`.actor`/`.evt`
+/// artifacts its other imports resolve to.
+pub(crate) fn is_uc_file(file: &Path) -> bool {
+    file.extension().and_then(|extension| extension.to_str()) == Some("uc")
 }
 
 /// `true` for `.deploy` paths: the deployment surface, compiled against the
@@ -621,6 +634,161 @@ pub(crate) fn read_evt_pair(file: &Path) -> anyhow::Result<EvtPair> {
     })
 }
 
+/// A `.uc` file plus everything it imports, ready for
+/// [`rex_driver::compile_usecase_str`].
+pub(crate) struct UcPair {
+    /// The use case file's path as given on the command line.
+    pub(crate) path: String,
+    /// The use case file's source text.
+    pub(crate) source: String,
+    /// Each imported domain as `(resolved path, source)`; the driver
+    /// matches a `.uc` import by exact string or by lexical resolution
+    /// relative to the use case file's directory, so resolved paths keep
+    /// vocabulary snapshots anchored to the declaring file no matter where
+    /// the process runs from.
+    pub(crate) domains: Vec<(String, String)>,
+    /// Each imported `.ddd` design, compiled, keyed by its resolved path;
+    /// the driver matches a `.uc` import by exact string or by lexical
+    /// resolution relative to the use case file's directory (the `.actor`
+    /// rule), so resolved paths work wherever the process runs from.
+    pub(crate) designs: Vec<(String, rex_ir::ddd::DddModel)>,
+    /// Each imported `.actor` policy, compiled, keyed by its resolved path.
+    pub(crate) actors: Vec<(String, rex_ir::ActorModel)>,
+    /// Each imported `.evt` contract, compiled, keyed by its resolved path.
+    pub(crate) events: Vec<(String, rex_ir::events::EventModel)>,
+    /// The domains' `import schema` content, keyed by domain path.
+    schemas: SchemaImports,
+    /// The domains' `import sigil` content, plus the rosetta sources for
+    /// rendering sigil diagnostics.
+    sigil: SigilSources,
+}
+
+impl UcPair {
+    /// The import bundle the driver entry point takes.
+    pub(crate) fn imports(&self) -> DomainImports {
+        DomainImports {
+            schemas: self.schemas.clone(),
+            sigil: self.sigil.imports.clone(),
+        }
+    }
+
+    /// The source text of the file with the given driver path — the use
+    /// case file itself, an imported domain, or a rosetta source (design,
+    /// actor, and event imports arrive pre-compiled, so their diagnostics
+    /// were rendered when they were gathered).
+    pub(crate) fn source_of(&self, path: &str) -> Option<&str> {
+        if path == self.path {
+            return Some(&self.source);
+        }
+        self.domains
+            .iter()
+            .find(|(name, _)| name == path)
+            .map(|(_, source)| source.as_str())
+            .or_else(|| {
+                self.sigil
+                    .sources
+                    .iter()
+                    .find(|(name, _)| name == path)
+                    .map(|(_, source)| source.as_str())
+            })
+    }
+}
+
+/// Reads a `.uc` file plus everything it imports: `.mox` domains as raw
+/// texts, and `.ddd` designs, `.actor` policies, and `.evt` contracts each
+/// pre-compiled to their artifact (the `.deploy` gathering pattern). Import
+/// paths resolve relative to the use case file's own directory, and the
+/// **resolved** path is passed to the driver (the driver matches imports by
+/// exact string or by lexical resolution, and the domain's driver path also
+/// locates its `vocab/` directory — with raw import strings that lookup
+/// would be relative to the process CWD). A missing or non-compiling import
+/// is a clean error naming the resolved path; an import of any other
+/// extension passes through untouched so the driver reports it against its
+/// declaration. Duplicate imports are read once.
+pub(crate) fn read_uc_pair(file: &Path) -> anyhow::Result<UcPair> {
+    let source = std::fs::read_to_string(file)
+        .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
+    let path = file.display().to_string();
+    let mut domains: Vec<(String, String)> = Vec::new();
+    let mut designs: Vec<(String, rex_ir::ddd::DddModel)> = Vec::new();
+    let mut actors: Vec<(String, rex_ir::ActorModel)> = Vec::new();
+    let mut events: Vec<(String, rex_ir::events::EventModel)> = Vec::new();
+    if let Some(ast) = &rex_syntax::parse_usecases(&source).ast {
+        let dir = file
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        for import in &ast.imports {
+            let resolved = dir.join(&import.path);
+            let resolved_path = resolved.display().to_string();
+            match resolved
+                .extension()
+                .and_then(|extension| extension.to_str())
+            {
+                Some("mox") => {
+                    if domains
+                        .iter()
+                        .any(|(existing, _)| *existing == resolved_path)
+                    {
+                        continue;
+                    }
+                    let text = std::fs::read_to_string(&resolved).map_err(|error| {
+                        anyhow::anyhow!(
+                            "cannot read imported file {} (imported by {}): {error}",
+                            resolved.display(),
+                            path
+                        )
+                    })?;
+                    domains.push((resolved_path, text));
+                }
+                Some("ddd") => {
+                    if designs
+                        .iter()
+                        .any(|(existing, _)| *existing == resolved_path)
+                    {
+                        continue;
+                    }
+                    let model = read_design_model(&resolved)?;
+                    designs.push((resolved_path, model));
+                }
+                Some("actor") => {
+                    if actors
+                        .iter()
+                        .any(|(existing, _)| *existing == resolved_path)
+                    {
+                        continue;
+                    }
+                    let model = read_actor_model(&resolved)?;
+                    actors.push((resolved_path, model));
+                }
+                Some("evt") => {
+                    if events
+                        .iter()
+                        .any(|(existing, _)| *existing == resolved_path)
+                    {
+                        continue;
+                    }
+                    let model = read_event_model(&resolved)?;
+                    events.push((resolved_path, model));
+                }
+                _ => {}
+            }
+        }
+    }
+    let schemas = collect_schema_imports(&domains)?;
+    let sigil = collect_sigil_imports(&domains)?;
+    Ok(UcPair {
+        path,
+        source,
+        domains,
+        designs,
+        actors,
+        events,
+        schemas,
+        sigil,
+    })
+}
+
 /// A `.deploy` file plus the pre-compiled design and flow artifacts its
 /// imports resolve to, ready for [`rex_driver::compile_deploy_str`].
 pub(crate) struct DeployPair {
@@ -710,6 +878,66 @@ fn read_design_model(file: &Path) -> anyhow::Result<rex_ir::ddd::DddModel> {
             .collect();
         anyhow::bail!(
             "imported design {} does not compile{}",
+            file.display(),
+            if messages.is_empty() {
+                String::new()
+            } else {
+                format!(":\n  {}", messages.join("\n  "))
+            }
+        );
+    };
+    Ok(model)
+}
+
+/// Reads and compiles one imported `.actor` policy (its own domain imports
+/// resolve relative to it, exactly like `rexlang check` on the policy).
+fn read_actor_model(file: &Path) -> anyhow::Result<rex_ir::ActorModel> {
+    let actors = read_actor_pair(file)?;
+    let compilation = rex_driver::compile_actors_str(
+        &actors.path,
+        &actors.source,
+        &actors.domains,
+        &actors.imports(),
+    );
+    let Some(model) = compilation.model else {
+        let messages: Vec<String> = compilation
+            .diagnostics
+            .iter()
+            .filter(|(_, diagnostic)| diagnostic.is_error())
+            .map(|(path, diagnostic)| format!("{path}: {}", diagnostic.message))
+            .collect();
+        anyhow::bail!(
+            "imported actor model {} does not compile{}",
+            file.display(),
+            if messages.is_empty() {
+                String::new()
+            } else {
+                format!(":\n  {}", messages.join("\n  "))
+            }
+        );
+    };
+    Ok(model)
+}
+
+/// Reads and compiles one imported `.evt` contract (its own domain imports
+/// resolve relative to it, exactly like `rexlang check` on the contract).
+fn read_event_model(file: &Path) -> anyhow::Result<rex_ir::events::EventModel> {
+    let contract = read_evt_pair(file)?;
+    let compilation = rex_driver::compile_evt_str(
+        &contract.path,
+        &contract.source,
+        &contract.domains,
+        &contract.imports(),
+    );
+    let Some(model) = compilation.model else {
+        let messages: Vec<String> = compilation
+            .diagnostics
+            .iter()
+            .filter(|(_, diagnostic)| diagnostic.is_error())
+            .map(|(path, diagnostic)| format!("{path}: {}", diagnostic.message))
+            .collect();
+        anyhow::bail!(
+            "imported contract {} does not compile{}",
             file.display(),
             if messages.is_empty() {
                 String::new()

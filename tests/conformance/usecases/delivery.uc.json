@@ -1,0 +1,428 @@
+{
+  "formatVersion": 1,
+  "useCases": [
+    {
+      "name": "HandOverParcel1",
+      "description": "Iteration 1: a subject and one bare policy actor, with the objective\ndoc — nothing else.",
+      "subject": {
+        "name": "Drone",
+        "typeName": "nz.example.delivery.DeliveryDrone"
+      },
+      "actors": [
+        {
+          "name": "Courier"
+        }
+      ]
+    },
+    {
+      "name": "HandOverParcel2a",
+      "description": "Iteration 2a: named occurrences and a fully anchored message.",
+      "subject": {
+        "name": "Drone",
+        "typeName": "nz.example.delivery.DeliveryDrone",
+        "occurrences": [
+          {
+            "type": "named",
+            "value": "recipientVerified"
+          }
+        ]
+      },
+      "actors": [
+        {
+          "name": "Recipient",
+          "typeName": "nz.example.delivery.Recipient",
+          "occurrences": [
+            {
+              "type": "named",
+              "value": "promptAcknowledged"
+            }
+          ]
+        }
+      ],
+      "messages": [
+        {
+          "name": "promptHandover",
+          "payload": {
+            "type": "domain",
+            "value": {
+              "type": "class",
+              "value": {
+                "package": "nz.example.delivery",
+                "name": "HandoverPrompt"
+              }
+            }
+          },
+          "source": {
+            "participant": "Drone",
+            "anchor": {
+              "type": "occurrence",
+              "value": "recipientVerified"
+            }
+          },
+          "target": {
+            "participant": "Recipient",
+            "anchor": {
+              "type": "occurrence",
+              "value": "promptAcknowledged"
+            }
+          }
+        }
+      ],
+      "successions": [
+        {
+          "first": {
+            "type": "start"
+          },
+          "then": {
+            "type": "messageEnd",
+            "value": {
+              "message": "promptHandover",
+              "end": "source"
+            }
+          }
+        },
+        {
+          "first": {
+            "type": "messageEnd",
+            "value": {
+              "message": "promptHandover",
+              "end": "source"
+            }
+          },
+          "then": {
+            "type": "messageEnd",
+            "value": {
+              "message": "promptHandover",
+              "end": "target"
+            }
+          }
+        },
+        {
+          "first": {
+            "type": "messageEnd",
+            "value": {
+              "message": "promptHandover",
+              "end": "target"
+            }
+          },
+          "then": {
+            "type": "done"
+          }
+        }
+      ]
+    },
+    {
+      "name": "HandOverParcel2b",
+      "description": "Iteration 2b: message-owned occurrences and an end-less message.",
+      "subject": {
+        "name": "Drone",
+        "typeName": "nz.example.delivery.DeliveryDrone",
+        "occurrences": [
+          {
+            "type": "messageEnd",
+            "value": {
+              "message": "releaseParcel",
+              "end": "source"
+            }
+          },
+          {
+            "type": "messageEnd",
+            "value": {
+              "message": "releaseParcel",
+              "end": "target"
+            }
+          }
+        ]
+      },
+      "messages": [
+        {
+          "name": "releaseParcel",
+          "payload": {
+            "type": "domain",
+            "value": {
+              "type": "class",
+              "value": {
+                "package": "nz.example.delivery",
+                "name": "ReleaseRequest"
+              }
+            }
+          },
+          "source": {
+            "participant": "Drone",
+            "anchor": {
+              "type": "messageEnd",
+              "value": "source"
+            }
+          },
+          "target": {
+            "participant": "Drone",
+            "anchor": {
+              "type": "messageEnd",
+              "value": "target"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "HandOverParcel3",
+      "description": "Iteration 3: subject-performed steps anchored to operations, actor\noccurrences, an event payload, and a realized service operation.",
+      "subject": {
+        "name": "Drone",
+        "typeName": "nz.example.delivery.DeliveryDrone",
+        "steps": [
+          {
+            "name": "verify",
+            "operation": "verifyRecipient"
+          },
+          {
+            "name": "release",
+            "operation": "releaseParcel",
+            "requires": [
+              "ReleaseParcel"
+            ]
+          }
+        ]
+      },
+      "actors": [
+        {
+          "name": "Courier",
+          "occurrences": [
+            {
+              "type": "named",
+              "value": "handoverRequested"
+            },
+            {
+              "type": "named",
+              "value": "parcelReleased"
+            }
+          ]
+        },
+        {
+          "name": "RecipientAgent",
+          "occurrences": [
+            {
+              "type": "named",
+              "value": "promptAcknowledged"
+            }
+          ]
+        }
+      ],
+      "messages": [
+        {
+          "name": "requestRelease",
+          "payload": {
+            "type": "domain",
+            "value": {
+              "type": "class",
+              "value": {
+                "package": "nz.example.delivery",
+                "name": "ReleaseRequest"
+              }
+            }
+          },
+          "source": {
+            "participant": "Courier",
+            "anchor": {
+              "type": "occurrence",
+              "value": "handoverRequested"
+            }
+          },
+          "target": {
+            "participant": "Drone",
+            "anchor": {
+              "type": "step",
+              "value": "verify"
+            }
+          }
+        },
+        {
+          "name": "promptHandover",
+          "payload": {
+            "type": "event",
+            "value": "PromptIssued"
+          },
+          "source": {
+            "participant": "Drone",
+            "anchor": {
+              "type": "step",
+              "value": "verify"
+            }
+          },
+          "target": {
+            "participant": "RecipientAgent",
+            "anchor": {
+              "type": "occurrence",
+              "value": "promptAcknowledged"
+            }
+          }
+        },
+        {
+          "name": "confirmRelease",
+          "payload": {
+            "type": "domain",
+            "value": {
+              "type": "class",
+              "value": {
+                "package": "nz.example.delivery",
+                "name": "HandoverPrompt"
+              }
+            }
+          },
+          "source": {
+            "participant": "Drone",
+            "anchor": {
+              "type": "step",
+              "value": "release"
+            }
+          },
+          "target": {
+            "participant": "Courier",
+            "anchor": {
+              "type": "occurrence",
+              "value": "parcelReleased"
+            }
+          }
+        }
+      ],
+      "successions": [
+        {
+          "first": {
+            "type": "start"
+          },
+          "then": {
+            "type": "messageEnd",
+            "value": {
+              "message": "requestRelease",
+              "end": "source"
+            }
+          }
+        },
+        {
+          "first": {
+            "type": "messageEnd",
+            "value": {
+              "message": "requestRelease",
+              "end": "source"
+            }
+          },
+          "then": {
+            "type": "messageEnd",
+            "value": {
+              "message": "requestRelease",
+              "end": "target"
+            }
+          }
+        },
+        {
+          "first": {
+            "type": "messageEnd",
+            "value": {
+              "message": "requestRelease",
+              "end": "target"
+            }
+          },
+          "then": {
+            "type": "step",
+            "value": "verify"
+          }
+        },
+        {
+          "first": {
+            "type": "step",
+            "value": "verify"
+          },
+          "then": {
+            "type": "messageEnd",
+            "value": {
+              "message": "promptHandover",
+              "end": "source"
+            }
+          }
+        },
+        {
+          "first": {
+            "type": "messageEnd",
+            "value": {
+              "message": "promptHandover",
+              "end": "source"
+            }
+          },
+          "then": {
+            "type": "messageEnd",
+            "value": {
+              "message": "promptHandover",
+              "end": "target"
+            }
+          }
+        },
+        {
+          "first": {
+            "type": "messageEnd",
+            "value": {
+              "message": "promptHandover",
+              "end": "target"
+            }
+          },
+          "then": {
+            "type": "step",
+            "value": "release"
+          }
+        },
+        {
+          "first": {
+            "type": "step",
+            "value": "release"
+          },
+          "then": {
+            "type": "messageEnd",
+            "value": {
+              "message": "confirmRelease",
+              "end": "source"
+            }
+          }
+        },
+        {
+          "first": {
+            "type": "messageEnd",
+            "value": {
+              "message": "confirmRelease",
+              "end": "source"
+            }
+          },
+          "then": {
+            "type": "messageEnd",
+            "value": {
+              "message": "confirmRelease",
+              "end": "target"
+            }
+          }
+        },
+        {
+          "first": {
+            "type": "messageEnd",
+            "value": {
+              "message": "confirmRelease",
+              "end": "target"
+            }
+          },
+          "then": {
+            "type": "done"
+          }
+        }
+      ],
+      "realizes": [
+        "handover.HandoverService.releaseParcel"
+      ]
+    },
+    {
+      "name": "MonitorHandover",
+      "description": "The courier watches a handover without participating in it.",
+      "actors": [
+        {
+          "name": "Courier"
+        }
+      ]
+    }
+  ]
+}

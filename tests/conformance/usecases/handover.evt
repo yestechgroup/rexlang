@@ -1,0 +1,9 @@
+import "delivery.mox"
+
+event PromptIssued {
+    code: String;
+}
+
+channel handover {
+    publishes PromptIssued;
+}
