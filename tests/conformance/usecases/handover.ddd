@@ -1,0 +1,11 @@
+import "delivery.mox";
+
+application Handover {
+    base nz.example.delivery
+    module handover {
+        service HandoverService {
+            HandoverPrompt verifyRecipient();
+            DeliveryCode releaseParcel();
+        }
+    }
+}

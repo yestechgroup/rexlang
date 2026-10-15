@@ -1,0 +1,18 @@
+import "delivery.mox"
+
+actors Handover {
+    actor Courier
+    agent RecipientAgent extends Courier
+    capability ReleaseParcel on DeliveryDrone
+    capability VerifyIdentity on DeliveryDrone
+
+    grant Courier {
+        permit ReleaseParcel
+    }
+
+    delegation HandoverAssist {
+        from Courier
+        to RecipientAgent
+        permit ReleaseParcel
+    }
+}

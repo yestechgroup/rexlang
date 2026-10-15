@@ -118,7 +118,8 @@
 //!     wire (instance JSON) as ISO-8601 `YYYY-MM-DD` strings.
 //! 14. **Equality policy.** Every artifact root — [`Model`],
 //!     [`ActorModel`], [`ddd::DddModel`], [`events::EventModel`],
-//!     [`deploy::DeployModel`], and [`ifml::IfmlModel`] — and every type
+//!     [`deploy::DeployModel`], [`ifml::IfmlModel`], and
+//!     [`usecases::UseCaseModel`] — and every type
 //!     nested inside them derives
 //!     [`Eq`] (structural value equality). The artifacts' only floating-point
 //!     values are wrapped in ordered newtypes: [`ddd::Boost`] (the
@@ -141,6 +142,7 @@ pub mod ddd;
 pub mod deploy;
 pub mod events;
 pub mod ifml;
+pub mod usecases;
 
 /// The artifact format version this crate writes and accepts.
 ///

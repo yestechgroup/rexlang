@@ -3,14 +3,14 @@
 //!
 //! Third-party backends consume [`rex_ir::Model`] / [`rex_ir::ActorModel`]
 //! / [`rex_ir::ddd::DddModel`] / [`rex_ir::events::EventModel`]
-//! / [`rex_ir::deploy::DeployModel`] (or read the serialized artifact
-//! directly) and emit canonical instance JSON. This module checks the
-//! *format* invariants of those documents without needing the originating
-//! model:
+//! / [`rex_ir::deploy::DeployModel`] / [`rex_ir::usecases::UseCaseModel`]
+//! (or read the serialized artifact directly) and emit canonical instance
+//! JSON. This module checks the *format* invariants of those documents
+//! without needing the originating model:
 //!
 //! * the root shape matches a known artifact kind (IR artifact, standalone
 //!   actor-policy artifact, DDD design artifact, event-contract artifact,
-//!   deployment artifact, or canonical instance),
+//!   deployment artifact, use-case artifact, or canonical instance),
 //! * `formatVersion` is present and supported — a higher version is rejected
 //!   with an error naming it, mirroring the readers' version gate
 //!   ([`rex_ir::IrError::UnsupportedFormatVersion`]),
@@ -58,6 +58,10 @@ pub enum ArtifactKind {
     /// root carries an `applications`, `profiles`, or `deployments` array
     /// (all omitted when empty).
     DeployModel,
+    /// A standalone use-case artifact
+    /// (`rex_ir::usecases::UseCaseModel`): root carries a `useCases`
+    /// array (omitted when empty).
+    UseCaseModel,
     /// A canonical instance document: root `$type` is `rex.instance`.
     Instance,
 }
@@ -103,12 +107,16 @@ pub fn check_str(path: &str, text: &str) -> Result<ArtifactKind, Vec<String>> {
 ///    from every earlier rule (`application` on a DDD design is a singular
 ///    object, not these plural arrays), so the ordering is documentation
 ///    symmetry again.
-/// 6. **`blocks` or exactly `{"formatVersion": N}` → actor artifact.** The
+/// 6. **`useCases` → use-case artifact.** A `formatVersion`-bearing root
+///    that carries that array validates as an
+///    [`ArtifactKind::UseCaseModel`]. The key exists on no other artifact,
+///    so the ordering is documentation symmetry once more.
+/// 7. **`blocks` or exactly `{"formatVersion": N}` → actor artifact.** The
 ///    canonical block-less [`rex_ir::ActorModel`] is exactly the version
 ///    marker, and the marker alone can only be an ActorModel (a Model always
 ///    emits `packages`; a DddModel always carries the design keys), so the
 ///    minimal-empty document falls here.
-/// 7. **Anything else** is rejected as `unrecognized artifact`.
+/// 8. **Anything else** is rejected as `unrecognized artifact`.
 ///
 /// Known limitations, same root cause: the minimal-empty artifact is exactly
 /// `{"formatVersion":1}` for several kinds, and shape-sniffing cannot tell
@@ -116,11 +124,13 @@ pub fn check_str(path: &str, text: &str) -> Result<ArtifactKind, Vec<String>> {
 ///
 /// - [`rex_ir::events::EventModel`] is empty-form-collided: an empty event
 ///   artifact serializes as exactly `{"formatVersion":1}` and classifies as
-///   an ActorModel via rule 6 (only a non-empty one reaches rule 4).
+///   an ActorModel via rule 7 (only a non-empty one reaches rule 4).
 /// - [`rex_ir::deploy::DeployModel`] is empty-form-collided the same way
-///   (rule 6; only a non-empty one reaches rule 5).
+///   (rule 7; only a non-empty one reaches rule 5).
+/// - [`rex_ir::usecases::UseCaseModel`] is empty-form-collided the same way
+///   (rule 7; only a non-empty one reaches rule 6).
 /// - [`rex_ir::ifml::IfmlModel`] is *not* a classified kind at all: an empty
-///   IFML model is the same `{"formatVersion":1}` bytes (rule 6), and a
+///   IFML model is the same `{"formatVersion":1}` bytes (rule 7), and a
 ///   module-bearing one carries `modules` (rule 3); only a view-bearing one
 ///   is unrecognized.
 ///
@@ -187,12 +197,23 @@ pub fn check(text: &str) -> Result<ArtifactKind, Vec<String>> {
     {
         return check_deploy_model(root);
     }
+    // A use-case artifact carries a `useCases` array — a key no other
+    // artifact has — so its check runs before the actor fallback. The empty
+    // use-case artifact serializes as exactly `{"formatVersion":1}` and
+    // falls through to the actor fallback like the event/deployment/IFML
+    // empty forms.
+    if root.get("formatVersion").is_some_and(Value::is_u64)
+        && root.get("useCases").is_some_and(Value::is_array)
+    {
+        return check_usecase_model(root);
+    }
     // No `packages`/`rexVersion`, no DDD design shape, no event-contract
-    // shape, no deployment shape: the canonical block-less ActorModel is
-    // exactly `{"formatVersion": N}` — a Model always emits `packages`, a
-    // DddModel always carries the design keys, an EventModel always carries
-    // one of the event arrays, a DeployModel always carries one of the
-    // deployment arrays. Anything else has no known root shape.
+    // shape, no deployment shape, no use-case shape: the canonical
+    // block-less ActorModel is exactly `{"formatVersion": N}` — a Model
+    // always emits `packages`, a DddModel always carries the design keys,
+    // an EventModel always carries one of the event arrays, a DeployModel
+    // always carries one of the deployment arrays, a UseCaseModel always
+    // carries `useCases`. Anything else has no known root shape.
     if root.contains_key("blocks") || (root.len() == 1 && root.contains_key("formatVersion")) {
         return check_actor_model(root);
     }
@@ -201,6 +222,7 @@ pub fn check(text: &str) -> Result<ArtifactKind, Vec<String>> {
          actor artifacts \"blocks\", DDD design artifacts \"application\"/\"modules\", \
          event artifacts \"events\"/\"channels\"/\"subscriptions\", \
          deployment artifacts \"applications\"/\"profiles\"/\"deployments\", \
+         use-case artifacts \"useCases\", \
          instances declare $type {:?})",
         rex_runtime::INSTANCE_TYPE
     )])
@@ -315,6 +337,26 @@ fn check_deploy_model(root: &serde_json::Map<String, Value>) -> Result<ArtifactK
     finish(ArtifactKind::DeployModel, errors)
 }
 
+/// Validates a use-case artifact exactly like the other kinds: the version
+/// gate mirrors `rex_ir::usecases::UseCaseModel::from_json` (only
+/// [`rex_ir::usecases::USE_CASE_MODEL_FORMAT_VERSION`] passes), and
+/// `useCases` must be an array of named objects.
+fn check_usecase_model(root: &serde_json::Map<String, Value>) -> Result<ArtifactKind, Vec<String>> {
+    let mut errors = Vec::new();
+    if let Some(error) = format_version_error(
+        root,
+        rex_ir::usecases::USE_CASE_MODEL_FORMAT_VERSION,
+        "use-case artifact",
+    ) {
+        errors.push(error);
+    }
+    if let Some(use_cases) = root.get("useCases") {
+        check_named_array(use_cases, "useCases", &mut errors);
+    }
+    scan_snake_case_keys(&Value::Object(root.clone()), &mut errors);
+    finish(ArtifactKind::UseCaseModel, errors)
+}
+
 fn check_instance(root: &serde_json::Map<String, Value>) -> Result<ArtifactKind, Vec<String>> {
     let mut errors = Vec::new();
     if let Some(error) = format_version_error(root, SUPPORTED_INSTANCE_FORMAT_VERSION, "instance") {
@@ -405,10 +447,12 @@ fn check_named_array(value: &Value, key: &str, errors: &mut Vec<String>) {
 }
 
 /// Every structural (non model-defined) key of the IR, actor, DDD design,
-/// and event wire formats, from the `rex-ir` serde shapes — the camelCase
-/// spellings a snake_case key is compared against. Sorted for binary search.
+/// event, deployment, and use-case wire formats, from the `rex-ir` serde
+/// shapes — the camelCase spellings a snake_case key is compared against.
+/// Sorted for binary search.
 const STRUCTURAL_KEYS: &[&str] = &[
     "actors",
+    "anchor",
     "annotations",
     "application",
     "base",
@@ -434,6 +478,7 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "designs",
     "details",
     "effect",
+    "end",
     "entries",
     "enums",
     "events",
@@ -441,6 +486,7 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "facets",
     "features",
     "finite",
+    "first",
     "flags",
     "format",
     "formatVersion",
@@ -458,6 +504,8 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "lower",
     "maxLength",
     "maximum",
+    "message",
+    "messages",
     "minLength",
     "minimum",
     "modules",
@@ -467,30 +515,41 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "nonPersistent",
     "objects",
     "obligations",
+    "occurrences",
     "operation",
     "operations",
     "opposite",
     "optimisticLocking",
     "packages",
     "params",
+    "participant",
     "pattern",
+    "payload",
     "platform",
     "publishes",
     "purposes",
+    "realizes",
     "repository",
+    "requires",
     "returnMultiplicity",
     "returnType",
     "rexVersion",
     "services",
     "source",
+    "steps",
     "stereotype",
+    "subject",
     "subscriptions",
+    "successions",
     "target",
     "targetBindings",
+    "then",
     "to",
     "type",
+    "typeName",
     "unique",
     "upper",
+    "useCases",
     "value",
     "version",
     "vocabularies",
@@ -501,9 +560,9 @@ const STRUCTURAL_KEYS: &[&str] = &[
 /// is a known structural key — the readers ignore unknown fields (forward
 /// compatibility), so such artifacts load but silently drop the value.
 ///
-/// Runs on IR, actor, DDD design, and event artifacts only: their keys are
-/// entirely structural. Instance objects' feature keys are model-defined
-/// names, so instance documents are exempt.
+/// Runs on IR, actor, DDD design, event, deployment, and use-case artifacts
+/// only: their keys are entirely structural. Instance objects' feature keys
+/// are model-defined names, so instance documents are exempt.
 fn scan_snake_case_keys(value: &Value, errors: &mut Vec<String>) {
     match value {
         Value::Object(map) => {
@@ -698,6 +757,9 @@ mod tests {
         let empty_ifml_json = serde_json::to_string(&empty_ifml).expect("serialize IfmlModel");
         let empty_event = rex_ir::events::EventModel::new();
         let empty_event_json = serde_json::to_string(&empty_event).expect("serialize EventModel");
+        let empty_usecase = rex_ir::usecases::UseCaseModel::new();
+        let empty_usecase_json =
+            serde_json::to_string(&empty_usecase).expect("serialize UseCaseModel");
 
         let cases = vec![
             ClassificationCase {
@@ -762,6 +824,37 @@ mod tests {
                 .expect("serialize DeployModel"),
                 expected: Ok(ArtifactKind::DeployModel),
             },
+            ClassificationCase {
+                name: "use-case artifact (serialized UseCaseModel)",
+                json: serde_json::to_string(&{
+                    let mut model = rex_ir::usecases::UseCaseModel::new();
+                    model.use_cases.push(rex_ir::usecases::UseCaseDef {
+                        name: "HandOver".to_string(),
+                        description: None,
+                        subject: None,
+                        actors: vec![rex_ir::usecases::Participant {
+                            name: "Courier".to_string(),
+                            type_name: None,
+                            occurrences: Vec::new(),
+                            steps: Vec::new(),
+                        }],
+                        messages: Vec::new(),
+                        successions: Vec::new(),
+                        realizes: Vec::new(),
+                    });
+                    model
+                })
+                .expect("serialize UseCaseModel"),
+                expected: Ok(ArtifactKind::UseCaseModel),
+            },
+            // Misclassification guard: a malformed use-case-shaped document
+            // must be reported by the UseCaseModel check, never fall through
+            // to the actor fallback.
+            ClassificationCase {
+                name: "malformed use-case shape is reported as a UseCaseModel, not an ActorModel",
+                json: r#"{"formatVersion": 1, "useCases": [{"oops": true}]}"#.to_string(),
+                expected: Err("useCases[0]"),
+            },
             // Misclassification guard: a malformed deployment-shaped
             // document must be reported by the DeployModel check, never
             // fall through to the actor fallback.
@@ -818,6 +911,23 @@ mod tests {
                          byte-identical on the wire"
                     );
                     empty_deploy_json
+                },
+                expected: Ok(ArtifactKind::ActorModel),
+            },
+            // Empty-form limitation, shared with the empty EventModel,
+            // DeployModel, and IfmlModel: an empty UseCaseModel serializes
+            // as exactly `{"formatVersion":1}`, so shape-sniffing classifies
+            // it as the block-less ActorModel. Pinned here so any future
+            // $type discriminator must update the five kinds consciously.
+            ClassificationCase {
+                name: "empty use-case artifact serializes as the same minimal-empty bytes",
+                json: {
+                    assert_eq!(
+                        empty_usecase_json, block_less_actor_json,
+                        "an empty UseCaseModel and an empty ActorModel are \
+                         byte-identical on the wire"
+                    );
+                    empty_usecase_json
                 },
                 expected: Ok(ArtifactKind::ActorModel),
             },
@@ -1144,5 +1254,57 @@ mod tests {
             errors[0].contains("unrecognized artifact"),
             "errors: {errors:?}"
         );
+    }
+
+    #[test]
+    fn a_usecase_artifact_does_not_fall_through_to_the_actor_fallback() {
+        // Regression for the fallback order: before the UseCaseModel check
+        // existed, the actor fallback claimed any versioned document
+        // without `packages`/`application`/`modules`/`events`/`blocks`.
+        assert_eq!(
+            check(r#"{"formatVersion": 1, "useCases": [{"name": "HandOver"}]}"#),
+            Ok(ArtifactKind::UseCaseModel)
+        );
+    }
+
+    #[test]
+    fn usecase_format_version_gate_names_both_versions() {
+        let errors = check(r#"{"formatVersion": 2, "useCases": []}"#).unwrap_err();
+        assert!(
+            errors[0].contains("formatVersion 2") && errors[0].contains("formatVersion 1"),
+            "errors: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn usecase_arrays_must_be_arrays_of_named_objects() {
+        let errors = check(r#"{"formatVersion": 1, "useCases": [42]}"#).unwrap_err();
+        assert!(
+            errors.iter().any(|error| error.contains("useCases[0]")),
+            "errors: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn snake_case_usecase_keys_are_reported_with_the_camel_case_spelling() {
+        let errors = check(
+            r#"{"formatVersion": 1, "useCases": [{"name": "HandOver", "type_name": "demo.Drone"}]}"#,
+        )
+        .unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("type_name") && error.contains("typeName")),
+            "errors: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn the_usecase_golden_artifact_classifies_as_usecase_model() {
+        // The real emitter output (`rexlang ir` on the canonical fixture):
+        // it carries no `packages`/`blocks`/`$type`, so only the UseCaseModel
+        // check may claim it.
+        let golden = include_str!("../../../tests/conformance/usecases/delivery.uc.json");
+        assert_eq!(check(golden), Ok(ArtifactKind::UseCaseModel));
     }
 }

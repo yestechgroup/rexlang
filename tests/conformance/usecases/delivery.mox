@@ -1,0 +1,20 @@
+package nz.example.delivery
+
+class DeliveryDrone {
+    op HandoverPrompt verifyRecipient()
+    op DeliveryCode releaseParcel()
+}
+
+class Recipient {}
+
+class DeliveryCode {
+    String code
+}
+
+class HandoverPrompt {
+    String text
+}
+
+class ReleaseRequest {
+    String parcelId
+}

@@ -804,7 +804,8 @@ fn stable_on_constraint_blocks() {
 
 /// The formatter a golden entry uses: `.mox` sources go through `format`,
 /// `.actor` sources through `format_actors`, `.evt` sources through
-/// `format_evt`.
+/// `format_evt`, `.deploy` sources through `format_deploy`, `.uc` sources
+/// through `format_usecases`.
 type Formatter = fn(&str) -> Result<String, FormatError>;
 
 const GOLDENS: &[(&str, &str, Formatter)] = &[
@@ -837,6 +838,11 @@ const GOLDENS: &[(&str, &str, Formatter)] = &[
         "tests/conformance/models/deploy.deploy",
         "tests/conformance/fmt/deploy.fmt.deploy",
         rex_syntax::fmt::format_deploy,
+    ),
+    (
+        "tests/conformance/models/usecases.uc",
+        "tests/conformance/fmt/usecases.fmt.uc",
+        rex_syntax::fmt::format_usecases,
     ),
 ];
 
