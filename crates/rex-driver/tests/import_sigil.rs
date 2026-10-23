@@ -1659,3 +1659,48 @@ fn an_output_less_function_is_skipped_with_a_warning() {
         warning.1.message
     );
 }
+
+/// A function's parameter/return references count for builtin emission: a
+/// func typed by an opaque builtin (`dateTime`) must pull the
+/// `com.rosetta.model` package into the artifact, even when no class
+/// references anything from it.
+#[test]
+fn a_function_reference_triggers_builtin_emission() {
+    let rosetta = concat!(
+        "namespace oracle.when\n\n",
+        "func Mature:\n",
+        "    inputs:\n",
+        "        d dateTime (1..1)\n",
+        "    output:\n",
+        "        ok boolean (1..1)\n"
+    );
+    let compilation = compile_with_sigil(
+        &[(
+            MOX.to_string(),
+            "package demo\n\nimport sigil \"w.rosetta\"\n\nclass C { String x }\n".to_string(),
+        )],
+        &rex_driver::SigilImports::new().provide(MOX, "w.rosetta", rosetta),
+    );
+    let model = compile_clean(&compilation);
+    assert!(
+        model
+            .packages
+            .iter()
+            .any(|package| package.name == "com.rosetta.model"),
+        "the referenced builtin package must be emitted: {:?}",
+        model.packages.iter().map(|p| &p.name).collect::<Vec<_>>()
+    );
+    let function = &model
+        .packages
+        .iter()
+        .find(|package| package.name == "oracle.when")
+        .expect("namespace package")
+        .functions[0];
+    assert_eq!(
+        function.params[0].type_,
+        TypeRef::Datatype {
+            package: "com.rosetta.model".to_string(),
+            name: "dateTime".to_string()
+        }
+    );
+}

@@ -1175,6 +1175,15 @@ impl<'a> Lowerer<'a> {
                     scan(&feature.type_, &mut referenced);
                 }
             }
+            // Lowered functions carry type references too — a func typed by
+            // an opaque builtin must pull the builtin package in just like a
+            // class feature does (rule 8).
+            for function in &package.functions {
+                scan(&function.return_type, &mut referenced);
+                for param in &function.params {
+                    scan(&param.type_, &mut referenced);
+                }
+            }
         }
         referenced
     }
