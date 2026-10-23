@@ -491,6 +491,7 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "format",
     "formatVersion",
     "from",
+    "functions",
     "grants",
     "id",
     "interfaces",

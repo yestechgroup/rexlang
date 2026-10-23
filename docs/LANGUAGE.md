@@ -245,6 +245,22 @@ Attribute cardinalities map verbatim (`(1..1)`, `(0..1)`, `(0..*)`,
 annotation references, labels, rule references, and doc references are
 skipped in v1.
 
+A `func` or `library function` declaration lowers to a **signature-only
+operation** on the namespace package's `functions` (`rex_ir::Operation` —
+the node domain `op`s use, minus a receiver): `inputs` → parameters with
+their cardinalities (the required `(1..1)` stays unset, the domain-operation
+convention), the `output` → the return type, the `definition` string → the
+description, and a `library function`'s array parameters carry a `0..*`
+multiplicity. A func without an `output` cannot become an operation (rexlang
+operations always return) and is skipped with a warning naming it. The
+declaration's complete Rune source is embedded **verbatim** as the
+operation's `"rosetta"` body target — dispatch heads, conditions,
+post-conditions, aliases, and `set`/`add` statements survive only inside
+that text, and nothing in rexlang parses or executes them yet. Functions are
+not types: they never join the `.mox`-side resolution namespace (an
+attribute typed by a function stays an error), and builtin
+`com.rosetta.model` functions stay implicit.
+
 The builtin `com.rosetta.model` namespace — which sigil implicitly
 wildcard-imports into every model — maps to rexlang primitives where
 counterparts exist (`boolean` → `boolean`, `string` → `String`, `int` →
@@ -258,9 +274,9 @@ the `.mox`-side resolution namespace: a `.mox` reference to `number` or
 `time` stays an unknown-type error (the coinciding `string`/`int`/
 `boolean`/`date` resolve as the rexlang primitives they always were).
 
-Skipped elements in v1: `func`, `library function`, `rule`, `report`,
-external rule sources, `schema`/`body`/`corpus`/`segment`, `metaType`, and
-`annotation` declarations.
+Skipped elements in v1: `rule`, `report`, external rule sources,
+`schema`/`body`/`corpus`/`segment`, `metaType`, and `annotation`
+declarations.
 
 Collisions are errors naming both sources: a synthetic package name
 (the rosetta namespace) that matches a declared `.mox` package of the

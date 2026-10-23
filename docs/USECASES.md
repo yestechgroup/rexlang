@@ -186,10 +186,12 @@ the operation after the step itself). Each step's operation must name an
 guarded; an `extends` target naming no class of the union errors;
 interface targets end the walk — they carry no operations).
 
-The sigil limitation, precisely: sigil v1 skips Rune `Function`
-declarations, so sigil-lowered classes carry attributes only — they have
-no operations, and therefore a **sigil-typed subject cannot take steps**
-(operations never resolve through them) until Function lowering lands.
+The sigil limitation, precisely: Rune functions are **free functions**, not
+class members. Sigil lowering (rule 8 of its contract) places them on the
+namespace package's `functions`, never on a class, so sigil-lowered classes
+carry attributes only and a **sigil-typed subject cannot take steps**
+(operations never resolve through them). Steps need an `.mox`-declared `op`
+on the subject's class.
 
 `requires [...]` names capabilities declared in an imported `.actor`
 file; every name must exist across the provided actor models and be
@@ -403,9 +405,10 @@ channel or subscription semantics exist on this surface.
 ### Sigil (`.rosetta`)
 
 Sigil-lowered classes participate in the union namespace like any other
-domain type (typed subjects and payload types resolve through them), but
-sigil v1 skips Rune `Function` declarations — sigil classes carry no
-operations, so sigil-typed subjects cannot take steps (rule 3).
+domain type (typed subjects and payload types resolve through them). Rune
+functions lower to package-level `functions` (rule 8 of the sigil
+contract), never onto a class — sigil classes carry no operations, so
+sigil-typed subjects cannot take steps (rule 3).
 
 ---
 
