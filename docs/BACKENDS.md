@@ -50,9 +50,14 @@ Root shapes, as actually serialized:
 - **Additive evolution.** Every field added after v1 is
   `#[serde(default)]`, so older artifacts keep loading; fields empty in the
   common case also `skip_serializing_if`, so artifacts for models that do
-  not use a feature (no bodies, no vocabularies, no actors, no descriptions)
-  stay **byte-identical** to older output. Unknown fields are ignored on
-  read, never denied.
+  not use a feature (no bodies, no vocabularies, no actors, no functions, no
+  descriptions) stay **byte-identical** to older output. Unknown fields are
+  ignored on read, never denied.
+- **Functions and unknown body targets.** `Package.functions` carries
+  sigil-lowered Rune functions as signature-only `Operation`s whose only
+  body is the verbatim `"rosetta"` target (wire contract rule 15). Backends
+  skip body targets they do not own — the `rosetta` text is never emitted
+  as code.
 - **Stable feature ids.** `Feature::id` equals its 0-based declaration index
   at publication time and is frozen for wire formats; backends key on it.
 - **Golden byte-identity.** The goldens under `tests/conformance/` are the

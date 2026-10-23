@@ -1,0 +1,169 @@
+{
+  "formatVersion": 1,
+  "rexVersion": "0.1.0",
+  "packages": [
+    {
+      "name": "rex.conformance.funcs",
+      "annotations": [],
+      "enums": [],
+      "datatypes": [],
+      "interfaces": [],
+      "classes": [
+        {
+          "name": "Desk",
+          "description": "A desk referencing the lowered sigil types beside the lowered functions.",
+          "extends": [],
+          "features": [
+            {
+              "id": 0,
+              "name": "underlier",
+              "kind": "crossReference",
+              "type": {
+                "type": "class",
+                "value": {
+                  "package": "rex.sigil.funcs",
+                  "name": "Underlier"
+                }
+              },
+              "multiplicity": {
+                "lower": 0,
+                "upper": "unbounded"
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            },
+            {
+              "id": 1,
+              "name": "defaultRateType",
+              "kind": "attribute",
+              "type": {
+                "type": "enum",
+                "value": {
+                  "package": "rex.sigil.funcs",
+                  "name": "RateType"
+                }
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "rex.sigil.funcs",
+      "annotations": [],
+      "enums": [
+        {
+          "name": "RateType",
+          "description": "How a rate is fixed.",
+          "literals": [
+            {
+              "name": "FIXED",
+              "value": 0
+            },
+            {
+              "name": "FLOATING",
+              "value": 1
+            }
+          ]
+        }
+      ],
+      "datatypes": [],
+      "interfaces": [],
+      "classes": [
+        {
+          "name": "Underlier",
+          "description": "A referenced underlier.",
+          "extends": [],
+          "features": [
+            {
+              "id": 0,
+              "name": "name",
+              "description": "The display name.",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            }
+          ]
+        }
+      ],
+      "functions": [
+        {
+          "name": "anyActive",
+          "description": "Whether any given id is active.",
+          "returnType": {
+            "type": "primitive",
+            "value": "boolean"
+          },
+          "params": [
+            {
+              "name": "ids",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 0,
+                "upper": "unbounded"
+              }
+            }
+          ],
+          "bodies": {
+            "rosetta": "library function anyActive(ids string[]) boolean <\"Whether any given id is active.\">\n\n"
+          }
+        },
+        {
+          "name": "calcRate",
+          "description": "Compute the rate of a leg.",
+          "returnType": {
+            "type": "primitive",
+            "value": "double"
+          },
+          "params": [
+            {
+              "name": "notional",
+              "type": {
+                "type": "primitive",
+                "value": "double"
+              }
+            },
+            {
+              "name": "legIds",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 0,
+                "upper": "unbounded"
+              }
+            }
+          ],
+          "bodies": {
+            "rosetta": "func calcRate: <\"Compute the rate of a leg.\">\n\tinputs:\n\t\tnotional number (1..1) <\"The notional amount.\">\n\t\tlegIds string (0..*) <\"The leg identifiers.\">\n\toutput:\n\t\trate number (1..1) <\"The computed rate.\">\n\n\tcondition PositiveNotional:\n\t\tnotional > 0\n\n\tset rate:\n\t\tnotional\n"
+          }
+        }
+      ]
+    }
+  ]
+}

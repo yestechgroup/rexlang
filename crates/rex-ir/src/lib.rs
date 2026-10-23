@@ -130,6 +130,16 @@
 //!     semantics: reflexive even for `NaN`, `-0.0` distinguished from
 //!     `0.0`. Wire artifacts therefore compare and hash deterministically,
 //!     and a raw float never appears in a public artifact field.
+//! 15. **Functions (additive).** [`Package::functions`] carries sigil-lowered
+//!     Rune free functions (`func`/`library function` declarations) as
+//!     signature-only [`Operation`]s under the same additive rules as
+//!     vocabularies (rule 6): `#[serde(default)]` and omitted when empty, so
+//!     artifacts for function-less models are byte-identical to earlier
+//!     output. The one verbatim body target [`Operation::bodies`] may carry
+//!     beyond codegen targets is **`"rosetta"`**: the declaration's complete
+//!     Rune source text, embedded verbatim — the IR never parses or
+//!     reformats it, and backends never emit it (they skip body targets they
+//!     do not own).
 //!
 //! [rexlang]: https://github.com/anton-makes/rexlang
 
@@ -270,6 +280,14 @@ pub struct Package {
     /// Class definitions, in declaration order.
     #[serde(default)]
     pub classes: Vec<ClassDef>,
+    /// Free-function definitions, in declaration order. Sigil lowering only:
+    /// Rune `func`/`library function` declarations land here as
+    /// signature-only [`Operation`]s (a function is not a type — it never
+    /// joins the resolvable namespace). Additive (wire contract rule 15);
+    /// omitted when empty so artifacts for function-less models stay
+    /// byte-identical.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub functions: Vec<Operation>,
     /// Vocabulary definitions, in declaration order. Entries are embedded so
     /// artifacts stay self-contained (no snapshot files needed downstream).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -292,6 +310,7 @@ impl Package {
             datatypes: Vec::new(),
             interfaces: Vec::new(),
             classes: Vec::new(),
+            functions: Vec::new(),
             vocabularies: Vec::new(),
             actors: Vec::new(),
         }
@@ -1836,6 +1855,77 @@ mod tests {
         assert_eq!(model.to_json_pretty().expect("serialize"), expected);
         let parsed = Model::from_json(expected).expect("deserialize golden");
         assert_eq!(model, parsed);
+    }
+
+    #[test]
+    fn golden_json_with_functions_pins_the_wire_format() {
+        // Additive (wire-contract rule 15): function-less models stay
+        // byte-identical (see `golden_json_matches_expected_wire_format`);
+        // this golden pins the NEW field — `functions`, with the one
+        // non-codegen body target `"rosetta"` — which is omitted when empty.
+        let mut package = Package::new("nz.example.demo");
+        package.functions.push(
+            Operation::new(
+                "calcRate",
+                TypeRef::Primitive(PrimitiveType::Double),
+                vec![OperationParam {
+                    name: "notional".to_string(),
+                    type_: TypeRef::Primitive(PrimitiveType::Double),
+                    multiplicity: None,
+                }],
+            )
+            .with_body("rosetta", "func calcRate:\n\tinputs:\n\t\tnotional number (1..1)\n\toutput:\n\t\trate number (1..1)"),
+        );
+        let mut model = Model::new();
+        model.packages.push(package);
+
+        let expected = r#"{
+  "formatVersion": 1,
+  "rexVersion": "0.1.0",
+  "packages": [
+    {
+      "name": "nz.example.demo",
+      "annotations": [],
+      "enums": [],
+      "datatypes": [],
+      "interfaces": [],
+      "classes": [],
+      "functions": [
+        {
+          "name": "calcRate",
+          "returnType": {
+            "type": "primitive",
+            "value": "double"
+          },
+          "params": [
+            {
+              "name": "notional",
+              "type": {
+                "type": "primitive",
+                "value": "double"
+              }
+            }
+          ],
+          "bodies": {
+            "rosetta": "func calcRate:\n\tinputs:\n\t\tnotional number (1..1)\n\toutput:\n\t\trate number (1..1)"
+          }
+        }
+      ]
+    }
+  ]
+}"#;
+
+        assert_eq!(model.to_json_pretty().expect("serialize"), expected);
+        let parsed = Model::from_json(expected).expect("deserialize golden");
+        assert_eq!(model, parsed);
+        // The empty case: a function-less package never carries the key —
+        // byte-identical to pre-rule-15 output.
+        let mut plain = Model::new();
+        plain.packages.push(Package::new("p"));
+        assert_eq!(
+            plain.to_json().expect("serialize"),
+            r#"{"formatVersion":1,"rexVersion":"0.1.0","packages":[{"name":"p","annotations":[],"enums":[],"datatypes":[],"interfaces":[],"classes":[]}]}"#
+        );
     }
 
     #[test]

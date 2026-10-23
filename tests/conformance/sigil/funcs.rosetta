@@ -1,0 +1,24 @@
+namespace rex.sigil.funcs
+version "1.0.0"
+
+type Underlier: <"A referenced underlier.">
+	name string (1..1) <"The display name.">
+
+enum RateType: <"How a rate is fixed.">
+	FIXED
+	FLOATING
+
+library function anyActive(ids string[]) boolean <"Whether any given id is active.">
+
+func calcRate: <"Compute the rate of a leg.">
+	inputs:
+		notional number (1..1) <"The notional amount.">
+		legIds string (0..*) <"The leg identifiers.">
+	output:
+		rate number (1..1) <"The computed rate.">
+
+	condition PositiveNotional:
+		notional > 0
+
+	set rate:
+		notional

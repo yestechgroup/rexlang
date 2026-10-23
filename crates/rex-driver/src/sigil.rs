@@ -89,14 +89,31 @@
 //!    are skipped. The `com.rosetta.model` package is emitted **only when
 //!    something from it is actually referenced** by lowered content, keeping
 //!    artifacts minimal.
-//! 7. **Skipped elements** (v1): `Function`, `LibraryFunction`, `Rule`,
-//!    `Report`, `ExternalRuleSource`, `Schema`, `Body`, `Corpus`,
-//!    `Segment`, `MetaType`, and `Annotation` declarations. References to
-//!    skipped kinds (e.g. an attribute typed by a rule) are sigil
-//!    resolution errors (`E0106`), which surface as blocking rexlang
-//!    diagnostics; the lowering fills a placeholder type for them (the
-//!    model is discarded whenever any error exists).
-//! 8. **Type references.** Sigil fills `TypeRef.resolved` element ids; the
+//! 7. **Skipped elements** (v1): `Rule`, `Report`, `ExternalRuleSource`,
+//!    `Schema`, `Body`, `Corpus`, `Segment`, `MetaType`, and `Annotation`
+//!    declarations. References to skipped kinds (e.g. an attribute typed by
+//!    a rule) are sigil resolution errors (`E0106`), which surface as
+//!    blocking rexlang diagnostics; the lowering fills a placeholder type
+//!    for them (the model is discarded whenever any error exists).
+//! 8. **`Function` / `LibraryFunction` → `Package::functions`.** User
+//!    namespace functions lower to signature-only rexlang operations
+//!    ([`ir::Operation`], wire contract rule 15): `inputs` → parameters
+//!    (an input's cardinality becomes the parameter's `multiplicity`; the
+//!    required `(1..1)` stays unset, the domain-operation convention), the
+//!    `output` → the return type, and `definition` → the description.
+//!    A `library function` lowers the same way (`is_array` parameters carry
+//!    a `0..*` multiplicity). A function without an output cannot become an
+//!    operation — rexlang operations always return — so it is skipped with
+//!    a **warning** diagnostic naming it. The declaration's complete Rune
+//!    source is embedded verbatim as the body target **`"rosetta"`**:
+//!    dispatch heads, conditions, post-conditions, aliases, and `set`/`add`
+//!    statements survive only inside that text, and nothing in rexlang
+//!    parses or executes them yet. Builtin (`com.rosetta.model`) functions
+//!    stay skipped — rule 6 keeps that namespace minimal. Functions are not
+//!    types: they never join the `.mox`-side resolution namespace, so an
+//!    attribute typed by a function remains an `E0106` sigil error. Sigil
+//!    resolution already rejects duplicate function names within a kind.
+//! 9. **Type references.** Sigil fills `TypeRef.resolved` element ids; the
 //!    lowering maps each resolved element to the rexlang equivalent
 //!    (`Class`/`Interface`/`Enum`/`Datatype`) qualified with the element's
 //!    namespace package, or to the mapped primitive. Unresolved references
@@ -448,13 +465,34 @@ pub(crate) fn compile_sigil_imports(
         ));
     }
 
-    let mut lowerer = Lowerer::new(&resolution);
+    let mut lowerer = Lowerer::new(
+        &resolution,
+        // The retained rosetta text per selected parsed file, keyed by the
+        // file's name (the candidate key) — verbatim function bodies slice
+        // it. Duplicate selection keeps the first occurrence, and so does
+        // this map.
+        selected
+            .iter()
+            .filter_map(|&index| {
+                let candidate = &candidates[index];
+                candidate
+                    .file
+                    .as_ref()
+                    .map(|file| (file.name.as_str(), candidate.text.as_str()))
+            })
+            .collect(),
+    );
     lowerer.register_builtins();
     // The resolved copies of the selected files (sigil fills the resolved
     // element ids on its own files, not the caller's).
     let selected_files: Vec<&ModelFile> = resolution.user_files().iter().collect();
     lowerer.collect_namespaces(&selected_files);
     lowerer.lower_elements(&selected_files);
+    // Lowering warnings route like content diagnostics: rosetta-keyed,
+    // never blocking.
+    for (path, diagnostic) in lowerer.warnings.drain(..) {
+        diagnostics.push((DiagnosticOrigin::Content { path }, diagnostic));
+    }
     // The user namespaces double as resolution packages for the `.mox`
     // declarations (bare and qualified references into the synthetic
     // packages resolve through the union namespace). Failed namespaces stay
@@ -598,6 +636,7 @@ struct NamespaceContent {
     datatypes: Vec<ir::DatatypeDef>,
     interfaces: Vec<ir::InterfaceDef>,
     classes: Vec<ir::ClassDef>,
+    functions: Vec<ir::Operation>,
 }
 
 /// A builtin definition emitted into `com.rosetta.model` when referenced.
@@ -609,6 +648,9 @@ enum BuiltinDef {
 /// Lowers the resolved sigil model into synthetic rexlang packages.
 struct Lowerer<'a> {
     resolution: &'a Resolution,
+    /// The rosetta source text per selected file (keyed by the file's name,
+    /// which is the candidate key) — verbatim function bodies slice it.
+    texts: HashMap<&'a str, &'a str>,
     /// What each resolved element id means in rexlang terms.
     targets: HashMap<usize, Target>,
     /// User namespaces in first-appearance order.
@@ -619,17 +661,22 @@ struct Lowerer<'a> {
     namespace_kinds: HashMap<String, HashMap<String, TopKind>>,
     /// Builtin definitions by element name (emitted only when referenced).
     builtins: Vec<(String, BuiltinDef)>,
+    /// Warnings raised while lowering (currently: functions without an
+    /// output), keyed by the rosetta file's name for diagnostic routing.
+    warnings: Vec<(String, Diagnostic)>,
 }
 
 impl<'a> Lowerer<'a> {
-    fn new(resolution: &'a Resolution) -> Self {
+    fn new(resolution: &'a Resolution, texts: HashMap<&'a str, &'a str>) -> Self {
         Self {
             resolution,
+            texts,
             targets: HashMap::new(),
             order: Vec::new(),
             packages: HashMap::new(),
             namespace_kinds: HashMap::new(),
             builtins: Vec::new(),
+            warnings: Vec::new(),
         }
     }
 
@@ -675,8 +722,9 @@ impl<'a> Lowerer<'a> {
                         kind: TargetKind::Enum,
                     }
                 }
-                // Skipped kinds: library functions and annotations declare
-                // nothing referencable.
+                // Skipped builtin kinds: builtin library functions and
+                // annotations declare nothing referencable (user functions
+                // lower per rule 8, but as operations, never as types).
                 _ => continue,
             };
             self.targets.insert(id, target);
@@ -823,6 +871,26 @@ impl<'a> Lowerer<'a> {
                             .datatypes
                             .push(datatype);
                     }
+                    SemanticElement::Function(function) => {
+                        if let Some(operation) = self.lower_function(file, function, &namespace) {
+                            self.packages
+                                .get_mut(&namespace)
+                                .expect("registered")
+                                .functions
+                                .push(operation);
+                        }
+                    }
+                    SemanticElement::LibraryFunction(function) => {
+                        if let Some(operation) =
+                            self.lower_library_function(file, function, &namespace)
+                        {
+                            self.packages
+                                .get_mut(&namespace)
+                                .expect("registered")
+                                .functions
+                                .push(operation);
+                        }
+                    }
                     SemanticElement::BasicType(_) | SemanticElement::RecordType(_)
                         if namespace != BUILTIN_NAMESPACE =>
                     {
@@ -902,6 +970,101 @@ impl<'a> Lowerer<'a> {
         datatype
     }
 
+    /// A `Function` → signature-only [`ir::Operation`] (rule 8). Inputs map
+    /// to parameters, the output to the return type, the definition to the
+    /// description; the declaration's complete Rune source rides verbatim as
+    /// the `"rosetta"` body target (dispatch, conditions, post-conditions,
+    /// aliases, and set/add statements survive only inside that text). A
+    /// function without an output cannot become an operation — rexlang
+    /// operations always return — and is skipped with a warning.
+    fn lower_function(
+        &mut self,
+        file: &ModelFile,
+        function: &sigil_model::Function,
+        namespace: &str,
+    ) -> Option<ir::Operation> {
+        let Some(output) = function.output.as_ref() else {
+            self.warnings.push((
+                file.name.clone(),
+                Diagnostic::warning(
+                    format!(
+                        "function '{}' declares no output and is skipped: rexlang operations \
+                         always return",
+                        function.name
+                    ),
+                    Some(Span::from(function.span.start..function.span.end)),
+                )
+                .with_help("give the function an `output` block to lower its signature"),
+            ));
+            return None;
+        };
+        let params = function
+            .inputs
+            .iter()
+            .map(|input| ir::OperationParam {
+                name: input.name.clone(),
+                type_: self.map_type_ref(namespace, &input.type_ref),
+                multiplicity: optional_multiplicity(&input.cardinality),
+            })
+            .collect();
+        let mut operation = ir::Operation::new(
+            function.name.clone(),
+            self.map_type_ref(namespace, &output.type_ref),
+            params,
+        );
+        operation.description = function.definition.clone();
+        self.with_rosetta_body(file, function.span, &mut operation);
+        Some(operation)
+    }
+
+    /// A `LibraryFunction` → signature-only [`ir::Operation`] (rule 8); an
+    /// `is_array` parameter carries a `0..*` multiplicity. Library functions
+    /// always declare a return type, so nothing is skipped.
+    fn lower_library_function(
+        &mut self,
+        file: &ModelFile,
+        function: &sigil_model::LibraryFunction,
+        namespace: &str,
+    ) -> Option<ir::Operation> {
+        let params = function
+            .parameters
+            .iter()
+            .map(|parameter| ir::OperationParam {
+                name: parameter.name.clone(),
+                type_: self.map_type_ref(namespace, &parameter.type_ref),
+                multiplicity: parameter.is_array.then_some(ir::Multiplicity {
+                    lower: 0,
+                    upper: ir::Upper::Unbounded,
+                }),
+            })
+            .collect();
+        let mut operation = ir::Operation::new(
+            function.name.clone(),
+            self.map_type_ref(namespace, &function.return_type),
+            params,
+        );
+        operation.description = function.definition.clone();
+        self.with_rosetta_body(file, function.span, &mut operation);
+        Some(operation)
+    }
+
+    /// Attaches the declaration's verbatim Rune source — sliced out of the
+    /// file's retained text by its span — as the `"rosetta"` body target.
+    /// The IR never parses or reformats the text (wire contract rule 15).
+    fn with_rosetta_body(
+        &self,
+        file: &ModelFile,
+        span: sigil_diag::Span,
+        operation: &mut ir::Operation,
+    ) {
+        if let Some(text) = self.texts.get(file.name.as_str()) {
+            operation.bodies.insert(
+                "rosetta".to_string(),
+                text[span.start..span.end].to_string(),
+            );
+        }
+    }
+
     /// Assembles the synthetic packages: user namespaces in first-appearance
     /// order, then `com.rosetta.model` with only the definitions lowered
     /// content actually references. Failed namespaces are skipped (their
@@ -946,6 +1109,7 @@ impl<'a> Lowerer<'a> {
             package.datatypes = content.datatypes.clone();
             package.interfaces = content.interfaces.clone();
             package.classes = content.classes.clone();
+            package.functions = content.functions.clone();
             packages.push(package);
         }
         // `com.rosetta.model` joins only when lowered content references it.
@@ -1036,6 +1200,15 @@ fn lower_cardinality(cardinality: &sigil_model::Cardinality) -> ir::Multiplicity
             CardinalityMax::Unbounded => ir::Upper::Unbounded,
         },
     }
+}
+
+/// A function input's cardinality as an [`ir::OperationParam`] multiplicity:
+/// the required `(1..1)` stays unset (the domain-operation convention —
+/// parameters are single-valued unless stated), anything else lowers
+/// verbatim.
+fn optional_multiplicity(cardinality: &sigil_model::Cardinality) -> Option<ir::Multiplicity> {
+    let multiplicity = lower_cardinality(cardinality);
+    (multiplicity != ir::Multiplicity::REQUIRED).then_some(multiplicity)
 }
 
 /// An enumeration's literals in declaration order with synthesized values

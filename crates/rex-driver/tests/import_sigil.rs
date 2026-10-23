@@ -1397,3 +1397,265 @@ fn references_into_a_failed_namespace_error_on_the_referencing_file() {
         .iter()
         .all(|(path, _)| path != "a.mox" && path != "ops.actor"));
 }
+
+// --- rule 8: func / library function lowering ------------------------------
+
+/// A user-namespace `func` lowers to a signature-only operation in
+/// `Package::functions`: inputs → parameters (with cardinalities), output →
+/// return type, definition → description, and the declaration's complete
+/// Rune source rides verbatim as the `"rosetta"` body target.
+#[test]
+fn a_user_function_lowers_to_a_signature_only_operation() {
+    let rosetta = concat!(
+        "namespace oracle.func\n\n",
+        "type Trade:\n",
+        "    price number (1..1)\n",
+        "\n",
+        "func Rate: <\"Compute the rate of a trade.\">\n",
+        "    inputs:\n",
+        "        trade Trade (1..1)\n",
+        "        tags string (0..*)\n",
+        "    output:\n",
+        "        rate number (1..1)\n",
+        "\n",
+        "    condition Present:\n",
+        "        trade exists\n",
+        "\n",
+        "    set rate:\n",
+        "        trade -> price\n"
+    );
+    let compilation = compile_with_sigil(
+        &[(
+            MOX.to_string(),
+            "package demo\n\nimport sigil \"f.rosetta\"\n\nclass C { String x }\n".to_string(),
+        )],
+        &rex_driver::SigilImports::new().provide(MOX, "f.rosetta", rosetta),
+    );
+    let model = compile_clean(&compilation);
+    let package = &model.packages[1];
+    assert_eq!(package.name, "oracle.func");
+    assert_eq!(package.functions.len(), 1, "one func, one operation");
+    let function = &package.functions[0];
+    assert_eq!(function.name, "Rate");
+    assert_eq!(
+        function.description.as_deref(),
+        Some("Compute the rate of a trade.")
+    );
+    assert_eq!(
+        function.return_type,
+        TypeRef::Primitive(rex_ir::PrimitiveType::Double)
+    );
+    assert_eq!(function.params.len(), 2);
+    assert_eq!(function.params[0].name, "trade");
+    assert_eq!(
+        function.params[0].type_,
+        TypeRef::Class {
+            package: "oracle.func".to_string(),
+            name: "Trade".to_string()
+        }
+    );
+    // The required `(1..1)` stays unset (the domain-operation convention);
+    // `0..*` lowers verbatim.
+    assert_eq!(function.params[0].multiplicity, None);
+    assert_eq!(function.params[1].name, "tags");
+    assert_eq!(
+        function.params[1].multiplicity,
+        Some(rex_ir::Multiplicity {
+            lower: 0,
+            upper: rex_ir::Upper::Unbounded
+        })
+    );
+    // The verbatim body is the complete declaration text, including the
+    // condition and set sections nothing in rexlang parses.
+    let body = function.bodies.get("rosetta").expect("rosetta body");
+    assert!(body.starts_with("func Rate:"), "{body:?}");
+    assert!(body.contains("condition Present:"), "{body:?}");
+    assert!(body.contains("set rate:"), "{body:?}");
+}
+
+/// A `library function` lowers the same way; an `is_array` parameter carries
+/// a `0..*` multiplicity.
+#[test]
+fn a_user_library_function_lowers_to_a_signature_only_operation() {
+    let rosetta = concat!(
+        "namespace oracle.lib\n\n",
+        "library function Round(x number, cents int[]) boolean <\"Round a number.\">\n"
+    );
+    let compilation = compile_with_sigil(
+        &[(
+            MOX.to_string(),
+            "package demo\n\nimport sigil \"l.rosetta\"\n\nclass C { String x }\n".to_string(),
+        )],
+        &rex_driver::SigilImports::new().provide(MOX, "l.rosetta", rosetta),
+    );
+    let model = compile_clean(&compilation);
+    let function = &model.packages[1].functions[0];
+    assert_eq!(function.name, "Round");
+    assert_eq!(function.description.as_deref(), Some("Round a number."));
+    assert_eq!(
+        function.return_type,
+        TypeRef::Primitive(rex_ir::PrimitiveType::Boolean)
+    );
+    assert_eq!(function.params.len(), 2);
+    assert_eq!(function.params[0].multiplicity, None);
+    assert_eq!(
+        function.params[1].multiplicity,
+        Some(rex_ir::Multiplicity {
+            lower: 0,
+            upper: rex_ir::Upper::Unbounded
+        })
+    );
+    assert!(function
+        .bodies
+        .get("rosetta")
+        .expect("rosetta body")
+        .starts_with("library function Round"));
+}
+
+/// Builtin (`com.rosetta.model`) library functions stay skipped: rule 6
+/// keeps that namespace minimal, and it is still emitted only when
+/// referenced.
+#[test]
+fn builtin_library_functions_stay_skipped() {
+    // The builtin library namespace is implicitly present; a user namespace
+    // that references nothing from `com.rosetta.model` must not grow it.
+    let rosetta = "namespace oracle.pure\n\nfunc Alone:\n\tinputs:\n\t\tx int (1..1)\n\toutput:\n\t\ty int (1..1)\n";
+    let compilation = compile_with_sigil(
+        &[(
+            MOX.to_string(),
+            "package demo\n\nimport sigil \"p.rosetta\"\n\nclass C { String x }\n".to_string(),
+        )],
+        &rex_driver::SigilImports::new().provide(MOX, "p.rosetta", rosetta),
+    );
+    let model = compile_clean(&compilation);
+    assert_eq!(
+        model
+            .packages
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect::<Vec<_>>(),
+        ["demo", "oracle.pure"],
+        "no builtin package may appear"
+    );
+    assert_eq!(model.packages[1].functions.len(), 1);
+    assert_eq!(model.packages[1].functions[0].name, "Alone");
+}
+
+/// Functions are not types: a `.mox` attribute typed by a sigil function
+/// stays an error (sigil `E0106`), and the function name never joins the
+/// resolution namespace.
+#[test]
+fn functions_are_not_referencable_as_types() {
+    let rosetta = concat!(
+        "namespace oracle.typ\n\n",
+        "func Maker:\n",
+        "    inputs:\n",
+        "        x int (1..1)\n",
+        "    output:\n",
+        "        y int (1..1)\n"
+    );
+    let compilation = compile_with_sigil(
+        &[(
+            MOX.to_string(),
+            "package demo\n\nimport sigil \"t.rosetta\"\n\nclass C { oracle.typ.Maker m }\n"
+                .to_string(),
+        )],
+        &rex_driver::SigilImports::new().provide(MOX, "t.rosetta", rosetta),
+    );
+    let mut all: Vec<_> = compilation.diagnostics.clone();
+    all.extend(compilation.sigil_diagnostics.clone());
+    assert!(
+        all.iter()
+            .any(|(path, diagnostic)| path == MOX && diagnostic.is_error()),
+        "typing an attribute by a function must error: {all:?}"
+    );
+    assert!(compilation.model.is_none());
+}
+
+/// A func with a dispatch head lowers to ONE operation (the head survives
+/// only inside the verbatim body) — the Rosetta multi-branch spelling is
+/// same-name functions, which sigil resolution itself rejects as duplicates.
+#[test]
+fn a_dispatch_function_lowers_to_one_operation_with_a_verbatim_head() {
+    let rosetta = concat!(
+        "namespace oracle.dispatch\n\n",
+        "enum Kind:\n",
+        "    FIRST\n",
+        "    SECOND\n",
+        "\n",
+        "func Pick(t: Kind->FIRST):\n",
+        "    inputs:\n",
+        "        t Kind (1..1)\n",
+        "    output:\n",
+        "        r int (1..1)\n",
+        "\n",
+        "    set r:\n",
+        "        1\n"
+    );
+    let compilation = compile_with_sigil(
+        &[(
+            MOX.to_string(),
+            "package demo\n\nimport sigil \"d.rosetta\"\n\nclass C { String x }\n".to_string(),
+        )],
+        &rex_driver::SigilImports::new().provide(MOX, "d.rosetta", rosetta),
+    );
+    let model = compile_clean(&compilation);
+    let functions = &model.packages[1].functions;
+    assert_eq!(functions.len(), 1, "one declaration, one operation");
+    assert_eq!(functions[0].name, "Pick");
+    assert_eq!(functions[0].params.len(), 1);
+    let body = functions[0].bodies.get("rosetta").expect("rosetta body");
+    assert!(body.contains("Kind->FIRST"), "{body:?}");
+}
+
+/// A func without an output cannot become an operation (rexlang operations
+/// always return): it is skipped with a warning naming it; the namespace
+/// still lowers.
+#[test]
+fn an_output_less_function_is_skipped_with_a_warning() {
+    let rosetta = concat!(
+        "namespace oracle.void\n\n",
+        "func OnlySideEffect:\n",
+        "    inputs:\n",
+        "        x int (1..1)\n",
+        "\n",
+        "func Real:\n",
+        "    inputs:\n",
+        "        x int (1..1)\n",
+        "    output:\n",
+        "        y int (1..1)\n"
+    );
+    let compilation = compile_with_sigil(
+        &[(
+            MOX.to_string(),
+            "package demo\n\nimport sigil \"v.rosetta\"\n\nclass C { String x }\n".to_string(),
+        )],
+        &rex_driver::SigilImports::new().provide(MOX, "v.rosetta", rosetta),
+    );
+    // The namespace lowers; the warning is content-keyed and non-blocking.
+    let model = compilation.model.as_ref().expect("namespace still lowers");
+    let functions = &model
+        .packages
+        .iter()
+        .find(|p| p.name == "oracle.void")
+        .expect("namespace package")
+        .functions;
+    assert_eq!(
+        functions
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Real"],
+        "only the output-carrying function lowers"
+    );
+    let warning = compilation
+        .sigil_diagnostics
+        .iter()
+        .find(|(path, diagnostic)| path == "v.rosetta" && !diagnostic.is_error())
+        .expect("a warning names the skipped function");
+    assert!(
+        warning.1.message.contains("OnlySideEffect"),
+        "{:?}",
+        warning.1.message
+    );
+}

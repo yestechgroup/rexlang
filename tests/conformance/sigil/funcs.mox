@@ -1,0 +1,9 @@
+package rex.conformance.funcs
+
+import sigil "funcs.rosetta"
+
+/// A desk referencing the lowered sigil types beside the lowered functions.
+class Desk {
+    refers rex.sigil.funcs.Underlier underlier
+    rex.sigil.funcs.RateType defaultRateType
+}
