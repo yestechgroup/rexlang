@@ -105,8 +105,12 @@
 //!    a `0..*` multiplicity). A function without an output cannot become an
 //!    operation — rexlang operations always return — so it is skipped with
 //!    a **warning** diagnostic naming it. The declaration's complete Rune
-//!    source is embedded verbatim as the body target **`"rosetta"`**:
-//!    dispatch heads, conditions, post-conditions, aliases, and `set`/`add`
+//!    source is embedded **ends-trimmed** verbatim as the body target
+//!    **`"rosetta"`**: sigil element spans consume trailing whitespace, so
+//!    the lowering trims the slice's trailing whitespace (the same
+//!    ends-trimmed convention as `when` conditions and `cedar` policy
+//!    bodies) while interior indentation survives byte-exact. Dispatch
+//!    heads, conditions, post-conditions, aliases, and `set`/`add`
 //!    statements survive only inside that text, and nothing in rexlang
 //!    parses or executes them yet. Builtin (`com.rosetta.model`) functions
 //!    stay skipped — rule 6 keeps that namespace minimal. Functions are not
@@ -1049,8 +1053,12 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Attaches the declaration's verbatim Rune source — sliced out of the
-    /// file's retained text by its span — as the `"rosetta"` body target.
-    /// The IR never parses or reformats the text (wire contract rule 15).
+    /// file's retained text by its span — as the `"rosetta"` body target,
+    /// ends-trimmed (contract rule 8): sigil element spans consume trailing
+    /// whitespace, so the raw slice typically ends with the declaration's
+    /// trailing blank line and the artifact does not carry it. Interior
+    /// indentation and whitespace are never reformatted, and the IR never
+    /// parses the text (wire contract rule 15).
     fn with_rosetta_body(
         &self,
         file: &ModelFile,
@@ -1060,7 +1068,7 @@ impl<'a> Lowerer<'a> {
         if let Some(text) = self.texts.get(file.name.as_str()) {
             operation.bodies.insert(
                 "rosetta".to_string(),
-                text[span.start..span.end].to_string(),
+                text[span.start..span.end].trim_end().to_string(),
             );
         }
     }

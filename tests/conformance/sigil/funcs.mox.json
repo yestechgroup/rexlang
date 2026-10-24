@@ -129,7 +129,7 @@
             }
           ],
           "bodies": {
-            "rosetta": "library function anyActive(ids string[]) boolean <\"Whether any given id is active.\">\n\n"
+            "rosetta": "library function anyActive(ids string[]) boolean <\"Whether any given id is active.\">"
           }
         },
         {
@@ -160,7 +160,7 @@
             }
           ],
           "bodies": {
-            "rosetta": "func calcRate: <\"Compute the rate of a leg.\">\n\tinputs:\n\t\tnotional number (1..1) <\"The notional amount.\">\n\t\tlegIds string (0..*) <\"The leg identifiers.\">\n\toutput:\n\t\trate number (1..1) <\"The computed rate.\">\n\n\tcondition PositiveNotional:\n\t\tnotional > 0\n\n\tset rate:\n\t\tnotional\n"
+            "rosetta": "func calcRate: <\"Compute the rate of a leg.\">\n\tinputs:\n\t\tnotional number (1..1) <\"The notional amount.\">\n\t\tlegIds string (0..*) <\"The leg identifiers.\">\n\toutput:\n\t\trate number (1..1) <\"The computed rate.\">\n\n\tcondition PositiveNotional:\n\t\tnotional > 0\n\n\tset rate:\n\t\tnotional"
           }
         }
       ]

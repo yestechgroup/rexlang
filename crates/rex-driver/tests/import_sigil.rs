@@ -1466,11 +1466,14 @@ fn a_user_function_lowers_to_a_signature_only_operation() {
         })
     );
     // The verbatim body is the complete declaration text, including the
-    // condition and set sections nothing in rexlang parses.
+    // condition and set sections nothing in rexlang parses — ends-trimmed
+    // (contract rule 8): sigil spans consume trailing whitespace, and the
+    // artifact never carries the declaration's trailing blank line.
     let body = function.bodies.get("rosetta").expect("rosetta body");
     assert!(body.starts_with("func Rate:"), "{body:?}");
     assert!(body.contains("condition Present:"), "{body:?}");
     assert!(body.contains("set rate:"), "{body:?}");
+    assert!(!body.ends_with(char::is_whitespace), "{body:?}");
 }
 
 /// A `library function` lowers the same way; an `is_array` parameter carries

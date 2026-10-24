@@ -253,7 +253,9 @@ convention), the `output` → the return type, the `definition` string → the
 description, and a `library function`'s array parameters carry a `0..*`
 multiplicity. A func without an `output` cannot become an operation (rexlang
 operations always return) and is skipped with a warning naming it. The
-declaration's complete Rune source is embedded **verbatim** as the
+declaration's complete Rune source is embedded **ends-trimmed verbatim**
+(the declaration's text without trailing whitespace — sigil spans consume
+trailing blank lines; interior indentation is never reformatted) as the
 operation's `"rosetta"` body target — dispatch heads, conditions,
 post-conditions, aliases, and `set`/`add` statements survive only inside
 that text, and nothing in rexlang parses or executes them yet. Functions are

@@ -137,9 +137,10 @@
 //!     artifacts for function-less models are byte-identical to earlier
 //!     output. The one verbatim body target [`Operation::bodies`] may carry
 //!     beyond codegen targets is **`"rosetta"`**: the declaration's complete
-//!     Rune source text, embedded verbatim — the IR never parses or
-//!     reformats it, and backends never emit it (they skip body targets they
-//!     do not own).
+//!     Rune source text, embedded ends-trimmed verbatim (the declaration's
+//!     text without trailing whitespace, like `when` conditions and `cedar`
+//!     policy bodies) — the IR never parses or reformats it, and backends
+//!     never emit it (they skip body targets they do not own).
 //!
 //! [rexlang]: https://github.com/anton-makes/rexlang
 
