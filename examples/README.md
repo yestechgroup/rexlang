@@ -1,6 +1,6 @@
 # rexlang examples
 
-The six canonical examples double as the repo's capability harness: the test
+The seven canonical examples double as the repo's capability harness: the test
 suites under `crates/rex-backend-rust/tests/examples_conformance.rs`,
 `crates/rex-backend-jsonschema/tests/examples_schemas.rs`,
 `crates/rex-backend-cedar/tests/examples_cedar.rs`, and
@@ -20,6 +20,7 @@ documents in `instances/`. A missing or broken example fails the suite.
 | `shapes.mox` | `nz.example.shapes` | `extends` inheritance: schema `allOf` with base `$type` enum and leaf closure; Rust codegen materializes **own features only** (declared, not inherited, structure) | — |
 | `support.mox` | `nz.example.support` | domain of the actors example: refers↔refers pair, readonly identity features, labeled enum state, derived boolean. Its policy surface lives in the sibling `support.actor` file | `derived boolean needsRefund { expr { refundCents > 0 } }` |
 | `support.actor` | imports `support.mox` | standalone actor-policy file (`import "support.mox"` + `actors Support { ... }`): actor hierarchy via `extends`, capabilities on a class, `when` conditions over primitive attributes, obligations (incl. two on one entry), native `forbid`, the verbatim `cedar { ... }` escape hatch, `never_both` separation of duty. Cedar output is validated against the real `cedar-policy` crate (strict mode) in `examples_cedar.rs` | `permit RaiseRefund when (refundCents > 0 && refundCents <= 5000) obligation audit obligation notifyCustomer` |
+| `pricing.mox` | `nz.example.pricing` | `import sigil "pricing.rosetta"`: the Rune namespace lowers to the synthetic `pricing.model` package (`Package::functions` signatures + ends-trimmed verbatim `"rosetta"` bodies), and the `zonedDateTime` reference emits the `com.rosetta.model` builtin package. The Rust backend emits each lowered function as a free `todo!()` stub (wire contract rule 15: rosetta text is never code) | — |
 
 Expression typing follows `docs/EXPRESSIONS.md`; in particular `+` is numeric
 only (L2), so string assembly is expressed with `if` unification instead.

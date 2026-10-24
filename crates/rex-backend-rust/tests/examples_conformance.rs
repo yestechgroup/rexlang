@@ -1,5 +1,5 @@
 //! Examples conformance harness (Rust backend side), driven test-first
-//! against the six canonical examples in `examples/`:
+//! against the seven canonical examples in `examples/`:
 //!
 //! 1. Every example compiles through [`rex_driver::compile_str`] with zero
 //!    diagnostics.
@@ -14,27 +14,80 @@
 #[path = "scratch/examples_flow.rs"]
 mod examples_flow;
 
-use examples_flow::{example_path, example_source, examples_scratch_files, EXAMPLES};
+use examples_flow::{examples_dir, examples_scratch_files, EXAMPLES};
 
 #[test]
 fn all_canonical_examples_compile_with_zero_diagnostics() {
     for name in EXAMPLES {
-        let path = example_path(name);
-        let source = example_source(name);
-        let compilation = rex_driver::compile_str(
-            path.to_str().expect("utf-8 example path"),
-            &source,
-            &rex_driver::DomainImports::default(),
-        );
+        let model = examples_flow::compile_example(name);
         assert!(
-            compilation.diagnostics.is_empty(),
-            "example {name}.mox must compile with zero diagnostics: {:?}",
-            compilation.diagnostics
-        );
-        assert!(
-            compilation.model.is_some(),
+            !model.packages.is_empty(),
             "example {name}.mox must lower to the Core IR"
         );
+    }
+}
+
+/// The sigil example: the artifact carries the lowered function signatures
+/// (rule 8 of the sigil contract), the referenced opaque builtin emits the
+/// `com.rosetta.model` package, and the `"rosetta"` bodies round-trip
+/// byte-exact against the source rosetta text (ends-trimmed, wire contract
+/// rule 15).
+#[test]
+fn sigil_example_carries_function_signatures_and_verbatim_bodies() {
+    let model = examples_flow::compile_example("pricing");
+    let package = model
+        .packages
+        .iter()
+        .find(|package| package.name == "pricing.model")
+        .expect("the synthetic pricing.model package");
+    assert_eq!(
+        package
+            .functions
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["isActive", "priceQuote"],
+        "lowered functions in declaration order"
+    );
+
+    let is_active = &package.functions[0];
+    assert_eq!(is_active.params.len(), 1);
+    assert_eq!(
+        is_active.params[0].multiplicity,
+        Some(rex_ir::Multiplicity::MANY),
+        "a library function's is_array parameter carries 0..*"
+    );
+
+    let price_quote = &package.functions[1];
+    assert_eq!(price_quote.params.len(), 3);
+    assert_eq!(
+        price_quote.params[2].type_,
+        rex_ir::TypeRef::Datatype {
+            package: "com.rosetta.model".to_string(),
+            name: "zonedDateTime".to_string(),
+        },
+        "the opaque builtin reference pins the com.rosetta.model lowering"
+    );
+    assert!(
+        model
+            .packages
+            .iter()
+            .any(|package| package.name == "com.rosetta.model"),
+        "referencing zonedDateTime must emit the builtin package"
+    );
+
+    // The verbatim bodies round-trip: byte-exact slices of the rosetta
+    // source, ends-trimmed (the spans consume trailing whitespace).
+    let rosetta = std::fs::read_to_string(examples_dir().join("pricing.rosetta"))
+        .expect("read pricing.rosetta");
+    for function in &package.functions {
+        let body = function.bodies.get("rosetta").expect("rosetta body");
+        assert!(
+            rosetta.contains(body.as_str()),
+            "the {0} body must be verbatim source:\n{body}",
+            function.name
+        );
+        assert!(!body.ends_with(char::is_whitespace), "{body:?}");
     }
 }
 
