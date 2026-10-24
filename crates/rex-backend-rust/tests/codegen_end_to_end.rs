@@ -579,9 +579,10 @@ fn sigil_functions_generate_todo_stubs_without_rosetta_text() {
         "func stub with mixed multiplicities:\n{code}"
     );
     assert_eq!(
-        code.matches("todo!()").count(),
+        code.matches("\n    todo!()").count(),
         2,
-        "one stub per lowered function:\n{code}"
+        "one stub body per lowered function (the header note's todo!() mention\n\
+         doesn't count):\n{code}"
     );
     // The verbatim Rune text stays in the IR, never in generated code.
     assert!(!code.contains("set rate:"), "{code}");

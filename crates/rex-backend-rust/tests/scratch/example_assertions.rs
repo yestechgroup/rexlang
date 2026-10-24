@@ -625,12 +625,9 @@ mod example_assertions {
     // ------------------------------------------------------------------
     mod pricing_example {
         #[test]
+        #[should_panic(expected = "not yet implemented")]
         fn lowered_function_stubs_panic_as_todo() {
-            #[should_panic(expected = "not yet implemented")]
-            fn call_stub() {
-                crate::pricing::is_active(vec![]);
-            }
-            call_stub();
+            crate::pricing::is_active(vec![]);
         }
 
         #[test]
@@ -643,7 +640,7 @@ mod example_assertions {
             let price_quote: fn(
                 f64,
                 Vec<crate::pricing::InstrumentId>,
-                crate::pricing::ZonedDateTime,
+                crate::pricing::zonedDateTime,
             ) -> f64 = crate::pricing::price_quote;
             let _ = (is_active, price_quote);
         }

@@ -1868,7 +1868,7 @@ import "library.mox";
 
 application Shop {
     module Catalog {
-        design Line as dto
+        dto Line
     }
 }
 "#;
@@ -1911,7 +1911,7 @@ import "library.mox";
 
 application Shop {
     module Catalog {
-        design Line as entity
+        entity Line
     }
 }
 "#;

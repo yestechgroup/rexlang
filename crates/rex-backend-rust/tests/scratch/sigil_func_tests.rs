@@ -1,7 +1,7 @@
-//! Behavioral assertions for sigil-lowered package functions: the emitted
-//! stubs compile with the multiplicity conventions in their signatures, and
-//! calling one panics as `todo!()` — the verbatim `rosetta` body text never
-//! reaches generated code (wire contract rule 15).
+// Behavioral assertions for sigil-lowered package functions: the emitted
+// stubs compile with the multiplicity conventions in their signatures, and
+// calling one panics as `todo!()` — the verbatim `rosetta` body text never
+// reaches generated code (wire contract rule 15).
 #[cfg(test)]
 mod sigil_func_assertions {
     #[test]

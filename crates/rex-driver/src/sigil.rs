@@ -1187,6 +1187,15 @@ impl<'a> Lowerer<'a> {
                     scan(&feature.type_, &mut referenced);
                 }
             }
+            // Functions count too: a Rune function typed by a builtin
+            // (e.g. a `zonedDateTime` input) must emit the referenced
+            // definition, or the artifact carries a dangling type.
+            for function in &package.functions {
+                scan(&function.return_type, &mut referenced);
+                for param in &function.params {
+                    scan(&param.type_, &mut referenced);
+                }
+            }
         }
         referenced
     }
