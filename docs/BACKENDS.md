@@ -55,9 +55,11 @@ Root shapes, as actually serialized:
   ignored on read, never denied.
 - **Functions and unknown body targets.** `Package.functions` carries
   sigil-lowered Rune functions as signature-only `Operation`s whose only
-  body is the verbatim `"rosetta"` target (wire contract rule 15). Backends
-  skip body targets they do not own — the `rosetta` text is never emitted
-  as code.
+  body is the ends-trimmed verbatim `"rosetta"` target (wire contract
+  rule 15). Backends skip body targets they do not own — the `rosetta`
+  text is never emitted as code. The Rust backend emits each lowered
+  function as a free function in the flattened module: a `rust` body
+  verbatim, anything else a `todo!()` stub named after the function.
 - **Stable feature ids.** `Feature::id` equals its 0-based declaration index
   at publication time and is frozen for wire formats; backends key on it.
 - **Golden byte-identity.** The goldens under `tests/conformance/` are the
