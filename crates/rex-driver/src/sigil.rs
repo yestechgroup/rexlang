@@ -1070,9 +1070,11 @@ impl<'a> Lowerer<'a> {
     /// content actually references. Failed namespaces are skipped (their
     /// content is dropped), so the builtin emission only sees references
     /// from surviving content. Namespace/package collisions with the
-    /// declared `.mox` packages error naming both sources.
+    /// declared `.mox` packages error naming both sources. The lowerer is
+    /// consumed exactly once here, so each namespace's `NamespaceContent`
+    /// drains by value instead of cloning its collections.
     fn finish(
-        self,
+        mut self,
         declared: &[(&str, &str)],
         anchor: &(String, Span),
         failed: &BTreeSet<String>,
@@ -1103,13 +1105,15 @@ impl<'a> Lowerer<'a> {
             if namespace == BUILTIN_NAMESPACE || failed.contains(namespace) {
                 continue;
             }
-            let content = self.packages.get(namespace).expect("registered");
+            // The lowerer is consumed here, so each namespace's content
+            // moves out of the map by value — no per-collection clones.
+            let content = self.packages.remove(namespace).expect("registered");
             let mut package = ir::Package::new(namespace.clone());
-            package.enums = content.enums.clone();
-            package.datatypes = content.datatypes.clone();
-            package.interfaces = content.interfaces.clone();
-            package.classes = content.classes.clone();
-            package.functions = content.functions.clone();
+            package.enums = content.enums;
+            package.datatypes = content.datatypes;
+            package.interfaces = content.interfaces;
+            package.classes = content.classes;
+            package.functions = content.functions;
             packages.push(package);
         }
         // `com.rosetta.model` joins only when lowered content references it.
