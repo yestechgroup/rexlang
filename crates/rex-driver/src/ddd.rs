@@ -435,6 +435,38 @@ pub(crate) fn compile_ddd_file(
                 }
             }
 
+            // Rule 15 — a dto design marks a transfer record, and `ops` on
+            // a transfer record are almost always a modeling mistake:
+            // behavior confined to one aggregate belongs on the class
+            // itself (a domain layer `op`), behavior spanning aggregates
+            // belongs on a service operation that delegates down. The
+            // warning names the design and the op; the artifact is
+            // unaffected (warnings never drop it), and the union is only
+            // consulted when fully lowered (a failed domain may hide ops).
+            if design.stereotype == dsl::DddStereotype::Dto {
+                if let (Some((package, class)), Some(union)) = (resolved.as_ref(), union.as_ref()) {
+                    if let Some(operations) = class_operations(union, package, class) {
+                        for operation in operations {
+                            local.push(
+                                Diagnostic::warning(
+                                    format!(
+                                        "dto design '{}': class carries op '{}'; a dto is a \
+                                         transfer record, and behavior on it is usually a \
+                                         modeling mistake",
+                                        design.class.text, operation.name
+                                    ),
+                                    Some(design.class.span),
+                                )
+                                .with_help(
+                                    "move the behavior to an aggregate-owned class `op`, or \
+                                     declare a service operation that delegates to it",
+                                ),
+                            );
+                        }
+                    }
+                }
+            }
+
             // Rule 14 — scaffold materializes the CRUD operations (Sculptor
             // auto-creates both the repository and the service); the
             // artifact stays validation-only — nothing is synthesized — so
@@ -1427,6 +1459,21 @@ fn class_features<'a>(
         }
     }
     Some(collected)
+}
+
+/// The operations of one resolved class (own only — the dto-with-ops
+/// warning, rule 15, is about the designed class's declared behavior).
+fn class_operations<'a>(
+    union: &'a rex_ir::Model,
+    package: &str,
+    class: &str,
+) -> Option<&'a [rex_ir::Operation]> {
+    union
+        .packages
+        .iter()
+        .find(|candidate| candidate.name == package)
+        .and_then(|candidate| candidate.classes.iter().find(|c| c.name == class))
+        .map(|def| def.operations.as_slice())
 }
 
 /// The comma-joined feature names of a class, for "did you mean" help.

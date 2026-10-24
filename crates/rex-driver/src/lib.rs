@@ -1208,6 +1208,12 @@ fn compile_evt_with(
 ///     nothing is synthesized — so the author declares the repository the
 ///     scaffolding would hang off. The service remains the author's to
 ///     declare.
+/// 15. **dto-with-ops warning** — a `dto` design whose class carries `ops`
+///     warns once per op, naming the design and the op: a dto is a transfer
+///     record, and behavior on it is almost always a modeling mistake (the
+///     layering heuristic is documented under "Domain operations vs service
+///     operations" in docs/DDD.md). Warning-severity — the artifact is
+///     unaffected; the union is only consulted when fully lowered.
 /// ## Aggregate derivation
 ///
 /// The aggregate boundary derives from the domain model's containment
