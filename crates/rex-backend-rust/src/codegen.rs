@@ -87,8 +87,8 @@ use std::path::Path;
 
 use anyhow::bail;
 use rex_ir::{
-    ClassDef, DatatypeDef, DefaultValue, EnumDef, Feature, FeatureKind, Model, Operation,
-    PrimitiveType, TypeRef, VocabularyDef, VocabularyEntry, VocabularyFacet,
+    ClassDef, DatatypeDef, DefaultValue, EnumDef, Feature, FeatureKind, Model, Multiplicity,
+    Operation, PrimitiveType, TypeRef, VocabularyDef, VocabularyEntry, VocabularyFacet,
 };
 
 use crate::naming::{rust_ident, slotmap_field, snake_case};
@@ -405,6 +405,7 @@ fn generate_unit(model: &Model) -> anyhow::Result<String> {
         e.push('\n');
         emit_struct(&mut e, &unit, class)?;
     }
+    emit_functions(&mut e, &unit)?;
     e.push('\n');
     emit_resource(&mut e, &unit)?;
     e.push('\n');
@@ -425,6 +426,18 @@ fn emit_header(e: &mut String, model: &Model, unit: &Unit<'_>) {
          //!   (the body text is embedded verbatim); body-less operations stay\n\
          //!   abstract — implement them as hand-written methods in your own modules;\n",
     );
+    if unit
+        .model
+        .packages
+        .iter()
+        .any(|package| !package.functions.is_empty())
+    {
+        e.push_str(
+            "//! - sigil-lowered package functions are emitted as free functions; a\n\
+             //!   `rust` body emits verbatim, anything else is a `todo!()` stub — the\n\
+             //!   verbatim `rosetta` body stays in the IR, never in generated code;\n",
+        );
+    }
     if unit
         .classes
         .iter()
@@ -1402,6 +1415,88 @@ fn emit_attribute_checks(
         ));
     }
     Ok(())
+}
+
+/// The sigil-lowered package functions ([`rex_ir::Package::functions`],
+/// wire contract rule 15) as free functions in the flattened module.
+///
+/// Body policy: a `rust` body emits verbatim (the class-operation
+/// convention); a `rosetta`-only or body-less function — today every
+/// lowered Rune function — emits a `todo!()` stub named after the
+/// function, because the verbatim Rune text is never emitted as code (wire
+/// contract rule 15). An `expr` body is a generate-time error: the neutral
+/// expression language has no free functions yet (rex-expr resolves calls
+/// against a receiver's class). Emits nothing for function-less models,
+/// keeping their generated code byte-identical.
+fn emit_functions(e: &mut String, unit: &Unit<'_>) -> anyhow::Result<()> {
+    for package in &unit.model.packages {
+        for function in &package.functions {
+            let expr_body = function.bodies.get("expr");
+            let rust_body = function.bodies.get("rust");
+            if let (Some(_), Some(_)) = (expr_body, rust_body) {
+                bail!(
+                    "function '{}' has conflicting 'rust' and 'expr' bodies; \
+                     declare exactly one body per function",
+                    function.name
+                );
+            }
+            if expr_body.is_some() {
+                bail!(
+                    "function '{}' has an 'expr' body; the neutral expression \
+                     language has no free functions yet",
+                    function.name
+                );
+            }
+            let params = function
+                .params
+                .iter()
+                .map(|param| {
+                    Ok(format!(
+                        "{}: {}",
+                        rust_ident(&snake_case(&param.name)),
+                        fn_param_type(&param.type_, param.multiplicity.as_ref())?
+                    ))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .join(", ");
+            let ret = op_type(&function.return_type)?;
+            let snake = rust_ident(&snake_case(&function.name));
+            e.push('\n');
+            match rust_body {
+                Some(body) => e.push_str(&format!(
+                    "/// Package function `{name}` (rust body embedded verbatim).\n\
+                     pub fn {snake}({params}) -> {ret} {{\n{body}\n}}\n",
+                    name = function.name,
+                )),
+                None => {
+                    let mut doc = format!("/// Package function `{}`", function.name);
+                    if let Some(description) = &function.description {
+                        doc.push_str(&format!(": {description}"));
+                    }
+                    e.push_str(&format!(
+                        "{doc}\n\
+                         /// Stub: the verbatim `rosetta` body stays in the IR (wire\n\
+                         /// contract rule 15); nothing executes Rune bodies yet.\n\
+                         pub fn {snake}({params}) -> {ret} {{\n\
+                         \x20   todo!()\n\
+                         }}\n",
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The Rust type of one package-function parameter: the `op_type` mapping,
+/// wrapped in `Vec<..>` when the parameter carries a many multiplicity (the
+/// feature-field convention; sigil `is_array` parameters carry `0..*`).
+fn fn_param_type(type_: &TypeRef, multiplicity: Option<&Multiplicity>) -> anyhow::Result<String> {
+    let inner = op_type(type_)?;
+    Ok(match multiplicity {
+        Some(multiplicity) if multiplicity.is_many() => format!("Vec<{inner}>"),
+        _ => inner,
+    })
 }
 
 fn emit_resource(e: &mut String, unit: &Unit<'_>) -> anyhow::Result<()> {

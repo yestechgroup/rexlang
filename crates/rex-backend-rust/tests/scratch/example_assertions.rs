@@ -617,4 +617,32 @@ mod example_assertions {
             super::assert_instance_json("support", &json);
         }
     }
+
+    // ------------------------------------------------------------------
+    // pricing — the sigil example: lowered Rune functions emit `todo!()`
+    // stubs; the verbatim `rosetta` body stays in the IR (wire contract
+    // rule 15), never in generated code.
+    // ------------------------------------------------------------------
+    mod pricing_example {
+        #[test]
+        #[should_panic(expected = "not yet implemented")]
+        fn lowered_function_stubs_panic_as_todo() {
+            crate::pricing::is_active(vec![]);
+        }
+
+        #[test]
+        fn stub_signatures_follow_the_multiplicity_conventions() {
+            // Compile-time proof of the emitted signatures: a class-typed
+            // `0..*` parameter arrives as `Vec<..Id>`, the opaque builtin
+            // datatype as its newtype.
+            let is_active: fn(Vec<crate::pricing::InstrumentId>) -> bool =
+                crate::pricing::is_active;
+            let price_quote: fn(
+                f64,
+                Vec<crate::pricing::InstrumentId>,
+                crate::pricing::zonedDateTime,
+            ) -> f64 = crate::pricing::price_quote;
+            let _ = (is_active, price_quote);
+        }
+    }
 }

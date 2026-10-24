@@ -1,0 +1,21 @@
+namespace pricing.model
+version "1.0.0"
+
+type Instrument: <"A tradable instrument.">
+	symbol string (1..1) <"The ticker symbol.">
+
+library function isActive(instruments Instrument[]) boolean <"Whether every given instrument is active.">
+
+func priceQuote: <"Compute the price of a quote.">
+	inputs:
+		notional number (1..1) <"The notional amount.">
+		legs Instrument (0..*) <"The priced legs.">
+		asOf zonedDateTime (1..1) <"The valuation timestamp.">
+	output:
+		price number (1..1) <"The computed price.">
+
+	condition PositiveNotional:
+		notional > 0
+
+	set price:
+		notional

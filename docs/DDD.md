@@ -220,6 +220,12 @@ consumers resolve against the domain model.
     imply the service), and the artifact stays validation-only — nothing is
     synthesized — so the author declares the repository the scaffolding
     would hang off. The service remains the author's to declare.
+15. **dto-with-ops warning** — a `dto` design whose class carries `ops`
+    warns once per op, naming the design and the op: a dto is a transfer
+    record, and behavior on it is almost always a modeling mistake (see
+    the layering heuristic under "Domain operations vs service
+    operations"). Warning-severity: the artifact is unaffected, and the
+    check runs only against a fully lowered union.
 
 ## Aggregate derivation
 
@@ -231,6 +237,30 @@ contained by another stereotyped entity's class is a non-root — it may not
 declare a repository. The closure is computed only when every imported
 domain lowered (a failed domain may hide containments, and a wrong
 non-root verdict is worse than none).
+
+## Domain operations vs service operations
+
+Mox class `op`s and `.ddd` service operations are deliberately different
+layers, and the split is the layering heuristic:
+
+- **Behavior confined to one aggregate stays a class `op`.** It lives in
+  the domain layer, is owned by the aggregate's class, and generates as an
+  instance method regardless of the class's stereotype.
+- **Behavior spanning aggregates, needing a transaction, or sitting at an
+  entry point is the cue for a `.ddd` service operation.** The service
+  operation delegates down to the aggregate-owned ops; it never
+  re-implements them.
+- **Authorization attaches at the service-operation/capability boundary**
+  (the `.actor` dimension). A domain `op` is not an entry point, so ops
+  never take `capability` clauses — guarding a domain method would bypass
+  the service boundary the policy dimension is defined over.
+
+A `dto`-designed class carrying `ops` is therefore flagged by validation
+rule 15 (a warning per op): transfer records carry data between layers, and
+behavior declared on them is almost always behavior that belongs on the
+aggregate's class or on a service. The escape hatch is unchanged: a
+body-less `op` stays the abstract hook implemented by hand in target code
+(the "Gap classes" divergence below).
 
 ## Capabilities and the actor dimension
 

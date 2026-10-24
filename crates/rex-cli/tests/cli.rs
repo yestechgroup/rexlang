@@ -1652,8 +1652,16 @@ fn gen_rust_accepts_multiple_files() {
 
 // --- the canonical examples suite --------------------------------------------
 
-/// The six canonical examples, hardcoded so a missing file fails loudly.
-const EXAMPLES: [&str; 6] = ["library", "ecommerce", "org", "iot", "shapes", "support"];
+/// The seven canonical examples, hardcoded so a missing file fails loudly.
+const EXAMPLES: [&str; 7] = [
+    "library",
+    "ecommerce",
+    "org",
+    "iot",
+    "shapes",
+    "support",
+    "pricing",
+];
 
 /// Canonical `.actor` policy files: compiled against the domain they import.
 const ACTOR_EXAMPLES: [&str; 1] = ["support"];

@@ -105,8 +105,12 @@
 //!    a `0..*` multiplicity). A function without an output cannot become an
 //!    operation — rexlang operations always return — so it is skipped with
 //!    a **warning** diagnostic naming it. The declaration's complete Rune
-//!    source is embedded verbatim as the body target **`"rosetta"`**:
-//!    dispatch heads, conditions, post-conditions, aliases, and `set`/`add`
+//!    source is embedded **ends-trimmed** verbatim as the body target
+//!    **`"rosetta"`**: sigil element spans consume trailing whitespace, so
+//!    the lowering trims the slice's trailing whitespace (the same
+//!    ends-trimmed convention as `when` conditions and `cedar` policy
+//!    bodies) while interior indentation survives byte-exact. Dispatch
+//!    heads, conditions, post-conditions, aliases, and `set`/`add`
 //!    statements survive only inside that text, and nothing in rexlang
 //!    parses or executes them yet. Builtin (`com.rosetta.model`) functions
 //!    stay skipped — rule 6 keeps that namespace minimal. Functions are not
@@ -1049,8 +1053,12 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Attaches the declaration's verbatim Rune source — sliced out of the
-    /// file's retained text by its span — as the `"rosetta"` body target.
-    /// The IR never parses or reformats the text (wire contract rule 15).
+    /// file's retained text by its span — as the `"rosetta"` body target,
+    /// ends-trimmed (contract rule 8): sigil element spans consume trailing
+    /// whitespace, so the raw slice typically ends with the declaration's
+    /// trailing blank line and the artifact does not carry it. Interior
+    /// indentation and whitespace are never reformatted, and the IR never
+    /// parses the text (wire contract rule 15).
     fn with_rosetta_body(
         &self,
         file: &ModelFile,
@@ -1060,7 +1068,7 @@ impl<'a> Lowerer<'a> {
         if let Some(text) = self.texts.get(file.name.as_str()) {
             operation.bodies.insert(
                 "rosetta".to_string(),
-                text[span.start..span.end].to_string(),
+                text[span.start..span.end].trim_end().to_string(),
             );
         }
     }
@@ -1070,9 +1078,11 @@ impl<'a> Lowerer<'a> {
     /// content actually references. Failed namespaces are skipped (their
     /// content is dropped), so the builtin emission only sees references
     /// from surviving content. Namespace/package collisions with the
-    /// declared `.mox` packages error naming both sources.
+    /// declared `.mox` packages error naming both sources. The lowerer is
+    /// consumed exactly once here, so each namespace's `NamespaceContent`
+    /// drains by value instead of cloning its collections.
     fn finish(
-        self,
+        mut self,
         declared: &[(&str, &str)],
         anchor: &(String, Span),
         failed: &BTreeSet<String>,
@@ -1103,13 +1113,15 @@ impl<'a> Lowerer<'a> {
             if namespace == BUILTIN_NAMESPACE || failed.contains(namespace) {
                 continue;
             }
-            let content = self.packages.get(namespace).expect("registered");
+            // The lowerer is consumed here, so each namespace's content
+            // moves out of the map by value — no per-collection clones.
+            let content = self.packages.remove(namespace).expect("registered");
             let mut package = ir::Package::new(namespace.clone());
-            package.enums = content.enums.clone();
-            package.datatypes = content.datatypes.clone();
-            package.interfaces = content.interfaces.clone();
-            package.classes = content.classes.clone();
-            package.functions = content.functions.clone();
+            package.enums = content.enums;
+            package.datatypes = content.datatypes;
+            package.interfaces = content.interfaces;
+            package.classes = content.classes;
+            package.functions = content.functions;
             packages.push(package);
         }
         // `com.rosetta.model` joins only when lowered content references it.
@@ -1173,6 +1185,15 @@ impl<'a> Lowerer<'a> {
                 }
                 for feature in &class.features {
                     scan(&feature.type_, &mut referenced);
+                }
+            }
+            // Functions count too: a Rune function typed by a builtin
+            // (e.g. a `zonedDateTime` input) must emit the referenced
+            // definition, or the artifact carries a dangling type.
+            for function in &package.functions {
+                scan(&function.return_type, &mut referenced);
+                for param in &function.params {
+                    scan(&param.type_, &mut referenced);
                 }
             }
         }

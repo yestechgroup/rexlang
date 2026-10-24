@@ -655,7 +655,7 @@ impl Printer {
                 .iter()
                 .find(|info| !is_comment(&info.tok))
                 .is_some_and(|info| info.tok == Tok::Ident("import".to_string()));
-            if !first && !(starts_import && prev_was_import) {
+            if !(first || starts_import && prev_was_import) {
                 self.out.push('\n');
             }
             self.emit_indent();

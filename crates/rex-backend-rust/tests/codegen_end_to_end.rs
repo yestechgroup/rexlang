@@ -524,3 +524,160 @@ fn check_currency_instance_fixture(instance_out: &Path) {
 fn generated_vocabulary_code_compiles_and_round_trips_by_key() {
     run_currency_scratch_crate();
 }
+
+// --- sigil-lowered package functions (wire contract rule 15) ----------------
+
+const SIGIL_FUNCS_MOX: &str = "tests/conformance/sigil/funcs.mox";
+const SIGIL_FUNCS_ROSETTA: &str = "tests/conformance/sigil/funcs.rosetta";
+
+/// The conformance sigil-func pair compiled through the full `import sigil`
+/// pipeline: the mox names the rosetta file, the driver lowers its
+/// namespaces to synthetic packages carrying `Package::functions`.
+fn sigil_funcs_model() -> Model {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../")
+        .canonicalize()
+        .expect("workspace root");
+    let mox = std::fs::read_to_string(root.join(SIGIL_FUNCS_MOX)).expect("read funcs.mox");
+    let rosetta =
+        std::fs::read_to_string(root.join(SIGIL_FUNCS_ROSETTA)).expect("read funcs.rosetta");
+    let compilation = rex_driver::compile_str(
+        SIGIL_FUNCS_MOX,
+        &mox,
+        &rex_driver::DomainImports {
+            schemas: rex_driver::SchemaImports::new(),
+            sigil: rex_driver::SigilImports::new().provide(
+                SIGIL_FUNCS_MOX,
+                "funcs.rosetta",
+                rosetta,
+            ),
+        },
+    );
+    assert!(
+        compilation.diagnostics.is_empty() && compilation.sigil_diagnostics.is_empty(),
+        "the sigil funcs pair must compile clean: {:?} {:?}",
+        compilation.diagnostics,
+        compilation.sigil_diagnostics
+    );
+    compilation.model.expect("funcs.mox lowered to the Core IR")
+}
+
+/// Sigil-lowered functions generate free `todo!()` stubs named after the
+/// declarations, with the backend's multiplicity conventions in their
+/// signatures — and the verbatim `rosetta` body text is never emitted as
+/// code (wire contract rule 15).
+#[test]
+fn sigil_functions_generate_todo_stubs_without_rosetta_text() {
+    let generated = rex_backend_rust::generate(&sigil_funcs_model()).expect("generate");
+    let code = &generated["models.rs"];
+    assert!(
+        code.contains("pub fn any_active(ids: Vec<String>) -> bool"),
+        "library-function stub with the 0..* convention:\n{code}"
+    );
+    assert!(
+        code.contains("pub fn calc_rate(notional: f64, leg_ids: Vec<String>) -> f64"),
+        "func stub with mixed multiplicities:\n{code}"
+    );
+    assert_eq!(
+        code.matches("\n    todo!()").count(),
+        2,
+        "one stub body per lowered function (the header note's todo!() mention\n\
+         doesn't count):\n{code}"
+    );
+    // The verbatim Rune text stays in the IR, never in generated code.
+    assert!(!code.contains("set rate:"), "{code}");
+    assert!(!code.contains("library function anyActive"), "{code}");
+    // The header documents the stub contract (only when functions exist).
+    assert!(code.contains("sigil-lowered package functions"), "{code}");
+}
+
+fn sigil_funcs_scratch_crate_files() -> Vec<(std::path::PathBuf, String)> {
+    let generated = rex_backend_rust::generate(&sigil_funcs_model()).expect("generate");
+    let models_rs = &generated["models.rs"];
+
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let runtime_path = Path::new(manifest)
+        .join("../../crates/rex-runtime")
+        .canonicalize()
+        .expect("rex-runtime path");
+
+    let lib_rs = format!(
+        "{models_rs}\n{}",
+        include_str!("scratch/sigil_func_tests.rs")
+    );
+
+    vec![
+        (
+            Path::new("Cargo.toml").to_path_buf(),
+            format!(
+                "[package]\n\
+                 name = \"rex-sigil-func-test\"\n\
+                 version = \"0.1.0\"\n\
+                 edition = \"2021\"\n\
+                 publish = false\n\n\
+                 # Standalone scratch crate: never a member of any workspace.\n\
+                 [workspace]\n\n\
+                 [lib]\n\
+                 path = \"src/lib.rs\"\n\n\
+                 [dependencies]\n\
+                 rex-runtime = {{ path = {:?} }}\n\
+                 slotmap = \"1\"\n\
+                 serde_json = \"1\"\n",
+                runtime_path
+            ),
+        ),
+        (Path::new("src/lib.rs").to_path_buf(), lib_rs),
+    ]
+}
+
+/// Runs `cargo test` inside the sigil-func scratch crate: the stubs compile
+/// with their declared signatures and panic as `todo!()` when called.
+fn run_sigil_funcs_scratch_crate() {
+    let cargo_available = std::process::Command::new("cargo")
+        .arg("--version")
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false);
+    if !cargo_available {
+        eprintln!("skipping sigil-func scratch-crate test: cargo not on PATH");
+        return;
+    }
+
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let scratch = Path::new(manifest).join("../../target/scratch/rex-sigil-func-test");
+    std::fs::create_dir_all(&scratch).expect("create scratch root");
+    for (relative, contents) in sigil_funcs_scratch_crate_files() {
+        let path = scratch.join(&relative);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create scratch dir");
+        }
+        std::fs::write(path, contents).expect("write scratch file");
+    }
+
+    let run = |offline: bool| {
+        let mut command = std::process::Command::new("cargo");
+        command.arg("test").current_dir(&scratch);
+        if offline {
+            command.arg("--offline");
+        }
+        command.output().expect("spawn cargo")
+    };
+
+    let mut output = run(true);
+    if !output.status.success() {
+        eprintln!("offline scratch build failed; retrying online");
+        output = run(false);
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        output.status.success(),
+        "sigil-func scratch crate cargo test failed:\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+    );
+    eprintln!("{stdout}");
+}
+
+#[test]
+fn generated_sigil_function_stubs_compile_and_panic_as_todo() {
+    run_sigil_funcs_scratch_crate();
+}
