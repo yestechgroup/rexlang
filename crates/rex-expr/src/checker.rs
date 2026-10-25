@@ -40,6 +40,51 @@ pub struct ClassInfo {
     pub operations: Vec<Operation>,
 }
 
+/// The resolvable signature of one package function (`Package::functions`,
+/// wire contract rule 15). Parameter and return types carry their
+/// multiplicity in the [`Ty`]: a required `(1..1)` parameter is plain, a
+/// many one is [`Ty::List`], an optional one [`Ty::Option`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunctionSignature {
+    /// Owning package name (the sigil namespace for lowered Rune
+    /// functions).
+    pub package: String,
+    /// The function name as declared.
+    pub name: String,
+    /// Parameter types in declaration order.
+    pub params: Vec<Ty>,
+    /// The return type.
+    pub return_type: Ty,
+}
+
+impl FunctionSignature {
+    /// Extracts the signature of one lowered function. Parameter
+    /// multiplicities map per the IR rules: unset (the required `(1..1)`
+    /// domain-operation convention) is plain, `is_many` lowers to
+    /// [`Ty::List`], a `0..1` lowers to [`Ty::Option`].
+    pub fn from_operation(package: &str, operation: &Operation) -> Self {
+        let params = operation
+            .params
+            .iter()
+            .map(|param| {
+                let ty = Ty::from_type_ref(&param.type_);
+                match &param.multiplicity {
+                    None => ty,
+                    Some(multiplicity) if multiplicity.is_many() => ty.list(),
+                    Some(multiplicity) if multiplicity.lower == 0 => ty.optional(),
+                    Some(_) => ty,
+                }
+            })
+            .collect();
+        FunctionSignature {
+            package: package.to_string(),
+            name: operation.name.clone(),
+            params,
+            return_type: Ty::from_type_ref(&operation.return_type),
+        }
+    }
+}
+
 /// The unified domain-object index: the generic binding seam every surface
 /// lowers into. Classes carry their resolvable members (features, operations,
 /// supertypes); every other named type is registered by kind. Built from a
@@ -52,6 +97,10 @@ pub struct ClassInfo {
 pub struct DomainTypes {
     classes: BTreeMap<(String, String), ClassInfo>,
     named: BTreeMap<(String, String), NamedKind>,
+    /// Package functions by bare name, union-wide. A name may carry
+    /// candidates from several packages; ambiguity is a *call-time* error,
+    /// so an uncalled duplicate never fails a compilation.
+    functions: BTreeMap<String, Vec<FunctionSignature>>,
 }
 
 /// Compatibility alias: the type universe of a model, as consumed by
@@ -83,6 +132,9 @@ impl DomainTypes {
             }
             for vocabulary in &package.vocabularies {
                 context.insert_named(&package.name, &vocabulary.name, NamedKind::Vocabulary);
+            }
+            for function in &package.functions {
+                context.insert_function(&package.name, function);
             }
         }
         context
@@ -117,12 +169,46 @@ impl DomainTypes {
             .insert((package.to_string(), name.to_string()), kind);
     }
 
+    /// Registers one package function under its bare name. Identical
+    /// re-registrations (the same package and signature — e.g. a domain
+    /// unioned twice) dedupe; a same-named function from a *different*
+    /// package becomes a second candidate, and a call that cannot pick
+    /// between candidates is the ambiguity error.
+    pub fn insert_function(&mut self, package: &str, operation: &Operation) {
+        let signature = FunctionSignature::from_operation(package, operation);
+        let candidates = self.functions.entry(signature.name.clone()).or_default();
+        if !candidates.contains(&signature) {
+            candidates.push(signature);
+        }
+    }
+
+    /// Looks up the candidates for one bare function name.
+    pub fn function(&self, name: &str) -> Option<&[FunctionSignature]> {
+        self.functions.get(name).map(Vec::as_slice)
+    }
+
+    /// Every indexed function name, sorted — the "known functions" list in
+    /// unknown-function diagnostics.
+    pub fn function_names(&self) -> Vec<&str> {
+        self.functions.keys().map(String::as_str).collect()
+    }
+
     /// Merges `other` into `self`; `other`'s entries win on collision. This
     /// is how domain unions are assembled: one [`DomainTypes`] per
-    /// contributing surface, combined before binding.
+    /// contributing surface, combined before binding. Function candidates
+    /// union instead of replacing (both sides' packages contribute), with
+    /// identical signatures deduped.
     pub fn merge(&mut self, other: DomainTypes) {
         self.classes.extend(other.classes);
         self.named.extend(other.named);
+        for (name, candidates) in other.functions {
+            let entry = self.functions.entry(name).or_default();
+            for signature in candidates {
+                if !entry.contains(&signature) {
+                    entry.push(signature);
+                }
+            }
+        }
     }
 
     /// Looks up a class's resolvable members.
@@ -237,6 +323,7 @@ impl TypeChecker {
                 args,
                 optional_safe,
             } => self.call(scope, receiver, *optional_safe, name, args, errors),
+            ExprKind::FunctionCall { name, args } => self.function_call(scope, name, args, errors),
             ExprKind::Algebra {
                 receiver,
                 kind,
@@ -858,6 +945,84 @@ impl TypeChecker {
         }
 
         self.wrap_optional(Ty::from_type_ref(&operation.return_type), optional_safe)
+    }
+
+    /// A bare package-function call `name(args)` (no receiver). Functions
+    /// resolve through the union namespace — never through a receiver's
+    /// class — so the one hazard is two packages declaring the same name,
+    /// which is the ambiguity error rather than a silent pick. Arguments
+    /// follow ordinary call semantics: no R3 auto-propagation (an `Option`
+    /// argument is required where the parameter declares one; plain values
+    /// do not widen), and R1–R4 apply inside them unchanged.
+    fn function_call(
+        &self,
+        scope: &Scope,
+        name: &Spanned<String>,
+        args: &[Expr],
+        errors: &mut Vec<ExprError>,
+    ) -> Checked {
+        let candidates = match self.context.function(&name.value) {
+            Some([candidate]) => candidate,
+            Some(candidates) if candidates.len() > 1 => {
+                let packages = candidates
+                    .iter()
+                    .map(|s| format!("`{}`", s.package))
+                    .collect::<Vec<_>>()
+                    .join(" and ");
+                errors.push(ExprError::new(
+                    format!(
+                        "ambiguous function `{}`: declared by {}",
+                        name.value, packages
+                    ),
+                    name.span,
+                ));
+                return Err(());
+            }
+            _ => {
+                let known = self.context.function_names();
+                let message = if known.is_empty() {
+                    format!("unknown function `{}`", name.value)
+                } else {
+                    format!(
+                        "unknown function `{}` (known: {})",
+                        name.value,
+                        known.join(", ")
+                    )
+                };
+                errors.push(ExprError::new(message, name.span));
+                return Err(());
+            }
+        };
+
+        if args.len() != candidates.params.len() {
+            errors.push(ExprError::new(
+                format!(
+                    "arity mismatch: function `{}` expects {} argument(s), found {}",
+                    name.value,
+                    candidates.params.len(),
+                    args.len()
+                ),
+                name.span,
+            ));
+            return Err(());
+        }
+
+        for (arg, expected) in args.iter().zip(&candidates.params) {
+            if let Ok(ty) = self.check(scope, arg, Some(expected), errors) {
+                if ty != *expected {
+                    errors.push(ExprError::new(
+                        format!(
+                            "argument type mismatch in call to `{}`: expected {expected}, \
+                             found {ty}",
+                            name.value
+                        ),
+                        arg.span,
+                    ));
+                }
+            }
+        }
+
+        Ok(candidates.return_type.clone())
     }
 
     /// The typed calendar algebra on `date` receivers (spec R5–R8):

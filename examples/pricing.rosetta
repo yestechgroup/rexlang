@@ -6,6 +6,8 @@ type Instrument: <"A tradable instrument.">
 
 library function isActive(instruments Instrument[]) boolean <"Whether every given instrument is active.">
 
+library function floorRate(rate number) number <"Floor a rate to the tick.">
+
 func priceQuote: <"Compute the price of a quote.">
 	inputs:
 		notional number (1..1) <"The notional amount.">

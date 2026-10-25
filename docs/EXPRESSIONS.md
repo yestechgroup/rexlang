@@ -89,8 +89,15 @@ Notes:
   algebra table): `first` takes an optional lambda, `filter`/`map`/`any`
   require exactly one lambda, `size`/`sum` take none. Any other `NAME` with
   parentheses is an operation call on a model-declared `op`.
-- A bare `NAME` is a variable reference: a `let` binding or a lambda
-  parameter. Feature access always has an explicit receiver.
+- A bare `NAME (args)` **without** a receiver is a package-function call:
+  it resolves against the union namespace's `Package::functions` (the
+  sigil-lowered Rune functions), never against a receiver's class, so it
+  cannot collide with an `op` call. A name declared by two packages is the
+  ambiguity error naming both; an unknown name lists the known functions.
+  There are still **no arbitrary host-library calls** — only model-declared
+  functions.
+- A bare `NAME` (no parentheses) is a variable reference: a `let` binding
+  or a lambda parameter. Feature access always has an explicit receiver.
 
 ### Precedence (loosest to tightest)
 
@@ -165,6 +172,12 @@ and no literal adaptation. The `if` expression's type is that type.
 - `op` call: the declared return type, after argument checking (arity and
   per-parameter types; a class-typed parameter expects that `Named` type).
   L1 applies to arguments.
+- package-function call: the declared return type, after argument checking
+  (arity and per-parameter types). A parameter's multiplicity is its type:
+  `(1..1)` takes a plain value, `0..*` takes a `List(T)`, `0..1` takes
+  `Option(T)` — and the match is strict (no R3 auto-propagation: a plain
+  value does not widen to `Option`; `?.`/`?:` produce the optional). R1–R4
+  apply inside arguments unchanged.
 
 Unknown features, unknown operations, and unknown names are type errors whose
 diagnostic span points at the offending name token.

@@ -33,6 +33,13 @@ fn plain(expr: &Expr) -> Expr {
             literal_span: zero,
         },
         ExprKind::Name(text) => ExprKind::Name(text.clone()),
+        ExprKind::FunctionCall { name, args } => ExprKind::FunctionCall {
+            name: Spanned {
+                value: name.value.clone(),
+                span: zero,
+            },
+            args: args.iter().map(plain).collect(),
+        },
         ExprKind::FeatureAccess {
             receiver,
             name,
@@ -683,10 +690,19 @@ fn garbage_never_panics() {
 
 #[test]
 fn algebra_names_are_contextual_and_keywords_are_reserved() {
-    // `first` etc. are ordinary identifiers outside call position; a bare call
-    // has no receiver and the grammar has no free functions.
+    // `first` etc. are ordinary identifiers outside call position. A bare
+    // call is a *package-function* call since #63 — receiver-bound algebra
+    // is unchanged — so a bare `first(1)` parses and its resolvability is
+    // the checker's business, not the parser's.
     let result = parse("first(1)");
-    assert!(result.ast.is_none() || !result.errors.is_empty());
+    assert!(
+        matches!(
+            result.ast.as_ref().map(|expr| &expr.kind),
+            Some(ExprKind::FunctionCall { .. })
+        ),
+        "a bare call parses as a function call: {:?}",
+        result.ast.map(|expr| expr.kind)
+    );
     // Keywords cannot be identifiers: this must not parse as `if + 1`.
     assert!(!parse("if + 1").errors.is_empty());
 }
@@ -798,4 +814,74 @@ fn float_literals_parse_with_int_member_access_untouched() {
         "1.size() must parse: {:?}",
         member.errors
     );
+}
+
+// --- bare package-function calls (issue #63) --------------------------------
+
+#[test]
+fn a_bare_call_parses_as_a_function_call_without_a_receiver() {
+    let ExprKind::FunctionCall { name, args } = kind(&ok("priceQuote(notional, legs)")) else {
+        panic!(
+            "expected a function call: {:#?}",
+            ok("priceQuote(notional, legs)").kind
+        )
+    };
+    assert_eq!(name.value, "priceQuote");
+    assert_eq!(args.len(), 2);
+}
+
+#[test]
+fn a_bare_call_takes_empty_and_trailing_paren_shapes() {
+    for (source, expected_args) in [
+        ("floorRate()", 0),
+        ("floorRate(   )", 0),
+        ("floorRate(1.5)", 1),
+    ] {
+        let ExprKind::FunctionCall { args, .. } = kind(&ok(source)) else {
+            panic!("{source}: expected a function call")
+        };
+        assert_eq!(args.len(), expected_args, "{source}");
+    }
+}
+
+#[test]
+fn a_bare_name_without_parens_stays_a_variable_reference() {
+    assert!(matches!(kind(&ok("priceQuote")), ExprKind::Name(_)));
+}
+
+#[test]
+fn a_bare_algebra_name_is_a_function_call_not_collection_algebra() {
+    // Algebra stays receiver-bound: a bare `size(...)` is a function call.
+    assert!(matches!(
+        kind(&ok("size(items)")),
+        ExprKind::FunctionCall { .. }
+    ));
+    // The receiver form is unchanged.
+    assert!(matches!(
+        kind(&ok("items.size()")),
+        ExprKind::Algebra {
+            kind: AlgebraKind::Size,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn a_call_result_supports_postfix_navigation() {
+    let navigated = ok("floorRate(1.5).precision");
+    let ExprKind::FeatureAccess { receiver, .. } = &navigated.kind else {
+        panic!(
+            "expected feature access over the call: {:#?}",
+            navigated.kind
+        )
+    };
+    assert!(matches!(receiver.kind, ExprKind::FunctionCall { .. }));
+}
+
+#[test]
+fn a_bare_call_argument_may_be_a_full_expression() {
+    let ExprKind::FunctionCall { args, .. } = kind(&ok("floorRate(pages + 1)")) else {
+        panic!("expected a function call")
+    };
+    assert!(matches!(args[0].kind, ExprKind::Binary { .. }));
 }

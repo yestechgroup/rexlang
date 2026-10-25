@@ -1662,3 +1662,92 @@ fn an_output_less_function_is_skipped_with_a_warning() {
         warning.1.message
     );
 }
+
+/// An `.mox` `expr` body may call a lowered package function: the sigil
+/// functions join the typing index through `DomainTypes::from_model`, and
+/// the artifact carries both the function and the calling operation. The
+/// typing itself is the backend's generate-time contract (`expr` bodies are
+/// not driver-checked); the backend tests pin the resolution and lowering.
+#[test]
+fn an_expr_body_may_call_a_lowered_package_function() {
+    let rosetta = concat!(
+        "namespace oracle.calls\n\n",
+        "library function floorRate(rate number) number <\"Floor a rate.\">\n"
+    );
+    let mox = concat!(
+        "package demo\n\n",
+        "import sigil \"calls.rosetta\"\n\n",
+        "class C {\n",
+        "    String x\n",
+        "    op double apply(double r) { expr { floorRate(r) } }\n",
+        "}\n",
+    )
+    .to_string();
+    let compilation = compile_with_sigil(
+        &[(MOX.to_string(), mox)],
+        &rex_driver::SigilImports::new().provide(MOX, "calls.rosetta", rosetta),
+    );
+    let model = compile_clean(&compilation);
+    let package = model
+        .packages
+        .iter()
+        .find(|package| package.name == "oracle.calls")
+        .expect("the synthetic package");
+    assert_eq!(package.functions[0].name, "floorRate");
+    let class = &model
+        .packages
+        .iter()
+        .find(|package| package.name == "demo")
+        .expect("the demo package")
+        .classes[0];
+    assert_eq!(class.operations[0].name, "apply");
+    assert!(class.operations[0].bodies.contains_key("expr"));
+}
+
+/// The documented sigil limitation, pinned: a subject typed by a
+/// sigil-lowered class cannot take steps — sigil classes carry no ops, so
+/// the step's operation lookup fails with the standard unknown-operation
+/// error (USECASES.md, "The sigil limitation, precisely"). Functions are
+/// computations, never step targets.
+#[test]
+fn a_sigil_typed_subject_cannot_take_steps() {
+    let domain = concat!(
+        "package demo\n\n",
+        "import sigil \"calls.rosetta\"\n\n",
+        "class Desk {\n",
+        "    String x\n",
+        "}\n",
+    )
+    .to_string();
+    let rosetta = "namespace oracle.uc\n\ntype Instrument: <\"A type.\">\n\tid string (1..1)\n";
+    let usecase = concat!(
+        "import \"demo.mox\"\n\n",
+        "usecase Handover {\n",
+        "    subject Thing: oracle.uc.Instrument {\n",
+        "        perform go: nope;\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = rex_driver::compile_usecase_str(
+        "use.uc",
+        usecase,
+        &[(MOX.to_string(), domain)],
+        &rex_driver::DomainImports {
+            schemas: rex_driver::SchemaImports::new(),
+            sigil: rex_driver::SigilImports::new().provide(MOX, "calls.rosetta", rosetta),
+        },
+        &[],
+        &[],
+        &[],
+    );
+    assert!(
+        compilation
+            .diagnostics
+            .iter()
+            .any(|(_, diagnostic)| diagnostic
+                .message
+                .contains("unknown operation 'nope' on class 'Instrument'")),
+        "expected the unknown-operation diagnostic: {:?}",
+        compilation.diagnostics
+    );
+}

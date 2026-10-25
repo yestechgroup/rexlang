@@ -397,10 +397,13 @@ resolver's override check): `String`/`Uuid` → string, `Int` → int,
 language's calendar `date` (a checking alias — no time-of-day
 reasoning). Generic (identifier) input types stay deferred — expressions
 relying on them are skipped, not errors. Constructs the shared
-expression language cannot type (bare calls other than
-`date("YYYY-MM-DD")`, `%`, the `~=`/`!~` regex operators, array/object
-values) are also skipped silently: evaluation stays deferred to
-generation time, as below. Diagnostics `E0100`–`E0103` (unknown data
+expression language cannot type (`%`, the `~=`/`!~` regex operators,
+array/object values) are also skipped silently: evaluation stays deferred
+to generation time, as below. Bare calls are the one constructor that
+moved from skipped to typed: they lower as package-function calls and
+resolve against the domain union's `Package::functions` (the sigil-lowered
+Rune functions) — an indexed function type-checks, an unknown one is an
+`E0101` diagnostic. Diagnostics `E0100`–`E0103` (unknown data
 entity, type mismatch, unknown feature, unknown name) name the site:
 `view 'X' component 'orders': …`. With `domains: None` the checker is a
 no-op.
