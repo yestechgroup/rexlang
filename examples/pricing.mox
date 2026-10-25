@@ -5,7 +5,6 @@ import sigil "pricing.rosetta"
 class Quote {
     String symbol
     double notional
-
     op double floorNotional(double floor) {
         expr { floorRate(notional) + floor }
     }
