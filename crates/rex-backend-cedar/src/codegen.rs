@@ -389,6 +389,9 @@ fn emit_condition(expr: &Expr, capability: &str, class: &ClassDef) -> anyhow::Re
         // integers/strings, and float-typed attributes are already refused
         // at the `Name` arm below.
         ExprKind::Float(_) => Err(reject("a float literal")),
+        // A bare package-function call is typed and lowerable to Rust, but
+        // Cedar conditions decide at policy time: no function-call mapping.
+        ExprKind::FunctionCall { .. } => Err(reject("a package-function call")),
         ExprKind::String(text) => Ok(cedar_string_literal(text)),
         ExprKind::Bool(value) => Ok(value.to_string()),
         ExprKind::Null => Err(reject("`null`")),
@@ -874,7 +877,7 @@ mod tests {
 
     #[test]
     fn rejected_constructs_name_the_capability_and_the_construct() {
-        let rejected: [(&str, &str); 8] = [
+        let rejected: [(&str, &str); 9] = [
             ("let x = 1; x", "`let`"),
             ("if internal { 1 } else { 2 }", "`if`"),
             ("internal?.flag == true", "`?.`"),
@@ -883,6 +886,7 @@ mod tests {
             ("internal.filter(x => x)", "collection algebra `filter`"),
             ("x => x", "a lambda"),
             ("[1, 2]", "list literals"),
+            ("today() == \"x\"", "a package-function call"),
         ];
         for (source, construct) in rejected {
             let actors = fixture_actors(vec![grant(

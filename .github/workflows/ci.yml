@@ -17,10 +17,24 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      # The runner's preinstalled toolchains (Android/ .NET/ GHC) eat disk
+      # the build needs: a full workspace + the scratch-crate e2e runs have
+      # hit the ceiling, and lld then dies with SIGBUS writing mmap'd
+      # output (seen as `ld terminated with signal 7` in the doc-tests).
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghc 2>/dev/null || true
+          df -h / /tmp
       - name: Build
         run: cargo build --workspace --all-targets
+      # rustdoc writes doctest build artifacts under TMPDIR; on a small
+      # tmpfs the linker SIGBUSes there (the AGENTS.md gotcha). Point it
+      # at the workspace's disk-backed target/, and cap cargo's job count
+      # so the eleven rex-driver doctests don't link concurrently.
       - name: Tests
-        run: cargo test --workspace
+        run: |
+          mkdir -p target/tmp
+          TMPDIR=$PWD/target/tmp cargo test --workspace --jobs 2
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Format check

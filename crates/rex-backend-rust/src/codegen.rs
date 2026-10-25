@@ -1429,6 +1429,25 @@ fn emit_attribute_checks(
 /// against a receiver's class). Emits nothing for function-less models,
 /// keeping their generated code byte-identical.
 fn emit_functions(e: &mut String, unit: &Unit<'_>) -> anyhow::Result<()> {
+    // Rust flattens packages into one module, so two functions whose names
+    // snake-case identically (`fooBar` / `foo_bar`) would collide — the
+    // `collect_unit` duplicate-class precedent: a generate-time error
+    // naming both declarations.
+    let mut seen: BTreeMap<String, String> = BTreeMap::new();
+    for package in &unit.model.packages {
+        for function in &package.functions {
+            let snake = snake_case(&function.name);
+            if let Some(previous) = seen.insert(snake.clone(), package.name.clone()) {
+                bail!(
+                    "duplicate function name '{}' in generated code: declared by packages \
+                     '{}' and '{}'",
+                    function.name,
+                    previous,
+                    package.name
+                );
+            }
+        }
+    }
     for package in &unit.model.packages {
         for function in &package.functions {
             let expr_body = function.bodies.get("expr");

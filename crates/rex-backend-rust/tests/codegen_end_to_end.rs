@@ -681,3 +681,124 @@ fn run_sigil_funcs_scratch_crate() {
 fn generated_sigil_function_stubs_compile_and_panic_as_todo() {
     run_sigil_funcs_scratch_crate();
 }
+
+// --- the function call surface (issue #63) ----------------------------------
+
+/// One sigil-style functions package: `floorRate(double) -> double` plus a
+/// `0..*`-parameter `priceQuote`, the #63 call-surface fixtures.
+fn functions_package() -> Package {
+    let mut pricing = Package::new("pricing.model");
+    pricing.functions.push(Operation::new(
+        "floorRate",
+        TypeRef::Primitive(PrimitiveType::Double),
+        vec![OperationParam {
+            name: "rate".to_string(),
+            type_: TypeRef::Primitive(PrimitiveType::Double),
+            multiplicity: None,
+        }],
+    ));
+    pricing
+}
+
+/// A class whose `apply` op calls the package function from its `expr`
+/// body: typing resolves through `DomainTypes::from_model`, lowering emits
+/// the free stub call (#61) in the same module.
+#[test]
+fn an_expr_body_calling_a_function_lowers_to_the_free_stub() {
+    let mut model = Model::new();
+    let mut package = Package::new("demo");
+    let mut class = ClassDef::new(
+        "Quote",
+        vec![],
+        vec![Feature::new(
+            "rate",
+            FeatureKind::Attribute,
+            TypeRef::Primitive(PrimitiveType::Double),
+            Multiplicity::REQUIRED,
+        )],
+    );
+    class.operations.push(
+        Operation::new(
+            "apply",
+            TypeRef::Primitive(PrimitiveType::Double),
+            vec![OperationParam {
+                name: "r".to_string(),
+                type_: TypeRef::Primitive(PrimitiveType::Double),
+                multiplicity: None,
+            }],
+        )
+        .with_body("expr", "floorRate(r) + rate"),
+    );
+    package.classes.push(class);
+    package.functions.extend(functions_package().functions);
+    model.packages.push(package);
+
+    let generated = rex_backend_rust::generate(&model).expect("generate");
+    let code = &generated["models.rs"];
+    assert!(
+        code.contains("floor_rate(r) + self.rate"),
+        "the call lowers to the free stub, args per their own types:\n{code}"
+    );
+}
+
+/// An unknown function in an `expr` body is a generate-time error naming
+/// the function (expr bodies are the backend's generate-time contract).
+#[test]
+fn an_expr_body_calling_an_unknown_function_fails_generation() {
+    let mut model = Model::new();
+    let mut package = Package::new("demo");
+    let mut class = ClassDef::new("Quote", vec![], vec![]);
+    class.operations.push(
+        Operation::new(
+            "apply",
+            TypeRef::Primitive(PrimitiveType::Double),
+            vec![OperationParam {
+                name: "r".to_string(),
+                type_: TypeRef::Primitive(PrimitiveType::Double),
+                multiplicity: None,
+            }],
+        )
+        .with_body("expr", "noSuchFunction(r)"),
+    );
+    package.classes.push(class);
+    model.packages.push(package);
+
+    let error = rex_backend_rust::generate(&model).expect_err("generation must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("unknown function `noSuchFunction`"),
+        "{error}"
+    );
+}
+
+/// Two functions whose names snake-case identically would collide in the
+/// flattened module: a generate-time error naming both packages (the
+/// `collect_unit` duplicate-class precedent).
+#[test]
+fn emit_functions_bails_on_duplicate_snake_case_names() {
+    let mut model = Model::new();
+    let mut first = Package::new("a");
+    first.functions.push(Operation::new(
+        "fooBar",
+        TypeRef::Primitive(PrimitiveType::Boolean),
+        vec![],
+    ));
+    let mut second = Package::new("b");
+    second.functions.push(Operation::new(
+        "foo_bar",
+        TypeRef::Primitive(PrimitiveType::Boolean),
+        vec![],
+    ));
+    model.packages.push(first);
+    model.packages.push(second);
+
+    let error = rex_backend_rust::generate(&model).expect_err("generation must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("duplicate function name 'foo_bar'")
+            && error.to_string().contains("'a' and 'b'"),
+        "{error}"
+    );
+}

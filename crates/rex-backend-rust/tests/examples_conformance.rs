@@ -46,7 +46,7 @@ fn sigil_example_carries_function_signatures_and_verbatim_bodies() {
             .iter()
             .map(|f| f.name.as_str())
             .collect::<Vec<_>>(),
-        vec!["isActive", "priceQuote"],
+        vec!["isActive", "floorRate", "priceQuote"],
         "lowered functions in declaration order"
     );
 
@@ -58,7 +58,7 @@ fn sigil_example_carries_function_signatures_and_verbatim_bodies() {
         "a library function's is_array parameter carries 0..*"
     );
 
-    let price_quote = &package.functions[1];
+    let price_quote = &package.functions[2];
     assert_eq!(price_quote.params.len(), 3);
     assert_eq!(
         price_quote.params[2].type_,

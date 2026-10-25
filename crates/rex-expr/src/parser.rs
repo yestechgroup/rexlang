@@ -312,7 +312,23 @@ where
             just(Token::True).map_with(|_, e| Expr::new(ExprKind::Bool(true), e.span())),
             just(Token::False).map_with(|_, e| Expr::new(ExprKind::Bool(false), e.span())),
             just(Token::Null).map_with(|_, e| Expr::new(ExprKind::Null, e.span())),
-            name().map_with(|n, e| Expr::new(ExprKind::Name(n.value), e.span())),
+            // A bare `name(args)` is a package-function call (no receiver —
+            // docs/EXPRESSIONS.md, "Package functions"); `name` alone stays
+            // a variable reference, and algebra names keep their receiver
+            // requirement (a bare `size(...)` is a function call, never the
+            // collection algebra).
+            name()
+                .then(
+                    expr.clone()
+                        .separated_by(just(Token::Comma))
+                        .collect::<Vec<_>>()
+                        .delimited_by(just(Token::LParen), just(Token::RParen))
+                        .or_not(),
+                )
+                .map_with(|(n, args), e| match args {
+                    Some(args) => Expr::new(ExprKind::FunctionCall { name: n, args }, e.span()),
+                    None => Expr::new(ExprKind::Name(n.value), e.span()),
+                }),
             expr.clone()
                 .delimited_by(just(Token::LParen), just(Token::RParen))
                 .boxed(),

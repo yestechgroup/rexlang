@@ -356,6 +356,7 @@ impl Lowerer<'_, '_> {
                 args,
                 optional_safe,
             } => self.call(receiver, name, args, *optional_safe),
+            ExprKind::FunctionCall { name, args } => self.function_call(name, args),
             ExprKind::Algebra {
                 receiver,
                 kind,
@@ -635,6 +636,53 @@ impl Lowerer<'_, '_> {
                 )
             }
         })
+    }
+
+    /// A bare package-function call `name(args)` (no receiver): lowers to
+    /// the free function #61 emits in the same module. The tree has already
+    /// type-checked, so the function resolves to exactly one candidate;
+    /// arguments lower per their own types (the signature's `Ty` shapes —
+    /// plain, `Vec<..>` for many, `Option<..>` for optional — match what
+    /// expressions produce).
+    fn function_call(
+        &mut self,
+        name: &rex_expr::Spanned<String>,
+        args: &[Expr],
+    ) -> Result<String, LowerError> {
+        let candidates: Vec<_> = self
+            .ctx
+            .model
+            .packages
+            .iter()
+            .flat_map(|package| {
+                package.functions.iter().map(|function| {
+                    rex_expr::FunctionSignature::from_operation(&package.name, function)
+                })
+            })
+            .filter(|signature| signature.name == name.value)
+            .collect();
+        let Some(signature) = candidates.first() else {
+            return Err(LowerError::new(format!(
+                "cannot lower call to `{}`: no package function of that name",
+                name.value
+            )));
+        };
+        if candidates.len() > 1 {
+            return Err(LowerError::new(format!(
+                "cannot lower call to `{}`: {} packages declare it",
+                name.value,
+                candidates.len()
+            )));
+        }
+
+        let mut lowered_args = Vec::new();
+        for (arg, expected) in args.iter().zip(&signature.params) {
+            // L1: an integer-literal argument adapts to a long parameter.
+            let arg_ty = self.operand_ty(arg, *expected == Ty::long())?;
+            lowered_args.push(self.lower(arg, &arg_ty)?);
+        }
+        let function = rust_ident(&snake_case(&signature.name));
+        Ok(format!("{}({})", function, lowered_args.join(", ")))
     }
 
     /// The calendar algebra on `date` receivers (spec R5–R8): the runtime

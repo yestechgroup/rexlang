@@ -144,9 +144,12 @@ synthesized `Model`:
 2. rex-backend-rust emits bodies instead of stubs; the stub remains only
    for functions whose statements could not be checked (the documented
    generation-time deferral contract, mirroring the `.ifml` checker's).
-3. The call surface (#63): rex-expr resolves `name(...)` against union
-   package functions; `.uc` steps and IFML handlers decide their
-   subject-free-step question with the typing index in place.
+3. The call surface (#63, landed): rex-expr resolves a bare `name(args)`
+   against the union's package functions (`DomainTypes` indexes them;
+   same-name ambiguity is a call-time error), IFML handler expressions
+   type them, and the Rust backend lowers calls to the #61 stubs until
+   stages 1–2 make them executable. `.uc` keeps its operation-only steps
+   (a documented non-goal: the grammar has no expression positions).
 
 Each stage keeps the wire format additive: function-less models stay
 byte-identical, and the golden diff of stage 1 is reviewed as a spec

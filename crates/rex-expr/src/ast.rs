@@ -94,6 +94,16 @@ pub enum ExprKind {
         /// `true` when invoked through `?.`.
         optional_safe: bool,
     },
+    /// A package-function call `name(args)` — the one receiver-less call
+    /// form. Functions live on the union namespace (`Package::functions`,
+    /// wire contract rule 15), never on a class, so a bare call is
+    /// unambiguous by construction: receiver calls stay class operations.
+    FunctionCall {
+        /// The function name as written.
+        name: Spanned<String>,
+        /// Arguments in source order.
+        args: Vec<Expr>,
+    },
     /// The fixed collection algebra: `receiver.kind(lambda?)` (spec A1–A6).
     Algebra {
         /// The collection being folded over.

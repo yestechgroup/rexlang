@@ -46,8 +46,10 @@
 //! A poisoned lowering or an untypeable context produces **no** diagnostic
 //! — one unmappable node disables the whole expression:
 //!
-//! - bare calls other than `date("YYYY-MM-DD")` (`today()`, `score(...)`)
-//!   — rex-expr has no free functions;
+//! - bare calls other than `date("YYYY-MM-DD")`: since rex-expr gained
+//!   package functions (#63) these lower as `FunctionCall` and **type
+//!   against the domain union** — an unknown bare call is a diagnostic, not
+//!   a skip. Only a call whose arguments cannot lower is still skipped;
 //! - the `%`, `~=`, and `!~` operators — rex-expr has no such operators;
 //! - `Array`/`Object` literal property values;
 //! - expressions referencing event parameters, or parameters whose declared
@@ -821,7 +823,10 @@ fn lower(expr: &Expression) -> Option<Expr> {
         },
         // The date constructor is expressible through the surface grammar
         // (`date("2026-01-01")`): one string-literal argument. Every other
-        // bare call (`today()`, `score(...)`) has no rex-expr shape.
+        // bare call lowers as a package-function call: rex-expr resolves it
+        // against the domain union's `Package::functions`, so an indexed
+        // function type-checks and an unknown one is a diagnostic (never a
+        // silent skip). Arguments that cannot lower still poison the node.
         Expression::Call { name, args } => {
             if name == "date" {
                 match args.as_slice() {
@@ -832,7 +837,13 @@ fn lower(expr: &Expression) -> Option<Expr> {
                     _ => return None,
                 }
             } else {
-                return None;
+                ExprKind::FunctionCall {
+                    name: Spanned {
+                        value: name.clone(),
+                        span: no_span(),
+                    },
+                    args: args.iter().map(lower).collect::<Option<Vec<_>>>()?,
+                }
             }
         }
     };
@@ -840,14 +851,22 @@ fn lower(expr: &Expression) -> Option<Expr> {
 }
 
 /// The [`lower`] twin for property/override values: literals and
-/// expressions map, arrays/objects/calls poison the whole value.
+/// expressions map; arrays and objects poison the whole value, and a bare
+/// call lowers as a package-function call (resolvability is rex-expr's).
 fn lower_value(value: &ValueExpression) -> Option<Expr> {
     let kind = match value {
         ValueExpression::Identifier(name) => ExprKind::Name(name.clone()),
         ValueExpression::String(text) => ExprKind::String(text.clone()),
         ValueExpression::Number(number) => numeric_literal(number.value()),
         ValueExpression::Bool(value) => ExprKind::Bool(*value),
-        ValueExpression::Array(_) | ValueExpression::Object(_) | ValueExpression::Call(..) => {
+        ValueExpression::Call(name, args) => ExprKind::FunctionCall {
+            name: Spanned {
+                value: name.clone(),
+                span: no_span(),
+            },
+            args: args.iter().map(lower_value).collect::<Option<Vec<_>>>()?,
+        },
+        ValueExpression::Array(_) | ValueExpression::Object(_) => {
             return None;
         }
         ValueExpression::FieldAccess { object, field } => ExprKind::FeatureAccess {
@@ -979,7 +998,10 @@ fn no_span() -> Span {
 mod tests {
     use super::*;
 
-    use rex_ir::{ClassDef, Feature, FeatureKind, Multiplicity, Package, PrimitiveType, TypeRef};
+    use rex_ir::{
+        ClassDef, Feature, FeatureKind, Multiplicity, Operation, OperationParam, Package,
+        PrimitiveType, TypeRef,
+    };
 
     const PKG: &str = "nz.example.shop";
 
@@ -1050,6 +1072,31 @@ mod tests {
             crate::compile_ifml_str("app.ifml", source, &crate::IfmlImports::default())
                 .expect("source must parse and resolve");
         check_ifml(&compilation, Some(model))
+    }
+
+    /// The shop domain plus a synthetic sigil-style functions package: one
+    /// `pricing.model` function over two ints.
+    fn functions_shop_model() -> Model {
+        let mut model = shop_model();
+        let mut pricing = Package::new("pricing.model");
+        pricing.functions.push(Operation::new(
+            "priceAbove",
+            TypeRef::Primitive(PrimitiveType::Boolean),
+            vec![
+                OperationParam {
+                    name: "value".to_string(),
+                    type_: TypeRef::Primitive(PrimitiveType::Int),
+                    multiplicity: None,
+                },
+                OperationParam {
+                    name: "floor".to_string(),
+                    type_: TypeRef::Primitive(PrimitiveType::Int),
+                    multiplicity: None,
+                },
+            ],
+        ));
+        model.packages.push(pricing);
+        model
     }
 
     #[test]
@@ -1352,19 +1399,35 @@ view "Detail" {
     }
 
     #[test]
-    fn bare_call_is_skipped() {
+    fn an_unknown_bare_call_is_a_diagnostic_and_an_indexed_one_types() {
+        // `today()` names no domain function: bare calls resolve against the
+        // union's `Package::functions` since rex-expr gained them, so the
+        // old silent skip is a diagnostic.
         let source = r#"
 view "Report" {
     if today() == "x";
+}
+"#;
+        let report = diags(source, &shop_model());
+        assert!(
+            report.iter().any(|d| d.code == "E0101"
+                && d.message.contains("unknown function")
+                && d.message.contains("'today'")),
+            "{report:?}"
+        );
 
+        // A function the domain union actually declares type-checks in a
+        // filter condition.
+        let source = r#"
+view "Report" {
     component "orders" {
         type: list;
         data: Product;
-        filter: today() == "active";
+        filter: priceAbove(price, 0);
     }
 }
 "#;
-        assert!(diags(source, &shop_model()).is_empty());
+        assert!(diags(source, &functions_shop_model()).is_empty());
     }
 
     #[test]
@@ -1457,11 +1520,16 @@ view "Catalog" {
             right: Box::new(modulo),
         }));
         assert!(lower(&wrapped).is_none());
-        assert!(lower(&Expression::Call {
-            name: "today".to_string(),
-            args: vec![],
-        })
-        .is_none());
+        // A bare call lowers as a package-function call; resolvability is
+        // the checker's (rex-expr's) business, not the lowerer's.
+        assert!(matches!(
+            lower(&Expression::Call {
+                name: "today".to_string(),
+                args: vec![],
+            })
+            .map(|expr| expr.kind),
+            Some(ExprKind::FunctionCall { .. })
+        ));
         assert!(lower_value(&ValueExpression::Array(vec![ValueExpression::Bool(true)])).is_none());
     }
 }

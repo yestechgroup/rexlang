@@ -942,3 +942,204 @@ fn assert_err_probe(checker: &TypeChecker, source: &str, rule: &str) {
         "{source}: {error:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Package functions: the bare call surface (issue #63)
+// ---------------------------------------------------------------------------
+
+/// Two synthetic sigil-style packages: `pricing.model` carries `priceQuote`
+/// (a `(1..1)` and a `0..*` parameter), `isActive` (an optional parameter),
+/// and `floorRate`; `other.model` carries a same-named `priceQuote` (the
+/// ambiguity case) and a `findBook` (the class-op precedence case).
+fn functions_model() -> Model {
+    let mut model = Model::new();
+    let mut pricing = Package::new("pricing.model");
+    pricing.functions.push(Operation::new(
+        "priceQuote",
+        TypeRef::Primitive(PrimitiveType::Double),
+        vec![
+            OperationParam {
+                name: "notional".to_string(),
+                type_: TypeRef::Primitive(PrimitiveType::Double),
+                multiplicity: None,
+            },
+            OperationParam {
+                name: "legs".to_string(),
+                type_: TypeRef::Primitive(PrimitiveType::String),
+                multiplicity: Some(Multiplicity::MANY),
+            },
+        ],
+    ));
+    pricing.functions.push(Operation::new(
+        "isActive",
+        TypeRef::Primitive(PrimitiveType::Boolean),
+        vec![OperationParam {
+            name: "id".to_string(),
+            type_: TypeRef::Primitive(PrimitiveType::String),
+            multiplicity: Some(Multiplicity::OPTIONAL),
+        }],
+    ));
+    pricing.functions.push(Operation::new(
+        "floorRate",
+        TypeRef::Primitive(PrimitiveType::Double),
+        vec![OperationParam {
+            name: "rate".to_string(),
+            type_: TypeRef::Primitive(PrimitiveType::Double),
+            multiplicity: None,
+        }],
+    ));
+    model.packages.push(pricing);
+    let mut other = Package::new("other.model");
+    other.functions.push(Operation::new(
+        "priceQuote",
+        TypeRef::Primitive(PrimitiveType::Int),
+        vec![],
+    ));
+    other.functions.push(Operation::new(
+        "findBook",
+        TypeRef::Primitive(PrimitiveType::Boolean),
+        vec![],
+    ));
+    model.packages.push(other);
+    model
+}
+
+/// The library checker merged with the function packages.
+fn function_checker() -> TypeChecker {
+    let mut context = TypeContext::from_model(&library_model());
+    context.merge(TypeContext::from_model(&functions_model()));
+    TypeChecker::new(context)
+        .with_binding("book", Ty::class(PKG, "Book"))
+        .with_binding("library", Ty::class(PKG, "Library"))
+}
+
+/// Asserts `source` types to `expected` under the function checker.
+fn assert_fn_ty(source: &str, expected: Ty) {
+    let parsed = parse(source);
+    assert!(parsed.errors.is_empty(), "{source:?}: {:?}", parsed.errors);
+    let ty = function_checker()
+        .type_of(parsed.ast.as_ref().expect("ast"))
+        .unwrap_or_else(|errors| panic!("{source:?}: {errors:?}"));
+    assert_eq!(ty, expected, "{source:?}");
+}
+
+/// Asserts `source` fails under the function checker with a message
+/// containing `rule`.
+fn assert_fn_err(source: &str, rule: &str) {
+    let parsed = parse(source);
+    assert!(parsed.errors.is_empty(), "{source:?}: {:?}", parsed.errors);
+    let errors = function_checker()
+        .type_of(parsed.ast.as_ref().expect("ast"))
+        .expect_err("expected type errors");
+    assert!(
+        errors.iter().any(|e| e.message.contains(rule)),
+        "{source:?}: expected a `{rule}` error, got {errors:?}"
+    );
+}
+
+#[test]
+fn from_model_indexes_package_functions_with_multiplicities() {
+    let context = TypeContext::from_model(&functions_model());
+    let price_quote = context.function("priceQuote").expect("indexed");
+    assert_eq!(price_quote.len(), 2, "two packages declare priceQuote");
+    let pricing = price_quote
+        .iter()
+        .find(|s| s.package == "pricing.model")
+        .expect("the pricing.model candidate");
+    assert_eq!(
+        pricing.params,
+        vec![Ty::double(), Ty::string().list()],
+        "(1..1) stays plain; a 0..* parameter lowers to List"
+    );
+    assert_eq!(pricing.return_type, Ty::double());
+    let is_active = &context.function("isActive").unwrap()[0];
+    assert_eq!(
+        is_active.params,
+        vec![Ty::string().optional()],
+        "a 0..1 parameter lowers to Option"
+    );
+    assert_eq!(is_active.return_type, Ty::boolean());
+}
+
+#[test]
+fn insert_function_serves_model_less_hosts() {
+    let mut context = TypeContext::default();
+    context.insert_function(
+        "solo",
+        &Operation::new("rate", TypeRef::Primitive(PrimitiveType::Double), vec![]),
+    );
+    assert_eq!(context.function("rate").unwrap()[0].package, "solo");
+}
+
+#[test]
+fn merge_unions_candidates_and_dedupes_identical_signatures() {
+    let mut context = TypeContext::from_model(&functions_model());
+    context.merge(TypeContext::from_model(&functions_model()));
+    assert_eq!(
+        context.function("priceQuote").unwrap().len(),
+        2,
+        "re-registering the same signatures must not multiply candidates"
+    );
+}
+
+#[test]
+fn a_bare_call_resolves_arity_params_and_return() {
+    assert_fn_ty("floorRate(1.5)", Ty::double());
+    assert_fn_ty("floorRate(1.5) == 2.0", Ty::boolean());
+    assert_fn_err(
+        "floorRate()",
+        "arity mismatch: function `floorRate` expects 1",
+    );
+    assert_fn_err(
+        "floorRate(\"x\")",
+        "argument type mismatch in call to `floorRate`",
+    );
+}
+
+#[test]
+fn a_bare_call_takes_an_optional_valued_argument() {
+    // `citation` is an OPTIONAL attribute: `Option(String)` — exactly the
+    // parameter type `isActive` declares. Plain values do not widen (the
+    // strictness test below).
+    assert_fn_ty("isActive(book.citation) == true || false", Ty::boolean());
+}
+
+#[test]
+fn an_ambiguous_bare_call_names_both_packages() {
+    assert_fn_err(
+        "priceQuote(1.5, [\"a\"])",
+        "ambiguous function `priceQuote`: declared by `pricing.model` and `other.model`",
+    );
+}
+
+#[test]
+fn an_unknown_function_error_lists_known_names() {
+    assert_fn_err(
+        "unknownFn(1)",
+        "unknown function `unknownFn` (known: findBook, floorRate, isActive, priceQuote)",
+    );
+}
+
+#[test]
+fn optional_arguments_are_strict_no_r3_auto_propagation() {
+    // A plain `String` is not an `Option(String)`: optional parameters take
+    // optional values (`?.`/`?:` produce them), never silently widen.
+    assert_fn_err(
+        "isActive(\"x\")",
+        "argument type mismatch in call to `isActive`",
+    );
+}
+
+#[test]
+fn r1_r4_apply_inside_call_arguments() {
+    assert_fn_err("floorRate(1 / 0)", "R4");
+    assert_fn_err("floorRate(2147483648)", "R1");
+}
+
+#[test]
+fn a_receiver_call_still_resolves_class_ops_only_and_a_bare_name_resolves_the_function() {
+    // Receiver calls stay class ops even when a package function shares
+    // the name; the bare call is the function.
+    assert_fn_ty("library.findBook(\"dune\")", book());
+    assert_fn_ty("findBook()", Ty::boolean());
+}

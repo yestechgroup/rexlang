@@ -631,6 +631,19 @@ mod example_assertions {
         }
 
         #[test]
+        #[should_panic(expected = "not yet implemented")]
+        fn an_expr_body_call_reaches_the_stub() {
+            // `Quote.floorNotional`'s `expr` body calls `floorRate` — the
+            // #63 call surface end to end: typing resolved the bare call,
+            // lowering emitted the stub call, and invoking the method
+            // panics inside it (the stub contract until the Rune statement
+            // IR executes bodies).
+            let mut res = crate::pricing::Resource::default();
+            let quote = res.new_quote();
+            res.quote(quote).unwrap().floor_notional(&res, 1.0);
+        }
+
+        #[test]
         fn stub_signatures_follow_the_multiplicity_conventions() {
             // Compile-time proof of the emitted signatures: a class-typed
             // `0..*` parameter arrives as `Vec<..Id>`, the opaque builtin

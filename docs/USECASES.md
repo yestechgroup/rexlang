@@ -191,7 +191,11 @@ class members. Sigil lowering (rule 8 of its contract) places them on the
 namespace package's `functions`, never on a class, so sigil-lowered classes
 carry attributes only and a **sigil-typed subject cannot take steps**
 (operations never resolve through them). Steps need an `.mox`-declared `op`
-on the subject's class.
+on the subject's class. Functions remain computations, never step targets:
+the `.uc` grammar has no expression positions, so a package function cannot
+appear anywhere in a use case file — if expression positions are ever
+added, they inherit function calls through the typing index
+(`rex_expr::DomainTypes`), while steps keep the operation contract above.
 
 `requires [...]` names capabilities declared in an imported `.actor`
 file; every name must exist across the provided actor models and be
