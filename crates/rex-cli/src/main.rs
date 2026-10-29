@@ -11,7 +11,7 @@
 //!   expressions are also type-checked against the imported domains). Each
 //!   input is a file or a directory —
 //!   a directory enters **batch mode**, checking every supported surface
-//!   under it independently (`.mox`, `.actor`, `.ddd`, `.evt`, `.uc`,
+//!   under it independently (`.mox`, `.actor`, `.ddd`, `.evt`, `.uc`, `.cmmn`,
 //!   `.ifml`, `.deploy`); several `.mox` files passed explicitly compile as
 //!   one multi-package model.
 //! * `rexlang ir <file>... [-o <out>]` — compile and emit the Core IR JSON
@@ -19,7 +19,7 @@
 //!   standalone ActorModel artifact is emitted; on `.ddd` files the
 //!   standalone DDD design artifact; on `.evt` files the standalone
 //!   EventModel artifact; on `.deploy` files the standalone DeployModel
-//!   artifact; on `.uc` files the standalone UseCaseModel artifact; on
+//!   artifact; on `.uc` files the standalone UseCaseModel artifact, on `.cmmn` files the standalone CmmnModel artifact; on
 //!   `.ifml` files the standalone IfmlModel artifact.
 //! * `rexlang artifact check <artifact.json>...` — validate wire-format
 //!   artifacts (Core IR, standalone actor policy, DDD design, canonical
@@ -63,7 +63,7 @@ enum Command {
         /// surface under them is checked independently).
         files: Vec<PathBuf>,
     },
-    /// Compile `.mox`, `.actor`, `.ddd`, `.evt`, `.deploy`, or `.uc` files
+    /// Compile `.mox`, `.actor`, `.ddd`, `.evt`, `.deploy`, `.uc`, or `.cmmn` files
     /// and emit the artifact as JSON (`.actor` files emit the standalone
     /// ActorModel artifact, `.ddd` files the standalone DDD design
     /// artifact, `.evt` files the standalone EventModel artifact, `.deploy`

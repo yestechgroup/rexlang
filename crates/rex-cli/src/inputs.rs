@@ -114,7 +114,7 @@ fn collect_with_extensions(
 fn collect_supported_files(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
     collect_with_extensions(
         dir,
-        &["mox", "actor", "ddd", "evt", "uc", "ifml", "deploy"],
+        &["mox", "actor", "ddd", "evt", "uc", "cmmn", "ifml", "deploy"],
         out,
     )
 }
@@ -175,6 +175,12 @@ pub(crate) fn is_evt_file(file: &Path) -> bool {
 /// artifacts its other imports resolve to.
 pub(crate) fn is_uc_file(file: &Path) -> bool {
     file.extension().and_then(|extension| extension.to_str()) == Some("uc")
+}
+
+/// `true` for `.cmmn` paths: the case-management surface, compiled against
+/// its imported domains, events, actors, and designs.
+pub(crate) fn is_cmmn_file(file: &Path) -> bool {
+    file.extension().and_then(|extension| extension.to_str()) == Some("cmmn")
 }
 
 /// `true` for `.deploy` paths: the deployment surface, compiled against the
@@ -778,6 +784,133 @@ pub(crate) fn read_uc_pair(file: &Path) -> anyhow::Result<UcPair> {
     let schemas = collect_schema_imports(&domains)?;
     let sigil = collect_sigil_imports(&domains)?;
     Ok(UcPair {
+        path,
+        source,
+        domains,
+        designs,
+        actors,
+        events,
+        schemas,
+        sigil,
+    })
+}
+
+/// A `.cmmn` file and its compiled imports: the case-management
+/// counterpart of [`UcPair`] — domains, events, actors, and aliased
+/// designs, each keyed by its resolved path.
+pub(crate) struct CmmnPair {
+    /// The case file's path as given on the command line.
+    pub(crate) path: String,
+    /// The case file's source text.
+    pub(crate) source: String,
+    /// Each imported domain as `(resolved path, source)`.
+    pub(crate) domains: Vec<(String, String)>,
+    /// Each imported `.ddd` design, compiled, keyed by its resolved path.
+    pub(crate) designs: Vec<(String, rex_ir::ddd::DddModel)>,
+    /// Each imported `.actor` policy, compiled, keyed by its resolved path.
+    pub(crate) actors: Vec<(String, rex_ir::ActorModel)>,
+    /// Each imported `.evt` contract, compiled, keyed by its resolved path.
+    pub(crate) events: Vec<(String, rex_ir::events::EventModel)>,
+    /// The domains' `import schema` content, keyed by domain path.
+    schemas: SchemaImports,
+    /// The domains' `import sigil` content, plus the rosetta sources for
+    /// rendering sigil diagnostics.
+    sigil: SigilSources,
+}
+
+impl CmmnPair {
+    /// The import bundle the driver entry point takes.
+    pub(crate) fn imports(&self) -> DomainImports {
+        DomainImports {
+            schemas: self.schemas.clone(),
+            sigil: self.sigil.imports.clone(),
+        }
+    }
+
+    /// The source text of the file with the given driver path — the case
+    /// file itself, an imported domain, or a rosetta source (design, actor,
+    /// and event imports arrive pre-compiled, so their diagnostics were
+    /// rendered when they were gathered).
+    pub(crate) fn source_of(&self, path: &str) -> Option<&str> {
+        if path == self.path {
+            return Some(&self.source);
+        }
+        self.domains
+            .iter()
+            .find(|(name, _)| name == path)
+            .map(|(_, source)| source.as_str())
+            .or_else(|| {
+                self.sigil
+                    .sources
+                    .iter()
+                    .find(|(name, _)| name == path)
+                    .map(|(_, source)| source.as_str())
+            })
+    }
+}
+
+/// Reads a `.cmmn` file and gathers its imports exactly like
+/// [`read_uc_pair`]: paths relative to the case file's directory, bucketed
+/// by extension (`.mox` raw, `.ddd`/`.actor`/`.evt` compiled). Unknown
+/// extensions pass through so the driver reports them.
+pub(crate) fn read_cmmn_pair(file: &Path) -> anyhow::Result<CmmnPair> {
+    let source = std::fs::read_to_string(file)
+        .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
+    let path = file.display().to_string();
+    let mut domains: Vec<(String, String)> = Vec::new();
+    let mut designs: Vec<(String, rex_ir::ddd::DddModel)> = Vec::new();
+    let mut actors: Vec<(String, rex_ir::ActorModel)> = Vec::new();
+    let mut events: Vec<(String, rex_ir::events::EventModel)> = Vec::new();
+    if let Some(ast) = &rex_syntax::parse_cmmn(&source).ast {
+        let dir = file
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        for import in &ast.imports {
+            let resolved = dir.join(&import.path);
+            let resolved_path = resolved.display().to_string();
+            match resolved.extension().and_then(|extension| extension.to_str()) {
+                Some("mox") => {
+                    if domains.iter().any(|(existing, _)| *existing == resolved_path) {
+                        continue;
+                    }
+                    let text = std::fs::read_to_string(&resolved).map_err(|error| {
+                        anyhow::anyhow!(
+                            "cannot read imported file {} (imported by {}): {error}",
+                            resolved.display(),
+                            path
+                        )
+                    })?;
+                    domains.push((resolved_path, text));
+                }
+                Some("ddd") => {
+                    if designs.iter().any(|(existing, _)| *existing == resolved_path) {
+                        continue;
+                    }
+                    let model = read_design_model(&resolved)?;
+                    designs.push((resolved_path, model));
+                }
+                Some("actor") => {
+                    if actors.iter().any(|(existing, _)| *existing == resolved_path) {
+                        continue;
+                    }
+                    let model = read_actor_model(&resolved)?;
+                    actors.push((resolved_path, model));
+                }
+                Some("evt") => {
+                    if events.iter().any(|(existing, _)| *existing == resolved_path) {
+                        continue;
+                    }
+                    let model = read_event_model(&resolved)?;
+                    events.push((resolved_path, model));
+                }
+                _ => {}
+            }
+        }
+    }
+    let schemas = collect_schema_imports(&domains)?;
+    let sigil = collect_sigil_imports(&domains)?;
+    Ok(CmmnPair {
         path,
         source,
         domains,

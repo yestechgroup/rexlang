@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use crate::inputs::{
-    is_actor_file, is_ddd_file, is_deploy_file, is_evt_file, is_ifml_file, is_uc_file,
+    is_actor_file, is_ddd_file, is_deploy_file, is_cmmn_file, is_evt_file, is_ifml_file, is_uc_file,
 };
 
 pub(crate) fn run(check: bool, files: Vec<PathBuf>) -> anyhow::Result<ExitCode> {
@@ -33,6 +33,8 @@ pub(crate) fn run(check: bool, files: Vec<PathBuf>) -> anyhow::Result<ExitCode> 
             rex_syntax::fmt::format_evt(&source)?
         } else if is_uc_file(file) {
             rex_syntax::fmt::format_usecases(&source)?
+        } else if is_cmmn_file(file) {
+            rex_syntax::fmt::format_cmmn(&source)?
         } else if is_deploy_file(file) {
             rex_syntax::fmt::format_deploy(&source)?
         } else if is_ifml_file(file) {

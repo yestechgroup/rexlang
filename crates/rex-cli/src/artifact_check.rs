@@ -62,6 +62,9 @@ pub enum ArtifactKind {
     /// (`rex_ir::usecases::UseCaseModel`): root carries a `useCases`
     /// array (omitted when empty).
     UseCaseModel,
+    /// A standalone case-management artifact (`rex_ir::cmmn::CmmnModel`):
+    /// root carries a `cases` array (omitted when empty).
+    CmmnModel,
     /// A canonical instance document: root `$type` is `rex.instance`.
     Instance,
 }
@@ -111,12 +114,15 @@ pub fn check_str(path: &str, text: &str) -> Result<ArtifactKind, Vec<String>> {
 ///    that carries that array validates as an
 ///    [`ArtifactKind::UseCaseModel`]. The key exists on no other artifact,
 ///    so the ordering is documentation symmetry once more.
-/// 7. **`blocks` or exactly `{"formatVersion": N}` → actor artifact.** The
+/// 7. **`cases` → case artifact.** A `formatVersion`-bearing root that
+///    carries that array validates as an [`ArtifactKind::CmmnModel`] —
+///    same disjointness, same symmetry.
+/// 8. **`blocks` or exactly `{"formatVersion": N}` → actor artifact.** The
 ///    canonical block-less [`rex_ir::ActorModel`] is exactly the version
 ///    marker, and the marker alone can only be an ActorModel (a Model always
 ///    emits `packages`; a DddModel always carries the design keys), so the
 ///    minimal-empty document falls here.
-/// 8. **Anything else** is rejected as `unrecognized artifact`.
+/// 9. **Anything else** is rejected as `unrecognized artifact`.
 ///
 /// Known limitations, same root cause: the minimal-empty artifact is exactly
 /// `{"formatVersion":1}` for several kinds, and shape-sniffing cannot tell
@@ -129,6 +135,8 @@ pub fn check_str(path: &str, text: &str) -> Result<ArtifactKind, Vec<String>> {
 ///   (rule 7; only a non-empty one reaches rule 5).
 /// - [`rex_ir::usecases::UseCaseModel`] is empty-form-collided the same way
 ///   (rule 7; only a non-empty one reaches rule 6).
+/// - [`rex_ir::cmmn::CmmnModel`] is empty-form-collided the same way (rule
+///   7; only a non-empty one reaches rule 7's `cases` check first).
 /// - [`rex_ir::ifml::IfmlModel`] is *not* a classified kind at all: an empty
 ///   IFML model is the same `{"formatVersion":1}` bytes (rule 7), and a
 ///   module-bearing one carries `modules` (rule 3); only a view-bearing one
@@ -206,6 +214,15 @@ pub fn check(text: &str) -> Result<ArtifactKind, Vec<String>> {
         && root.get("useCases").is_some_and(Value::is_array)
     {
         return check_usecase_model(root);
+    }
+    // A case artifact carries a `cases` array — likewise a key no other
+    // artifact has. The empty case artifact serializes as exactly
+    // `{"formatVersion":1}` and falls through to the actor fallback like
+    // the other empty forms.
+    if root.get("formatVersion").is_some_and(Value::is_u64)
+        && root.get("cases").is_some_and(Value::is_array)
+    {
+        return check_cmmn_model(root);
     }
     // No `packages`/`rexVersion`, no DDD design shape, no event-contract
     // shape, no deployment shape, no use-case shape: the canonical
@@ -357,6 +374,22 @@ fn check_usecase_model(root: &serde_json::Map<String, Value>) -> Result<Artifact
     finish(ArtifactKind::UseCaseModel, errors)
 }
 
+fn check_cmmn_model(root: &serde_json::Map<String, Value>) -> Result<ArtifactKind, Vec<String>> {
+    let mut errors = Vec::new();
+    if let Some(error) = format_version_error(
+        root,
+        rex_ir::cmmn::CMMN_MODEL_FORMAT_VERSION,
+        "case artifact",
+    ) {
+        errors.push(error);
+    }
+    if let Some(cases) = root.get("cases") {
+        check_named_array(cases, "cases", &mut errors);
+    }
+    scan_snake_case_keys(&Value::Object(root.clone()), &mut errors);
+    finish(ArtifactKind::CmmnModel, errors)
+}
+
 fn check_instance(root: &serde_json::Map<String, Value>) -> Result<ArtifactKind, Vec<String>> {
     let mut errors = Vec::new();
     if let Some(error) = format_version_error(root, SUPPORTED_INSTANCE_FORMAT_VERSION, "instance") {
@@ -454,7 +487,10 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "actors",
     "anchor",
     "annotations",
+    "applicabilityRules",
     "application",
+    "authorizedRoles",
+    "autoComplete",
     "base",
     "blocks",
     "bodies",
@@ -462,16 +498,22 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "cache",
     "capabilities",
     "capability",
+    "caseFile",
+    "cases",
     "cedar",
     "channels",
+    "children",
     "class",
     "classes",
+    "composition",
     "constraints",
     "consumer",
+    "context",
     "convert",
     "create",
     "datatypes",
     "default",
+    "definitionRef",
     "delegations",
     "dependencies",
     "description",
@@ -494,6 +536,7 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "functions",
     "grants",
     "id",
+    "ifPart",
     "interfaces",
     "isDerived",
     "isId",
@@ -503,6 +546,8 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "label",
     "literals",
     "lower",
+    "manualActivation",
+    "manualActivationRule",
     "maxLength",
     "maximum",
     "message",
@@ -517,6 +562,7 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "objects",
     "obligations",
     "occurrences",
+    "onParts",
     "operation",
     "operations",
     "opposite",
@@ -526,15 +572,23 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "participant",
     "pattern",
     "payload",
+    "planItems",
+    "planningMode",
+    "planningTables",
     "platform",
+    "processRef",
     "publishes",
     "purposes",
     "realizes",
+    "repetitionRule",
     "repository",
+    "requiredRole",
+    "requiredRule",
     "requires",
     "returnMultiplicity",
     "returnType",
     "rexVersion",
+    "sentryRef",
     "services",
     "source",
     "steps",
@@ -544,6 +598,7 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "successions",
     "target",
     "targetBindings",
+    "taskType",
     "then",
     "to",
     "type",
@@ -1307,5 +1362,59 @@ mod tests {
         // check may claim it.
         let golden = include_str!("../../../tests/conformance/usecases/delivery.uc.json");
         assert_eq!(check(golden), Ok(ArtifactKind::UseCaseModel));
+    }
+
+    #[test]
+    fn a_cmmn_artifact_does_not_fall_through_to_the_actor_fallback() {
+        assert_eq!(
+            check(r#"{"formatVersion": 1, "cases": [{"name": "Loan"}]}"#),
+            Ok(ArtifactKind::CmmnModel)
+        );
+    }
+
+    #[test]
+    fn cmmn_format_version_gate_names_both_versions() {
+        let errors = check(r#"{"formatVersion": 2, "cases": []}"#).unwrap_err();
+        assert!(
+            errors[0].contains("formatVersion 2") && errors[0].contains("formatVersion 1"),
+            "errors: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn cmmn_arrays_must_be_arrays_of_named_objects() {
+        let errors = check(r#"{"formatVersion": 1, "cases": [42]}"#).unwrap_err();
+        assert!(
+            errors.iter().any(|error| error.contains("cases[0]")),
+            "errors: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn snake_case_cmmn_keys_are_reported_with_the_camel_case_spelling() {
+        let errors = check(
+            r#"{"formatVersion": 1, "cases": [{"name": "Loan", "case_file": []}]}"#,
+        )
+        .unwrap_err();
+        assert!(
+            errors.iter().any(|error| error.contains("caseFile")),
+            "errors: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn the_cmmn_golden_artifact_classifies_as_cmmn_model() {
+        // The real emitter output (`rexlang ir` on the canonical fixture).
+        let golden = include_str!("../../../tests/conformance/cmmn/lending.cmmn.json");
+        assert_eq!(check(golden), Ok(ArtifactKind::CmmnModel));
+    }
+
+    #[test]
+    fn the_cmmn_engine_golden_does_not_classify_as_a_rexlang_artifact() {
+        // The cmmn-rs CaseDefinition JSON is a DIFFERENT wire format
+        // (snake_case, no formatVersion): the checker must reject it rather
+        // than guess.
+        let golden = include_str!("../../../tests/conformance/cmmn/lending.case.json");
+        assert!(check(golden).is_err());
     }
 }
