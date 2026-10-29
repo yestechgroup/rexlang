@@ -1124,3 +1124,325 @@ fn adversarial_search_inputs_do_not_panic() {
         let _ = format_ddd(source);
     }
 }
+
+// --- state machines -------------------------------------------------------------
+
+/// A machine-bearing design: repository + machine on one design, a machine on
+/// a body-less design, triggered and bare transitions, an edge guard, and
+/// service/repository ops guarded by machine states.
+const MACHINE: &str = r#"
+import "payrun.mox"
+
+application Payroll {
+    base nz.example.payroll
+    module payroll {
+        service PayRunService {
+            boolean approve() capability ApprovePayRun when (status == AwaitingApproval);
+        }
+        entity PayRun repository PayRunRepository {
+            findById;
+            save;
+            PhysicalMedia[] findByState(String state) when (status == Posted);
+        }
+        machine status: PayRunStatus {
+            initial Draft;
+            Draft -> Calculating via Calculate;
+            AwaitingApproval -> Approved via Approve when (total > 0);
+            Draft -> Reversed;
+            terminal Reversed;
+            terminal Posted;
+        }
+        entity AuditLog
+        machine state: AuditState {
+            initial Open;
+            Open -> Closed via Close;
+            terminal Closed;
+        }
+    }
+}
+"#;
+
+#[test]
+fn machine_blocks_parse() {
+    let result = parse_ddd(MACHINE);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let module = expect_module(&file, "payroll");
+
+    let payrun = module
+        .designs
+        .iter()
+        .find(|design| design.class.text == "PayRun")
+        .expect("the PayRun design");
+    let machine = payrun.machine.as_ref().expect("the PayRun machine");
+    assert_eq!(machine.field.text, "status");
+    assert_eq!(machine.type_.name.full_name(), "PayRunStatus");
+    assert_eq!(machine.initial.as_ref().expect("initial").text, "Draft");
+    assert_eq!(
+        machine
+            .terminals
+            .iter()
+            .map(|name| name.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Reversed", "Posted"]
+    );
+    assert_eq!(machine.transitions.len(), 3);
+    let approve = &machine.transitions[1];
+    assert_eq!(approve.from.text, "AwaitingApproval");
+    assert_eq!(approve.to.text, "Approved");
+    assert_eq!(approve.trigger.as_ref().expect("trigger").text, "Approve");
+    assert_eq!(
+        span_text(MACHINE, approve.guard.expect("guard")),
+        "(total > 0)"
+    );
+    let bare = &machine.transitions[2];
+    assert_eq!(bare.from.text, "Draft");
+    assert_eq!(bare.to.text, "Reversed");
+    assert!(bare.trigger.is_none());
+    assert!(bare.guard.is_none());
+
+    // A machine on a body-less design parses the same way.
+    let audit = module
+        .designs
+        .iter()
+        .find(|design| design.class.text == "AuditLog")
+        .expect("the AuditLog design");
+    assert!(audit.repository.is_none());
+    let audit_machine = audit.machine.as_ref().expect("the AuditLog machine");
+    assert_eq!(audit_machine.field.text, "state");
+    assert_eq!(audit_machine.transitions.len(), 1);
+}
+
+#[test]
+fn service_op_when_clause_parses() {
+    let result = parse_ddd(MACHINE);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let module = expect_module(&file, "payroll");
+    let service = module
+        .services
+        .iter()
+        .find(|service| service.name.text == "PayRunService")
+        .expect("the PayRunService");
+    let approve = service
+        .operations
+        .iter()
+        .find(|op| op.name.text == "approve")
+        .expect("the approve operation");
+    assert_eq!(
+        span_text(MACHINE, approve.condition.expect("condition")),
+        "(status == AwaitingApproval)"
+    );
+
+    // A declared repository operation takes a `when` clause but no
+    // `capability` clause (the documented slice-1).
+    let payrun = module
+        .designs
+        .iter()
+        .find(|design| design.class.text == "PayRun")
+        .expect("the PayRun design");
+    let repository = payrun.repository.as_ref().expect("repository");
+    let by_state = repository
+        .operations
+        .iter()
+        .find(|op| op.name.text == "findByState")
+        .expect("the findByState operation");
+    assert_eq!(
+        span_text(MACHINE, by_state.condition.expect("condition")),
+        "(status == Posted)"
+    );
+}
+
+#[test]
+fn machine_words_stay_contextual() {
+    // `machine`, `initial`, `terminal`, and `via` are ordinary identifiers in
+    // every other position: class names, field names, enum names, state
+    // names, and escaped forms.
+    let source = r#"
+application A {
+    module m {
+        entity machine
+        machine initial: terminal {
+            initial terminal;
+            terminal -> initial via via;
+            terminal initial;
+        }
+        entity ^machine
+    }
+}
+"#;
+    let result = parse_ddd(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let module = expect_module(&file, "m");
+    assert_eq!(module.designs[0].class.text, "machine");
+    let machine = module.designs[0].machine.as_ref().expect("machine");
+    assert_eq!(machine.field.text, "initial");
+    assert_eq!(machine.type_.name.full_name(), "terminal");
+    assert_eq!(machine.initial.as_ref().expect("initial").text, "terminal");
+    assert_eq!(machine.terminals[0].text, "initial");
+    assert_eq!(machine.transitions[0].from.text, "terminal");
+    assert_eq!(machine.transitions[0].to.text, "initial");
+    assert_eq!(machine.transitions[0].trigger.as_ref().unwrap().text, "via");
+    assert_eq!(module.designs[1].class.text, "machine");
+}
+
+#[test]
+fn machine_parse_failures_are_clean_errors() {
+    for (source, label) in [
+        (
+            "application A { module m { machine { initial Open; } } }",
+            "missing field and type",
+        ),
+        (
+            "application A { module m { entity E machine status: S { Draft; } } }",
+            "transition without an arrow",
+        ),
+        (
+            "application A { module m { entity E machine status: S { initial; } } }",
+            "initial without a state",
+        ),
+        (
+            "application A { module m { entity E machine status: S { Draft -> Done via; } } }",
+            "via without a trigger",
+        ),
+        (
+            "application A { module m { entity E machine status: S { Open -> Done when total; } } }",
+            "when without parens",
+        ),
+        (
+            "application A { module m { entity E machine status: S { Open -> Done, Cancelled; } } }",
+            "multi-target arrow",
+        ),
+    ] {
+        let result = parse_ddd(source);
+        assert!(!result.errors.is_empty(), "{label} must be an error");
+    }
+}
+
+#[test]
+fn machine_recovered_errors_keep_parsing_the_design() {
+    let source = r#"
+application A {
+    module m {
+        entity E
+        machine status: S {
+            initial Open;
+            Open -> Done via;
+            terminal Done;
+        }
+        entity F repository FRepository {
+            findById;
+        }
+    }
+}
+"#;
+    let result = parse_ddd(source);
+    assert!(
+        !result.errors.is_empty(),
+        "the `via` without a trigger must be an error"
+    );
+    let file = result.ast.expect("a partial AST");
+    let module = expect_module(&file, "m");
+    assert!(
+        module.designs.iter().any(|design| design.class.text == "F"),
+        "the design after the broken machine must still parse"
+    );
+}
+
+#[test]
+fn machines_format_canonically_and_are_idempotent() {
+    let formatted = fmt_ddd(MACHINE);
+    assert_eq!(
+        formatted,
+        concat!(
+            "import \"payrun.mox\";\n",
+            "\n",
+            "application Payroll {\n",
+            "    base nz.example.payroll\n",
+            "    module payroll {\n",
+            "        service PayRunService {\n",
+            "            boolean approve() capability ApprovePayRun when (status == AwaitingApproval);\n",
+            "        }\n",
+            "        entity PayRun repository PayRunRepository {\n",
+            "            findById;\n",
+            "            save;\n",
+            "            PhysicalMedia[] findByState(String state) when (status == Posted);\n",
+            "        }\n",
+            "        machine status: PayRunStatus {\n",
+            "            initial Draft;\n",
+            "            Draft -> Calculating via Calculate;\n",
+            "            AwaitingApproval -> Approved via Approve when (total > 0);\n",
+            "            Draft -> Reversed;\n",
+            "            terminal Reversed;\n",
+            "            terminal Posted;\n",
+            "        }\n",
+            "        entity AuditLog\n",
+            "        machine state: AuditState {\n",
+            "            initial Open;\n",
+            "            Open -> Closed via Close;\n",
+            "            terminal Closed;\n",
+            "        }\n",
+            "    }\n",
+            "}\n",
+        ),
+        "the machine source is already canonical, got:\n{formatted}"
+    );
+    assert_eq!(
+        fmt_ddd(&formatted),
+        formatted,
+        "formatting must be idempotent"
+    );
+}
+
+#[test]
+fn machine_output_round_trips_structurally() {
+    let formatted = fmt_ddd(MACHINE);
+    let once = parse_ddd(&formatted);
+    assert!(
+        once.errors.is_empty(),
+        "formatted output must parse cleanly, got {:?}",
+        once.errors
+    );
+    let twice = parse_ddd(&fmt_ddd(&formatted));
+    assert!(
+        twice.errors.is_empty(),
+        "re-formatted output must parse cleanly, got {:?}",
+        twice.errors
+    );
+    assert_eq!(once.ast, twice.ast);
+}
+
+#[test]
+fn adversarial_machine_inputs_do_not_panic() {
+    let sources = [
+        "machine",
+        "machine status",
+        "machine status:",
+        "machine status: S",
+        "machine status: S {",
+        "machine status: S { initial",
+        "machine status: S { Open ->",
+        "machine status: S { Open -> Done when }",
+        "machine status: S { Open -> Done when ( }",
+        "application A { module m { entity E machine status: S { initial Open; } machine other: T { initial X; } } }",
+    ];
+    for source in sources {
+        let _ = parse_ddd(source);
+        // Formatting may fail on lex errors; the contract is only that
+        // neither path panics.
+        let _ = format_ddd(source);
+    }
+}

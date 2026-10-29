@@ -7,6 +7,10 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # The rev-pinned git dependencies (sigil, xstate-ir) fetch through the git
+  # CLI so actions/checkout's persisted credentials authenticate private
+  # repos; cargo's default libgit2 backend carries no credentials.
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 jobs:
   test:

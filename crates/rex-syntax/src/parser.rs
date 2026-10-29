@@ -187,23 +187,29 @@
 //! module_member     := service_decl | design_decl | search_decl
 //! service_decl      := "service" name "{" service_member* "}"
 //! service_member    := service_op | inject_decl
-//! service_op        := "protected"? signature capability_clause? ";"
+//! service_op        := "protected"? signature capability_clause? guard_clause? ";"
 //!                    | "protected"? name "=>" qualified_name
-//!                      capability_clause? ";"
+//!                      capability_clause? guard_clause? ";"
 //! inject_decl       := "inject" name ";"
 //! signature         := type_ref multiplicity? name
 //!                      "(" (param ("," param)*)? ")"
 //! param             := type_ref multiplicity? name
 //! capability_clause := "capability" name ("," name)*
 //! design_decl       := "abstract"? stereotype name design_flag*
-//!                      repository_decl?
+//!                      repository_decl? machine_decl?
 //! stereotype        := "entity" | "value" | "dto"
 //! design_flag       := "!"? ("scaffold" | "auditable" | "optimisticLocking"
 //!                               | "nonPersistent" | "cache")
 //! repository_decl   := "repository" name "{" repository_op* "}"
-//! repository_op     := "protected"? (repository_builtin | signature) ";"
+//! repository_op     := "protected"? (repository_builtin | signature)
+//!                      guard_clause? ";"
 //! repository_builtin := "findById" | "findAll" | "findByExample"
 //!                    | "findByKeys" | "save" | "delete"
+//! machine_decl      := "machine" name ":" type_ref "{" machine_member* "}"
+//! machine_member    := "initial" name ";" | "terminal" name ";"
+//!                    | transition ";"
+//! transition        := name "->" name ("via" name)? guard_clause?
+//! guard_clause      := "when" raw_parens
 //! search_decl       := "search" name "{" search_member* "}"
 //! search_member     := "entity" qualified_name
 //!                    | "text" "{" search_field* "}"
@@ -242,6 +248,19 @@
 //! * `document_entry`'s `raw_expr` spans balanced `()`/`[]`/`{}` nesting up
 //!   to the terminating `;` (string literals are single tokens), and is
 //!   stored verbatim; parsing/typing it is the driver's job.
+//! * A design may carry at most one `machine` block, after the optional
+//!   `repository` block (the formatter's canonical order). `machine`,
+//!   `initial`, `terminal`, and `via` are contextual words like the rest.
+//!   A transition takes one target — the comma-separated multi-target arrow
+//!   is deliberately excluded (an unguarded external choice is not a
+//!   deterministic machine; write one edge per transition). The `when` of a
+//!   `guard_clause` is the real lexer keyword; the guard itself is a
+//!   `raw_parens` span the driver slices and types. The driver validates the
+//!   machine (one `initial`, declared transition endpoints, terminal
+//!   states without outgoing edges, reachability, duplicate triggers,
+//!   guard/op state references, the bound feature and its enum) and derives
+//!   the workflow actions (`via` names; bare arrows get a documented
+//!   derivation) — see `docs/DDD.md`.
 //!
 //! ## `.evt` event-contract sources ([`parse_evt`])
 //!
@@ -2523,9 +2542,10 @@ fn ddd_delegation<'src>() -> impl Parser<'src, Tokens<'src>, DddDelegation, MoxE
 fn ddd_service_op<'src>() -> impl Parser<'src, Tokens<'src>, DddServiceOp, MoxExtra<'src>> + Clone {
     let declared = ddd_signature()
         .then(ddd_capabilities().or_not())
+        .then(ddd_guard_clause().or_not())
         .then_ignore(kw(Token::Other(';')))
         .map_with(
-            |((type_ref, multiplicity, name, params), capabilities), e| DddServiceOp {
+            |(((type_ref, multiplicity, name, params), capabilities), condition), e| DddServiceOp {
                 name,
                 return_type: Some(type_ref),
                 multiplicity,
@@ -2533,6 +2553,7 @@ fn ddd_service_op<'src>() -> impl Parser<'src, Tokens<'src>, DddServiceOp, MoxEx
                 delegation: None,
                 is_protected: false,
                 capabilities: capabilities.unwrap_or_default(),
+                condition,
                 span: e.span(),
             },
         );
@@ -2540,17 +2561,21 @@ fn ddd_service_op<'src>() -> impl Parser<'src, Tokens<'src>, DddServiceOp, MoxEx
         .then_ignore(kw(Token::FatArrow))
         .then(ddd_delegation())
         .then(ddd_capabilities().or_not())
+        .then(ddd_guard_clause().or_not())
         .then_ignore(kw(Token::Other(';')))
-        .map_with(|((name, delegation), capabilities), e| DddServiceOp {
-            name,
-            return_type: None,
-            multiplicity: None,
-            params: Vec::new(),
-            delegation: Some(delegation),
-            is_protected: false,
-            capabilities: capabilities.unwrap_or_default(),
-            span: e.span(),
-        });
+        .map_with(
+            |(((name, delegation), capabilities), condition), e| DddServiceOp {
+                name,
+                return_type: None,
+                multiplicity: None,
+                params: Vec::new(),
+                delegation: Some(delegation),
+                is_protected: false,
+                capabilities: capabilities.unwrap_or_default(),
+                condition,
+                span: e.span(),
+            },
+        );
     ddd_keyword(ddd::PROTECTED)
         .or_not()
         .then(delegated.or(declared))
@@ -2685,19 +2710,21 @@ fn ddd_flags<'src>() -> impl Parser<'src, Tokens<'src>, DddFlags, MoxExtra<'src>
 }
 
 /// A design declaration: `("abstract")? stereotype name flag*
-/// ("repository" ...)?`.
+/// ("repository" ...)? ("machine" ...)?`.
 fn ddd_design_decl<'src>() -> impl Parser<'src, Tokens<'src>, DddDesign, MoxExtra<'src>> + Clone {
     ddd_design_head()
         .then(name())
         .then(ddd_flags())
         .then(ddd_repository_decl().or_not())
+        .then(ddd_machine_decl().or_not())
         .map_with(
-            |((((abstract_span, stereotype), class), flags), repository), e| DddDesign {
+            |(((((abstract_span, stereotype), class), flags), repository), machine), e| DddDesign {
                 is_abstract: abstract_span.is_some(),
                 stereotype,
                 class,
                 flags,
                 repository,
+                machine,
                 span: e.span(),
             },
         )
@@ -2731,19 +2758,24 @@ fn ddd_repository_op<'src>(
         multiplicity: None,
         params: Vec::new(),
         is_protected: false,
+        condition: None,
         span: e.span(),
     });
-    let declared = ddd_signature().then_ignore(kw(Token::Other(';'))).map_with(
-        |(type_ref, multiplicity, name, params), e| DddRepositoryOp {
-            name,
-            builtin: None,
-            return_type: Some(type_ref),
-            multiplicity,
-            params,
-            is_protected: false,
-            span: e.span(),
-        },
-    );
+    let declared = ddd_signature()
+        .then(ddd_guard_clause().or_not())
+        .then_ignore(kw(Token::Other(';')))
+        .map_with(
+            |((type_ref, multiplicity, name, params), condition), e| DddRepositoryOp {
+                name,
+                builtin: None,
+                return_type: Some(type_ref),
+                multiplicity,
+                params,
+                is_protected: false,
+                condition,
+                span: e.span(),
+            },
+        );
     ddd_keyword(ddd::PROTECTED)
         .or_not()
         .then(
@@ -2787,6 +2819,104 @@ fn ddd_repository_decl<'src>(
             operations: operations.into_iter().flatten().collect(),
             span: e.span(),
         })
+}
+
+/// The `when ( ... )` guard clause shared by machine transitions and service
+/// operations: the real `when` keyword followed by a [`raw_parens`] span the
+/// driver slices and types (the `.actor` condition convention).
+fn ddd_guard_clause<'src>() -> impl Parser<'src, Tokens<'src>, Span, MoxExtra<'src>> + Clone {
+    kw(Token::When).ignore_then(raw_parens())
+}
+
+/// One `from -> to (via <Trigger>)? (when (...))?;` transition of a machine
+/// body. The arrow is the real [`Token::Arrow`]; a transition takes exactly
+/// one target — a `,` after the target cannot start any machine member, so a
+/// multi-target arrow fails into the member junk path (the deliberate
+/// exclusion noted in the grammar).
+fn ddd_machine_transition<'src>(
+) -> impl Parser<'src, Tokens<'src>, Option<DddMachineTransition>, MoxExtra<'src>> + Clone {
+    let transition = name()
+        .then_ignore(kw(Token::Arrow))
+        .then(name())
+        .then(ddd_keyword(ddd::VIA).ignore_then(name()).or_not())
+        .then(ddd_guard_clause().or_not())
+        .then_ignore(kw(Token::Other(';')))
+        .map_with(|(((from, to), trigger), guard), e| DddMachineTransition {
+            from,
+            to,
+            trigger,
+            guard,
+            span: e.span(),
+        });
+    transition.map(Some).or(junk_ddd_machine_member().to(None))
+}
+
+/// Consumes a run of tokens that cannot start or continue a machine member,
+/// stopping before the body's closing `}` and before identifiers (which
+/// could begin the next member). Always consumes at least one token.
+fn junk_ddd_machine_member<'src>() -> impl Parser<'src, Tokens<'src>, (), MoxExtra<'src>> + Clone {
+    let first = select! { t if !matches!(t, Token::RBrace) => () };
+    let rest = select! {
+        t if !matches!(t, Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_)) => ()
+    };
+    first
+        .ignore_then(rest.repeated().ignored())
+        .validate(|(), e, emitter| {
+            emitter.emit(Rich::custom(e.span(), "expected a machine member"));
+        })
+}
+
+/// A `machine <field>: <Enum> { ... }` block of a design declaration. Body
+/// members are `initial`/`terminal` lines and transitions; the per-kind
+/// lists fold exactly like the search members.
+fn ddd_machine_decl<'src>() -> impl Parser<'src, Tokens<'src>, DddMachine, MoxExtra<'src>> + Clone {
+    let initial = ddd_keyword(ddd::INITIAL)
+        .ignore_then(name())
+        .then_ignore(kw(Token::Other(';')));
+    let terminal = ddd_keyword(ddd::TERMINAL)
+        .ignore_then(name())
+        .then_ignore(kw(Token::Other(';')));
+    let member = choice((
+        initial.map(DddMachineMember::Initial),
+        terminal.map(DddMachineMember::Terminal),
+        ddd_machine_transition().map(DddMachineMember::Transition),
+    ));
+    ddd_keyword(ddd::MACHINE)
+        .ignore_then(name())
+        .then_ignore(kw(Token::Other(':')))
+        .then(tref())
+        .then_ignore(kw(Token::LBrace))
+        .then(member.repeated().collect::<Vec<_>>())
+        .then_ignore(kw(Token::RBrace))
+        .map_with(|((field, type_), members), e| {
+            let mut machine = DddMachine {
+                field,
+                type_,
+                initial: None,
+                terminals: Vec::new(),
+                transitions: Vec::new(),
+                span: e.span(),
+            };
+            for member in members {
+                match member {
+                    DddMachineMember::Initial(name) => machine.initial = Some(name),
+                    DddMachineMember::Terminal(name) => machine.terminals.push(name),
+                    DddMachineMember::Transition(Some(transition)) => {
+                        machine.transitions.push(transition)
+                    }
+                    DddMachineMember::Transition(None) => {}
+                }
+            }
+            machine
+        })
+}
+
+/// One member of a `machine` body.
+#[derive(Clone)]
+enum DddMachineMember {
+    Initial(Name),
+    Terminal(Name),
+    Transition(Option<DddMachineTransition>),
 }
 
 /// Scans a raw expression: tokens up to the terminating `;`, tracking the
@@ -4830,6 +4960,10 @@ mod grammar_doc_tests {
             ddd::REPOSITORY,
             ddd::INJECT,
             ddd::PROTECTED,
+            ddd::MACHINE,
+            ddd::INITIAL,
+            ddd::TERMINAL,
+            ddd::VIA,
             ddd::BOOST,
             ddd::ANALYZER,
             ddd::LIMIT,

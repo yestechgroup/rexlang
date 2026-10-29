@@ -69,6 +69,13 @@
 //!   entries, pagination members) keep their source order, and a document
 //!   expression is emitted verbatim token-by-token at canonical spacing
 //!   (so `;` inside string literals survives and nested braces balance).
+//!   A design may carry a `machine` block after its optional `repository`
+//!   block: the `initial`/`terminal` lines and the transitions keep their
+//!   source order, a transition renders `<From> -> <To>` plus its optional
+//!   `via <Trigger>` and `when (...)` clauses on one line, and a guard's
+//!   parenthesized condition is emitted verbatim (ends trimmed, the
+//!   `when`-condition rule). A service operation's optional `when (...)`
+//!   guard follows the `capability` clause on the operation's line.
 //! * An `.evt` source (see [`format_evt`]) canonicalizes the whole file into
 //!   section order: `import` declarations first (tight, one per line), then
 //!   `event`, `channel`, and `subscription` declarations — each kind grouped
@@ -273,6 +280,8 @@ enum BodyKind {
     DddService,
     /// builtin/declared operations of a `.ddd` repository.
     DddRepository,
+    /// `initial`/`terminal` lines and transitions of a `.ddd` machine.
+    DddMachine,
     /// members of a `.ddd` search projection.
     DddSearch,
     /// indexed fields of a `.ddd` search's `text` clause.
@@ -1101,6 +1110,7 @@ impl<'src> Formatter<'src> {
                 BodyKind::DddModule => self.scan_ddd_module_item(),
                 BodyKind::DddService => self.scan_ddd_service_item(),
                 BodyKind::DddRepository => self.scan_ddd_repository_item(),
+                BodyKind::DddMachine => self.scan_ddd_machine_item(),
                 BodyKind::DddSearch => self.scan_ddd_search_item(),
                 BodyKind::DddSearchField => self.scan_ddd_search_field_item(),
                 BodyKind::DddSearchNames => self.scan_ddd_search_name_item(),
@@ -1576,6 +1586,67 @@ impl<'src> Formatter<'src> {
             self.take_name();
             self.scan_body(BodyKind::DddRepository);
         }
+        if matches!(self.peek_tok(), Some(Token::Ident(ddd::MACHINE))) {
+            // The machine block starts on its own line (unlike the
+            // `repository` block, which joins the design line).
+            self.flush_line();
+            self.advance();
+            self.take_name();
+            if matches!(self.peek_tok(), Some(Token::Other(':'))) {
+                self.bump_token();
+            }
+            self.push_text(":", true);
+            self.scan_qname();
+            self.scan_body(BodyKind::DddMachine);
+        }
+    }
+
+    /// One member of a `machine` body: an `initial <State>;` line, a
+    /// `terminal <State>;` line, or a `<From> -> <To> [via <Trigger>]
+    /// [when (...)] ;` transition (the guard's parens re-emit verbatim, the
+    /// `when`-condition rule).
+    fn scan_ddd_machine_item(&mut self) {
+        match self.peek_tok() {
+            // The member keywords are contextual: a leading `initial` or
+            // `terminal` followed by the arrow is a transition *from* a
+            // state of that name, not a member line.
+            Some(Token::Ident(ddd::INITIAL | ddd::TERMINAL))
+                if !matches!(self.peek_tok_nth(1), Some(Token::Arrow)) =>
+            {
+                self.advance();
+                self.take_name();
+                self.take_if(|token| matches!(token, Token::Other(';')));
+            }
+            Some(Token::Ident(_) | Token::IdentEscaped(_)) => {
+                self.take_name();
+                if self.take_if(|token| matches!(token, Token::Arrow)) {
+                    self.take_name();
+                    if self.take_if(|token| matches!(token, Token::Ident(ddd::VIA))) {
+                        self.take_name();
+                    }
+                    if self.take_if(|token| matches!(token, Token::When)) {
+                        self.scan_raw_parens();
+                    }
+                }
+                self.take_if(|token| matches!(token, Token::Other(';')));
+            }
+            _ => {
+                // Junk always consumes the front token first (the stop set
+                // contains identifiers, and the body loop cannot make
+                // progress otherwise) — unless the front is the body's
+                // closing `}` (or the stream ended), which the loop breaks
+                // on; a drained trailing comment may have just revealed it.
+                if !matches!(self.peek_tok(), Some(Token::RBrace) | None) {
+                    self.advance();
+                    self.scan_junk_until(|token| {
+                        matches!(
+                            token,
+                            Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_)
+                        )
+                    });
+                }
+            }
+        }
     }
 
     fn scan_ddd_service_item(&mut self) {
@@ -1604,6 +1675,9 @@ impl<'src> Formatter<'src> {
                     self.scan_ddd_params();
                 }
                 self.scan_ddd_capabilities();
+                if self.take_if(|token| matches!(token, Token::When)) {
+                    self.scan_raw_parens();
+                }
                 self.take_if(|token| matches!(token, Token::Other(';')));
             }
             _ => {
@@ -1685,6 +1759,9 @@ impl<'src> Formatter<'src> {
                 self.scan_multiplicity();
                 self.take_name();
                 self.scan_ddd_params();
+                if self.take_if(|token| matches!(token, Token::When)) {
+                    self.scan_raw_parens();
+                }
                 self.take_if(|token| matches!(token, Token::Other(';')));
             }
             _ => {

@@ -1249,6 +1249,58 @@ fn ir_ddd_file_emits_the_ddd_design_artifact() {
 }
 
 #[test]
+fn ir_ddd_file_emits_the_machine_and_its_derivations() {
+    let path = workspace_root().join("tests/conformance/ddd/payrun.ddd");
+    let output = rexlang()
+        .args(["ir", path.to_str().unwrap()])
+        .output()
+        .expect("run rexlang ir");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let emitted = rex_ir::ddd::DddModel::from_json(&String::from_utf8_lossy(&output.stdout))
+        .expect("stdout is DDD design JSON");
+    let design = &emitted.modules[0].designs[0];
+    let machine = design.machine.as_ref().expect("the machine lowers");
+    assert_eq!(design.class, "PayRun");
+    assert_eq!(machine.field, "status");
+    assert_eq!(machine.initial, "Draft");
+    assert_eq!(machine.terminals, ["Reversed", "Posted"]);
+    assert_eq!(machine.transitions.len(), 6);
+    let guarded = &machine.transitions[2];
+    assert_eq!(guarded.trigger.as_deref(), Some("Approve"));
+    assert_eq!(guarded.guard.as_deref(), Some("total > 0"));
+
+    // The machine derives the state_changed event contract and lowers onto
+    // the restingstate xstate-ir form.
+    let events = rex_driver::machines::derived_events(&emitted);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event, "state_changed");
+    assert_eq!(events[0].entity, "PayRun");
+    let machines = rex_driver::machines::lower_design_machines(&emitted);
+    assert_eq!(machines.len(), 1);
+    assert_eq!(machines[0].id, "PayRun");
+    assert_eq!(machines[0].initial, "Draft");
+}
+
+#[test]
+fn fmt_check_passes_on_the_machine_ddd_fixture() {
+    let path = workspace_root().join("tests/conformance/ddd/payrun.ddd");
+    let output = rexlang()
+        .args(["fmt", "--check", path.to_str().unwrap()])
+        .output()
+        .expect("run rexlang fmt --check");
+    assert!(
+        output.status.success(),
+        "stdout: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).is_empty());
+}
+
+#[test]
 fn fmt_check_passes_on_the_canonical_ddd_fixture() {
     let path = workspace_root().join("tests/conformance/ddd/library.ddd");
     let output = rexlang()

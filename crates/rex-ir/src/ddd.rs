@@ -31,7 +31,16 @@
 //! - **Shared IR types.** Signatures reuse the domain IR's [`crate::TypeRef`]
 //!   (adjacent tagging: `{"type": "class", "value": {...}}`) and
 //!   [`crate::OperationParam`] (`{"name": ..., "type": ...}`); there are no
-//!   parallel wire-level signature types.
+//!   parallel wire-level signature types. A [`StateMachine`]'s enum is the
+//!   same [`crate::TypeRef::Enum`].
+//! - **State machines.** A [`Design`] may carry a [`StateMachine`] (`machine`
+//!   block). The state set is derived — `initial` + `terminals` + transition
+//!   endpoints — never serialized as a separate list; terminalness is
+//!   membership in `terminals`. A [`Transition`]'s `trigger` is the `via`
+//!   workflow action (`None` = bare arrow, action name derived downstream),
+//!   and its `guard`/an operation's `condition` are the `when`-condition
+//!   rule: verbatim source text between the parentheses, typed by the
+//!   driver.
 //! - **Equality policy.** Like every artifact root, [`DddModel`] derives
 //!   [`Eq`] (wire contract rule 14): the one floating-point field in any
 //!   artifact — [`SearchField::boost`] — is wrapped in the ordered
@@ -267,6 +276,10 @@ pub struct ServiceOperation {
     /// the wire layer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<String>,
+    /// The `when (...)` guard condition's source text, verbatim between the
+    /// parentheses (the `when`-condition rule); typing is a driver concern.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<String>,
 }
 
 impl ServiceOperation {
@@ -281,6 +294,7 @@ impl ServiceOperation {
             delegation: None,
             is_protected: false,
             capabilities: Vec::new(),
+            condition: None,
         }
     }
 
@@ -386,6 +400,9 @@ pub struct Design {
     /// The class's repository, when designed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repository: Option<Repository>,
+    /// The class's lifecycle state machine, when designed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<StateMachine>,
 }
 
 impl Design {
@@ -397,6 +414,7 @@ impl Design {
             is_abstract: false,
             flags: DesignFlags::default(),
             repository: None,
+            machine: None,
         }
     }
 }
@@ -418,6 +436,101 @@ impl Repository {
         Self {
             name: name.into(),
             operations: Vec::new(),
+        }
+    }
+}
+
+/// The lifecycle state machine of a [`Design`]: a `machine <field>: <Enum>`
+/// block over one enum-typed feature of the designed class.
+///
+/// The state set is the union of [`StateMachine::initial`], the
+/// [`StateMachine::terminals`], and every transition endpoint; consumers
+/// derive it (the artifact never repeats a bare list). Whether a state is
+/// terminal is carried by the [`StateMachine::terminals`] list, not by a
+/// per-state flag.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateMachine {
+    /// The designed class's feature carrying the state. The driver binds the
+    /// machine to it (the feature must exist and be enum-typed); the wire
+    /// layer carries the name loosely.
+    pub field: String,
+    /// The enum the states are drawn from.
+    #[serde(rename = "enumType")]
+    pub enum_type: TypeRef,
+    /// The initial state.
+    pub initial: String,
+    /// Terminal states, in declaration order. A terminal state takes no
+    /// outgoing transitions; the driver validates the machine before
+    /// lowering, so consumers may rely on it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub terminals: Vec<String>,
+    /// Transitions in declaration order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transitions: Vec<Transition>,
+}
+
+impl StateMachine {
+    /// Creates a state machine with no terminals or transitions.
+    pub fn new(field: impl Into<String>, enum_type: TypeRef, initial: impl Into<String>) -> Self {
+        Self {
+            field: field.into(),
+            enum_type,
+            initial: initial.into(),
+            terminals: Vec::new(),
+            transitions: Vec::new(),
+        }
+    }
+
+    /// Every state of the machine, in canonical order: the initial state
+    /// first, then the terminals in declaration order, then every remaining
+    /// transition endpoint in first-appearance order (duplicates removed).
+    pub fn states(&self) -> Vec<&str> {
+        let mut states = vec![self.initial.as_str()];
+        for terminal in &self.terminals {
+            if !states.contains(&terminal.as_str()) {
+                states.push(terminal);
+            }
+        }
+        for transition in &self.transitions {
+            for endpoint in [&transition.from, &transition.to] {
+                if !states.contains(&endpoint.as_str()) {
+                    states.push(endpoint);
+                }
+            }
+        }
+        states
+    }
+}
+
+/// One transition of a [`StateMachine`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Transition {
+    /// The source state name.
+    pub from: String,
+    /// The target state name.
+    pub to: String,
+    /// The `via` trigger — the workflow action performed through this
+    /// transition. `None` for a bare arrow, whose action name is derived
+    /// (the lowerCamel of the target state; documented in `docs/DDD.md`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<String>,
+    /// The guard condition's source text, verbatim between the parentheses
+    /// (the `when`-condition rule). Parsing, typing, and evaluation are
+    /// driver concerns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard: Option<String>,
+}
+
+impl Transition {
+    /// Creates an unguarded transition.
+    pub fn new(from: impl Into<String>, to: impl Into<String>) -> Self {
+        Self {
+            from: from.into(),
+            to: to.into(),
+            trigger: None,
+            guard: None,
         }
     }
 }
@@ -455,6 +568,11 @@ pub struct RepositoryOperation {
     /// `false`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_protected: bool,
+    /// The `when (...)` guard condition's source text, verbatim between the
+    /// parentheses (the `when`-condition rule); typing is a driver concern.
+    /// A built-in never carries one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<String>,
 }
 
 impl RepositoryOperation {
@@ -467,6 +585,7 @@ impl RepositoryOperation {
             return_multiplicity: None,
             params: Vec::new(),
             is_protected: false,
+            condition: None,
         }
     }
 
@@ -484,6 +603,7 @@ impl RepositoryOperation {
             return_multiplicity: None,
             params,
             is_protected: false,
+            condition: None,
         }
     }
 
@@ -496,6 +616,12 @@ impl RepositoryOperation {
     /// Chainable setter marking the operation `protected`.
     pub fn with_protected(mut self, is_protected: bool) -> Self {
         self.is_protected = is_protected;
+        self
+    }
+
+    /// Chainable setter installing the `when (...)` condition's source text.
+    pub fn with_condition(mut self, condition: Option<String>) -> Self {
+        self.condition = condition;
         self
     }
 }
@@ -914,6 +1040,7 @@ mod tests {
                             delegation: None,
                             is_protected: false,
                             capabilities: vec!["BorrowBooks".to_string()],
+                            condition: None,
                         },
                         ServiceOperation {
                             name: "renew".to_string(),
@@ -926,6 +1053,7 @@ mod tests {
                             }),
                             is_protected: false,
                             capabilities: Vec::new(),
+                            condition: None,
                         },
                     ],
                     dependencies: vec![
@@ -963,6 +1091,7 @@ mod tests {
                                 ),
                             ],
                         }),
+                        machine: None,
                     },
                     Design {
                         class: "Money".to_string(),
@@ -970,6 +1099,7 @@ mod tests {
                         is_abstract: false,
                         flags: DesignFlags::default(),
                         repository: None,
+                        machine: None,
                     },
                     Design {
                         class: "LoanSummary".to_string(),
@@ -982,6 +1112,7 @@ mod tests {
                             ..Default::default()
                         },
                         repository: None,
+                        machine: None,
                     },
                 ],
                 searches: Vec::new(),
@@ -1095,6 +1226,7 @@ mod tests {
             is_abstract: false,
             flags: DesignFlags::default(),
             repository: None,
+            machine: None,
         };
         assert_eq!(
             serde_json::to_string(&design).expect("serialize"),
@@ -1116,6 +1248,7 @@ mod tests {
                 cache: true,
             },
             repository: None,
+            machine: None,
         };
         assert_eq!(
             serde_json::to_string(&design).expect("serialize"),

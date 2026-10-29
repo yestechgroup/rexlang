@@ -20,7 +20,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use rex_ir::ddd::{
     Application, Boost, BuiltinRepositoryOp, DddModel, Delegation, Design, DesignFlags,
     DocumentField, Module, Pagination, RankingStrategy, Repository, RepositoryOperation, SearchDef,
-    SearchField, SearchFilter, SearchSort, Service, ServiceOperation, Stereotype,
+    SearchField, SearchFilter, SearchSort, Service, ServiceOperation, StateMachine, Stereotype,
+    Transition,
 };
 use rex_syntax::ast as dsl;
 use rex_syntax::Span;
@@ -208,9 +209,102 @@ pub(crate) fn compile_ddd_file(
     let mut inject_checks: Vec<InjectCheck<'_>> = Vec::new();
     let mut capability_checks: Vec<CapabilityCheck<'_>> = Vec::new();
 
+    // The shared expression context: conditions (machine edge guards, service
+    // and repository operation guards) type-check against the union model
+    // once, here. Feature-level checks only run against a fully lowered
+    // union (a failed domain may hide features; its diagnostics already
+    // block the artifact).
+    let expr_context = union.as_ref().map(rex_expr::TypeContext::from_model);
+
     let mut model = DddModel::new().application(application_out);
 
     for module in &application.modules {
+        // The module's machine scopes, collected before its services lower
+        // so their `when` conditions can bind machine states (the design
+        // loop below validates the machines themselves).
+        let mut machines: Vec<ResolvedMachine> = Vec::new();
+        for design in &module.designs {
+            let Some(machine) = &design.machine else {
+                continue;
+            };
+            let help = format!(
+                "the machine '{}: {}' of module '{}' must target a class declared \
+                 in the imported domains",
+                machine.field.text,
+                machine.type_.name.full_name(),
+                module.name.text
+            );
+            let Some(class) = lower::resolve_ddd_class(
+                &class_type_ref(&design.class),
+                &packages,
+                base.as_deref(),
+                &help,
+                &mut local,
+            ) else {
+                continue;
+            };
+            let enum_type =
+                lower::resolve_ddd_type(&machine.type_, &packages, base.as_deref(), &mut local);
+            let rex_ir::TypeRef::Enum {
+                package: enum_package,
+                name: enum_name,
+            } = &enum_type
+            else {
+                // The design-loop validation reports this properly; the
+                // binding here stays nameless.
+                continue;
+            };
+            // Ambiguous bindings (two machines declaring the same state in
+            // one module) drop the name and say so once.
+            let resolved = ResolvedMachine {
+                class: class.clone(),
+                enum_type: (enum_package.clone(), enum_name.clone()),
+                states: machine
+                    .initial
+                    .iter()
+                    .map(|name| name.text.clone())
+                    .chain(machine.terminals.iter().map(|name| name.text.clone()))
+                    .chain(
+                        machine
+                            .transitions
+                            .iter()
+                            .flat_map(|transition| [&transition.from.text, &transition.to.text])
+                            .cloned(),
+                    )
+                    .collect::<Vec<_>>(),
+            };
+            let mut seen: Vec<String> = Vec::new();
+            let mut ambiguous: Vec<String> = Vec::new();
+            for state in &resolved.states {
+                if seen.contains(state) {
+                    continue;
+                }
+                if machines
+                    .iter()
+                    .any(|machine| machine.states.iter().any(|declared| declared == state))
+                {
+                    ambiguous.push(state.clone());
+                }
+                seen.push(state.clone());
+            }
+            let ambiguous_refs: Vec<&str> = ambiguous.iter().map(String::as_str).collect();
+            for state in &ambiguous {
+                local.push(Diagnostic::error(
+                    format!(
+                        "ambiguous state name '{state}' in module '{}': it is declared \
+                         by more than one machine, so conditions cannot bind it",
+                        module.name.text
+                    ),
+                    Some(machine.span),
+                ));
+            }
+            let mut filtered = resolved;
+            filtered
+                .states
+                .retain(|state| !ambiguous_refs.contains(&state.as_str()));
+            machines.push(filtered);
+        }
+
         // Rule 2 — module names are unique application-wide.
         if module_names
             .iter()
@@ -231,6 +325,42 @@ pub(crate) fn compile_ddd_file(
         }
 
         let mut module_out = Module::new(module.name.text.clone());
+
+        // The condition scope of the module's service operations: a service
+        // operation is not aggregate-scoped, so its `when` condition types
+        // against the module's unique machine-bearing design (states bind
+        // from the machine registry; with zero or several machine-bearing
+        // designs the scope is undecidable and reported).
+        let machine_designs = module
+            .designs
+            .iter()
+            .filter(|design| design.machine.is_some())
+            .count();
+        let service_self = machines.first().map(|machine| machine.class.clone());
+        if machine_designs != 1 {
+            for service in &module.services {
+                for op in &service.operations {
+                    if let Some(condition) = op.condition {
+                        local.push(
+                            Diagnostic::error(
+                                format!(
+                                    "operation '{}' of service '{}' carries a `when` condition, \
+                                 but module '{}' does not have exactly one machine-bearing \
+                                 design to scope it",
+                                    op.name.text, service.name.text, module.name.text
+                                ),
+                                Some(condition),
+                            )
+                            .with_help(
+                                "a condition binds the states of the module's machine; give the \
+                             module one `machine` block, or guard the repository operation \
+                             of the machine-bearing design",
+                            ),
+                        );
+                    }
+                }
+            }
+        }
 
         for service in &module.services {
             // Rule 2 — service names are unique application-wide.
@@ -299,7 +429,24 @@ pub(crate) fn compile_ddd_file(
                         }),
                         is_protected: op.is_protected,
                         capabilities,
+                        condition: op
+                            .condition
+                            .map(|span| condition_text(design_source, span).to_string()),
                     });
+                    if let Some(condition) = op.condition {
+                        check_condition(
+                            design_source,
+                            condition,
+                            &format!(
+                                "operation '{}' of service '{}'",
+                                op.name.text, service.name.text
+                            ),
+                            service_self.as_ref(),
+                            &machines,
+                            expr_context.as_ref(),
+                            &mut local,
+                        );
+                    }
                     delegation_checks.push(DelegationCheck {
                         module: module.name.text.clone(),
                         delegation,
@@ -346,7 +493,24 @@ pub(crate) fn compile_ddd_file(
                         delegation: None,
                         is_protected: op.is_protected,
                         capabilities,
+                        condition: op
+                            .condition
+                            .map(|span| condition_text(design_source, span).to_string()),
                     });
+                    if let Some(condition) = op.condition {
+                        check_condition(
+                            design_source,
+                            condition,
+                            &format!(
+                                "operation '{}' of service '{}'",
+                                op.name.text, service.name.text
+                            ),
+                            service_self.as_ref(),
+                            &machines,
+                            expr_context.as_ref(),
+                            &mut local,
+                        );
+                    }
                 }
             }
 
@@ -527,8 +691,16 @@ pub(crate) fn compile_ddd_file(
                     );
                 }
 
-                let operations =
-                    lower_repository_ops(repository, &packages, base.as_deref(), &mut local);
+                let operations = lower_repository_ops(
+                    repository,
+                    &packages,
+                    base.as_deref(),
+                    &mut local,
+                    design_source,
+                    resolved.as_ref(),
+                    &machines,
+                    expr_context.as_ref(),
+                );
                 if !repositories
                     .iter()
                     .any(|(name, _)| *name == repository.name.text)
@@ -549,6 +721,21 @@ pub(crate) fn compile_ddd_file(
                     name: repository.name.text.clone(),
                     operations,
                 });
+            }
+
+            if let Some(machine) = &design.machine {
+                design_out.machine = lower_design_machine(
+                    machine,
+                    design,
+                    resolved.as_ref(),
+                    union.as_ref(),
+                    &packages,
+                    base.as_deref(),
+                    &machines,
+                    expr_context.as_ref(),
+                    design_source,
+                    &mut local,
+                );
             }
 
             if design.stereotype == dsl::DddStereotype::Entity {
@@ -1297,11 +1484,16 @@ fn check_flags(design: &dsl::DddDesign, local: &mut Vec<Diagnostic>) {
 /// Lowers one repository's operations: built-ins keep their keyword name and
 /// no signature; declared operations type-check their signature against the
 /// domain model. Rule 2 — operation names are unique within one repository.
+#[allow(clippy::too_many_arguments)]
 fn lower_repository_ops(
     repository: &dsl::DddRepository,
     packages: &[DomainPackage],
     base: Option<&str>,
     local: &mut Vec<Diagnostic>,
+    source: &str,
+    self_class: Option<&(String, String)>,
+    machines: &[ResolvedMachine],
+    context: Option<&rex_expr::TypeContext>,
 ) -> Vec<RepositoryOperation> {
     let mut ops: Vec<String> = Vec::new();
     let mut operations = Vec::new();
@@ -1367,11 +1559,346 @@ fn lower_repository_ops(
             operations.push(
                 RepositoryOperation::declared(op.name.text.clone(), return_type, params)
                     .with_return_multiplicity(return_multiplicity)
-                    .with_protected(op.is_protected),
+                    .with_protected(op.is_protected)
+                    .with_condition(
+                        op.condition
+                            .map(|span| condition_text(source, span).to_string()),
+                    ),
             );
+            if let Some(condition) = op.condition {
+                check_condition(
+                    source,
+                    condition,
+                    &format!(
+                        "operation '{}' of repository '{}'",
+                        op.name.text, repository.name.text
+                    ),
+                    self_class,
+                    machines,
+                    context,
+                    local,
+                );
+            }
         }
     }
     operations
+}
+
+/// Validates and lowers one `machine` block against the designed class:
+/// the design must be an entity bound to an enum-typed feature, the states
+/// must form a deterministic, reachable machine anchored at exactly one
+/// initial state, terminal states take no outgoing transitions, non-terminal
+/// states take at least one, and every guard type-checks with the designed
+/// class as `self` and the machine's states bound (states bind as enum
+/// values, so guards read `status == AwaitingApproval` — never magic
+/// strings). Returns `None` on a broken machine only when an error was
+/// reported; an empty artifact is still preferred over a wrong one.
+#[allow(clippy::too_many_arguments)]
+fn lower_design_machine(
+    machine: &dsl::DddMachine,
+    design: &dsl::DddDesign,
+    resolved: Option<&(String, String)>,
+    union: Option<&rex_ir::Model>,
+    packages: &[DomainPackage],
+    base: Option<&str>,
+    machines: &[ResolvedMachine],
+    context: Option<&rex_expr::TypeContext>,
+    source: &str,
+    local: &mut Vec<Diagnostic>,
+) -> Option<StateMachine> {
+    let mut ok = true;
+
+    // A lifecycle is entity semantics (the repository-placement precedent):
+    // a value object is immutable and a dto is a transfer record — neither
+    // carries states to move through.
+    if design.stereotype != dsl::DddStereotype::Entity {
+        local.push(Diagnostic::error(
+            format!(
+                "machine '{}: {}' requires an entity design; '{}' is designed as a {}",
+                machine.field.text,
+                machine.type_.name.full_name(),
+                design.class.text,
+                stereotype_label(design.stereotype)
+            ),
+            Some(machine.span),
+        ));
+        ok = false;
+    }
+
+    // The machine's type must resolve to an enum.
+    let enum_type = lower::resolve_ddd_type(&machine.type_, packages, base, local);
+    if !matches!(&enum_type, rex_ir::TypeRef::Enum { .. }) {
+        local.push(Diagnostic::error(
+            format!(
+                "machine '{}: {}' must bind an enum; '{}' is not one",
+                machine.field.text,
+                machine.type_.name.full_name(),
+                machine.type_.name.full_name()
+            ),
+            Some(machine.type_.span),
+        ));
+        ok = false;
+    }
+
+    // The bound feature must exist on the class and carry exactly the
+    // machine's enum type.
+    if let (Some((package, class)), Some(union)) = (resolved, union) {
+        match class_features(union, package, class).and_then(|features| {
+            features
+                .iter()
+                .find(|feature| feature.name == machine.field.text)
+                .cloned()
+        }) {
+            None => {
+                local.push(Diagnostic::error(
+                    format!(
+                        "machine '{}' binds feature '{}' of '{}', which does not exist",
+                        machine.field.text, machine.field.text, design.class.text
+                    ),
+                    Some(machine.field.span),
+                ));
+                ok = false;
+            }
+            Some(feature) => {
+                if feature.type_ != enum_type {
+                    local.push(Diagnostic::error(
+                        format!(
+                            "machine '{}: {}' binds feature '{}' of '{}', which carries a \
+                             different type",
+                            machine.field.text,
+                            machine.type_.name.full_name(),
+                            machine.field.text,
+                            design.class.text
+                        ),
+                        Some(machine.field.span),
+                    ));
+                    ok = false;
+                }
+            }
+        }
+    }
+
+    // Exactly one initial state.
+    let initial: Option<String> = match &machine.initial {
+        Some(name) => Some(name.text.clone()),
+        None => {
+            local.push(
+                Diagnostic::error(
+                    format!(
+                        "machine '{}: {}' declares no initial state",
+                        machine.field.text,
+                        machine.type_.name.full_name()
+                    ),
+                    Some(machine.span),
+                )
+                .with_help("add `initial <State>;` to the machine body"),
+            );
+            ok = false;
+            // Recovery: the first terminal, else the first transition
+            // endpoint, keeps the rest of the machine checkable.
+            machine
+                .terminals
+                .first()
+                .map(|name| name.text.clone())
+                .or_else(|| {
+                    machine
+                        .transitions
+                        .first()
+                        .map(|transition| transition.from.text.clone())
+                })
+        }
+    };
+
+    // Duplicate terminals.
+    let mut terminals: Vec<String> = Vec::new();
+    for terminal in &machine.terminals {
+        if terminals.contains(&terminal.text) {
+            local.push(
+                Diagnostic::error(
+                    format!(
+                        "duplicate terminal state '{}' in machine '{}'",
+                        terminal.text, machine.field.text
+                    ),
+                    Some(terminal.span),
+                )
+                .with_help("a state is declared terminal once per machine"),
+            );
+        } else {
+            terminals.push(terminal.text.clone());
+        }
+    }
+
+    // Duplicate transitions, and determinism: one trigger name leaves a
+    // state for at most one target (the statechart event rule).
+    let mut transitions: Vec<(String, String, Option<String>)> = Vec::new();
+    for transition in &machine.transitions {
+        let trigger = transition.trigger.as_ref().map(|name| name.text.clone());
+        let row = (
+            transition.from.text.clone(),
+            transition.to.text.clone(),
+            trigger.clone(),
+        );
+        if transitions.contains(&row) {
+            local.push(
+                Diagnostic::error(
+                    format!(
+                        "duplicate transition '{} -> {}' in machine '{}'",
+                        transition.from.text, transition.to.text, machine.field.text
+                    ),
+                    Some(transition.span),
+                )
+                .with_help("an edge is declared once per machine"),
+            );
+            continue;
+        }
+        if let Some(trigger) = &trigger {
+            let clashing = transitions.iter().any(|(from, _, other)| {
+                from == &transition.from.text && other.as_deref() == Some(trigger.as_str())
+            });
+            if clashing {
+                local.push(
+                    Diagnostic::error(
+                        format!(
+                            "trigger '{trigger}' leaves state '{}' more than once in machine '{}'",
+                            transition.from.text, machine.field.text
+                        ),
+                        Some(transition.span),
+                    )
+                    .with_help("a trigger deterministically names one transition per state"),
+                );
+                ok = false;
+            }
+        }
+        transitions.push(row);
+    }
+
+    // Terminal states take no outgoing transitions.
+    for transition in &machine.transitions {
+        if terminals.contains(&transition.from.text) {
+            local.push(
+                Diagnostic::error(
+                    format!(
+                        "terminal state '{}' takes a transition to '{}' in machine '{}'",
+                        transition.from.text, transition.to.text, machine.field.text
+                    ),
+                    Some(transition.span),
+                )
+                .with_help("a terminal state ends the lifecycle; remove the outgoing edge"),
+            );
+            ok = false;
+        }
+    }
+
+    // Reachability from the initial state; every non-terminal state takes at
+    // least one outgoing transition.
+    let states: Vec<String> = {
+        let mut states = initial
+            .clone()
+            .into_iter()
+            .chain(terminals.iter().cloned())
+            .collect::<Vec<_>>();
+        for (from, to, _) in &transitions {
+            if !states.contains(from) {
+                states.push(from.clone());
+            }
+            if !states.contains(to) {
+                states.push(to.clone());
+            }
+        }
+        states
+    };
+    if let Some(initial) = &initial {
+        let mut reachable = vec![initial.clone()];
+        let mut frontier = vec![initial.clone()];
+        while let Some(state) = frontier.pop() {
+            for (from, to, _) in transitions.iter().rev() {
+                if from == &state && !reachable.contains(to) {
+                    reachable.push(to.clone());
+                    frontier.push(to.clone());
+                }
+            }
+        }
+        for state in &states {
+            if !reachable.contains(state) {
+                local.push(Diagnostic::error(
+                    format!(
+                        "state '{state}' is unreachable from the initial state in machine '{}'",
+                        machine.field.text
+                    ),
+                    Some(machine.span),
+                ));
+                ok = false;
+            }
+        }
+        let mut outgoing: Vec<&str> = transitions
+            .iter()
+            .map(|(from, _, _)| from.as_str())
+            .collect();
+        outgoing.sort_unstable();
+        outgoing.dedup();
+        for state in &states {
+            if !terminals.contains(state) && !outgoing.contains(&state.as_str()) {
+                local.push(
+                    Diagnostic::error(
+                        format!(
+                        "state '{state}' takes no transition and is not terminal in machine '{}'",
+                        machine.field.text
+                    ),
+                        Some(machine.span),
+                    )
+                    .with_help("declare it `terminal <State>;` or add an outgoing edge"),
+                );
+                ok = false;
+            }
+        }
+    }
+
+    // Edge guards: the designed class scopes them; the machine's own states
+    // bind (a foreign machine's states are unbound here — cross-entity state
+    // references are a type error).
+    let own_machine = machines
+        .iter()
+        .find(|candidate| candidate.class == resolved.cloned().unwrap_or_default());
+    let edge_machines: Vec<ResolvedMachine> = own_machine.cloned().into_iter().collect();
+    for transition in &machine.transitions {
+        if let Some(guard) = transition.guard {
+            check_condition(
+                source,
+                guard,
+                &format!(
+                    "transition '{} -> {}' of machine '{}'",
+                    transition.from.text, transition.to.text, machine.field.text
+                ),
+                resolved,
+                &edge_machines,
+                context,
+                local,
+            );
+        }
+    }
+
+    if !ok {
+        return None;
+    }
+    let mut machine_out = StateMachine::new(machine.field.text.clone(), enum_type, initial?);
+    machine_out.terminals = terminals;
+    machine_out.transitions = transitions
+        .into_iter()
+        .map(|(from, to, trigger)| Transition {
+            from,
+            to,
+            trigger,
+            guard: None,
+        })
+        .collect();
+    // The guard text fills in from the AST (the dedup pass above drops
+    // duplicate rows, so indexes stay aligned).
+    for (out, ast) in machine_out.transitions.iter_mut().zip(&machine.transitions) {
+        out.guard = ast
+            .guard
+            .map(|span| condition_text(source, span).to_string());
+    }
+    Some(machine_out)
 }
 
 /// Lowers one signature type reference (a return type or a parameter type)
@@ -1417,6 +1944,85 @@ fn single_segment(name: &dsl::QualifiedName) -> Option<&str> {
     match name.segments.as_slice() {
         [segment] => Some(segment.text.as_str()),
         _ => None,
+    }
+}
+
+/// One designed machine resolved against its domain class, collected before
+/// a module's services lower so their conditions can bind machine states.
+#[derive(Debug, Clone)]
+struct ResolvedMachine {
+    /// The designed class, package-qualified (the condition scope of the
+    /// module's service operations).
+    class: (String, String),
+    /// The enum the states are drawn from.
+    enum_type: (String, String),
+    /// Every state the machine declares (initial, terminals, endpoints).
+    states: Vec<String>,
+}
+
+/// The condition text of one `when ( ... )` clause, sliced verbatim between
+/// the parentheses (the `when`-condition rule), plus the file-absolute span
+/// of the parenthesized region for diagnostics.
+fn condition_text(source: &str, span: rex_syntax::Span) -> &str {
+    source
+        .get(span.start + 1..span.end.saturating_sub(1))
+        .unwrap_or("")
+        .trim()
+}
+
+/// Type-checks one sliced condition with the machine states of `machines`
+/// bound as enum-typed names (acceptance: guards bind to declared states,
+/// never magic strings) and `self_class` as the implicit-`self` scope.
+/// Parse/type errors are re-based onto the file-absolute condition span.
+fn check_condition(
+    source: &str,
+    span: rex_syntax::Span,
+    context_label: &str,
+    self_class: Option<&(String, String)>,
+    machines: &[ResolvedMachine],
+    context: Option<&rex_expr::TypeContext>,
+    local: &mut Vec<Diagnostic>,
+) {
+    let text = condition_text(source, span);
+    let inner_start = span.start + 1;
+    let parsed = rex_expr::parse(text);
+    for error in &parsed.errors {
+        let start = inner_start.saturating_add(error.span.start).min(span.end);
+        let end = inner_start
+            .saturating_add(error.span.end)
+            .clamp(start, span.end);
+        local.push(Diagnostic::error(
+            format!("invalid condition in {context_label}: {}", error.message),
+            Some((start..end).into()),
+        ));
+    }
+    let (Some(ast), Some(context), Some(union_self)) = (parsed.ast, context, self_class) else {
+        // A condition still parses when the domain failed to lower (its
+        // diagnostics already block the artifact) or the scope is unknown.
+        return;
+    };
+    let mut checker =
+        rex_expr::TypeChecker::new(context.clone()).with_self(&union_self.0, &union_self.1);
+    for machine in machines {
+        let binding = rex_expr::Ty::from_type_ref(&rex_ir::TypeRef::Enum {
+            package: machine.enum_type.0.clone(),
+            name: machine.enum_type.1.clone(),
+        });
+        for state in &machine.states {
+            checker = checker.with_binding(state.clone(), binding.clone());
+        }
+    }
+    if let Err(errors) = checker.type_of(&ast) {
+        for error in errors {
+            let start = inner_start.saturating_add(error.span.start).min(span.end);
+            let end = inner_start
+                .saturating_add(error.span.end)
+                .clamp(start, span.end);
+            local.push(Diagnostic::error(
+                format!("invalid condition in {context_label}: {}", error.message),
+                Some((start..end).into()),
+            ));
+        }
     }
 }
 

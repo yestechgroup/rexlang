@@ -1,0 +1,26 @@
+import "payrun.mox";
+
+application Payroll {
+    base nz.example.payroll
+    module payroll {
+        service PayRunService {
+            boolean approve() capability ApprovePayRun when (status == AwaitingApproval);
+        }
+        entity PayRun repository PayRunRepository {
+            findById;
+            save;
+            PayRun[] findByState(String state) when (status == Posted);
+        }
+        machine status: PayRunStatus {
+            initial Draft;
+            Draft -> Calculating via Calculate;
+            Calculating -> AwaitingApproval via Submit;
+            AwaitingApproval -> Approved via Approve when (total > 0);
+            Approved -> Processing via Schedule;
+            Processing -> Posted via Post;
+            Draft -> Reversed;
+            terminal Reversed;
+            terminal Posted;
+        }
+    }
+}

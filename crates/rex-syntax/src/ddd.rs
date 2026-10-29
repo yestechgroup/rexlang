@@ -60,6 +60,14 @@ pub(crate) const INJECT: &str = "inject";
 /// interface). A contextual word like the rest: in leading position it is
 /// the modifier, anywhere else an ordinary name.
 pub(crate) const PROTECTED: &str = "protected";
+/// The `machine <field>: <Enum> { ... }` keyword of a design declaration.
+pub(crate) const MACHINE: &str = "machine";
+/// The `initial <State>;` member of a `machine` body.
+pub(crate) const INITIAL: &str = "initial";
+/// The `terminal <State>;` member of a `machine` body.
+pub(crate) const TERMINAL: &str = "terminal";
+/// The `via <Trigger>` clause of a machine transition.
+pub(crate) const VIA: &str = "via";
 /// The `boost <int>` keyword of a `text` field.
 pub(crate) const BOOST: &str = "boost";
 /// The `analyzer "<...>"` keyword, both as a search member and as a `text`

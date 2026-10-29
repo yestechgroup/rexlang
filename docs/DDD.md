@@ -6,8 +6,8 @@ A Sculptor-style domain-driven-design layer over `.mox` domain models. The
 domain model defines the data (entities, features, constraints); the `.ddd`
 design defines the application architecture on top of it: the application,
 its modules, the application services with their use-case operations, and
-per-class design decisions (stereotype, flags, repository, delegation
-targets). Parsed by **rex-syntax** (`parse_ddd`, the chumsky parser) at
+per-class design decisions (stereotype, flags, repository, state machine,
+delegation targets). Parsed by **rex-syntax** (`parse_ddd`, the chumsky parser) at
 compile time, lowered and validated by **rex-driver**
 (`compile_ddd_str`) against the imported domains, and emitted as the
 versioned `rex_ir::ddd::DddModel` artifact (the rex-ir crate).
@@ -82,8 +82,8 @@ module docs under [*`.ddd` design
 sources*](https://docs.rs/rex-syntax/latest/rex_syntax/parser/index.html)
 (`crates/rex-syntax/src/parser.rs`) — the single authority for `ddd_file`,
 `application_decl`, `module_decl`, `service_decl`, `design_decl`,
-`repository_decl`, and `search_decl`; this page keeps only the
-language-level rules. The `.ddd` keyword tables in
+`repository_decl`, `machine_decl`, and `search_decl`; this page keeps only
+the language-level rules. The `.ddd` keyword tables in
 `crates/rex-syntax/src/ddd.rs` are the keyword authority the parser and the
 formatter share.
 
@@ -227,6 +227,97 @@ consumers resolve against the domain model.
     operations"). Warning-severity: the artifact is unaffected, and the
     check runs only against a fully lowered union.
 
+## State machines
+
+An entity design may carry one lifecycle state machine — a
+`machine <field>: <Enum>` block, written after the optional repository
+block (the formatter's canonical order; one per design). `machine`,
+`initial`, `terminal`, and `via` are contextual words like every `.ddd`
+word. The normative grammar (`machine_decl`, `machine_member`,
+`transition`, `guard_clause`) lives in the parser module docs
+(`crates/rex-syntax/src/parser.rs`); the canonical fixture's machine gives
+the shape:
+
+```
+machine status: PayRunStatus {
+    initial Draft;
+    Draft -> Calculating via Calculate;
+    Calculating -> AwaitingApproval via Submit;
+    AwaitingApproval -> Approved via Approve when (total > 0);
+    Approved -> Processing via Schedule;
+    Processing -> Posted via Post;
+    Draft -> Reversed;
+    terminal Reversed;
+    terminal Posted;
+}
+```
+
+The driver validates the machine before it lowers (`lower_design_machine`
+in `crates/rex-driver/src/ddd.rs`; behavior pinned by
+`crates/rex-driver/tests/ddd_machines.rs`):
+
+- Only an **entity** design carries a machine — a value object is
+  immutable and a dto is a transfer record; neither moves through states.
+- The machine's type must resolve to an **enum**, and the bound feature
+  (`<field>`) must exist on the designed class and carry exactly that enum
+  type.
+- Exactly one `initial` state. Duplicate terminal declarations and
+  duplicate identical edges are rejected.
+- **Determinism** — one trigger name may leave a state for at most one
+  target (the statechart event rule).
+- **Terminal states take no outgoing transitions**; every non-terminal
+  state takes at least one (no dead ends — declare it `terminal` or add an
+  outgoing edge).
+- **Reachability** — every state is reachable from the initial state
+  (breadth-first over the edges).
+- Edge guards and operation `when` conditions type-check through the shared
+  expression language (rex-expr) with the designed class as the implicit
+  `self`.
+
+**Condition binding.** Machine states bind as enum-typed *names* — guards
+read `status == AwaitingApproval`, never `status == "AwaitingApproval"`.
+The string literal is a type error under the same-type equality rule (R2 of
+`docs/EXPRESSIONS.md`); the anti-magic-strings stance is deliberate. Edge
+guards bind only the machine's own states (a foreign machine's states are
+unbound — cross-entity state references are a type error). A service
+operation is not aggregate-scoped, so its condition requires the module to
+have **exactly one** machine-bearing design, and that design's class is the
+condition's `self` scope. Two machines in one module declaring the same
+state name is an ambiguous-binding error: the name stops binding, with one
+error saying so.
+
+**Artifact shape.** The machine lowers to `machine` on the design (a
+`rex_ir::ddd::StateMachine`): the bound `field`, the enum `TypeRef`, the
+`initial` state, the `terminals`, and the `transitions` — the `via` trigger
+(`None` for a bare arrow) and the guard as the verbatim source text between
+the parentheses (the `when`-condition rule). The state set is **derived**,
+never serialized as a separate list: `StateMachine::states()` is the
+initial state, then the terminals, then the remaining transition endpoints
+in first-appearance order; terminalness is membership in `terminals`.
+
+**xstate-ir lowering.** `rex_driver::machines::lower_design_machines` maps
+every designed machine onto the
+[restingstate](https://github.com/yestechgroup/restingstate) toolchain's
+language-neutral `xstate_ir::Machine` (rev-pinned as `xstate-ir` in the
+workspace `Cargo.toml`; the sigil precedent). The mapping is total and
+lossless for the v1 surface: `id` is the design class name; `context` is
+one field (the bound feature, typed by the enum's qualified name, default
+the initial state); states follow `StateMachine::states()` with terminals
+as `final` nodes and the rest `atomic`; transitions attach to their source
+in artifact order, and the guard maps to a named guard whose name is the
+condition's source text. A bare arrow's event is **derived**: the lowerCamel
+of the target state (`Posted` → `posted`, `AwaitingApproval` →
+`awaitingApproval`). The committed goldens pin both forms —
+`tests/conformance/ddd/payrun.ddd.json` (the design artifact) and
+`tests/conformance/ddd/payrun.xstate.json` (the lowered machine);
+regenerate with `REX_UPDATE_FIXTURES=1 cargo test -p rex-driver --test
+ddd_machine_golden`.
+
+**Derived events.** Every designed machine derives the `state_changed` event
+contract (entity + field — `rex_driver::machines::derived_events`), which
+is what makes the push plane's `state_changed` vocabulary reachable for a
+plain CRUD model once its lifecycle is modeled.
+
 ## Aggregate derivation
 
 The aggregate boundary derives from the domain model's containment graph,
@@ -361,6 +452,15 @@ Sculptor concepts rexlang intentionally does not carry, and why:
   a class designed `value` (rule 12 then requires its features
   `readonly`); a true embeddable datatype awaits a deliberate `.mox`
   language extension.
+- **Multi-target arrows (`A -> B, C`)** — deliberately excluded from the
+  machine surface: an unguarded external choice is not a deterministic
+  machine; write one edge per transition.
+- **Transition entry/exit actions and timers** — v1 transitions carry only
+  trigger, guard, and target; domains.toml approval chains and timers are
+  downstream concerns.
+- **`.actor` guards binding machine states** — the actor dimension cannot
+  yet reference a design's machine states cross-file (a fast-follow);
+  today only `.ddd`-internal conditions bind them.
 
 ---
 
@@ -495,3 +595,9 @@ byte-compares the compiled artifact, the CLI fmt gate enforces the
 canonical formatting, and `rexlang artifact check` classifies the artifact
 as a DDD design. Regenerate goldens with `REX_UPDATE_FIXTURES=1 cargo test
 --workspace`.
+
+The machine-bearing pair `payrun.mox`/`payrun.ddd` (formatter-canonical)
+commits two goldens: `payrun.ddd.json` (the design artifact) and
+`payrun.xstate.json` (the lowered xstate-ir machine), byte-compared by
+`crates/rex-driver/tests/ddd_machine_golden.rs`; the machine validation
+rules are pinned by `crates/rex-driver/tests/ddd_machines.rs`.
