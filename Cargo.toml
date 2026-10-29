@@ -50,6 +50,12 @@ sigil-model = { git = "https://github.com/yestechgroup/sigil.git", rev = "69115a
 sigil-resolve = { git = "https://github.com/yestechgroup/sigil.git", rev = "69115a79999e6ff2ce04c039a71edac6d8ba2468" }
 sigil-syntax = { git = "https://github.com/yestechgroup/sigil.git", rev = "69115a79999e6ff2ce04c039a71edac6d8ba2468" }
 
+# The restingstate statechart toolchain, pinned by rev — `.ddd` state
+# machines lower into its language-neutral Machine IR (xstate-ir is the
+# compatibility boundary; the lowering contract lives in docs/DDD.md).
+# NOTE: restingstate is a private repo; CI needs credentials to fetch it.
+xstate-ir = { git = "https://github.com/yestechgroup/restingstate.git", rev = "380580b6407f6530c6fb89e1ce87621567f009c5" }
+
 anyhow = "1.0"
 ariadne = "0.5"
 askama = "0.14"
