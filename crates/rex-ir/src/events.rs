@@ -52,7 +52,8 @@ use crate::{IrError, TypeRef};
 /// Versioned independently of [`crate::FORMAT_VERSION`] (the domain-model
 /// marker), [`crate::ACTOR_MODEL_FORMAT_VERSION`] (the policy marker),
 /// [`crate::ddd::DDD_MODEL_FORMAT_VERSION`] (the design marker), and
-/// [`crate::ifml::IFML_MODEL_FORMAT_VERSION`] (the interaction marker); bump
+/// [`crate::ifml::IFML_MODEL_FORMAT_VERSION`] (the interaction marker),
+/// [`crate::cmmn::CMMN_MODEL_FORMAT_VERSION`] (the case marker); bump
 /// whenever the event wire format changes incompatibly.
 pub const EVENT_MODEL_FORMAT_VERSION: u32 = 1;
 

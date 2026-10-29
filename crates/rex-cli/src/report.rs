@@ -183,6 +183,33 @@ pub(crate) fn report_usecase_diagnostics(
     }
 }
 
+/// Renders a `.cmmn` compilation's diagnostics grouped per file,
+/// ariadne-rendered against each file's own source — the case file and
+/// every imported domain.
+pub(crate) fn report_cmmn_diagnostics(
+    pair: &crate::inputs::CmmnPair,
+    compilation: &rex_driver::CmmnCompilation,
+) {
+    if compilation.diagnostics.is_empty() {
+        return;
+    }
+    let mut groups: Vec<(&str, Vec<rex_driver::Diagnostic>)> = Vec::new();
+    for (path, diagnostic) in &compilation.diagnostics {
+        match groups.last_mut() {
+            Some((group_path, group)) if *group_path == path.as_str() => {
+                group.push(diagnostic.clone())
+            }
+            _ => groups.push((path.as_str(), vec![diagnostic.clone()])),
+        }
+    }
+    for (path, group) in groups {
+        let Some(source) = pair.source_of(path) else {
+            continue;
+        };
+        eprint!("{}", render(path, source, &group));
+    }
+}
+
 /// Renders an `.ifml` compilation's diagnostics (resolver plus typed-binding
 /// checker) grouped per file, ariadne-rendered against each file's own
 /// source — the main interaction file and every imported `.ifml` file.

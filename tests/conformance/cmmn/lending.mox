@@ -1,0 +1,16 @@
+package lending
+
+class Borrower {
+    String name
+    String registrationNumber
+}
+
+class FinancialStatements {
+    int totalAssets
+    int totalLiabilities
+}
+
+class CreditAssessmentResult {
+    String rating
+    int score
+}

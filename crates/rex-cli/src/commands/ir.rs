@@ -4,18 +4,19 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use rex_driver::{
-    compile_actors_str, compile_ddd_str, compile_deploy_str, compile_evt_str, compile_usecase_str,
+    compile_actors_str, compile_cmmn_str, compile_ddd_str, compile_deploy_str, compile_evt_str,
+    compile_usecase_str,
 };
 
 use crate::inputs::{
-    compile_sources, expand_inputs, is_actor_file, is_ddd_file, is_deploy_file, is_evt_file,
-    is_ifml_file, is_uc_file, read_actor_pair, read_ddd_design, read_deploy_pair, read_evt_pair,
-    read_ifml_inputs, read_sources, read_uc_pair,
+    compile_sources, expand_inputs, is_actor_file, is_cmmn_file, is_ddd_file, is_deploy_file,
+    is_evt_file, is_ifml_file, is_uc_file, read_actor_pair, read_cmmn_pair, read_ddd_design,
+    read_deploy_pair, read_evt_pair, read_ifml_inputs, read_sources, read_uc_pair,
 };
 use crate::report::{
-    report_actor_diagnostics, report_ddd_diagnostics, report_deploy_diagnostics,
-    report_evt_diagnostics, report_ifml_diagnostics, report_multi_diagnostics,
-    report_usecase_diagnostics,
+    report_actor_diagnostics, report_cmmn_diagnostics, report_ddd_diagnostics,
+    report_deploy_diagnostics, report_evt_diagnostics, report_ifml_diagnostics,
+    report_multi_diagnostics, report_usecase_diagnostics,
 };
 
 pub(crate) fn run(
@@ -130,6 +131,27 @@ pub(crate) fn run(
             return Ok(ExitCode::FAILURE);
         };
         let json = use_case_model.to_json_pretty()?;
+        match out {
+            Some(out_path) => std::fs::write(out_path, json)?,
+            None => println!("{json}"),
+        }
+        Ok(ExitCode::SUCCESS)
+    } else if files.len() == 1 && is_cmmn_file(&files[0]) {
+        let pair = read_cmmn_pair(&files[0])?;
+        let compilation = compile_cmmn_str(
+            &pair.path,
+            &pair.source,
+            &pair.domains,
+            &pair.imports(),
+            &pair.designs,
+            &pair.actors,
+            &pair.events,
+        );
+        report_cmmn_diagnostics(&pair, &compilation);
+        let Some(case_model) = compilation.model else {
+            return Ok(ExitCode::FAILURE);
+        };
+        let json = case_model.to_json_pretty()?;
         match out {
             Some(out_path) => std::fs::write(out_path, json)?,
             None => println!("{json}"),

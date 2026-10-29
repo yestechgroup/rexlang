@@ -1,0 +1,12 @@
+import "lending.mox"
+
+actors Lending {
+    actor RelationshipManager
+    actor CreditAnalyst
+
+    capability AssessCredit on Borrower
+
+    grant CreditAnalyst {
+        permit AssessCredit
+    }
+}

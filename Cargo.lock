@@ -2436,6 +2436,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rex-backend-cmmn"
+version = "0.1.0"
+dependencies = [
+ "rex-driver",
+ "rex-expr",
+ "rex-ir",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "rex-backend-jsonschema"
 version = "0.1.0"
 dependencies = [

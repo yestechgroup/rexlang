@@ -9,6 +9,7 @@ members = [
     "crates/rex-backend-rust",
     "crates/rex-backend-jsonschema",
     "crates/rex-backend-cedar",
+    "crates/rex-backend-cmmn",
     "crates/rex-vocab",
     "crates/rex-lsp",
     "crates/rex-runtime",

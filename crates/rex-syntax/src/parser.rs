@@ -421,6 +421,77 @@
 //!   introducing the next member), so a missing `]` never swallows the
 //!   next line. A member that cannot start anything at all fails the whole
 //!   usecase into file-level junk (the `actors_block` coarseness).
+//!
+//! ## `.cmmn` case management sources ([`parse_cmmn`])
+//!
+//! ```text
+//! cmmn_file        := (cmmn_import | case_decl)*
+//! cmmn_import      := "import" string ("as" name)?
+//! case_decl        := "case" name "{" case_member* "}"
+//! case_member      := roles_block | case_file_block | plan_item_decl
+//! roles_block      := "roles" "{" role_decl* "}"
+//! role_decl        := "role" name ("as" name)? ";"
+//! case_file_block  := "case_file" "{" file_item* "}"
+//! file_item        := type_ref multiplicity? name ";"
+//! plan_item_decl   := "discretionary" simple_item_decl
+//!                   | simple_item_decl | stage_decl
+//! simple_item_decl := ("task" | "service" | "milestone") name plan_body?
+//! stage_decl       := "stage" name stage_body?
+//! plan_body        := "{" plan_member* "}"
+//! stage_body       := "{" (plan_member | plan_item_decl)* "}"
+//! plan_member      := performer_clause | execute_clause
+//!                   | criterion_decl | flag_decl
+//! performer_clause := "performer" ":" name ";"
+//! execute_clause   := "execute" name "." name "." name ";"
+//! criterion_decl   := ("entry" | "exit") "on" on_part ("," on_part)*
+//!                     ("when" raw_parens)? ";"
+//! on_part          := name ("." name)?
+//! flag_decl        := "required" ";" | "repeats" ";" | "auto" ";"
+//! ```
+//!
+//! * Every `.cmmn` word above is a **contextual identifier** (the `.ddd`
+//!   discipline): special only in the grammar position noted, an ordinary
+//!   name everywhere else, escapable with `^`. The table in `crate::cmmn`
+//!   is the keyword authority shared by the parser and the formatter.
+//!   `import`, `as`, `on`, and `when` are real lexer keywords (`on`/`when`
+//!   are the `.actor` condition keywords).
+//! * A case-file item reuses the `.mox` attribute production (type-first
+//!   with the shared `multiplicity` annotation): `Borrower borrower;`,
+//!   `Borrower[0..1] borrower;`, `FinancialStatements[] financials;`.
+//! * An on-part is `name` (a domain event from an imported `.evt`
+//!   contract) or `name.tail` — a plan item standard event or a case-file
+//!   transition. The **transition vocabulary** (`create`, `enable`,
+//!   `start`, `complete`, `terminate`, `fail`, `occur`, `update`,
+//!   `delete`, `childUpdate`) is deliberately **not** syntax: both
+//!   segments are plain names and the driver validates the tail against
+//!   its closed tables (the `.deploy` vocabulary discipline). The `when`
+//!   if-part is a [`raw_parens`] span — the driver slices strictly inside
+//!   the parens (the `when`-condition convention) and types the text with
+//!   rex-expr.
+//! * The `discretionary` prefix is grammatical before a simple item
+//!   (`task`, `service`, or `milestone`) but not before a `stage`; the
+//!   driver rejects it on milestones — discretionary planning is a
+//!   task/service concept.
+//! * Semicolons follow the `.evt` rule: every statement line (`role`,
+//!   case-file item, `performer`, `execute`, criterion, flag) ends in `;`;
+//!   block declarations (`case`, `stage`, `task`, `service`, `milestone`,
+//!   `roles`, `case_file`) end without one. The formatter emits the
+//!   canonical `;` whether or not the source had one.
+//! * Imports must precede the first `case` declaration; a later `import`
+//!   is an error (recovered, and the misplaced import is dropped),
+//!   mirroring the `.actor`/`.evt`/`.uc` rule. Duplicate imports are a
+//!   driver concern.
+//! * Doc comments (`///` runs) directly above a `case`, a plan item, or a
+//!   case-file item become its description.
+//! * Recovery: an import's alias, a role's `as`/name/`;`, a case-file
+//!   item's type/multiplicity/name/`;`, a plan item's name/body, a
+//!   performer's `:`/name/`;`, an execute binding's arity/`;`, a
+//!   criterion's `on`/parts/`when`/`;`, and a flag's `;` are each
+//!   committed once their leading word matched — missing pieces are
+//!   reported errors and the declaration still recovers. A body member
+//!   that cannot start anything fails into the enclosing body's junk (the
+//!   `actors_block` coarseness); a member that cannot start anything at
+//!   all fails the whole case into file-level junk.
 
 use std::iter::once;
 use std::ops::{Range, RangeFrom};
@@ -429,6 +500,7 @@ use chumsky::input::{ExactSizeInput, ValueInput};
 use chumsky::prelude::*;
 
 use crate::ast::*;
+use crate::cmmn;
 use crate::ddd;
 use crate::deploy;
 use crate::lexer::{lex, lex_with_comments, Token};
@@ -4817,6 +4889,733 @@ pub fn parse_usecases(source: &str) -> UcParseResult {
     }
 }
 
+fn cmmn_keyword<'src>(
+    keyword: &'static str,
+) -> impl Parser<'src, Tokens<'src>, Span, MoxExtra<'src>> + Clone {
+    select! { Token::Ident(text) = e if text == keyword => e.span() }
+}
+
+/// An `import "<path>" (as <name>)?` declaration of a `.cmmn` file: the
+/// `.uc` import production. Committed once the `as` keyword matched: a
+/// missing alias name is a reported error. Without `as` nothing else is
+/// consumed (the next word may begin a case).
+fn cmmn_import_decl<'src>() -> impl Parser<'src, Tokens<'src>, CmmnImport, MoxExtra<'src>> + Clone {
+    kw(Token::Import)
+        .ignore_then(string_lit())
+        .then(
+            kw(Token::As)
+                .ignore_then(name().map(Some).or_not().map(Some))
+                .or_not(),
+        )
+        .map_with(|(path, alias), e| (path, alias, e.span()))
+        .validate(|(path, alias, span), _e, emitter| {
+            if matches!(&alias, Some(Some(None))) {
+                emitter.emit(Rich::custom(span, "expected a name after `as`"));
+            }
+            CmmnImport {
+                path,
+                alias: match alias {
+                    Some(Some(Some(Some(alias)))) => Some(alias.text),
+                    _ => None,
+                },
+                span,
+            }
+        })
+}
+
+/// Consumes a run of tokens that cannot start or continue a body member,
+/// stopping before the body's closing `}` and before identifiers (which
+/// could begin the next member). Always consumes at least one token.
+fn junk_cmmn_member<'src>(
+    expected: &'static str,
+) -> impl Parser<'src, Tokens<'src>, (), MoxExtra<'src>> + Clone {
+    let first = select! { t if !matches!(t, Token::RBrace) => () };
+    let rest = select! {
+        t if !matches!(
+            t,
+            Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_)
+        ) =>
+        ()
+    };
+    first
+        .ignore_then(rest.repeated().ignored())
+        .validate(move |(), e, emitter| {
+            emitter.emit(Rich::custom(e.span(), expected));
+        })
+}
+
+/// A `role <name> (as <actor>)?;` line of a roles block. Committed once
+/// `role` matched: a missing name, alias, or `;` is a reported error.
+fn role_decl<'src>() -> impl Parser<'src, Tokens<'src>, CmmnRole, MoxExtra<'src>> + Clone {
+    cmmn_keyword(cmmn::ROLE)
+        .ignore_then(name().or_not())
+        .then(
+            kw(Token::As)
+                .ignore_then(name().map(Some).or_not().map(Some))
+                .or_not(),
+        )
+        .then(kw(Token::Other(';')).or_not())
+        .map_with(|((name, actor), semi), e| (name, actor, semi, e.span()))
+        .validate(|(name, actor, semi, span), _e, emitter| {
+            let name = name.or_else(|| {
+                emitter.emit(Rich::custom(span, "expected a role name after `role`"));
+                None
+            });
+            if matches!(&actor, Some(Some(None))) {
+                emitter.emit(Rich::custom(span, "expected an actor name after `as`"));
+            }
+            if semi.is_none() {
+                emitter.emit(Rich::custom(span, "expected `;` after the role"));
+            }
+            CmmnRole {
+                name: name.map(|n| n.text).unwrap_or_default(),
+                actor: match actor {
+                    Some(Some(Some(Some(actor)))) => Some(actor.text),
+                    _ => None,
+                },
+                span,
+            }
+        })
+}
+
+/// A `roles { ... }` block of a case body. A member that cannot start a
+/// role is junk (recovered, reported).
+fn roles_block<'src>() -> impl Parser<'src, Tokens<'src>, Vec<CmmnRole>, MoxExtra<'src>> + Clone {
+    cmmn_keyword(cmmn::ROLES)
+        .ignore_then(
+            kw(Token::LBrace)
+                .ignore_then(
+                    role_decl()
+                        .map(Some)
+                        .or(junk_cmmn_member("expected a role declaration").to(None))
+                        .repeated()
+                        .collect::<Vec<_>>(),
+                )
+                .then_ignore(kw(Token::RBrace)),
+        )
+        .map(|roles| roles.into_iter().flatten().collect())
+}
+
+/// A case-file item declaration: the `.mox` attribute production
+/// (`Type[mult]? name;`). Committed once the type matched: a missing name
+/// or `;` is a reported error.
+fn case_file_item<'src>() -> impl Parser<'src, Tokens<'src>, CmmnFileItem, MoxExtra<'src>> + Clone {
+    tref()
+        .then(multiplicity().or_not())
+        .then(name().or_not())
+        .then(kw(Token::Other(';')).or_not())
+        .map_with(|(((type_ref, mult), name), semi), e| (type_ref, mult, name, semi, e.span()))
+        .validate(|(type_ref, multiplicity, name, semi, span), _e, emitter| {
+            let name = name.or_else(|| {
+                emitter.emit(Rich::custom(span, "expected an item name after the type"));
+                None
+            });
+            if semi.is_none() {
+                emitter.emit(Rich::custom(span, "expected `;` after the case-file item"));
+            }
+            CmmnFileItem {
+                name: name.map(|n| n.text).unwrap_or_default(),
+                type_ref,
+                multiplicity,
+                description: None,
+                span,
+            }
+        })
+}
+
+/// A `case_file { ... }` block of a case body.
+fn case_file_block<'src>(
+) -> impl Parser<'src, Tokens<'src>, Vec<CmmnFileItem>, MoxExtra<'src>> + Clone {
+    cmmn_keyword(cmmn::CASE_FILE)
+        .ignore_then(
+            kw(Token::LBrace)
+                .ignore_then(
+                    case_file_item()
+                        .map(Some)
+                        .or(junk_cmmn_member("expected a case-file item declaration").to(None))
+                        .repeated()
+                        .collect::<Vec<_>>(),
+                )
+                .then_ignore(kw(Token::RBrace)),
+        )
+        .map(|items| items.into_iter().flatten().collect())
+}
+
+/// One on-part of a criterion: `name` (a domain event) or `name.tail` (a
+/// plan item event or case-file transition — the driver validates the
+/// tail). Committed once the name matched: a missing tail word is a
+/// reported error.
+fn cmmn_on_part<'src>() -> impl Parser<'src, Tokens<'src>, CmmnOnPart, MoxExtra<'src>> + Clone {
+    name()
+        .then(
+            kw(Token::Dot)
+                .ignore_then(name().map(Some).or_not().map(Some))
+                .or_not(),
+        )
+        .map_with(|(source, tail), e| (source, tail, e.span()))
+        .validate(|(source, tail, span), _e, emitter| {
+            if matches!(&tail, Some(Some(None))) {
+                emitter.emit(Rich::custom(span, "expected a transition word after `.`"));
+            }
+            CmmnOnPart {
+                source: source.text,
+                event: match tail {
+                    Some(Some(Some(Some(word)))) => Some(word.text),
+                    _ => None,
+                },
+                span,
+            }
+        })
+}
+
+/// An `entry`/`exit` criterion of a plan item body:
+/// `entry on <part> (, <part>)* (when (...))?;`. Committed once the
+/// `entry`/`exit` word matched: a missing `on`, on-part, `when` parens,
+/// or `;` is a reported error.
+fn criterion_decl<'src>(
+) -> impl Parser<'src, Tokens<'src>, (bool, CmmnCriterion), MoxExtra<'src>> + Clone {
+    let head = cmmn_keyword(cmmn::ENTRY)
+        .to(false)
+        .or(cmmn_keyword(cmmn::EXIT).to(true));
+    let parts = cmmn_on_part()
+        .then(
+            kw(Token::Comma)
+                .ignore_then(cmmn_on_part())
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .map(|(first, rest)| {
+            let mut parts = Vec::with_capacity(rest.len() + 1);
+            parts.push(first);
+            parts.extend(rest);
+            parts
+        });
+    let when = kw(Token::When)
+        .ignore_then(raw_parens().map(Some).or_not().map(Some))
+        .or_not();
+    head.then(kw(Token::On).map(Some).or_not())
+        .then(parts.or_not())
+        .then(when)
+        .then(kw(Token::Other(';')).or_not())
+        .map_with(|((((is_exit, on), parts), when), semi), e| {
+            (is_exit, on, parts, when, semi, e.span())
+        })
+        .validate(|(is_exit, on, parts, when, semi, span), _e, emitter| {
+            let head_word = if is_exit { "exit" } else { "entry" };
+            if on.is_none() {
+                emitter.emit(Rich::custom(
+                    span,
+                    format!("expected `on` after `{head_word}`"),
+                ));
+            }
+            if matches!(&when, Some(Some(None))) {
+                emitter.emit(Rich::custom(span, "expected `(...)` after `when`"));
+            }
+            if semi.is_none() {
+                emitter.emit(Rich::custom(span, "expected `;` after the criterion"));
+            }
+            let parts = parts.unwrap_or_default();
+            if on.is_some() && parts.is_empty() {
+                emitter.emit(Rich::custom(span, "expected an on-part after `on`"));
+            }
+            (
+                is_exit,
+                CmmnCriterion {
+                    on_parts: parts,
+                    when: match when {
+                        Some(Some(Some(Some(parens)))) => Some(parens),
+                        _ => None,
+                    },
+                    span,
+                },
+            )
+        })
+}
+
+/// A `performer: <role>;` clause of a plan item body. Committed once
+/// `performer` matched.
+fn performer_clause<'src>(
+) -> impl Parser<'src, Tokens<'src>, (String, Span), MoxExtra<'src>> + Clone {
+    cmmn_keyword(cmmn::PERFORMER)
+        .ignore_then(
+            kw(Token::Other(':'))
+                .ignore_then(name().map(Some).or_not().map(Some))
+                .or_not(),
+        )
+        .then(kw(Token::Other(';')).or_not())
+        .map_with(|(role, semi), e| (role, semi, e.span()))
+        .validate(|(role, semi, span), _e, emitter| {
+            let role = match role {
+                Some(Some(Some(Some(name)))) => Some(name),
+                Some(Some(Some(None))) | Some(Some(None)) | Some(None) => {
+                    emitter.emit(Rich::custom(span, "expected a role name after `:`"));
+                    None
+                }
+                None => {
+                    emitter.emit(Rich::custom(span, "expected `:` after `performer`"));
+                    None
+                }
+            };
+            if semi.is_none() {
+                emitter.emit(Rich::custom(
+                    span,
+                    "expected `;` after the performer clause",
+                ));
+            }
+            (role.map(|n| n.text).unwrap_or_default(), span)
+        })
+}
+
+/// An `execute <alias>.<Service>.<operation>;` clause of a service body.
+/// Committed once `execute` matched: a reference that is not exactly three
+/// segments or a missing `;` is a reported error, and the clause recovers
+/// with the segments it has.
+fn execute_clause<'src>() -> impl Parser<'src, Tokens<'src>, CmmnExecute, MoxExtra<'src>> + Clone {
+    cmmn_keyword(cmmn::EXECUTE)
+        .ignore_then(qname())
+        .then(kw(Token::Other(';')).or_not())
+        .map_with(|(name, semi), e| (name, semi, e.span()))
+        .validate(|(name, semi, span), _e, emitter| {
+            if semi.is_none() {
+                emitter.emit(Rich::custom(span, "expected `;` after the execute clause"));
+            }
+            let segment = |index: usize| {
+                name.segments
+                    .get(index)
+                    .map(|s| s.text.clone())
+                    .unwrap_or_default()
+            };
+            let (alias, service, operation) = match name.segments.as_slice() {
+                [alias, service, operation] => (
+                    alias.text.clone(),
+                    service.text.clone(),
+                    operation.text.clone(),
+                ),
+                _ => {
+                    emitter.emit(Rich::custom(
+                        name.span,
+                        "expected `alias.Service.operation`",
+                    ));
+                    (segment(0), segment(1), segment(2))
+                }
+            };
+            CmmnExecute {
+                alias,
+                service,
+                operation,
+                span,
+            }
+        })
+}
+
+/// A control flag: `required;`, `repeats;`, or `auto;`.
+fn flag_decl<'src>() -> impl Parser<'src, Tokens<'src>, (Span, &'static str), MoxExtra<'src>> + Clone
+{
+    choice((
+        cmmn_keyword(cmmn::REQUIRED).to(cmmn::REQUIRED),
+        cmmn_keyword(cmmn::REPEATS).to(cmmn::REPEATS),
+        cmmn_keyword(cmmn::AUTO).to(cmmn::AUTO),
+    ))
+    .then(kw(Token::Other(';')).or_not())
+    .map_with(|(word, semi), e| (word, semi, e.span()))
+    .validate(|(word, semi, span), _e, emitter| {
+        if semi.is_none() {
+            emitter.emit(Rich::custom(span, "expected `;` after the flag"));
+        }
+        (span, word)
+    })
+}
+
+/// One member of a plan item body: a `performer` clause, an `execute`
+/// clause, a criterion, a control flag, or — inside a stage — a nested
+/// plan item.
+#[derive(Clone)]
+enum CmmnBodyMember {
+    Performer((String, Span)),
+    Execute(CmmnExecute),
+    Criterion {
+        is_exit: bool,
+        criterion: CmmnCriterion,
+    },
+    Flag(Span, &'static str),
+    Item(Box<CmmnItemDecl>),
+}
+
+/// The folded members of a plan item body.
+#[derive(Default)]
+struct CmmnBody {
+    performer: Option<(String, Span)>,
+    execute: Option<CmmnExecute>,
+    entry: Vec<CmmnCriterion>,
+    exit: Vec<CmmnCriterion>,
+    required: bool,
+    auto: bool,
+    repeats: bool,
+    problems: Vec<(Span, String)>,
+}
+
+impl CmmnBody {
+    fn fold(&mut self, member: CmmnBodyMember) {
+        match member {
+            CmmnBodyMember::Performer(performer) => {
+                if self.performer.is_none() {
+                    self.performer = Some(performer);
+                } else {
+                    self.problems
+                        .push((performer.1, "duplicate `performer` clause".to_string()));
+                }
+            }
+            CmmnBodyMember::Execute(execute) => {
+                if self.execute.is_none() {
+                    self.execute = Some(execute);
+                } else {
+                    self.problems
+                        .push((execute.span, "duplicate `execute` clause".to_string()));
+                }
+            }
+            CmmnBodyMember::Criterion { is_exit, criterion } => {
+                if is_exit {
+                    self.exit.push(criterion);
+                } else {
+                    self.entry.push(criterion);
+                }
+            }
+            CmmnBodyMember::Flag(span, word) => match word {
+                w if w == cmmn::REQUIRED => self.required = true,
+                w if w == cmmn::AUTO => self.auto = true,
+                w if w == cmmn::REPEATS => self.repeats = true,
+                _ => self.problems.push((span, format!("unknown flag `{word}`"))),
+            },
+            CmmnBodyMember::Item(_) => {}
+        }
+    }
+}
+
+/// The `{ ... }` body of a plan item: its members, folded. `nested`
+/// selects whether nested plan items are grammatical inside (stages only);
+/// `expected` is the junk-member error message.
+fn plan_item_body<'src>(
+    nested: bool,
+    decl: impl Parser<'src, Tokens<'src>, CmmnItemDecl, MoxExtra<'src>> + Clone + 'src,
+) -> impl Parser<'src, Tokens<'src>, (CmmnBody, Vec<CmmnItemDecl>), MoxExtra<'src>> + Clone {
+    let plain = choice((
+        performer_clause().map(CmmnBodyMember::Performer),
+        execute_clause().map(CmmnBodyMember::Execute),
+        criterion_decl()
+            .map(|(is_exit, criterion)| CmmnBodyMember::Criterion { is_exit, criterion }),
+        flag_decl().map(|(span, word)| CmmnBodyMember::Flag(span, word)),
+    ));
+    let member: Boxed<'src, 'src, Tokens<'src>, CmmnBodyMember, MoxExtra<'src>> = if nested {
+        choice((plain, decl.map(|item| CmmnBodyMember::Item(Box::new(item))))).boxed()
+    } else {
+        plain.boxed()
+    };
+    kw(Token::LBrace)
+        .ignore_then(
+            member
+                .map(Some)
+                .or(junk_cmmn_member("expected a plan item member").to(None))
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .then_ignore(kw(Token::RBrace))
+        .map(|members| {
+            let mut body = CmmnBody::default();
+            let mut items = Vec::new();
+            for member in members.into_iter().flatten() {
+                match member {
+                    CmmnBodyMember::Item(item) => items.push(*item),
+                    other => body.fold(other),
+                }
+            }
+            (body, items)
+        })
+}
+
+/// A plan item declaration: a `task`, `service`, `milestone`, or `stage`
+/// (optionally prefixed `discretionary`), with its optional body. Stages
+/// may nest plan items; the other kinds may not.
+fn plan_item_decl<'src>() -> impl Parser<'src, Tokens<'src>, CmmnItemDecl, MoxExtra<'src>> + Clone {
+    recursive(|decl| {
+        let simple = |word: &'static str| {
+            cmmn_keyword(word)
+                .ignore_then(name().or_not())
+                .then(plan_item_body(false, decl.clone()).or_not())
+                .map_with(move |(name, body), e| (word, name, body, e.span()))
+                .validate(|(word, name, body, span), _e, emitter| {
+                    let name = name.or_else(|| {
+                        emitter.emit(Rich::custom(span, "expected a plan item name"));
+                        None
+                    });
+                    let (body, _) = body.unwrap_or_default();
+                    for (problem_span, message) in &body.problems {
+                        emitter.emit(Rich::custom(*problem_span, message.clone()));
+                    }
+                    let kind = if word == cmmn::TASK {
+                        CmmnItemKind::Task
+                    } else if word == cmmn::SERVICE {
+                        CmmnItemKind::Service
+                    } else {
+                        CmmnItemKind::Milestone
+                    };
+                    CmmnItemDecl {
+                        name: name.map(|n| n.text).unwrap_or_default(),
+                        description: None,
+                        discretionary: false,
+                        kind,
+                        performer: body.performer,
+                        execute: body.execute,
+                        entry: body.entry,
+                        exit: body.exit,
+                        required: body.required,
+                        auto: body.auto,
+                        repeats: body.repeats,
+                        span,
+                    }
+                })
+        };
+        let discretionary = cmmn_keyword(cmmn::DISCRETIONARY)
+            .ignore_then(choice((
+                simple(cmmn::TASK),
+                simple(cmmn::SERVICE),
+                simple(cmmn::MILESTONE),
+            )))
+            .validate(|mut item, _e, _emitter| {
+                item.discretionary = true;
+                item
+            });
+        let stage = cmmn_keyword(cmmn::STAGE)
+            .ignore_then(name().or_not())
+            .then(plan_item_body(true, decl.clone()).or_not())
+            .map_with(|(name, body), e| (name, body, e.span()))
+            .validate(|(name, body, span), _e, emitter| {
+                let name = name.or_else(|| {
+                    emitter.emit(Rich::custom(span, "expected a plan item name"));
+                    None
+                });
+                let (body, items) = body.unwrap_or_default();
+                for (problem_span, message) in &body.problems {
+                    emitter.emit(Rich::custom(*problem_span, message.clone()));
+                }
+                CmmnItemDecl {
+                    name: name.map(|n| n.text).unwrap_or_default(),
+                    description: None,
+                    discretionary: false,
+                    kind: CmmnItemKind::Stage { items },
+                    performer: body.performer,
+                    execute: body.execute,
+                    entry: body.entry,
+                    exit: body.exit,
+                    required: body.required,
+                    auto: body.auto,
+                    repeats: body.repeats,
+                    span,
+                }
+            });
+        choice((
+            discretionary,
+            simple(cmmn::TASK),
+            simple(cmmn::SERVICE),
+            simple(cmmn::MILESTONE),
+            stage,
+        ))
+    })
+}
+
+/// One member of a case body.
+#[derive(Clone)]
+enum CmmnCaseMember {
+    Roles(Vec<CmmnRole>),
+    CaseFile(Vec<CmmnFileItem>),
+    Item(Box<CmmnItemDecl>),
+}
+
+/// A `case <name> { ... }` declaration. The three member kinds may be
+/// interleaved in any order; the AST folds them into per-kind lists.
+fn case_decl<'src>() -> impl Parser<'src, Tokens<'src>, CmmnCase, MoxExtra<'src>> + Clone {
+    let member = choice((
+        roles_block().map(CmmnCaseMember::Roles),
+        case_file_block().map(CmmnCaseMember::CaseFile),
+        plan_item_decl().map(|item| CmmnCaseMember::Item(Box::new(item))),
+    ));
+    cmmn_keyword(cmmn::CASE)
+        .ignore_then(name().or_not())
+        .then_ignore(kw(Token::LBrace))
+        .then(
+            member
+                .map(Some)
+                .or(junk_cmmn_member("expected a case member").to(None))
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .then_ignore(kw(Token::RBrace))
+        .map_with(|(name, members), e| (name, members, e.span()))
+        .validate(|(name, members, span), _e, emitter| {
+            let name = name.or_else(|| {
+                emitter.emit(Rich::custom(span, "expected a case name after `case`"));
+                None
+            });
+            let mut case = CmmnCase {
+                name: name.map(|n| n.text).unwrap_or_default(),
+                description: None,
+                roles: Vec::new(),
+                case_file: Vec::new(),
+                plan_items: Vec::new(),
+                span,
+            };
+            for member in members.into_iter().flatten() {
+                match member {
+                    CmmnCaseMember::Roles(roles) => case.roles.extend(roles),
+                    CmmnCaseMember::CaseFile(items) => case.case_file.extend(items),
+                    CmmnCaseMember::Item(item) => case.plan_items.push(*item),
+                }
+            }
+            case
+        })
+}
+
+/// Consumes a run of tokens up to the next `import` keyword or the
+/// contextual `case` word (or end of input). File-level recovery for
+/// `.cmmn` files: always consumes at least one token (guaranteeing
+/// progress) and emits an error for the skipped region.
+fn junk_cmmn_file<'src>() -> impl Parser<'src, Tokens<'src>, (), MoxExtra<'src>> + Clone {
+    let rest = select! {
+        t if !matches!(t, Token::Import | Token::Ident(cmmn::CASE)) => ()
+    };
+    any()
+        .ignore_then(rest.repeated().ignored())
+        .validate(|(), e, emitter| {
+            emitter.emit(Rich::custom(
+                e.span(),
+                "expected an import or case declaration",
+            ));
+        })
+}
+
+/// One top-level item of a `.cmmn` file.
+#[derive(Clone)]
+enum CmmnFileItemKind {
+    Import(CmmnImport),
+    Case(Box<CmmnCase>),
+    Junk,
+}
+
+fn fold_cmmn_file(items: Vec<CmmnFileItemKind>) -> (CmmnFile, Option<Span>) {
+    let mut imports = Vec::new();
+    let mut cases = Vec::new();
+    // Span of the first `import` that follows a case (a syntax error
+    // reported by the caller's `validate`).
+    let mut late_import = None;
+    for item in items {
+        match item {
+            CmmnFileItemKind::Import(decl) => {
+                if cases.is_empty() {
+                    imports.push(decl);
+                } else if late_import.is_none() {
+                    late_import = Some(decl.span);
+                }
+            }
+            CmmnFileItemKind::Case(decl) => cases.push(*decl),
+            CmmnFileItemKind::Junk => {}
+        }
+    }
+    (CmmnFile { imports, cases }, late_import)
+}
+
+fn cmmn_file<'src>() -> impl Parser<'src, Tokens<'src>, CmmnFile, MoxExtra<'src>> + Clone {
+    let item = choice((
+        cmmn_import_decl().map(CmmnFileItemKind::Import),
+        case_decl().map(|decl| CmmnFileItemKind::Case(Box::new(decl))),
+    ))
+    .or(junk_cmmn_file().to(CmmnFileItemKind::Junk));
+
+    item.repeated()
+        .collect::<Vec<_>>()
+        .then_ignore(end())
+        .map(fold_cmmn_file)
+        .validate(|(file, late_import), _, emitter| {
+            if let Some(span) = late_import {
+                emitter.emit(Rich::custom(span, "`import` after a case declaration"));
+            }
+            file
+        })
+}
+
+/// Attaches doc comments to a `.cmmn` file's cases, case-file items, and
+/// plan items (recursively through stages). The contiguous `///` run is
+/// joined with newlines into a single description — the same semantic as
+/// the `.mox` doc collection ([`doc_run_above`] is shared).
+fn attach_cmmn_docs(file: &mut CmmnFile, comments: &[crate::lexer::Comment<'_>], source: &str) {
+    let starts = line_starts(source);
+    let line_of = |byte: usize| line_of(byte, &starts);
+    let docs = collect_docs(comments, source);
+    let description = |span: Span| doc_run_above(&docs, line_of(span.start));
+    for case in &mut file.cases {
+        case.description = description(case.span);
+        for item in &mut case.case_file {
+            item.description = description(item.span);
+        }
+        attach_item_docs(&mut case.plan_items, &description);
+    }
+}
+
+fn attach_item_docs(items: &mut Vec<CmmnItemDecl>, description: &impl Fn(Span) -> Option<String>) {
+    for item in items {
+        item.description = description(item.span);
+        if let CmmnItemKind::Stage { items } = &mut item.kind {
+            attach_item_docs(items, description);
+        }
+    }
+}
+
+/// The outcome of parsing a `.cmmn` source: as much of the file as could be
+/// recovered, plus all encountered errors. Parsing never panics and always
+/// produces a result.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CmmnParseResult {
+    /// The recovered case file, or `None` if no output could be produced
+    /// at all.
+    pub ast: Option<CmmnFile>,
+    /// All errors encountered during lexing and parsing.
+    pub errors: Vec<ParseError>,
+}
+
+/// Lex and parse a `.cmmn` source text: `import` declarations followed by
+/// `case` declarations (imports must come first).
+///
+/// This function never panics and always recovers as much of the AST as
+/// possible; check [`CmmnParseResult::errors`] for syntax problems. Doc
+/// comment runs (`///`) directly above a `case`, a plan item, or a
+/// case-file item become its description.
+pub fn parse_cmmn(source: &str) -> CmmnParseResult {
+    let (tokens, comments) = match lex_with_comments(source) {
+        Ok(result) => result,
+        Err(error) => {
+            return CmmnParseResult {
+                ast: None,
+                errors: vec![ParseError {
+                    message: error.to_string(),
+                    span: error.span,
+                }],
+            }
+        }
+    };
+    let (mut ast, errors) = cmmn_file().parse(Tokens::new(&tokens)).into_output_errors();
+    if let Some(file) = ast.as_mut() {
+        attach_cmmn_docs(file, &comments, source);
+    }
+    CmmnParseResult {
+        ast,
+        errors: errors
+            .into_iter()
+            .map(|error| ParseError {
+                message: error.to_string(),
+                span: *error.span(),
+            })
+            .collect(),
+    }
+}
+
 /// Keeps the normative grammar in this module's docs in sync with the code.
 ///
 /// The grammar authority lives as EBNF blocks in the `//!` docs above (see
@@ -4829,6 +5628,7 @@ pub fn parse_usecases(source: &str) -> UcParseResult {
 /// mechanically.
 #[cfg(test)]
 mod grammar_doc_tests {
+    use crate::cmmn;
     use crate::ddd;
     use crate::deploy;
     use crate::lexer::lex;
@@ -5021,6 +5821,26 @@ mod grammar_doc_tests {
             usecases::REALIZES,
             usecases::SOURCE,
             usecases::TARGET,
+        ] {
+            words.push(word);
+        }
+        for word in [
+            cmmn::CASE,
+            cmmn::ROLES,
+            cmmn::ROLE,
+            cmmn::CASE_FILE,
+            cmmn::ENTRY,
+            cmmn::EXIT,
+            cmmn::PERFORMER,
+            cmmn::EXECUTE,
+            cmmn::REQUIRED,
+            cmmn::REPEATS,
+            cmmn::AUTO,
+            cmmn::DISCRETIONARY,
+            cmmn::STAGE,
+            cmmn::TASK,
+            cmmn::SERVICE,
+            cmmn::MILESTONE,
         ] {
             words.push(word);
         }
