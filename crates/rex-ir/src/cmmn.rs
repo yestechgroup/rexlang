@@ -368,8 +368,10 @@ pub enum CaseFileTransition {
     Update,
     /// The item was deleted.
     Delete,
-    /// A child of the item was added or removed.
-    ChildUpdate,
+    /// A child case-file item was added.
+    AddChild,
+    /// A child case-file item was removed.
+    RemoveChild,
 }
 
 /// The planning mode of a [`PlanItem`]: how the item relates to runtime

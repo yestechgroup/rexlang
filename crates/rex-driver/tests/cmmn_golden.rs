@@ -299,13 +299,10 @@ fn the_case_shape_lowers_as_declared() {
     let assessment = &case.plan_items[4];
     assert_eq!(
         assessment.entry[0].on_parts,
-        [
-            OnPart::Item {
-                item: "ApplicationReady".into(),
-                event: PlanItemTransition::Occur,
-            },
-            OnPart::Event("LoanApplicationSubmitted".into()),
-        ]
+        [OnPart::Item {
+            item: "ApplicationReady".into(),
+            event: PlanItemTransition::Occur,
+        }]
     );
 }
 

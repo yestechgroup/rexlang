@@ -51,11 +51,12 @@ const PLAN_ITEM_TRANSITIONS: [(&str, PlanItemTransition); 7] = [
 
 /// The case-file transitions an [`OnPart::CaseFile`] may watch, in
 /// vocabulary order.
-const CASE_FILE_TRANSITIONS: [(&str, CaseFileTransition); 4] = [
+const CASE_FILE_TRANSITIONS: [(&str, CaseFileTransition); 5] = [
     ("create", CaseFileTransition::Create),
     ("update", CaseFileTransition::Update),
     ("delete", CaseFileTransition::Delete),
-    ("childUpdate", CaseFileTransition::ChildUpdate),
+    ("addChild", CaseFileTransition::AddChild),
+    ("removeChild", CaseFileTransition::RemoveChild),
 ];
 
 /// The name universes of one case: plan items and case-file items share one

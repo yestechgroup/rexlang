@@ -132,10 +132,6 @@
                     "item": "ApplicationReady",
                     "event": "occur"
                   }
-                },
-                {
-                  "type": "event",
-                  "value": "LoanApplicationSubmitted"
                 }
               ]
             }

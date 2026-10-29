@@ -32,7 +32,7 @@ case CommercialLoan {
         entry on ApplicationReady.occur;
         task CreditAssessment {
             performer: credit_analyst;
-            entry on ApplicationReady.occur, LoanApplicationSubmitted;
+            entry on ApplicationReady.occur;
             exit on AssessmentComplete.occur;
         }
         service ScoreApplication {

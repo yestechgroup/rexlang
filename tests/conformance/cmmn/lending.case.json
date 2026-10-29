@@ -1,0 +1,309 @@
+{
+  "id": "CommercialLoan",
+  "name": "CommercialLoan",
+  "case_file_model": {
+    "items": {
+      "borrower": {
+        "id": "borrower",
+        "name": "borrower",
+        "multiplicity": "ZeroOrOne",
+        "children": [],
+        "properties": [
+          {
+            "name": "name",
+            "type_name": "string"
+          },
+          {
+            "name": "registrationNumber",
+            "type_name": "string"
+          }
+        ]
+      },
+      "financials": {
+        "id": "financials",
+        "name": "financials",
+        "multiplicity": "ZeroOrMore",
+        "children": [],
+        "properties": [
+          {
+            "name": "totalAssets",
+            "type_name": "number"
+          },
+          {
+            "name": "totalLiabilities",
+            "type_name": "number"
+          }
+        ]
+      }
+    },
+    "children": [
+      "borrower",
+      "financials"
+    ]
+  },
+  "plan_model": {
+    "id": "CommercialLoan_plan",
+    "name": "CommercialLoan",
+    "plan_items": {
+      "ApplicationReady": {
+        "id": "ApplicationReady",
+        "name": "ApplicationReady",
+        "kind": {
+          "Milestone": {}
+        },
+        "entry_criteria": [
+          {
+            "id": "crit_ApplicationReady_entry_0",
+            "sentry_ref": "sentry_ApplicationReady_entry_0"
+          }
+        ],
+        "exit_criteria": [],
+        "control": null
+      },
+      "Assessment": {
+        "id": "Assessment",
+        "name": "Assessment",
+        "kind": {
+          "Stage": {
+            "children": [
+              "CreditAssessment",
+              "ScoreApplication",
+              "AssessmentComplete"
+            ],
+            "auto_complete": false
+          }
+        },
+        "entry_criteria": [
+          {
+            "id": "crit_Assessment_entry_0",
+            "sentry_ref": "sentry_Assessment_entry_0"
+          }
+        ],
+        "exit_criteria": [],
+        "control": null
+      },
+      "AssessmentComplete": {
+        "id": "AssessmentComplete",
+        "name": "AssessmentComplete",
+        "kind": {
+          "Milestone": {}
+        },
+        "entry_criteria": [
+          {
+            "id": "crit_AssessmentComplete_entry_0",
+            "sentry_ref": "sentry_AssessmentComplete_entry_0"
+          }
+        ],
+        "exit_criteria": [],
+        "control": null
+      },
+      "CommercialLoan_plan": {
+        "id": "CommercialLoan_plan",
+        "name": "CommercialLoan",
+        "kind": {
+          "Stage": {
+            "children": [
+              "Intake",
+              "Assessment"
+            ],
+            "auto_complete": true
+          }
+        },
+        "entry_criteria": [],
+        "exit_criteria": [],
+        "control": null
+      },
+      "CreditAssessment": {
+        "id": "CreditAssessment",
+        "name": "CreditAssessment",
+        "kind": {
+          "Task": {
+            "task_type": "User",
+            "required_role": "credit_analyst",
+            "planning_mode": "None",
+            "composition": null
+          }
+        },
+        "entry_criteria": [
+          {
+            "id": "crit_CreditAssessment_entry_0",
+            "sentry_ref": "sentry_CreditAssessment_entry_0"
+          }
+        ],
+        "exit_criteria": [
+          {
+            "id": "crit_CreditAssessment_exit_0",
+            "sentry_ref": "sentry_CreditAssessment_exit_0"
+          }
+        ],
+        "control": null
+      },
+      "Intake": {
+        "id": "Intake",
+        "name": "Intake",
+        "kind": {
+          "Stage": {
+            "children": [
+              "VerifyBorrower",
+              "ApplicationReady"
+            ],
+            "auto_complete": false
+          }
+        },
+        "entry_criteria": [],
+        "exit_criteria": [],
+        "control": null
+      },
+      "ScoreApplication": {
+        "id": "ScoreApplication",
+        "name": "ScoreApplication",
+        "kind": {
+          "Task": {
+            "task_type": "Process",
+            "required_role": null,
+            "planning_mode": "None",
+            "composition": {
+              "Process": {
+                "process_ref": "lending.CreditAssessmentService.assess",
+                "is_blocking": true,
+                "mappings": []
+              }
+            }
+          }
+        },
+        "entry_criteria": [
+          {
+            "id": "crit_ScoreApplication_entry_0",
+            "sentry_ref": "sentry_ScoreApplication_entry_0"
+          }
+        ],
+        "exit_criteria": [],
+        "control": {
+          "manual_activation_rule": null,
+          "required_rule": {
+            "condition": null
+          },
+          "repetition_rule": null
+        }
+      },
+      "VerifyBorrower": {
+        "id": "VerifyBorrower",
+        "name": "VerifyBorrower",
+        "kind": {
+          "Task": {
+            "task_type": "User",
+            "required_role": "relationship_manager",
+            "planning_mode": "None",
+            "composition": null
+          }
+        },
+        "entry_criteria": [],
+        "exit_criteria": [],
+        "control": null
+      }
+    },
+    "sentries": {
+      "sentry_ApplicationReady_entry_0": {
+        "id": "sentry_ApplicationReady_entry_0",
+        "on_parts": [
+          {
+            "PlanItem": {
+              "source": "VerifyBorrower",
+              "event": "Complete"
+            }
+          }
+        ],
+        "if_part": null
+      },
+      "sentry_AssessmentComplete_entry_0": {
+        "id": "sentry_AssessmentComplete_entry_0",
+        "on_parts": [
+          {
+            "PlanItem": {
+              "source": "CreditAssessment",
+              "event": "Complete"
+            }
+          },
+          {
+            "PlanItem": {
+              "source": "ScoreApplication",
+              "event": "Complete"
+            }
+          }
+        ],
+        "if_part": null
+      },
+      "sentry_Assessment_entry_0": {
+        "id": "sentry_Assessment_entry_0",
+        "on_parts": [
+          {
+            "PlanItem": {
+              "source": "ApplicationReady",
+              "event": "Occur"
+            }
+          }
+        ],
+        "if_part": null
+      },
+      "sentry_CreditAssessment_entry_0": {
+        "id": "sentry_CreditAssessment_entry_0",
+        "on_parts": [
+          {
+            "PlanItem": {
+              "source": "ApplicationReady",
+              "event": "Occur"
+            }
+          }
+        ],
+        "if_part": null
+      },
+      "sentry_CreditAssessment_exit_0": {
+        "id": "sentry_CreditAssessment_exit_0",
+        "on_parts": [
+          {
+            "PlanItem": {
+              "source": "AssessmentComplete",
+              "event": "Occur"
+            }
+          }
+        ],
+        "if_part": null
+      },
+      "sentry_ScoreApplication_entry_0": {
+        "id": "sentry_ScoreApplication_entry_0",
+        "on_parts": [
+          {
+            "CaseFileItem": {
+              "source": "financials",
+              "transition": "Create"
+            }
+          },
+          {
+            "CaseFileItem": {
+              "source": "financials",
+              "transition": "Update"
+            }
+          }
+        ],
+        "if_part": {
+          "language": "Feel",
+          "source": "count(financials) > 0"
+        }
+      }
+    },
+    "planning_tables": {},
+    "discretionary_items": {},
+    "applicability_rules": {},
+    "auto_complete": true
+  },
+  "roles": {
+    "credit_analyst": {
+      "id": "credit_analyst",
+      "name": "credit_analyst"
+    },
+    "relationship_manager": {
+      "id": "relationship_manager",
+      "name": "relationship_manager"
+    }
+  }
+}
