@@ -5364,13 +5364,9 @@ fn plan_item_decl<'src>(
                         emitter.emit(Rich::custom(*problem_span, message.clone()));
                     }
                     let kind = if word == cmmn::TASK {
-                        CmmnItemKind::Task {
-                            performer: body.performer,
-                        }
+                        CmmnItemKind::Task
                     } else if word == cmmn::SERVICE {
-                        CmmnItemKind::Service {
-                            execute: body.execute,
-                        }
+                        CmmnItemKind::Service
                     } else {
                         CmmnItemKind::Milestone
                     };
@@ -5379,6 +5375,8 @@ fn plan_item_decl<'src>(
                         description: None,
                         discretionary: false,
                         kind,
+                        performer: body.performer,
+                        execute: body.execute,
                         entry: body.entry,
                         exit: body.exit,
                         required: body.required,
@@ -5416,6 +5414,8 @@ fn plan_item_decl<'src>(
                     description: None,
                     discretionary: false,
                     kind: CmmnItemKind::Stage { items },
+                    performer: body.performer,
+                    execute: body.execute,
                     entry: body.entry,
                     exit: body.exit,
                     required: body.required,
@@ -5439,7 +5439,7 @@ fn plan_item_decl<'src>(
 enum CmmnCaseMember {
     Roles(Vec<CmmnRole>),
     CaseFile(Vec<CmmnFileItem>),
-    Item(CmmnItemDecl),
+    Item(Box<CmmnItemDecl>),
 }
 
 /// A `case <name> { ... }` declaration. The three member kinds may be
@@ -5448,7 +5448,7 @@ fn case_decl<'src>() -> impl Parser<'src, Tokens<'src>, CmmnCase, MoxExtra<'src>
     let member = choice((
         roles_block().map(CmmnCaseMember::Roles),
         case_file_block().map(CmmnCaseMember::CaseFile),
-        plan_item_decl().map(CmmnCaseMember::Item),
+        plan_item_decl().map(|item| CmmnCaseMember::Item(Box::new(item))),
     ));
     cmmn_keyword(cmmn::CASE)
         .ignore_then(name().or_not())
@@ -5479,7 +5479,7 @@ fn case_decl<'src>() -> impl Parser<'src, Tokens<'src>, CmmnCase, MoxExtra<'src>
                 match member {
                     CmmnCaseMember::Roles(roles) => case.roles.extend(roles),
                     CmmnCaseMember::CaseFile(items) => case.case_file.extend(items),
-                    CmmnCaseMember::Item(item) => case.plan_items.push(item),
+                    CmmnCaseMember::Item(item) => case.plan_items.push(*item),
                 }
             }
             case

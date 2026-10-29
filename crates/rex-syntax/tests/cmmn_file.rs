@@ -119,11 +119,12 @@ fn a_full_case_parses() {
     };
     assert_eq!(items.len(), 2);
     assert_eq!(items[0].name, "VerifyBorrower");
-    let CmmnItemKind::Task { performer } = &items[0].kind else {
-        panic!("expected a task, found {:?}", items[0].kind)
-    };
+    assert!(matches!(items[0].kind, CmmnItemKind::Task));
     assert_eq!(
-        performer.as_ref().map(|(role, _)| role.as_str()),
+        items[0]
+            .performer
+            .as_ref()
+            .map(|(role, _)| role.as_str()),
         Some("relationship_manager")
     );
     let milestone = &items[1];
@@ -142,10 +143,8 @@ fn a_full_case_parses() {
 
     let service = &case.plan_items[1];
     assert_eq!(service.name, "ScoreApplication");
-    let CmmnItemKind::Service { execute } = &service.kind else {
-        panic!("expected a service, found {:?}", service.kind)
-    };
-    let execute = execute.as_ref().expect("expected an execute clause");
+    assert!(matches!(service.kind, CmmnItemKind::Service));
+    let execute = service.execute.as_ref().expect("expected an execute clause");
     assert_eq!(execute.alias, "lending");
     assert_eq!(execute.service, "CreditAssessmentService");
     assert_eq!(execute.operation, "assess");
@@ -169,7 +168,7 @@ fn a_full_case_parses() {
     let discretionary = &case.plan_items[2];
     assert_eq!(discretionary.name, "LegalReview");
     assert!(discretionary.discretionary);
-    assert!(matches!(discretionary.kind, CmmnItemKind::Task { .. }));
+    assert!(matches!(discretionary.kind, CmmnItemKind::Task));
 }
 
 #[test]
@@ -443,10 +442,14 @@ fn a_duplicate_performer_is_reported_and_first_wins() {
         result.errors
     );
     let file = result.ast.expect("expected an AST");
-    let CmmnItemKind::Task { performer } = &file.cases[0].plan_items[0].kind else {
-        panic!("expected a task")
-    };
-    assert_eq!(performer.as_ref().map(|(role, _)| role.as_str()), Some("first"));
+    assert!(matches!(file.cases[0].plan_items[0].kind, CmmnItemKind::Task));
+    assert_eq!(
+        file.cases[0].plan_items[0]
+            .performer
+            .as_ref()
+            .map(|(role, _)| role.as_str()),
+        Some("first")
+    );
 }
 
 #[test]

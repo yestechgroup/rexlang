@@ -1,0 +1,10 @@
+import "lending.mox";
+
+application Lending {
+    base lending
+    module lending {
+        service CreditAssessmentService {
+            CreditAssessmentResult assess();
+        }
+    }
+}

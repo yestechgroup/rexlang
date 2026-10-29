@@ -1866,8 +1866,15 @@ pub struct CmmnItemDecl {
     pub description: Option<String>,
     /// `true` when declared with the `discretionary` prefix.
     pub discretionary: bool,
-    /// The structural kind and its body payload.
+    /// The structural kind.
     pub kind: CmmnItemKind,
+    /// The `performer: <role>;` clause, wherever it was declared — the
+    /// driver validates that only a human task carries one.
+    pub performer: Option<(String, Span)>,
+    /// The `execute <alias>.<Service>.<operation>;` clause, wherever it
+    /// was declared — the driver validates that only a service task
+    /// carries one.
+    pub execute: Option<CmmnExecute>,
     /// `entry` criteria in source order.
     pub entry: Vec<CmmnCriterion>,
     /// `exit` criteria in source order.
@@ -1885,18 +1892,10 @@ pub struct CmmnItemDecl {
 /// The structural kind of a [`CmmnItemDecl`], with its body payload.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CmmnItemKind {
-    /// A human task; the optional `performer` clause names a role.
-    Task {
-        /// The `performer: <role>;` clause, with the role name and the
-        /// name's span.
-        performer: Option<(String, Span)>,
-    },
-    /// A service task; the optional `execute` clause names a design
-    /// service operation.
-    Service {
-        /// The `execute <alias>.<Service>.<operation>;` clause.
-        execute: Option<CmmnExecute>,
-    },
+    /// A human task.
+    Task,
+    /// A service task invoking a `.ddd` service operation.
+    Service,
     /// A milestone: a case goal reached when its entry criteria satisfy.
     Milestone,
     /// A stage grouping nested plan items.

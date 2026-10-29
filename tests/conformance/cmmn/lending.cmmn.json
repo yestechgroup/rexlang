@@ -1,0 +1,219 @@
+{
+  "formatVersion": 1,
+  "cases": [
+    {
+      "name": "CommercialLoan",
+      "description": "A commercial lending application case: the work coordinated around one\nloan application, distinct from the application's own lifecycle.",
+      "roles": [
+        {
+          "name": "relationship_manager",
+          "actor": "RelationshipManager"
+        },
+        {
+          "name": "credit_analyst",
+          "actor": "CreditAnalyst"
+        }
+      ],
+      "caseFile": [
+        {
+          "name": "borrower",
+          "description": "The borrower under assessment.",
+          "type": {
+            "type": "class",
+            "value": {
+              "package": "lending",
+              "name": "Borrower"
+            }
+          },
+          "multiplicity": {
+            "lower": 0,
+            "upper": {
+              "finite": 1
+            }
+          }
+        },
+        {
+          "name": "financials",
+          "description": "Financial statements received during assessment.",
+          "type": {
+            "type": "class",
+            "value": {
+              "package": "lending",
+              "name": "FinancialStatements"
+            }
+          },
+          "multiplicity": {
+            "lower": 0,
+            "upper": "unbounded"
+          }
+        }
+      ],
+      "planItems": [
+        {
+          "name": "Intake",
+          "kind": {
+            "type": "stage",
+            "value": {
+              "children": [
+                "VerifyBorrower",
+                "ApplicationReady"
+              ]
+            }
+          }
+        },
+        {
+          "name": "VerifyBorrower",
+          "kind": {
+            "type": "task",
+            "value": {
+              "performer": "relationship_manager"
+            }
+          }
+        },
+        {
+          "name": "ApplicationReady",
+          "kind": {
+            "type": "milestone"
+          },
+          "entry": [
+            {
+              "onParts": [
+                {
+                  "type": "item",
+                  "value": {
+                    "item": "VerifyBorrower",
+                    "event": "complete"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Assessment",
+          "kind": {
+            "type": "stage",
+            "value": {
+              "children": [
+                "CreditAssessment",
+                "ScoreApplication",
+                "AssessmentComplete"
+              ]
+            }
+          },
+          "entry": [
+            {
+              "onParts": [
+                {
+                  "type": "item",
+                  "value": {
+                    "item": "ApplicationReady",
+                    "event": "occur"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "CreditAssessment",
+          "kind": {
+            "type": "task",
+            "value": {
+              "performer": "credit_analyst"
+            }
+          },
+          "entry": [
+            {
+              "onParts": [
+                {
+                  "type": "item",
+                  "value": {
+                    "item": "ApplicationReady",
+                    "event": "occur"
+                  }
+                },
+                {
+                  "type": "event",
+                  "value": "LoanApplicationSubmitted"
+                }
+              ]
+            }
+          ],
+          "exit": [
+            {
+              "onParts": [
+                {
+                  "type": "item",
+                  "value": {
+                    "item": "AssessmentComplete",
+                    "event": "occur"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "ScoreApplication",
+          "kind": {
+            "type": "service",
+            "value": {
+              "execute": "lending.CreditAssessmentService.assess"
+            }
+          },
+          "entry": [
+            {
+              "onParts": [
+                {
+                  "type": "caseFile",
+                  "value": {
+                    "item": "financials",
+                    "transition": "create"
+                  }
+                },
+                {
+                  "type": "caseFile",
+                  "value": {
+                    "item": "financials",
+                    "transition": "update"
+                  }
+                }
+              ],
+              "when": "financials.size() > 0"
+            }
+          ],
+          "control": {
+            "required": true
+          }
+        },
+        {
+          "name": "AssessmentComplete",
+          "kind": {
+            "type": "milestone"
+          },
+          "entry": [
+            {
+              "onParts": [
+                {
+                  "type": "item",
+                  "value": {
+                    "item": "CreditAssessment",
+                    "event": "complete"
+                  }
+                },
+                {
+                  "type": "item",
+                  "value": {
+                    "item": "ScoreApplication",
+                    "event": "complete"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
