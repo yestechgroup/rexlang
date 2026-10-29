@@ -980,6 +980,10 @@ pub struct DddServiceOp {
     pub is_protected: bool,
     /// Actor capability names from the `capability` clause, in source order.
     pub capabilities: Vec<Name>,
+    /// The `when ( ... )` guard condition: a `raw_parens` span (parens
+    /// included, expression inside deliberately unparsed — slicing and
+    /// type-checking it is the driver's job).
+    pub condition: Option<Span>,
     /// Span of the whole operation, `;` included.
     pub span: Span,
 }
@@ -1114,7 +1118,53 @@ pub struct DddDesign {
     pub flags: DddFlags,
     /// The class's repository, when designed.
     pub repository: Option<DddRepository>,
+    /// The class's lifecycle state machine, when designed.
+    pub machine: Option<DddMachine>,
     /// Span of the whole declaration (`abstract` included, when present).
+    pub span: Span,
+}
+
+/// The `machine <field>: <Enum> { ... }` block of a [`DddDesign`]: the
+/// designed class's lifecycle, a state machine over one enum-typed feature.
+///
+/// The interleaved source order of the members is not preserved; `initial`,
+/// the `terminal` declarations, and the transitions are collected in their
+/// own source orders (the same split the wire artifact makes, and the
+/// canonical order the formatter emits).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DddMachine {
+    /// The designed class's feature carrying the state; the driver binds the
+    /// machine to it (the feature must exist and be enum-typed).
+    pub field: Name,
+    /// The enum the states are drawn from.
+    pub type_: TypeRef,
+    /// The `initial <State>;` line, when written; the driver requires exactly
+    /// one.
+    pub initial: Option<Name>,
+    /// The `terminal <State>;` lines in source order.
+    pub terminals: Vec<Name>,
+    /// The transitions in source order.
+    pub transitions: Vec<DddMachineTransition>,
+    /// Span of the whole declaration, `machine` keyword included.
+    pub span: Span,
+}
+
+/// One `from -> to` transition of a [`DddMachine`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct DddMachineTransition {
+    /// The source state name.
+    pub from: Name,
+    /// The target state name.
+    pub to: Name,
+    /// The `via <Trigger>` name — the workflow action the transition is
+    /// performed through; `None` for a bare arrow (the driver derives the
+    /// action name).
+    pub trigger: Option<Name>,
+    /// The `when ( ... )` guard condition: a `raw_parens` span (parens
+    /// included, expression inside deliberately unparsed — slicing and
+    /// type-checking it is the driver's job).
+    pub guard: Option<Span>,
+    /// Span of the whole transition, `;` included.
     pub span: Span,
 }
 
@@ -1149,6 +1199,11 @@ pub struct DddRepositoryOp {
     /// `true` for the `protected` modifier: the operation stays off the
     /// public interface (Sculptor's visibility).
     pub is_protected: bool,
+    /// The `when ( ... )` guard condition of a declared operation: a
+    /// `raw_parens` span (parens included, expression inside deliberately
+    /// unparsed — slicing and type-checking it is the driver's job).
+    /// Built-ins take no condition.
+    pub condition: Option<Span>,
     /// Span of the whole operation, `;` included.
     pub span: Span,
 }
