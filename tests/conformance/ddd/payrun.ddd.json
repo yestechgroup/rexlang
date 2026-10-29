@@ -1,0 +1,124 @@
+{
+  "formatVersion": 1,
+  "application": {
+    "name": "Payroll",
+    "base": "nz.example.payroll"
+  },
+  "modules": [
+    {
+      "name": "payroll",
+      "services": [
+        {
+          "name": "PayRunService",
+          "operations": [
+            {
+              "name": "approve",
+              "returnType": {
+                "type": "primitive",
+                "value": "boolean"
+              },
+              "capabilities": [
+                "ApprovePayRun"
+              ],
+              "condition": "status == AwaitingApproval"
+            }
+          ]
+        }
+      ],
+      "designs": [
+        {
+          "class": "PayRun",
+          "stereotype": "entity",
+          "flags": {
+            "auditable": true,
+            "optimisticLocking": true
+          },
+          "repository": {
+            "name": "PayRunRepository",
+            "operations": [
+              {
+                "name": "findById",
+                "builtin": "findById"
+              },
+              {
+                "name": "save",
+                "builtin": "save"
+              },
+              {
+                "name": "findByState",
+                "returnType": {
+                  "type": "class",
+                  "value": {
+                    "package": "nz.example.payroll",
+                    "name": "PayRun"
+                  }
+                },
+                "returnMultiplicity": {
+                  "lower": 0,
+                  "upper": "unbounded"
+                },
+                "params": [
+                  {
+                    "name": "state",
+                    "type": {
+                      "type": "primitive",
+                      "value": "string"
+                    }
+                  }
+                ],
+                "condition": "status == Posted"
+              }
+            ]
+          },
+          "machine": {
+            "field": "status",
+            "enumType": {
+              "type": "enum",
+              "value": {
+                "package": "nz.example.payroll",
+                "name": "PayRunStatus"
+              }
+            },
+            "initial": "Draft",
+            "terminals": [
+              "Reversed",
+              "Posted"
+            ],
+            "transitions": [
+              {
+                "from": "Draft",
+                "to": "Calculating",
+                "trigger": "Calculate"
+              },
+              {
+                "from": "Calculating",
+                "to": "AwaitingApproval",
+                "trigger": "Submit"
+              },
+              {
+                "from": "AwaitingApproval",
+                "to": "Approved",
+                "trigger": "Approve",
+                "guard": "total > 0"
+              },
+              {
+                "from": "Approved",
+                "to": "Processing",
+                "trigger": "Schedule"
+              },
+              {
+                "from": "Processing",
+                "to": "Posted",
+                "trigger": "Post"
+              },
+              {
+                "from": "Draft",
+                "to": "Reversed"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

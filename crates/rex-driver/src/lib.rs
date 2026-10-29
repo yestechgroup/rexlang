@@ -31,6 +31,7 @@ pub(crate) mod deploy;
 pub mod diagnostic;
 pub(crate) mod events;
 pub(crate) mod lower;
+pub mod machines;
 pub mod manifest;
 pub mod navigation;
 pub(crate) mod sigil;

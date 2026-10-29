@@ -1,0 +1,16 @@
+package nz.example.payroll
+
+enum PayRunStatus {
+    Draft as "D" = 0
+    Calculating as "C" = 1
+    AwaitingApproval as "A" = 2
+    Approved as "P" = 3
+    Processing as "R" = 4
+    Posted as "O" = 5
+    Reversed as "V" = 6
+}
+
+class PayRun {
+    PayRunStatus status
+    int total
+}
