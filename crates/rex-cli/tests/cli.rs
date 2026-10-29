@@ -2869,8 +2869,7 @@ fn ir_cmmn_file_writes_case_model_artifact() {
     );
     assert!(String::from_utf8_lossy(&output.stdout).is_empty());
     let json = std::fs::read_to_string(&out).expect("read case IR output");
-    let case_model =
-        rex_ir::cmmn::CmmnModel::from_json(&json).expect("file is CmmnModel JSON");
+    let case_model = rex_ir::cmmn::CmmnModel::from_json(&json).expect("file is CmmnModel JSON");
     assert_eq!(
         case_model.format_version,
         rex_ir::cmmn::CMMN_MODEL_FORMAT_VERSION

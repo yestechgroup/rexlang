@@ -257,7 +257,8 @@ pub(crate) fn compile_cmmn_file(
         // resolution in the domain union.
         let mut case_file: Vec<CaseFileItem> = Vec::new();
         for item in &decl.case_file {
-            if names.plan_items.contains(&item.name) || case_file.iter().any(|seen| seen.name == item.name)
+            if names.plan_items.contains(&item.name)
+                || case_file.iter().any(|seen| seen.name == item.name)
             {
                 local.push(Diagnostic::error(
                     format!("duplicate name '{}' in case '{}'", item.name, decl.name),
@@ -394,7 +395,11 @@ fn collect_names(decl: &dsl::CmmnCase) -> CaseNames {
     let mut plan_items = Vec::new();
     walk(&decl.plan_items, &mut plan_items);
     CaseNames {
-        file_items: decl.case_file.iter().map(|item| item.name.clone()).collect(),
+        file_items: decl
+            .case_file
+            .iter()
+            .map(|item| item.name.clone())
+            .collect(),
         plan_items,
     }
 }
@@ -635,10 +640,7 @@ fn lower_plan_item(
                     let matches: Vec<&EventModel> = events
                         .iter()
                         .filter(|(_, model)| {
-                            model
-                                .events
-                                .iter()
-                                .any(|event| event.name == part.source)
+                            model.events.iter().any(|event| event.name == part.source)
                         })
                         .map(|(_, model)| model)
                         .collect();
@@ -756,8 +758,13 @@ fn check_when(
     let parsed = rex_expr::parse(&interior);
     for error in &parsed.errors {
         local.push(
-            Diagnostic::error(format!("invalid criterion condition: {}", error.message), Some(span))
-                .with_help(format!("in the `when` of plan item '{item}' in case '{case}'")),
+            Diagnostic::error(
+                format!("invalid criterion condition: {}", error.message),
+                Some(span),
+            )
+            .with_help(format!(
+                "in the `when` of plan item '{item}' in case '{case}'"
+            )),
         );
     }
     let ast = parsed.ast?;
@@ -770,7 +777,9 @@ fn check_when(
                     format!("criterion condition must be boolean, found {ty}"),
                     Some(span),
                 )
-                .with_help(format!("in the `when` of plan item '{item}' in case '{case}'")),
+                .with_help(format!(
+                    "in the `when` of plan item '{item}' in case '{case}'"
+                )),
             );
             Some(interior)
         }

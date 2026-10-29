@@ -100,8 +100,7 @@ fn compile_with_buckets(source: &str) -> CmmnCompilation {
     let domain_source = std::fs::read_to_string(&domain_path).expect("read lending.mox");
     let domain = [(domain_path.display().to_string(), domain_source.clone())];
 
-    let events_source =
-        std::fs::read_to_string(dir.join("lending.evt")).expect("read lending.evt");
+    let events_source = std::fs::read_to_string(dir.join("lending.evt")).expect("read lending.evt");
     let events_path = dir.join("lending.evt").display().to_string();
     let events = compile_evt_str(
         &events_path,
@@ -118,8 +117,7 @@ fn compile_with_buckets(source: &str) -> CmmnCompilation {
         &domain,
         &DomainImports::default(),
     );
-    let design_source =
-        std::fs::read_to_string(dir.join("lending.ddd")).expect("read lending.ddd");
+    let design_source = std::fs::read_to_string(dir.join("lending.ddd")).expect("read lending.ddd");
     let design_path = dir.join("lending.ddd").display().to_string();
     let design = compile_ddd_str(
         &design_path,
@@ -188,7 +186,10 @@ fn conformance_cmmn_file_matches_golden_artifact() {
         return;
     }
     let expected = std::fs::read_to_string(&artifact_path).expect("golden artifact");
-    assert_eq!(json, expected, "the compiled artifact must match the golden");
+    assert_eq!(
+        json, expected,
+        "the compiled artifact must match the golden"
+    );
 }
 
 #[test]
@@ -216,10 +217,7 @@ fn the_case_shape_lowers_as_declared() {
     assert_eq!(case.name, "CommercialLoan");
 
     assert_eq!(case.roles.len(), 2);
-    assert_eq!(
-        case.roles[0].actor.as_deref(),
-        Some("RelationshipManager")
-    );
+    assert_eq!(case.roles[0].actor.as_deref(), Some("RelationshipManager"));
 
     assert_eq!(case.case_file.len(), 2);
     assert_eq!(
@@ -233,7 +231,11 @@ fn the_case_shape_lowers_as_declared() {
     assert_eq!(case.case_file[1].multiplicity, rex_ir::Multiplicity::MANY);
 
     // Depth-first flat graph: the stages first, then their children.
-    let names: Vec<&str> = case.plan_items.iter().map(|item| item.name.as_str()).collect();
+    let names: Vec<&str> = case
+        .plan_items
+        .iter()
+        .map(|item| item.name.as_str())
+        .collect();
     assert_eq!(
         names,
         [
@@ -266,8 +268,7 @@ fn the_case_shape_lowers_as_declared() {
         panic!("expected a service")
     };
     assert_eq!(
-        execute,
-        "lending.CreditAssessmentService.assess",
+        execute, "lending.CreditAssessmentService.assess",
         "the execute binding stores the resolved alias.Service.operation"
     );
     assert_eq!(
@@ -311,13 +312,15 @@ fn the_case_shape_lowers_as_declared() {
 #[test]
 fn an_unprovided_import_is_an_error() {
     let compilation = compile_with_buckets("import \"nowhere.mox\"\ncase C {}\n");
-    expect_diagnostic(&compilation, "imported file \"nowhere.mox\" was not provided");
+    expect_diagnostic(
+        &compilation,
+        "imported file \"nowhere.mox\" was not provided",
+    );
 }
 
 #[test]
 fn an_alias_on_a_non_design_import_is_an_error() {
-    let compilation =
-        compile_with_buckets("import \"lending.evt\" as events\ncase C {}\n");
+    let compilation = compile_with_buckets("import \"lending.evt\" as events\ncase C {}\n");
     expect_diagnostic(
         &compilation,
         "import \"lending.evt\" is not a design; only design imports take an alias",
@@ -348,7 +351,10 @@ fn an_unknown_performer_role_is_an_error() {
     let compilation = compile_with_buckets(
         "import \"lending.mox\"\ncase C {\n    task T {\n        performer: nobody;\n    }\n}\n",
     );
-    expect_diagnostic(&compilation, "unknown role 'nobody' on task 'T' in case 'C'");
+    expect_diagnostic(
+        &compilation,
+        "unknown role 'nobody' on task 'T' in case 'C'",
+    );
 }
 
 #[test]
@@ -523,9 +529,7 @@ fn a_when_over_the_case_file_types_clean() {
     );
     let model = compilation.model.expect("artifact");
     assert_eq!(
-        model.cases[0].plan_items[0].entry[0]
-            .when
-            .as_deref(),
+        model.cases[0].plan_items[0].entry[0].when.as_deref(),
         Some("borrower.name != \"\"")
     );
 }
@@ -551,10 +555,7 @@ fn discretionary_tasks_and_flags_lower_to_their_wire_fields() {
     assert!(compilation.diagnostics.is_empty(), "expected clean compile");
     let model = compilation.model.expect("artifact");
     let discretionary = &model.cases[0].plan_items[1];
-    assert_eq!(
-        discretionary.planning,
-        rex_ir::cmmn::PlanningMode::Manual
-    );
+    assert_eq!(discretionary.planning, rex_ir::cmmn::PlanningMode::Manual);
     let control = discretionary.control.as_ref().expect("control rules");
     assert!(control.repetition);
     assert_eq!(control.manual_activation, Some(false));

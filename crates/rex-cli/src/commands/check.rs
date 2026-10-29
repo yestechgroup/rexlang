@@ -9,15 +9,14 @@ use rex_driver::{
 };
 
 use crate::inputs::{
-    compile_sources, expand_check_inputs, expand_inputs, is_actor_file, is_ddd_file,
-    is_cmmn_file, is_deploy_file, is_evt_file, is_ifml_file, is_uc_file, read_actor_pair,
-    read_cmmn_pair, read_ddd_design, read_deploy_pair, read_evt_pair, read_ifml_inputs,
-    read_sources, read_uc_pair,
+    compile_sources, expand_check_inputs, expand_inputs, is_actor_file, is_cmmn_file, is_ddd_file,
+    is_deploy_file, is_evt_file, is_ifml_file, is_uc_file, read_actor_pair, read_cmmn_pair,
+    read_ddd_design, read_deploy_pair, read_evt_pair, read_ifml_inputs, read_sources, read_uc_pair,
 };
 use crate::report::{
-    report_actor_diagnostics, report_ddd_diagnostics, report_deploy_diagnostics,
-    report_evt_diagnostics, report_ifml_diagnostics, report_multi_diagnostics,
-    report_cmmn_diagnostics, report_usecase_diagnostics,
+    report_actor_diagnostics, report_cmmn_diagnostics, report_ddd_diagnostics,
+    report_deploy_diagnostics, report_evt_diagnostics, report_ifml_diagnostics,
+    report_multi_diagnostics, report_usecase_diagnostics,
 };
 
 pub(crate) fn run(files: Vec<PathBuf>) -> anyhow::Result<ExitCode> {

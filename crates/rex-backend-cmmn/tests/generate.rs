@@ -71,10 +71,19 @@ fn the_feel_subset_translates_expression_by_expression() {
     let (model, domains) = conformance_inputs();
     let mut model = model;
     let conditions = [
-        ("financials.size() > 0 && financials.size() < 99", "count(financials) > 0 and count(financials) < 99"),
-        ("financials.size() == 0 || financials.sum() < 100", "count(financials) = 0 or sum(financials) < 100"),
+        (
+            "financials.size() > 0 && financials.size() < 99",
+            "count(financials) > 0 and count(financials) < 99",
+        ),
+        (
+            "financials.size() == 0 || financials.sum() < 100",
+            "count(financials) = 0 or sum(financials) < 100",
+        ),
         ("!(financials.size() == 0)", "not (count(financials) = 0)"),
-        ("if financials.size() == 0 { false } else { true }", "if count(financials) = 0 then false else true"),
+        (
+            "if financials.size() == 0 { false } else { true }",
+            "if count(financials) = 0 then false else true",
+        ),
         ("case_file.financials.size() >= 1", "count(financials) >= 1"),
     ];
     for (source, feel) in conditions {
@@ -88,7 +97,9 @@ fn the_feel_subset_translates_expression_by_expression() {
         }
         let definitions = generate(&model, &domains).expect("generate");
         assert!(
-            definitions[0].json.contains(&format!("\"source\": \"{feel}\"")),
+            definitions[0]
+                .json
+                .contains(&format!("\"source\": \"{feel}\"")),
             "`{source}` must translate to `{feel}`, got:\n{}",
             definitions[0].json
         );
@@ -106,8 +117,9 @@ fn an_event_on_part_is_a_named_error() {
         .iter_mut()
         .find(|item| item.name == "ApplicationReady")
         .expect("milestone");
-    milestone.entry[0].on_parts =
-        vec![rex_ir::cmmn::OnPart::Event("LoanApplicationSubmitted".into())];
+    milestone.entry[0].on_parts = vec![rex_ir::cmmn::OnPart::Event(
+        "LoanApplicationSubmitted".into(),
+    )];
     let error = generate(&model, &domains).expect_err("generate must fail");
     assert_eq!(
         error,

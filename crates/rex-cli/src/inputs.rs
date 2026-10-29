@@ -869,9 +869,15 @@ pub(crate) fn read_cmmn_pair(file: &Path) -> anyhow::Result<CmmnPair> {
         for import in &ast.imports {
             let resolved = dir.join(&import.path);
             let resolved_path = resolved.display().to_string();
-            match resolved.extension().and_then(|extension| extension.to_str()) {
+            match resolved
+                .extension()
+                .and_then(|extension| extension.to_str())
+            {
                 Some("mox") => {
-                    if domains.iter().any(|(existing, _)| *existing == resolved_path) {
+                    if domains
+                        .iter()
+                        .any(|(existing, _)| *existing == resolved_path)
+                    {
                         continue;
                     }
                     let text = std::fs::read_to_string(&resolved).map_err(|error| {
@@ -884,21 +890,30 @@ pub(crate) fn read_cmmn_pair(file: &Path) -> anyhow::Result<CmmnPair> {
                     domains.push((resolved_path, text));
                 }
                 Some("ddd") => {
-                    if designs.iter().any(|(existing, _)| *existing == resolved_path) {
+                    if designs
+                        .iter()
+                        .any(|(existing, _)| *existing == resolved_path)
+                    {
                         continue;
                     }
                     let model = read_design_model(&resolved)?;
                     designs.push((resolved_path, model));
                 }
                 Some("actor") => {
-                    if actors.iter().any(|(existing, _)| *existing == resolved_path) {
+                    if actors
+                        .iter()
+                        .any(|(existing, _)| *existing == resolved_path)
+                    {
                         continue;
                     }
                     let model = read_actor_model(&resolved)?;
                     actors.push((resolved_path, model));
                 }
                 Some("evt") => {
-                    if events.iter().any(|(existing, _)| *existing == resolved_path) {
+                    if events
+                        .iter()
+                        .any(|(existing, _)| *existing == resolved_path)
+                    {
                         continue;
                     }
                     let model = read_event_model(&resolved)?;

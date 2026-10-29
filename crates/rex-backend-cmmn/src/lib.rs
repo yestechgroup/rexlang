@@ -157,19 +157,24 @@ pub struct CaseDefinitionJson {
 
 /// Lowers every case of the artifact into engine-ready `CaseDefinition`
 /// JSON, one entry per case, in declaration order.
-pub fn generate(model: &CmmnModel, domains: &Model) -> Result<Vec<CaseDefinitionJson>, GenerateError> {
+pub fn generate(
+    model: &CmmnModel,
+    domains: &Model,
+) -> Result<Vec<CaseDefinitionJson>, GenerateError> {
     model
         .cases
         .iter()
         .map(|case| {
             Ok(CaseDefinitionJson {
                 case: case.name.clone(),
-                json: serde_json::to_string_pretty(&CaseDefinitionEmitter::new(case, domains).emit()?)
-                    .map_err(|_| GenerateError::Untranslatable {
-                        case: case.name.clone(),
-                        item: String::new(),
-                        reason: "the lowered definition does not serialize".to_string(),
-                    })?,
+                json: serde_json::to_string_pretty(
+                    &CaseDefinitionEmitter::new(case, domains).emit()?,
+                )
+                .map_err(|_| GenerateError::Untranslatable {
+                    case: case.name.clone(),
+                    item: String::new(),
+                    reason: "the lowered definition does not serialize".to_string(),
+                })?,
             })
         })
         .collect()
@@ -474,9 +479,7 @@ impl<'a> CaseDefinitionEmitter<'a> {
             .case
             .plan_items
             .iter()
-            .filter(|item| {
-                !item.discretionary_planning() && !staged.contains(&item.name.as_str())
-            })
+            .filter(|item| !item.discretionary_planning() && !staged.contains(&item.name.as_str()))
             .map(|item| item.name.clone())
             .collect();
         self.plan_items.insert(
@@ -597,14 +600,9 @@ impl<'a> CaseDefinitionEmitter<'a> {
                     .children
                     .iter()
                     .filter(|name| {
-                        !self
-                            .case
-                            .plan_items
-                            .iter()
-                            .any(|candidate| {
-                                candidate.name == **name
-                                    && candidate.planning == PlanningMode::Manual
-                            })
+                        !self.case.plan_items.iter().any(|candidate| {
+                            candidate.name == **name && candidate.planning == PlanningMode::Manual
+                        })
                     })
                     .cloned()
                     .collect(),
@@ -718,11 +716,17 @@ impl<'a> CaseDefinitionEmitter<'a> {
         let mut on_parts = Vec::new();
         for part in &criterion.on_parts {
             on_parts.push(match part {
-                OnPart::Item { item: source, event } => EngineOnPart::PlanItem {
+                OnPart::Item {
+                    item: source,
+                    event,
+                } => EngineOnPart::PlanItem {
                     source: source.clone(),
                     event: plan_item_transition(*event),
                 },
-                OnPart::CaseFile { item: source, transition } => EngineOnPart::CaseFileItem {
+                OnPart::CaseFile {
+                    item: source,
+                    transition,
+                } => EngineOnPart::CaseFileItem {
                     source: source.clone(),
                     transition: case_file_transition(*transition),
                 },
@@ -759,12 +763,7 @@ impl<'a> CaseDefinitionEmitter<'a> {
 
     /// Translates one `when` condition's rex-expr text into FEEL, within
     /// the documented subset.
-    fn translate_when(
-        &self,
-        case: &str,
-        item: &str,
-        text: &str,
-    ) -> Result<String, GenerateError> {
+    fn translate_when(&self, case: &str, item: &str, text: &str) -> Result<String, GenerateError> {
         let Some(ast) = rex_expr_parse(text) else {
             return Err(GenerateError::Untranslatable {
                 case: case.to_string(),
@@ -887,7 +886,11 @@ fn translate(
             }
             out.push_str(name);
         }
-        ExprKind::FeatureAccess { receiver, name, optional_safe } => {
+        ExprKind::FeatureAccess {
+            receiver,
+            name,
+            optional_safe,
+        } => {
             if *optional_safe {
                 return Err(fail("`?.` safe navigation".to_string()));
             }
@@ -916,7 +919,12 @@ fn translate(
         ExprKind::Call { .. } => {
             return Err(fail("an operation call".to_string()));
         }
-        ExprKind::Algebra { receiver, kind, lambda, .. } => {
+        ExprKind::Algebra {
+            receiver,
+            kind,
+            lambda,
+            ..
+        } => {
             if lambda.is_some() && !matches!(kind, AlgebraKind::Any) {
                 return Err(fail(format!("`{kind}(...)` with a lambda")));
             }

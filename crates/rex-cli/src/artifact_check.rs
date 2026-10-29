@@ -1392,10 +1392,8 @@ mod tests {
 
     #[test]
     fn snake_case_cmmn_keys_are_reported_with_the_camel_case_spelling() {
-        let errors = check(
-            r#"{"formatVersion": 1, "cases": [{"name": "Loan", "case_file": []}]}"#,
-        )
-        .unwrap_err();
+        let errors = check(r#"{"formatVersion": 1, "cases": [{"name": "Loan", "case_file": []}]}"#)
+            .unwrap_err();
         assert!(
             errors.iter().any(|error| error.contains("caseFile")),
             "errors: {errors:?}"

@@ -6,8 +6,8 @@
 
 use rex_ir::cmmn::{
     CaseDef, CaseFileItem, CaseFileTransition, CmmnModel, ControlRules, Criterion, OnPart,
-    PlanItem, PlanItemKind, PlanItemTransition, PlanningMode, Role, ServiceDef, StageBody,
-    TaskDef, CMMN_MODEL_FORMAT_VERSION,
+    PlanItem, PlanItemKind, PlanItemTransition, PlanningMode, Role, ServiceDef, StageBody, TaskDef,
+    CMMN_MODEL_FORMAT_VERSION,
 };
 use rex_ir::{IrError, Multiplicity, TypeRef, Upper};
 
@@ -201,7 +201,10 @@ fn cmmn_model_round_trips_through_json() {
         service.entry[0].on_parts[1],
         OnPart::Event("FinancialStatementsReceived".into())
     );
-    assert_eq!(service.entry[0].when.as_deref(), Some("financials.size() > 0"));
+    assert_eq!(
+        service.entry[0].when.as_deref(),
+        Some("financials.size() > 0")
+    );
     assert_eq!(
         service.control,
         Some(ControlRules {
@@ -215,15 +218,21 @@ fn cmmn_model_round_trips_through_json() {
     // Adjacent tags appear as expected on the wire (camelCase tags, the
     // shared `{"type": ..., "value": ...}` shape).
     let compact = model.to_json().expect("serialize");
-    assert!(compact.contains(r#""kind":{"type":"task","value":{"performer":"relationship_manager"}}"#));
-    assert!(compact.contains(r#""kind":{"type":"service","value":{"execute":"lending.CreditAssessmentService.assess"}}"#));
+    assert!(
+        compact.contains(r#""kind":{"type":"task","value":{"performer":"relationship_manager"}}"#)
+    );
+    assert!(compact.contains(
+        r#""kind":{"type":"service","value":{"execute":"lending.CreditAssessmentService.assess"}}"#
+    ));
     assert!(compact.contains(r#""kind":{"type":"milestone"}"#));
-    assert!(compact
-        .contains(r#""kind":{"type":"stage","value":{"children":["VerifyBorrower","ApplicationReady"]}}"#));
+    assert!(compact.contains(
+        r#""kind":{"type":"stage","value":{"children":["VerifyBorrower","ApplicationReady"]}}"#
+    ));
     assert!(compact.contains(
         r#""onParts":[{"type":"caseFile","value":{"item":"financials","transition":"update"}},{"type":"event","value":"FinancialStatementsReceived"}],"when":"financials.size() > 0""#
     ));
-    assert!(compact.contains(r#""type":{"type":"class","value":{"package":"lending","name":"Borrower"}}"#));
+    assert!(compact
+        .contains(r#""type":{"type":"class","value":{"package":"lending","name":"Borrower"}}"#));
     assert!(compact.contains(r#""actor":"RelationshipManager""#));
     assert!(compact.contains(r#""control":{"required":true,"manualActivation":false}"#));
     assert!(compact.contains(r#""planning":"manual""#));
@@ -348,8 +357,8 @@ fn from_json_tolerates_unknown_fields_in_and_around_entries() {
     );
 
     // An artifact without any section key at all reads as empty.
-    let sparse = CmmnModel::from_json(r#"{ "formatVersion": 1, "bogus": true }"#)
-        .expect("sparse artifact");
+    let sparse =
+        CmmnModel::from_json(r#"{ "formatVersion": 1, "bogus": true }"#).expect("sparse artifact");
     assert!(sparse.cases.is_empty());
 }
 

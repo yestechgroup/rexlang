@@ -137,10 +137,10 @@
 //!   `nz.import.sigil.X`) are never hoisted.
 
 use crate::ast::Span;
+use crate::cmmn;
 use crate::ddd;
 use crate::deploy;
 use crate::lexer::{lex_with_comments, CommentKind, LexError, Token};
-use crate::cmmn;
 use crate::usecases;
 
 /// A formatting failure: the source could not be tokenized.
@@ -2803,7 +2803,10 @@ impl<'src> Formatter<'src> {
         if !matches!(self.peek_tok(), Some(Token::RBrace) | None) {
             self.advance();
             self.scan_junk_until(|token| {
-                matches!(token, Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_))
+                matches!(
+                    token,
+                    Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_)
+                )
             });
         }
     }

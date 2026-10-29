@@ -90,23 +90,29 @@ fn a_full_case_parses() {
 
     assert_eq!(case.roles.len(), 2);
     assert_eq!(case.roles[0].name, "relationship_manager");
-    assert_eq!(
-        case.roles[0].actor.as_deref(),
-        Some("RelationshipManager")
-    );
+    assert_eq!(case.roles[0].actor.as_deref(), Some("RelationshipManager"));
     assert_eq!(case.roles[1].name, "credit_analyst");
     assert_eq!(case.roles[1].actor, None);
 
     assert_eq!(case.case_file.len(), 2);
     assert_eq!(case.case_file[0].name, "financials");
-    assert_eq!(case.case_file[0].type_ref.name.full_name(), "FinancialStatements");
+    assert_eq!(
+        case.case_file[0].type_ref.name.full_name(),
+        "FinancialStatements"
+    );
     assert!(case.case_file[0].multiplicity.is_some());
     assert_eq!(
         case.case_file[0].description.as_deref(),
         Some("Received financial statements.")
     );
     assert_eq!(case.case_file[1].name, "borrower");
-    assert_eq!(case.case_file[1].multiplicity.as_ref().map(|m| span_text(source, m.span)), Some("[0..1]"));
+    assert_eq!(
+        case.case_file[1]
+            .multiplicity
+            .as_ref()
+            .map(|m| span_text(source, m.span)),
+        Some("[0..1]")
+    );
 
     // Top-level plan items: the stage first, then the service, then the
     // discretionary task. The stage's children nest inside it.
@@ -121,10 +127,7 @@ fn a_full_case_parses() {
     assert_eq!(items[0].name, "VerifyBorrower");
     assert!(matches!(items[0].kind, CmmnItemKind::Task));
     assert_eq!(
-        items[0]
-            .performer
-            .as_ref()
-            .map(|(role, _)| role.as_str()),
+        items[0].performer.as_ref().map(|(role, _)| role.as_str()),
         Some("relationship_manager")
     );
     let milestone = &items[1];
@@ -135,16 +138,16 @@ fn a_full_case_parses() {
     let criterion = &milestone.entry[0];
     assert_eq!(criterion.on_parts.len(), 1);
     assert_eq!(criterion.on_parts[0].source, "VerifyBorrower");
-    assert_eq!(
-        criterion.on_parts[0].event.as_deref(),
-        Some("completed")
-    );
+    assert_eq!(criterion.on_parts[0].event.as_deref(), Some("completed"));
     assert!(criterion.when.is_none());
 
     let service = &case.plan_items[1];
     assert_eq!(service.name, "ScoreApplication");
     assert!(matches!(service.kind, CmmnItemKind::Service));
-    let execute = service.execute.as_ref().expect("expected an execute clause");
+    let execute = service
+        .execute
+        .as_ref()
+        .expect("expected an execute clause");
     assert_eq!(execute.alias, "lending");
     assert_eq!(execute.service, "CreditAssessmentService");
     assert_eq!(execute.operation, "assess");
@@ -193,7 +196,10 @@ fn bodyless_plan_items_and_exit_criteria_parse() {
     let cleanup = &case.plan_items[2];
     assert_eq!(cleanup.exit.len(), 1);
     assert_eq!(cleanup.exit[0].on_parts[0].source, "Done");
-    assert_eq!(cleanup.exit[0].on_parts[0].event.as_deref(), Some("occurred"));
+    assert_eq!(
+        cleanup.exit[0].on_parts[0].event.as_deref(),
+        Some("occurred")
+    );
     assert!(cleanup.repeats);
     assert!(!cleanup.required);
 }
@@ -373,10 +379,9 @@ fn an_on_part_without_a_tail_word_is_reported() {
     );
     let result = parse_cmmn(source);
     assert!(
-        result
-            .errors
-            .iter()
-            .any(|error| error.message.contains("expected a transition word after `.`")),
+        result.errors.iter().any(|error| error
+            .message
+            .contains("expected a transition word after `.`")),
         "unexpected errors: {:?}",
         result.errors
     );
@@ -442,7 +447,10 @@ fn a_duplicate_performer_is_reported_and_first_wins() {
         result.errors
     );
     let file = result.ast.expect("expected an AST");
-    assert!(matches!(file.cases[0].plan_items[0].kind, CmmnItemKind::Task));
+    assert!(matches!(
+        file.cases[0].plan_items[0].kind,
+        CmmnItemKind::Task
+    ));
     assert_eq!(
         file.cases[0].plan_items[0]
             .performer
@@ -480,11 +488,7 @@ fn unterminated_case_body_is_a_junk_error() {
 
 #[test]
 fn junk_regions_recover_to_the_next_declaration() {
-    let source = concat!(
-        "case First {}\n",
-        "??? junk ???\n",
-        "case Second {}\n",
-    );
+    let source = concat!("case First {}\n", "??? junk ???\n", "case Second {}\n",);
     let result = parse_cmmn(source);
     assert!(!result.errors.is_empty(), "the junk region is reported");
     let file = result.ast.expect("expected an AST");
@@ -516,10 +520,9 @@ fn a_case_file_item_without_a_name_is_reported() {
     );
     let result = parse_cmmn(source);
     assert!(
-        result
-            .errors
-            .iter()
-            .any(|error| error.message.contains("expected an item name after the type")),
+        result.errors.iter().any(|error| error
+            .message
+            .contains("expected an item name after the type")),
         "unexpected errors: {:?}",
         result.errors
     );
@@ -550,7 +553,6 @@ fn adversarial_inputs_do_not_panic() {
         // No panic is the contract; errors are fine.
     }
 }
-
 
 // --- formatting ----------------------------------------------------------------
 
@@ -603,11 +605,7 @@ fn formatting_is_canonicalizing() {
 
 #[test]
 fn imports_hoist_before_cases() {
-    let source = concat!(
-        "case C {}\n",
-        "import \"after.mox\"\n",
-        "case D {}\n",
-    );
+    let source = concat!("case C {}\n", "import \"after.mox\"\n", "case D {}\n",);
     let formatted = format_cmmn(source).expect("format");
     assert_eq!(
         formatted,

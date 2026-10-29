@@ -11,9 +11,11 @@ docs](https://docs.rs/rex-ir)** (also rendered by `cargo doc -p rex-ir`).
 ## The boundary
 
 - A backend consumes **only** `rex_ir::Model` (plus `rex_ir::ActorModel` if
-  it deals with the authorization dimension) or the serialized artifact.
-  Never the AST: parsing, name resolution, validation, and lowering into the
-  IR happen upstream in `rex-driver`.
+  it deals with the authorization dimension, or the standalone artifact its
+  surface emits — `rex_ir::cmmn::CmmnModel` for the case-management
+  backend) or the serialized artifact. Never the AST: parsing, name
+  resolution, validation, and lowering into the IR happen upstream in
+  `rex-driver`.
 - Backends **register nothing and emit anything** — Rust code, JSON Schema,
   Cedar policies, documents, tables.
 - Two integration modes:
@@ -24,8 +26,10 @@ docs](https://docs.rs/rex-ir)** (also rendered by `cargo doc -p rex-ir`).
      JSON. A `.mox` compile emits the `Model` artifact; a `.actor` compile
      emits the standalone `ActorModel` artifact.
 - The in-tree backends (`rex-backend-rust`, `rex-backend-jsonschema`,
-  `rex-backend-cedar`) are reference implementations of exactly this
-  discipline; reading them is the fastest way to learn the shapes.
+  `rex-backend-cedar`, `rex-backend-cmmn` — the last lowering
+  `CmmnModel` + domain model to the cmmn-rs engine's `CaseDefinition`
+  JSON) are reference implementations of exactly this discipline; reading
+  them is the fastest way to learn the shapes.
 
 ## The serialized-artifact contract (summary)
 

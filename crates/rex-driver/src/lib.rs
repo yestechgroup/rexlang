@@ -26,8 +26,8 @@
 //! [rexlang]: https://github.com/anton-makes/rexlang
 //! [salsa]: https://crates.io/crates/salsa
 
-mod ddd;
 pub(crate) mod cmmn;
+mod ddd;
 pub(crate) mod deploy;
 pub mod diagnostic;
 pub(crate) mod events;
@@ -1699,11 +1699,7 @@ pub fn compile_usecase_str(
 /// through the one-shot [`compile_cmmn_str`]. Use it for parse/domain
 /// editing feedback, not for full validation.
 #[salsa::tracked]
-pub fn compile_cmmn(
-    db: &dyn Db,
-    file: SourceFile,
-    domains: Vec<SourceFile>,
-) -> CmmnCompilation {
+pub fn compile_cmmn(db: &dyn Db, file: SourceFile, domains: Vec<SourceFile>) -> CmmnCompilation {
     compile_cmmn_with(db, file, domains, &[], &[], &[], &DomainImports::default())
 }
 

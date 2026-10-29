@@ -6,19 +6,16 @@ import "lending.ddd" as lending
 /// A commercial lending application case: the work coordinated around one
 /// loan application, distinct from the application's own lifecycle.
 case CommercialLoan {
-
     roles {
         role relationship_manager as RelationshipManager;
         role credit_analyst as CreditAnalyst;
     }
-
     case_file {
         /// The borrower under assessment.
         Borrower[0..1] borrower;
         /// Financial statements received during assessment.
         FinancialStatements[] financials;
     }
-
     stage Intake {
         task VerifyBorrower {
             performer: relationship_manager;
@@ -27,7 +24,6 @@ case CommercialLoan {
             entry on VerifyBorrower.complete;
         }
     }
-
     stage Assessment {
         entry on ApplicationReady.occur;
         task CreditAssessment {

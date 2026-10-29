@@ -4899,8 +4899,7 @@ fn cmmn_keyword<'src>(
 /// `.uc` import production. Committed once the `as` keyword matched: a
 /// missing alias name is a reported error. Without `as` nothing else is
 /// consumed (the next word may begin a case).
-fn cmmn_import_decl<'src>() -> impl Parser<'src, Tokens<'src>, CmmnImport, MoxExtra<'src>> + Clone
-{
+fn cmmn_import_decl<'src>() -> impl Parser<'src, Tokens<'src>, CmmnImport, MoxExtra<'src>> + Clone {
     kw(Token::Import)
         .ignore_then(string_lit())
         .then(
@@ -4981,8 +4980,7 @@ fn role_decl<'src>() -> impl Parser<'src, Tokens<'src>, CmmnRole, MoxExtra<'src>
 
 /// A `roles { ... }` block of a case body. A member that cannot start a
 /// role is junk (recovered, reported).
-fn roles_block<'src>() -> impl Parser<'src, Tokens<'src>, Vec<CmmnRole>, MoxExtra<'src>> + Clone
-{
+fn roles_block<'src>() -> impl Parser<'src, Tokens<'src>, Vec<CmmnRole>, MoxExtra<'src>> + Clone {
     cmmn_keyword(cmmn::ROLES)
         .ignore_then(
             kw(Token::LBrace)
@@ -5001,21 +4999,15 @@ fn roles_block<'src>() -> impl Parser<'src, Tokens<'src>, Vec<CmmnRole>, MoxExtr
 /// A case-file item declaration: the `.mox` attribute production
 /// (`Type[mult]? name;`). Committed once the type matched: a missing name
 /// or `;` is a reported error.
-fn case_file_item<'src>() -> impl Parser<'src, Tokens<'src>, CmmnFileItem, MoxExtra<'src>> + Clone
-{
+fn case_file_item<'src>() -> impl Parser<'src, Tokens<'src>, CmmnFileItem, MoxExtra<'src>> + Clone {
     tref()
         .then(multiplicity().or_not())
         .then(name().or_not())
         .then(kw(Token::Other(';')).or_not())
-        .map_with(|(((type_ref, mult), name), semi), e| {
-            (type_ref, mult, name, semi, e.span())
-        })
+        .map_with(|(((type_ref, mult), name), semi), e| (type_ref, mult, name, semi, e.span()))
         .validate(|(type_ref, multiplicity, name, semi, span), _e, emitter| {
             let name = name.or_else(|| {
-                emitter.emit(Rich::custom(
-                    span,
-                    "expected an item name after the type",
-                ));
+                emitter.emit(Rich::custom(span, "expected an item name after the type"));
                 None
             });
             if semi.is_none() {
@@ -5108,35 +5100,36 @@ fn criterion_decl<'src>(
         .map_with(|((((is_exit, on), parts), when), semi), e| {
             (is_exit, on, parts, when, semi, e.span())
         })
-        .validate(
-            |(is_exit, on, parts, when, semi, span), _e, emitter| {
-                let head_word = if is_exit { "exit" } else { "entry" };
-                if on.is_none() {
-                    emitter.emit(Rich::custom(span, format!("expected `on` after `{head_word}`")));
-                }
-                if matches!(&when, Some(Some(None))) {
-                    emitter.emit(Rich::custom(span, "expected `(...)` after `when`"));
-                }
-                if semi.is_none() {
-                    emitter.emit(Rich::custom(span, "expected `;` after the criterion"));
-                }
-                let parts = parts.unwrap_or_default();
-                if on.is_some() && parts.is_empty() {
-                    emitter.emit(Rich::custom(span, "expected an on-part after `on`"));
-                }
-                (
-                    is_exit,
-                    CmmnCriterion {
-                        on_parts: parts,
-                        when: match when {
-                            Some(Some(Some(Some(parens)))) => Some(parens),
-                            _ => None,
-                        },
-                        span,
+        .validate(|(is_exit, on, parts, when, semi, span), _e, emitter| {
+            let head_word = if is_exit { "exit" } else { "entry" };
+            if on.is_none() {
+                emitter.emit(Rich::custom(
+                    span,
+                    format!("expected `on` after `{head_word}`"),
+                ));
+            }
+            if matches!(&when, Some(Some(None))) {
+                emitter.emit(Rich::custom(span, "expected `(...)` after `when`"));
+            }
+            if semi.is_none() {
+                emitter.emit(Rich::custom(span, "expected `;` after the criterion"));
+            }
+            let parts = parts.unwrap_or_default();
+            if on.is_some() && parts.is_empty() {
+                emitter.emit(Rich::custom(span, "expected an on-part after `on`"));
+            }
+            (
+                is_exit,
+                CmmnCriterion {
+                    on_parts: parts,
+                    when: match when {
+                        Some(Some(Some(Some(parens)))) => Some(parens),
+                        _ => None,
                     },
-                )
-            },
-        )
+                    span,
+                },
+            )
+        })
 }
 
 /// A `performer: <role>;` clause of a plan item body. Committed once
@@ -5164,7 +5157,10 @@ fn performer_clause<'src>(
                 }
             };
             if semi.is_none() {
-                emitter.emit(Rich::custom(span, "expected `;` after the performer clause"));
+                emitter.emit(Rich::custom(
+                    span,
+                    "expected `;` after the performer clause",
+                ));
             }
             (role.map(|n| n.text).unwrap_or_default(), span)
         })
@@ -5174,8 +5170,7 @@ fn performer_clause<'src>(
 /// Committed once `execute` matched: a reference that is not exactly three
 /// segments or a missing `;` is a reported error, and the clause recovers
 /// with the segments it has.
-fn execute_clause<'src>(
-) -> impl Parser<'src, Tokens<'src>, CmmnExecute, MoxExtra<'src>> + Clone {
+fn execute_clause<'src>() -> impl Parser<'src, Tokens<'src>, CmmnExecute, MoxExtra<'src>> + Clone {
     cmmn_keyword(cmmn::EXECUTE)
         .ignore_then(qname())
         .then(kw(Token::Other(';')).or_not())
@@ -5214,8 +5209,8 @@ fn execute_clause<'src>(
 }
 
 /// A control flag: `required;`, `repeats;`, or `auto;`.
-fn flag_decl<'src>(
-) -> impl Parser<'src, Tokens<'src>, (Span, &'static str), MoxExtra<'src>> + Clone {
+fn flag_decl<'src>() -> impl Parser<'src, Tokens<'src>, (Span, &'static str), MoxExtra<'src>> + Clone
+{
     choice((
         cmmn_keyword(cmmn::REQUIRED).to(cmmn::REQUIRED),
         cmmn_keyword(cmmn::REPEATS).to(cmmn::REPEATS),
@@ -5306,18 +5301,12 @@ fn plan_item_body<'src>(
     let plain = choice((
         performer_clause().map(CmmnBodyMember::Performer),
         execute_clause().map(CmmnBodyMember::Execute),
-        criterion_decl().map(|(is_exit, criterion)| CmmnBodyMember::Criterion {
-            is_exit,
-            criterion,
-        }),
+        criterion_decl()
+            .map(|(is_exit, criterion)| CmmnBodyMember::Criterion { is_exit, criterion }),
         flag_decl().map(|(span, word)| CmmnBodyMember::Flag(span, word)),
     ));
     let member: Boxed<'src, 'src, Tokens<'src>, CmmnBodyMember, MoxExtra<'src>> = if nested {
-        choice((
-            plain,
-            decl.map(|item| CmmnBodyMember::Item(Box::new(item))),
-        ))
-        .boxed()
+        choice((plain, decl.map(|item| CmmnBodyMember::Item(Box::new(item))))).boxed()
     } else {
         plain.boxed()
     };
@@ -5346,8 +5335,7 @@ fn plan_item_body<'src>(
 /// A plan item declaration: a `task`, `service`, `milestone`, or `stage`
 /// (optionally prefixed `discretionary`), with its optional body. Stages
 /// may nest plan items; the other kinds may not.
-fn plan_item_decl<'src>(
-) -> impl Parser<'src, Tokens<'src>, CmmnItemDecl, MoxExtra<'src>> + Clone {
+fn plan_item_decl<'src>() -> impl Parser<'src, Tokens<'src>, CmmnItemDecl, MoxExtra<'src>> + Clone {
     recursive(|decl| {
         let simple = |word: &'static str| {
             cmmn_keyword(word)
@@ -5627,7 +5615,6 @@ pub fn parse_cmmn(source: &str) -> CmmnParseResult {
             .collect(),
     }
 }
-
 
 /// Keeps the normative grammar in this module's docs in sync with the code.
 ///

@@ -517,7 +517,7 @@ is a tested property, not an aspiration.
 | Command | Purpose |
 |---|---|
 | `rexlang check <file>...` | validate; ariadne-rendered diagnostics grouped per file (`.mox`, `.actor`, `.ddd`, and `.evt`; each input may be a directory, scanned recursively for `*.mox`) |
-| `rexlang ir <file>... -o <out>` | emit the Core IR artifact (`.actor`: the ActorModel artifact; `.ddd`: the DDD design artifact; `.evt`: the EventModel artifact; several `.mox`: one multi-package model) |
+| `rexlang ir <file>... -o <out>` | emit the Core IR artifact (`.actor`: the ActorModel artifact; `.ddd`: the DDD design artifact; `.evt`: the EventModel artifact; `.uc`/`.cmmn`: the standalone artifact; several `.mox`: one multi-package model) |
 | `rexlang gen rust <file>... -o <dir>` | arena-based Rust models |
 | `rexlang gen json-schema <file>... --profile wire\|api -o <dir>` | JSON Schema |
 | `rexlang gen cedar <file>... -o <dir>` | Cedar policies + schema (`.mox`: inline blocks; `.actor`: file + imported domains) |
@@ -532,4 +532,7 @@ layer compiled against the domain models they import; `check`, `ir`, and
 files are a separate event-contract surface — events, channels, and
 subscriptions compiled against the domain models they import; `check`,
 `ir`, and `fmt` dispatch on the `.evt` extension. See
-[docs/EVENTS.md](EVENTS.md).
+[docs/EVENTS.md](EVENTS.md). `.cmmn` files are a separate case-management surface — cases, case
+files, plans, and criteria compiled against the domains, events, actors,
+and designs they import; `check`, `ir`, and `fmt` dispatch on the `.cmmn`
+extension. See [docs/CMMN.md](CMMN.md).
