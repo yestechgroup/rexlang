@@ -55,7 +55,8 @@ pub use ast::{
     UcRealizes, UcStep, UcSuccession, VocabularyDecl, VocabularyFacetDecl, Wraps,
 };
 pub use fmt::{
-    format, format_actors, format_ddd, format_deploy, format_evt, format_usecases, FormatError,
+    format, format_actors, format_cmmn, format_ddd, format_deploy, format_evt, format_usecases,
+    FormatError,
 };
 pub use lexer::{lex, lex_with_comments, Comment, CommentKind, LexError, Token};
 pub use parser::{

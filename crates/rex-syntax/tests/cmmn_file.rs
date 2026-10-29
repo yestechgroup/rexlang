@@ -6,7 +6,7 @@
 //! lexer keywords.
 
 use rex_syntax::ast::*;
-use rex_syntax::{parse_cmmn, Span};
+use rex_syntax::{format_cmmn, parse_cmmn, Span};
 
 fn span_text(source: &str, span: Span) -> &str {
     &source[span.start..span.end]
@@ -548,3 +548,98 @@ fn adversarial_inputs_do_not_panic() {
     }
 }
 
+
+// --- formatting ----------------------------------------------------------------
+
+/// Workspace root (two levels above the rex-syntax crate).
+fn workspace_root() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("workspace root")
+}
+
+#[test]
+fn formatting_is_canonicalizing() {
+    let source = concat!(
+        "case  C {\n",
+        "    roles {\n",
+        "        role analyst\n",
+        "        role second ;\n",
+        "    }\n",
+        "    case_file { FinancialStatements[] financials Borrower borrower }\n",
+        "    task T { performer:  analyst entry on B.completed,financials.update when (x > 0) required }\n",
+        "}\n",
+    );
+    let formatted = format_cmmn(source).expect("format");
+    assert_eq!(
+        formatted,
+        concat!(
+            "case C {\n",
+            "    roles {\n",
+            "        role analyst;\n",
+            "        role second;\n",
+            "    }\n",
+            "    case_file {\n",
+            "        FinancialStatements[] financials;\n",
+            "        Borrower borrower;\n",
+            "    }\n",
+            "    task T {\n",
+            "        performer: analyst;\n",
+            "        entry on B.completed, financials.update when (x > 0);\n",
+            "        required;\n",
+            "    }\n",
+            "}\n",
+        ),
+        "canonical `;`, tight dots, comma-space on-parts, verbatim when parens"
+    );
+    // The formatted output is a fixpoint and parses cleanly.
+    assert_eq!(format_cmmn(&formatted).expect("reformat"), formatted);
+    assert!(parse_cmmn(&formatted).errors.is_empty(), "round-trips");
+}
+
+#[test]
+fn imports_hoist_before_cases() {
+    let source = concat!(
+        "case C {}\n",
+        "import \"after.mox\"\n",
+        "case D {}\n",
+    );
+    let formatted = format_cmmn(source).expect("format");
+    assert_eq!(
+        formatted,
+        concat!(
+            "import \"after.mox\"\n",
+            "\n",
+            "case C {}\n",
+            "\n",
+            "case D {}\n",
+        ),
+        "imports hoist into a tight first section; one blank line between cases"
+    );
+}
+
+#[test]
+fn canonical_fixture_is_a_fixpoint() {
+    let model = workspace_root().join("tests/conformance/models/cmmn.cmmn");
+    let golden = workspace_root().join("tests/conformance/fmt/cmmn.fmt.cmmn");
+    let source = std::fs::read_to_string(&model).expect("canonical fixture");
+    let formatted = format_cmmn(&source).expect("format canonical fixture");
+    if std::env::var("REX_UPDATE_FIXTURES").is_ok() {
+        std::fs::write(&golden, &formatted).unwrap();
+    }
+    let expected = std::fs::read_to_string(&golden).expect("golden formatting");
+    assert_eq!(formatted, expected, "the canonical fixture is a fixpoint");
+}
+
+#[test]
+fn canonical_fixture_parses_cleanly() {
+    let model = workspace_root().join("tests/conformance/models/cmmn.cmmn");
+    let source = std::fs::read_to_string(&model).expect("canonical fixture");
+    let result = parse_cmmn(&source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+}
