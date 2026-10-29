@@ -67,7 +67,8 @@ use crate::{IrError, TypeRef};
 /// [`crate::ddd::DDD_MODEL_FORMAT_VERSION`] (the design marker),
 /// [`crate::events::EVENT_MODEL_FORMAT_VERSION`] (the event marker),
 /// [`crate::deploy::DEPLOY_MODEL_FORMAT_VERSION`] (the deployment marker),
-/// and [`crate::ifml::IFML_MODEL_FORMAT_VERSION`] (the interaction marker);
+/// [`crate::ifml::IFML_MODEL_FORMAT_VERSION`] (the interaction marker), and
+/// [`crate::cmmn::CMMN_MODEL_FORMAT_VERSION`] (the case marker);
 /// bump whenever the use-case wire format changes incompatibly.
 pub const USE_CASE_MODEL_FORMAT_VERSION: u32 = 1;
 

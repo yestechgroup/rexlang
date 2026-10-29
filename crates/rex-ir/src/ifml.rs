@@ -52,7 +52,8 @@ use crate::IrError;
 /// interaction-model artifacts ([`IfmlModel`]).
 ///
 /// Versioned independently of [`crate::FORMAT_VERSION`] (the domain-model
-/// marker) and [`crate::ACTOR_MODEL_FORMAT_VERSION`] (the policy marker);
+/// marker), [`crate::ACTOR_MODEL_FORMAT_VERSION`] (the policy marker), and
+/// [`crate::cmmn::CMMN_MODEL_FORMAT_VERSION`] (the case marker);
 /// bump whenever the IFML wire format changes incompatibly.
 pub const IFML_MODEL_FORMAT_VERSION: u32 = 1;
 

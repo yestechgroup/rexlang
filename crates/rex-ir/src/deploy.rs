@@ -62,7 +62,8 @@ use crate::IrError;
 /// marker), [`crate::ACTOR_MODEL_FORMAT_VERSION`] (the policy marker),
 /// [`crate::ddd::DDD_MODEL_FORMAT_VERSION`] (the design marker),
 /// [`crate::events::EVENT_MODEL_FORMAT_VERSION`] (the event marker), and
-/// [`crate::ifml::IFML_MODEL_FORMAT_VERSION`] (the interaction marker); bump
+/// [`crate::ifml::IFML_MODEL_FORMAT_VERSION`] (the interaction marker),
+/// [`crate::cmmn::CMMN_MODEL_FORMAT_VERSION`] (the case marker); bump
 /// whenever the deployment wire format changes incompatibly.
 pub const DEPLOY_MODEL_FORMAT_VERSION: u32 = 1;
 
