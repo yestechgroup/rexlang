@@ -15,7 +15,6 @@ fn support_cmmn_lowers_to_the_engine_definition() {
     let dir = root.join("examples");
     let read = |name: &str| std::fs::read_to_string(dir.join(name)).expect(name);
 
-    let domain_path = dir.join("support.mox").display().to_string();
     let domain = [("support.mox".to_string(), read("support.mox"))];
 
     let events_source = read("support.evt");

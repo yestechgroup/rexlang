@@ -109,17 +109,6 @@ struct Gathered {
     schemas: BTreeMap<String, String>,
 }
 
-impl Gathered {
-    /// Whether any import resolved into the bucket.
-    fn is_empty(&self) -> bool {
-        self.domains.is_empty()
-            && self.designs.is_empty()
-            && self.actors.is_empty()
-            && self.events.is_empty()
-            && self.flows.is_empty()
-    }
-}
-
 /// Resolves one import path relative to the declaring document's directory
 /// (the CLI rule), reading it from disk.
 fn resolve(base: &Path, import: &str) -> anyhow::Result<Option<PathBuf>> {
