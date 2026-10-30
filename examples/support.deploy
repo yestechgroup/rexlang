@@ -1,0 +1,65 @@
+// Support-desk deployment projections over the imported design
+// (support.ddd) and interaction flows (support.ifml). One logical
+// application, two targets: the database engine is a profile default —
+// postgres on the cluster, D1 at the edge — never a component baseline,
+// because projecting the application onto a target that cannot host an
+// engine is a compile error, not a generated artifact.
+import "support.ddd"
+import "support.ifml"
+
+application SupportDesk {
+    component api: api {
+        design "support.ddd#desk"
+        scaling: autoscaled
+    }
+    component web: frontend {
+        flow "support.ifml"
+        entrypoint: "src/inbox.ts"
+    }
+    component db: database {
+        storage: managed
+    }
+    connects web -> api
+    connects api -> db
+}
+
+profile production_k8s {
+    target: kubernetes
+    defaults {
+        api.runtime: container
+        api.replicas: 3
+        db.engine: postgres
+    }
+    mappings {
+        api -> kubernetes.deployment
+        api -> kubernetes.service
+        database -> external.postgres
+    }
+    require (api.replicas >= 3)
+    prohibit (db.storage == "local")
+}
+
+profile edge {
+    target: cloudflareWorkers
+    defaults {
+        api.runtime: worker
+        db.engine: d1
+        db.storage: external
+    }
+    mappings {
+        api -> cloudflare.workers
+        frontend -> cloudflare.assets
+        database -> cloudflare.d1
+    }
+}
+
+deployment production for SupportDesk {
+    use production_k8s
+    configure {
+        api.replicas: 4
+    }
+}
+
+deployment edgeLive for SupportDesk {
+    use edge
+}
