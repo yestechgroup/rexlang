@@ -27,11 +27,15 @@ once both complete; a credit-committee milestone marks the goal. The
 application's aggregate state stays in the domain; the case coordinates the
 work *around* it. **The domain owns its state; the case owns its work.**
 
-```text
-import "lending.mox"
-import "lending.evt"
-import "lending.actor"
-import "lending.ddd" as lending
+The fence below is the canonical fixture's shape
+(`tests/conformance/cmmn/lending.cmmn`), its imports repointed so it
+compiles from this document (the docs fences are compiled by CI):
+
+```cmmn
+import "../tests/conformance/cmmn/lending.mox"
+import "../tests/conformance/cmmn/lending.evt"
+import "../tests/conformance/cmmn/lending.actor"
+import "../tests/conformance/cmmn/lending.ddd" as lending
 
 case CommercialLoan {
 
@@ -109,7 +113,7 @@ case CommercialLoan {
 ## Artifact wire format
 
 `rexlang ir file.cmmn` emits the standalone
-[`rex_ir::cmmn::CmmnModel`](crates/rex-ir/src/cmmn.rs) artifact — the
+[`rex_ir::cmmn::CmmnModel`](../crates/rex-ir/src/cmmn.rs) artifact — the
 versioned wire format in the rexlang artifact family
 (`CMMN_MODEL_FORMAT_VERSION`, camelCase keys, adjacent tagging, an empty
 artifact serializing as exactly `{"formatVersion":1}`). The wire carries
@@ -121,9 +125,9 @@ name, and a case's root items are the ones no stage lists.
 ## Grammar
 
 The normative EBNF lives once in the parser module docs
-([`crates/rex-syntax/src/parser.rs`](crates/rex-syntax/src/parser.rs),
+([`crates/rex-syntax/src/parser.rs`](../crates/rex-syntax/src/parser.rs),
 section "`.cmmn` case management sources"); `rexlang fmt` canonicalizes to
-the layout documented on [`format_cmmn`](crates/rex-syntax/src/fmt.rs).
+the layout documented on [`format_cmmn`](../crates/rex-syntax/src/fmt.rs).
 Every `case` word is a contextual identifier (escapable with `^`);
 `import`, `as`, `on`, and `when` are real lexer keywords. The transition
 vocabularies are deliberately **not** syntax — both segments of an on-part
@@ -133,7 +137,7 @@ tables (the `.deploy` vocabulary discipline).
 ## Resolution & validation
 
 `compile_cmmn_str` (normative contract on
-[`crates/rex-driver/src/lib.rs`](crates/rex-driver/src/lib.rs)) resolves a
+[`crates/rex-driver/src/lib.rs`](../crates/rex-driver/src/lib.rs)) resolves a
 `.cmmn` file against **four import buckets**: raw `.mox` domains, plus
 pre-compiled `EventModel`, `ActorModel`, and `DddModel` pairs the host
 provides. Imports match by exact path or lexical resolution relative to the
@@ -185,3 +189,20 @@ the case-file scope alone).
 Known follow-up: a dev-dependency on `cmmn-rs` (the `cedar-policy`
 precedent) to validate the emitted definitions with the real
 `deserialize_case_definition` in CI.
+
+## Conformance
+
+The canonical fixture set lives in `tests/conformance/cmmn/`:
+`lending.cmmn` (the case above, over `lending.mox`/`lending.evt`/
+`lending.actor`/`lending.ddd`) compiles clean, byte-matches the
+`lending.cmmn.json` artifact golden, and round-trips through `from_json`
+(`crates/rex-driver/tests/cmmn_golden.rs`); the backend lowers the same
+artifact to the engine's `CaseDefinition` JSON, byte-pinned at
+`lending.case.json` (`crates/rex-backend-cmmn/tests/generate.rs`). The
+`examples/` side ships `support.cmmn` — the full-stack example whose
+imports span all four buckets and whose `execute` binding names a real
+`support.ddd` service operation — byte-pinned under `examples/artifacts/`
+(`examples_artifacts.rs`, plus the engine-definition golden in
+`rex-backend-cmmn`'s examples test). The CI fmt gate covers
+`tests/conformance/cmmn/*.cmmn` and `examples/*.cmmn`. Regenerate goldens
+with `REX_UPDATE_FIXTURES=1 cargo test --workspace`.

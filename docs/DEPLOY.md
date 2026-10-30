@@ -49,14 +49,18 @@ page is the language reference.
 
 ## A worked example
 
-```text
-import "../ddd/library.ddd"
-import "../ifml/app.ifml"
+The fence below is the canonical fixture's shape
+(`tests/conformance/deploy/svc.deploy`), its imports repointed so it
+compiles from this document (the docs fences are compiled by CI):
+
+```deploy
+import "../tests/conformance/ddd/library.ddd"
+import "../tests/conformance/ifml/app.ifml"
 
 application Svc {
     component api: api { scaling: autoscaled }
-    component lending: api { design "../ddd/library.ddd#media" }
-    component web: frontend { flow "../ifml/app.ifml#Pagination" }
+    component lending: api { design "../tests/conformance/ddd/library.ddd#media" }
+    component web: frontend { flow "../tests/conformance/ifml/app.ifml#Pagination" }
     component search: worker { requires longRunningProcess }
     component db: database { engine: postgres  storage: managed }
     connects web -> api
@@ -256,3 +260,9 @@ profiles, deployments — each in source order).
 - The LSP does not publish `.deploy` diagnostics yet (the `.evt`
   precedent): the surface compiles through the same one-shot entry
   points, so editor wiring is a follow-up, not a contract change.
+
+The `examples/` side ships `support.deploy` — one logical application
+bound to `support.ddd#desk` and `support.ifml`, projected through a
+kubernetes profile (postgres, mappings, policies) and a cloudflareWorkers
+profile (D1) — byte-pinned against `examples/artifacts/` by
+`crates/rex-driver/tests/examples_artifacts.rs`.

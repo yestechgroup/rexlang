@@ -21,13 +21,22 @@ consumes the IR — in or out of tree — start with
    +-- import schema "x.json"    .actor policy file -> resolve & check ---+-+
    +-- import sigil "x.rosetta"                       -> ActorModel (.actors.rex.json)
                                     .ddd design file  -> resolve & validate
-                                                    -> DddModel (.ddd.json)
+                                                    -> DddModel (.ddd.json) --xstate-ir--> machines
                                     .evt contract file -> resolve & validate
                                                     -> EventModel (orders.evt.json)
+                                    .uc use case file  -> resolve & validate (4 import buckets)
+                                                    -> UseCaseModel (support.uc.json)
                                     .deploy deployment file -> resolve & validate
                                                     -> DeployModel (svc.deploy.json)
+                                    .cmmn case file    -> resolve & validate
+                                                    -> CmmnModel (support.cmmn.json)
                                     .ifml flow file   -> parse
                                                     -> IfmlModel (.ifml.json)
+                                                                        |
+                                                        cmmn backend (rex-backend-cmmn)
+                                                                        v
+                                              cmmn-rs CaseDefinition JSON -- the
+                                              cmmn-rs engine executes cases
 ```
 
 ## Status
@@ -35,12 +44,14 @@ consumes the IR — in or out of tree — start with
 Front-end, Core IR, wire format, Rust backend, canonical JSON instances,
 JSON Schema (wire/api), the Tier-2 expression language, hermetic
 vocabularies, the `.actor` authorization dimension with Cedar policy
-generation, the `.ddd` Sculptor-style design layer over imported domains,
-the `.evt` event-contract surface, the `.deploy` deployment-projection
-surface, the `.ifml` interaction-flow surface,
-and structural `import schema` /
-`import sigil` (Rune DSL) imports — implemented and CI-enforced. C#/Java
-backends and filter/query predicates are future work.
+generation, the `.ddd` Sculptor-style design layer over imported domains
+(with entity state machines lowered to xstate-ir), the `.evt`
+event-contract surface, the `.deploy` deployment-projection surface, the
+`.uc` use-case-pattern surface, the `.cmmn` case-management surface with
+its cmmn-rs lowering backend, the `.ifml` interaction-flow surface, and
+structural `import schema` / `import sigil` (Rune DSL) imports —
+implemented and CI-enforced. C#/Java backends and filter/query predicates
+are future work.
 
 ## Usage
 
@@ -52,6 +63,8 @@ rexlang gen rust model.mox -o src-gen/
 rexlang gen json-schema model.mox --profile wire -o schemas/
 rexlang gen cedar model.mox -o policies/      # from inline actors blocks
 rexlang gen cedar policy.actor -o policies/   # from a standalone actor file
+rexlang ir usecase.uc -o usecase.uc.json      # every artifact surface: .ddd/.evt/.deploy/.uc/.cmmn
+rexlang artifact check usecase.uc.json        # lint any serialized artifact, no toolchain needed
 rexlang vocab fetch model.mox --provider file:vocab-sources/
 rexlang lsp                       # start the language server (stdio)
 ```
@@ -66,7 +79,12 @@ compiles to a versioned JSON artifact with a stable wire contract (camelCase
 keys, a `formatVersion` gate, additive-only evolution):
 `rexlang ir model.mox -o model.rex.json` (Core IR), `policy.actor` →
 `ActorModel`, `design.ddd` → `DddModel`, `flow.ifml` → `IfmlModel`,
-`contract.evt` → `EventModel`.
+`contract.evt` → `EventModel`, `usecase.uc` → `UseCaseModel`,
+`svc.deploy` → `DeployModel`, `case.cmmn` → `CmmnModel` — and
+`rex-backend-cmmn` lowers a `CmmnModel` plus its domain model to the
+[cmmn-rs](https://github.com/yestechgroup/cmmn-rs) engine's
+`CaseDefinition` JSON: rexlang authors and validates the case, cmmn-rs
+executes it.
 `rexlang artifact check <files>` validates any serialized artifact without
 the toolchain. Treat the artifact as the interface and any Rust version
 becomes an implementation detail.
@@ -87,7 +105,7 @@ The crates are the compatibility boundary:
 
 | Crate | Role for a consumer |
 |---|---|
-| `rex-ir` | The artifacts (`Model`, `ActorModel`, `ddd::DddModel`, `ifml::IfmlModel`, `events::EventModel`) with `from_json`/`to_json` and their version gates — the type-level boundary |
+| `rex-ir` | The artifacts (`Model`, `ActorModel`, `ddd::DddModel`, `ifml::IfmlModel`, `events::EventModel`, `deploy::DeployModel`, `usecases::UseCaseModel`, `cmmn::CmmnModel`) with `from_json`/`to_json` and their version gates — the type-level boundary |
 | `rex-driver` | Compilation: one call per surface, rich byte-span diagnostics, ariadne `render` |
 | `rex-expr` | The neutral expression language (parser, type checker) behind `when` conditions and `expr` bodies |
 | `rex-ifml` | The `.ifml` parser (`parse_ifml`/`parse_ifml_file` → `IfmlModel`) |
@@ -110,12 +128,19 @@ let actor = rex_driver::compile_actors_str("policy.actor", &source, &domains, &i
 let design = rex_driver::compile_ddd_str_with_actors("design.ddd", &source, &domains, &imports, &actors);
 // .evt — event-contract artifact over the imported domains
 let events = rex_driver::compile_evt_str("orders.evt", &source, &domains, &imports);
+// .deploy — deployment projections over compiled designs + flows
+let deploy = rex_driver::compile_deploy_str("svc.deploy", &source, &designs, &flows);
+// .uc — use case patterns over all four buckets (domains, designs, actors, events)
+let uc = rex_driver::compile_usecase_str("support.uc", &source, &domains, &imports, &designs, &actors, &events);
+// .cmmn — case management over the same four buckets
+let cmmn = rex_driver::compile_cmmn_str("support.cmmn", &source, &domains, &imports, &designs, &actors, &events);
 // .ifml — parses directly, no domain needed
 let ifml = rex_ifml::parse_ifml(&source)?;
 ```
 
-`Compilation`/`ActorCompilation`/`DddCompilation`/`EventCompilation` carry
-every file's
+`Compilation`/`ActorCompilation`/`DddCompilation`/`EventCompilation`/
+`DeployCompilation`/`UseCaseCompilation`/`CmmnCompilation` carry every
+file's
 diagnostics tagged with its path (`sigil` content errors are tagged with the
 rosetta path); `rex_driver::render(path, source, &diagnostics)` produces
 ariadne output, and every diagnostic span is a byte offset into its file.
@@ -127,10 +152,15 @@ empty `DomainImports::default()` is the no-import compilation).
 Normative contracts: the language in [docs/LANGUAGE.md](docs/LANGUAGE.md),
 the design layer in [docs/DDD.md](docs/DDD.md), event contracts in
 [docs/EVENTS.md](docs/EVENTS.md), deployment models in
-[docs/DEPLOY.md](docs/DEPLOY.md), interaction flows in
+[docs/DEPLOY.md](docs/DEPLOY.md), use case patterns in
+[docs/USECASES.md](docs/USECASES.md), case management in
+[docs/CMMN.md](docs/CMMN.md), interaction flows in
 [docs/IFML.md](docs/IFML.md), expression rules in
 [docs/EXPRESSIONS.md](docs/EXPRESSIONS.md), and the out-of-tree backend
-contract in [docs/BACKENDS.md](docs/BACKENDS.md).
+contract in [docs/BACKENDS.md](docs/BACKENDS.md) — the full index is
+[docs/README.md](docs/README.md). The canonical examples
+([examples/README.md](examples/README.md)) compile one domain — the
+support desk — through every surface, CI-enforced.
 
 ## Actor policies (.actor)
 
@@ -139,19 +169,32 @@ capabilities, grants, obligations, and prohibitions never appear in the
 domain IR or its JSON Schemas. They live in `.actor` files that import the
 domain so everything stays type safe:
 
-```
-import "support.mox"
+```actor
+import "examples/support.mox"
 
 actors Support {
+    actor Customer
     actor Agent extends Customer
+    actor Finance
+
     capability RaiseRefund on Ticket
+    capability ApproveRefund on Ticket
 
     grant Agent {
-        permit RaiseRefund when (refundCents <= 5000) obligation audit
+        permit RaiseRefund when (refundCents > 0 && refundCents <= 5000)
+            obligation audit
+    }
+
+    grant Finance {
+        permit ApproveRefund when (refundCents <= 100000)
     }
 
     never_both { RaiseRefund, ApproveRefund }
 }
+```
+
+(This policy compiles — it is the shape of `examples/support.actor`, and
+the fenced blocks in these docs are compiled by CI.)
 ```
 
 - `when` conditions are **fully type-checked** against the imported classes

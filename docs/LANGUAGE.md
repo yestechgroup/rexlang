@@ -10,7 +10,9 @@ exactly once, in the parser module docs
 (`crates/rex-syntax/src/parser.rs`, rendered as
 [`rex_syntax::parser`](https://docs.rs/rex-syntax/latest/rex_syntax/parser/) —
 sections: *`.mox` model sources*, *the shared `actors_block`*, *`.actor`
-policy files*, *`.ddd` design sources*, *`.evt` event-contract sources*).
+policy files*, *`.ddd` design sources*, *`.evt` event-contract sources*,
+*`.deploy` deployment sources*, *`.uc` use case sources*, and *`.cmmn`
+case management sources*).
 The sections below link to it
 instead of restating the grammar; when this page and the parser disagree,
 the parser wins. The `.ifml` surface's authority is its Pest grammar file
@@ -145,8 +147,8 @@ A `.mox` package can import JSON Schema types into its namespace — the
 ```mox
 package nz.example.todos
 
-import schema "schemas/todo_item.json" as TodoItem
-import schema "schemas/todo_list.json"
+import schema "../tests/conformance/models/import_schema/todo_item.json" as TodoItem
+import schema "../tests/conformance/models/import_schema/todo_list.json"
 
 /// The aggregate root, referring to two imported schema types.
 class TodoList {
@@ -206,13 +208,18 @@ lower into synthetic rexlang packages — the `import_sigil_decl` production
 of the grammar authority (`import sigil "<path>"`, no alias):
 
 ```mox
-package nz.example.trading
+package nz.example.pricing
 
-import sigil "rosetta/trade.rosetta"
+import sigil "../examples/pricing.rosetta"
 
-/// The lowered `oracle.basic.Trade` class is ordinary rexlang content.
-class Book {
-    refers oracle.basic.Trade about
+/// The lowered `pricing.model` package carries the Rune namespace's
+/// functions (signature-only operations with verbatim `"rosetta"` bodies);
+/// the `zonedDateTime` reference pulls in the `com.rosetta.model` builtin
+/// package. See `examples/pricing.mox` — the canonical example this fence
+/// mirrors.
+class Quote {
+    String symbol
+    double notional
 }
 ```
 
@@ -516,7 +523,7 @@ is a tested property, not an aspiration.
 
 | Command | Purpose |
 |---|---|
-| `rexlang check <file>...` | validate; ariadne-rendered diagnostics grouped per file (`.mox`, `.actor`, `.ddd`, and `.evt`; each input may be a directory, scanned recursively for `*.mox`) |
+| `rexlang check <file>...` | validate; ariadne-rendered diagnostics grouped per file (every surface: `.mox`, `.actor`, `.ddd`, `.evt`, `.deploy`, `.uc`, `.cmmn`, `.ifml`; a `.mox` input may be a directory, scanned recursively for `*.mox`) |
 | `rexlang ir <file>... -o <out>` | emit the Core IR artifact (`.actor`: the ActorModel artifact; `.ddd`: the DDD design artifact; `.evt`: the EventModel artifact; `.uc`/`.cmmn`: the standalone artifact; several `.mox`: one multi-package model) |
 | `rexlang gen rust <file>... -o <dir>` | arena-based Rust models |
 | `rexlang gen json-schema <file>... --profile wire\|api -o <dir>` | JSON Schema |
@@ -526,13 +533,30 @@ is a tested property, not an aspiration.
 | `rexlang fmt [--check] <files>\|-` | canonical formatting (comments kept) |
 | `rexlang lsp` | language server (stdio) |
 
-`.ddd` files are a separate design surface — a Sculptor-style DDD design
-layer compiled against the domain models they import; `check`, `ir`, and
-`fmt` dispatch on the `.ddd` extension. See [docs/DDD.md](DDD.md). `.evt`
-files are a separate event-contract surface — events, channels, and
-subscriptions compiled against the domain models they import; `check`,
-`ir`, and `fmt` dispatch on the `.evt` extension. See
-[docs/EVENTS.md](EVENTS.md). `.cmmn` files are a separate case-management surface — cases, case
-files, plans, and criteria compiled against the domains, events, actors,
-and designs they import; `check`, `ir`, and `fmt` dispatch on the `.cmmn`
-extension. See [docs/CMMN.md](CMMN.md).
+## Surfaces beyond this reference
+
+Every surface follows the same pipeline — `check`, `ir`, and `fmt` dispatch
+on its extension; each compiles to its own versioned artifact consumed by
+downstream tools. This page is the `.mox`/`.actor` reference; the others:
+
+- **`.ddd`** — a Sculptor-style DDD design layer (applications, modules,
+  services, repositories, searches, and entity state machines) compiled
+  against the domain models it imports. See [docs/DDD.md](DDD.md).
+- **`.evt`** — event contracts: versioned events, the channels that
+  publish them, and the subscriptions that deliver them, typed against the
+  imported domains. See [docs/EVENTS.md](EVENTS.md).
+- **`.deploy`** — deployment projections: one logical application bound to
+  its designs and flows, projected onto capability-described targets
+  through profiles and policies. See [docs/DEPLOY.md](DEPLOY.md).
+- **`.uc`** — SysML v2 use case patterns: subjects, actors, anchored
+  messages, performed steps, and successions, composed across all four
+  import buckets. See [docs/USECASES.md](USECASES.md).
+- **`.cmmn`** — CMMN 1.1 case management: cases, typed case files, plans,
+  and sentry criteria, lowered by `rex-backend-cmmn` to the cmmn-rs
+  engine's `CaseDefinition` JSON. See [docs/CMMN.md](CMMN.md).
+- **`.ifml`** — interaction flows over the reference pattern library,
+  type-checked against the imported domains. See [docs/IFML.md](IFML.md).
+
+The examples directory (`examples/`, see its README) carries a canonical
+example for every surface — the support-desk stack exercises seven of them
+over one domain.
