@@ -1,0 +1,185 @@
+{
+  "formatVersion": 1,
+  "applications": [
+    {
+      "name": "SupportDesk",
+      "components": [
+        {
+          "name": "api",
+          "kind": "api",
+          "settings": [
+            {
+              "path": "scaling",
+              "value": {
+                "type": "word",
+                "value": "autoscaled"
+              }
+            }
+          ],
+          "designs": [
+            {
+              "source": "support.ddd",
+              "module": "desk"
+            }
+          ]
+        },
+        {
+          "name": "web",
+          "kind": "frontend",
+          "settings": [
+            {
+              "path": "entrypoint",
+              "value": {
+                "type": "text",
+                "value": "src/inbox.ts"
+              }
+            }
+          ],
+          "flows": [
+            {
+              "source": "support.ifml"
+            }
+          ]
+        },
+        {
+          "name": "db",
+          "kind": "database",
+          "settings": [
+            {
+              "path": "storage",
+              "value": {
+                "type": "word",
+                "value": "managed"
+              }
+            }
+          ]
+        }
+      ],
+      "connections": [
+        {
+          "from": "web",
+          "to": "api"
+        },
+        {
+          "from": "api",
+          "to": "db"
+        }
+      ]
+    }
+  ],
+  "profiles": [
+    {
+      "name": "production_k8s",
+      "target": "kubernetes",
+      "defaults": [
+        {
+          "path": "api.runtime",
+          "value": {
+            "type": "word",
+            "value": "container"
+          }
+        },
+        {
+          "path": "api.replicas",
+          "value": {
+            "type": "int",
+            "value": 3
+          }
+        },
+        {
+          "path": "db.engine",
+          "value": {
+            "type": "word",
+            "value": "postgres"
+          }
+        }
+      ],
+      "policies": [
+        {
+          "prohibit": false,
+          "expression": "api.replicas >= 3"
+        },
+        {
+          "prohibit": true,
+          "expression": "db.storage == \"local\""
+        }
+      ],
+      "mappings": [
+        {
+          "kind": "api",
+          "resource": "kubernetes.deployment"
+        },
+        {
+          "kind": "api",
+          "resource": "kubernetes.service"
+        },
+        {
+          "kind": "database",
+          "resource": "external.postgres"
+        }
+      ]
+    },
+    {
+      "name": "edge",
+      "target": "cloudflareWorkers",
+      "defaults": [
+        {
+          "path": "api.runtime",
+          "value": {
+            "type": "word",
+            "value": "worker"
+          }
+        },
+        {
+          "path": "db.engine",
+          "value": {
+            "type": "word",
+            "value": "d1"
+          }
+        },
+        {
+          "path": "db.storage",
+          "value": {
+            "type": "word",
+            "value": "external"
+          }
+        }
+      ],
+      "mappings": [
+        {
+          "kind": "api",
+          "resource": "cloudflare.workers"
+        },
+        {
+          "kind": "frontend",
+          "resource": "cloudflare.assets"
+        },
+        {
+          "kind": "database",
+          "resource": "cloudflare.d1"
+        }
+      ]
+    }
+  ],
+  "deployments": [
+    {
+      "name": "production",
+      "application": "SupportDesk",
+      "profile": "production_k8s",
+      "configure": [
+        {
+          "path": "api.replicas",
+          "value": {
+            "type": "int",
+            "value": 4
+          }
+        }
+      ]
+    },
+    {
+      "name": "edgeLive",
+      "application": "SupportDesk",
+      "profile": "edge"
+    }
+  ]
+}

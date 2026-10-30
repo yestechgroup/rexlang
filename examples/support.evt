@@ -1,0 +1,47 @@
+// Support-desk event contracts over support.mox (whose policy surface
+// lives in support.actor): the lifecycle events a ticket flows through,
+// the channels that publish them, and the subscriptions that deliver
+// them — with nothing about brokers or delivery guaranteed.
+import "support.mox"
+
+event TicketRaised version "1.0.0" {
+    ticketNo: String;
+    title: String;
+    state: TicketState;
+    internal: boolean;
+}
+
+event RefundRequested version "1.1.0" {
+    ticketNo: String;
+    refundCents: int;
+}
+
+event RefundApproved version "1.0.0" {
+    ticketNo: String;
+    refundCents: int;
+}
+
+event TicketResolved version "1.0.0" {
+    ticketNo: String;
+    state: TicketState;
+}
+
+channel tickets {
+    publishes TicketRaised;
+    publishes TicketResolved;
+}
+
+channel refunds {
+    publishes RefundRequested;
+    publishes RefundApproved;
+}
+
+subscription refundDesk {
+    events [ RefundRequested RefundApproved ]
+    consumer refund_approval_service
+}
+
+subscription analytics {
+    events [ TicketRaised TicketResolved RefundRequested ]
+    consumer analytics_service
+}

@@ -1,0 +1,74 @@
+// Order-management application design over ecommerce.mox: the ordering
+// module designs the order aggregate (Order is the root with a
+// scaffolded repository; OrderLine is contained, so it declares no
+// repository) and a search projection over the order book; the customers
+// module owns the customer register. The service delegates across the
+// module boundary only via the customer service — never a foreign
+// repository.
+import "ecommerce.mox";
+
+application Orders {
+    base nz.example.shop
+    module ordering {
+        /// Places and prices orders across the catalogue.
+        service OrderService {
+            inject OrderRepository;
+            inject OrderSearch;
+            Order place(String orderNo, Customer forCustomer, Currency currency) capability PlaceOrder;
+            saveOrder => OrderRepository.save;
+            findOrders => OrderSearch.search;
+        }
+        entity Order scaffold repository OrderRepository {
+            findById;
+            findAll;
+            save;
+            delete;
+            protected Order findByNumber(String orderNo);
+        }
+        // Contained by Order (`contains lines`): a non-root aggregate
+        // member, so it may declare no repository.
+        entity OrderLine
+        entity Product repository ProductRepository {
+            findById;
+            findAll;
+            findByExample;
+            findByKeys;
+            save;
+            delete;
+        }
+        /// Full-text search over the order book.
+        search OrderSearch {
+            entity Order
+            text {
+                orderNo boost 2
+            }
+            filters {
+                currency
+            }
+            sort {
+                orderNo
+            }
+            document {
+                headline = orderNo;
+            }
+            pagination {
+                limit 25
+                max 200
+            }
+        }
+    }
+    module customers {
+        /// Keeps the customer register current.
+        service CustomerService {
+            inject CustomerRepository;
+            register => CustomerRepository.save;
+            protected Customer findByName(String name);
+        }
+        entity Customer repository CustomerRepository {
+            findById;
+            findAll;
+            save;
+            delete;
+        }
+    }
+}

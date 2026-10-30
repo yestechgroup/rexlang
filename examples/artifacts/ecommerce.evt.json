@@ -1,0 +1,130 @@
+{
+  "formatVersion": 1,
+  "events": [
+    {
+      "name": "OrderPlaced",
+      "version": "1.0.0",
+      "fields": [
+        {
+          "name": "orderNo",
+          "type": {
+            "type": "primitive",
+            "value": "string"
+          }
+        },
+        {
+          "name": "customer",
+          "type": {
+            "type": "primitive",
+            "value": "string"
+          }
+        },
+        {
+          "name": "currency",
+          "type": {
+            "type": "vocabulary",
+            "value": {
+              "package": "nz.example.shop",
+              "name": "Currency"
+            }
+          }
+        },
+        {
+          "name": "total",
+          "type": {
+            "type": "primitive",
+            "value": "int"
+          }
+        }
+      ]
+    },
+    {
+      "name": "OrderLineShipped",
+      "version": "1.0.0",
+      "fields": [
+        {
+          "name": "orderNo",
+          "type": {
+            "type": "primitive",
+            "value": "string"
+          }
+        },
+        {
+          "name": "sku",
+          "type": {
+            "type": "primitive",
+            "value": "string"
+          }
+        },
+        {
+          "name": "quantity",
+          "type": {
+            "type": "primitive",
+            "value": "int"
+          }
+        }
+      ]
+    },
+    {
+      "name": "OrderCancelled",
+      "version": "1.1.0",
+      "fields": [
+        {
+          "name": "orderNo",
+          "type": {
+            "type": "primitive",
+            "value": "string"
+          }
+        },
+        {
+          "name": "reason",
+          "type": {
+            "type": "primitive",
+            "value": "string"
+          }
+        }
+      ]
+    }
+  ],
+  "channels": [
+    {
+      "name": "orders",
+      "publishes": [
+        {
+          "event": "OrderPlaced"
+        },
+        {
+          "event": "OrderLineShipped"
+        },
+        {
+          "event": "OrderCancelled"
+        }
+      ]
+    },
+    {
+      "name": "fulfilment",
+      "publishes": [
+        {
+          "event": "OrderLineShipped"
+        }
+      ]
+    }
+  ],
+  "subscriptions": [
+    {
+      "name": "billing",
+      "events": [
+        "OrderPlaced",
+        "OrderCancelled"
+      ],
+      "consumer": "billing_service"
+    },
+    {
+      "name": "warehouse",
+      "events": [
+        "OrderLineShipped"
+      ],
+      "consumer": "warehouse_system"
+    }
+  ]
+}

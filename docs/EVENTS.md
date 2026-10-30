@@ -247,10 +247,12 @@ cargo run -p rex-cli -- ir tests/conformance/events/orders.evt -o orders.evt.jso
 ## Worked example
 
 `tests/conformance/events/orders.evt`, the canonical fixture, contracts the
-sample order flow over `tests/conformance/events/orders.mox`:
+sample order flow over `tests/conformance/events/orders.mox`. The fence
+below is the fixture verbatim, its import repointed so it compiles from
+this document (the docs fences are compiled by CI):
 
-```
-import "orders.mox"
+```evt
+import "../tests/conformance/events/orders.mox"
 
 event OrderPlaced version "1.0.0" {
     orderId: String;
@@ -300,3 +302,7 @@ diagnostics; the wire shape is pinned by
 `crates/rex-syntax/tests/fmt.rs`, and the CI fmt gate covers
 `tests/conformance/events/`. Regenerate goldens with
 `REX_UPDATE_FIXTURES=1 cargo test --workspace`.
+
+The `examples/` side ships `support.evt` and `ecommerce.evt` (the latter
+with a vocabulary-typed payload field), compiled and byte-pinned against
+`examples/artifacts/` by `crates/rex-driver/tests/examples_artifacts.rs`.

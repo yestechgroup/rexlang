@@ -1,0 +1,388 @@
+{
+  "formatVersion": 1,
+  "useCases": [
+    {
+      "name": "TrackRefund",
+      "description": "Iteration 1: a subject and one bare policy actor — nothing else.",
+      "subject": {
+        "name": "Ticket",
+        "typeName": "nz.example.support.Ticket"
+      },
+      "actors": [
+        {
+          "name": "Agent"
+        }
+      ]
+    },
+    {
+      "name": "ClarifyTicket",
+      "description": "Iteration 2a: named occurrences and a fully anchored message.",
+      "subject": {
+        "name": "Ticket",
+        "typeName": "nz.example.support.Ticket",
+        "occurrences": [
+          {
+            "type": "named",
+            "value": "clarificationRequested"
+          }
+        ]
+      },
+      "actors": [
+        {
+          "name": "Reporter",
+          "typeName": "nz.example.support.User",
+          "occurrences": [
+            {
+              "type": "named",
+              "value": "clarificationSent"
+            }
+          ]
+        }
+      ],
+      "messages": [
+        {
+          "name": "requestInfo",
+          "payload": {
+            "type": "domain",
+            "value": {
+              "type": "class",
+              "value": {
+                "package": "nz.example.support",
+                "name": "Ticket"
+              }
+            }
+          },
+          "source": {
+            "participant": "Ticket",
+            "anchor": {
+              "type": "occurrence",
+              "value": "clarificationRequested"
+            }
+          },
+          "target": {
+            "participant": "Reporter",
+            "anchor": {
+              "type": "occurrence",
+              "value": "clarificationSent"
+            }
+          }
+        }
+      ],
+      "successions": [
+        {
+          "first": {
+            "type": "start"
+          },
+          "then": {
+            "type": "messageEnd",
+            "value": {
+              "message": "requestInfo",
+              "end": "source"
+            }
+          }
+        },
+        {
+          "first": {
+            "type": "messageEnd",
+            "value": {
+              "message": "requestInfo",
+              "end": "source"
+            }
+          },
+          "then": {
+            "type": "messageEnd",
+            "value": {
+              "message": "requestInfo",
+              "end": "target"
+            }
+          }
+        },
+        {
+          "first": {
+            "type": "messageEnd",
+            "value": {
+              "message": "requestInfo",
+              "end": "target"
+            }
+          },
+          "then": {
+            "type": "done"
+          }
+        }
+      ]
+    },
+    {
+      "name": "EscalateInternal",
+      "description": "Iteration 2b: message-owned ends and an end-less message.",
+      "subject": {
+        "name": "Ticket",
+        "typeName": "nz.example.support.Ticket",
+        "occurrences": [
+          {
+            "type": "messageEnd",
+            "value": {
+              "message": "escalate",
+              "end": "source"
+            }
+          },
+          {
+            "type": "messageEnd",
+            "value": {
+              "message": "escalate",
+              "end": "target"
+            }
+          }
+        ]
+      },
+      "messages": [
+        {
+          "name": "escalate",
+          "payload": {
+            "type": "domain",
+            "value": {
+              "type": "class",
+              "value": {
+                "package": "nz.example.support",
+                "name": "Ticket"
+              }
+            }
+          },
+          "source": {
+            "participant": "Ticket",
+            "anchor": {
+              "type": "messageEnd",
+              "value": "source"
+            }
+          },
+          "target": {
+            "participant": "Ticket",
+            "anchor": {
+              "type": "messageEnd",
+              "value": "target"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "RaiseRefund",
+      "description": "Iteration 3: subject-performed steps anchored to operations, actor\noccurrences, an event payload and a domain payload, and a realized\nservice operation.",
+      "subject": {
+        "name": "Ticket",
+        "typeName": "nz.example.support.Ticket",
+        "steps": [
+          {
+            "name": "raise",
+            "operation": "raiseRefund",
+            "requires": [
+              "RaiseRefund"
+            ]
+          }
+        ]
+      },
+      "actors": [
+        {
+          "name": "Agent",
+          "occurrences": [
+            {
+              "type": "named",
+              "value": "refundRequested"
+            },
+            {
+              "type": "named",
+              "value": "refundEscalated"
+            }
+          ]
+        }
+      ],
+      "messages": [
+        {
+          "name": "requestRefund",
+          "payload": {
+            "type": "event",
+            "value": "RefundRequested"
+          },
+          "source": {
+            "participant": "Agent",
+            "anchor": {
+              "type": "occurrence",
+              "value": "refundRequested"
+            }
+          },
+          "target": {
+            "participant": "Ticket",
+            "anchor": {
+              "type": "step",
+              "value": "raise"
+            }
+          }
+        },
+        {
+          "name": "escalate",
+          "payload": {
+            "type": "domain",
+            "value": {
+              "type": "class",
+              "value": {
+                "package": "nz.example.support",
+                "name": "RefundDecision"
+              }
+            }
+          },
+          "source": {
+            "participant": "Ticket",
+            "anchor": {
+              "type": "step",
+              "value": "raise"
+            }
+          },
+          "target": {
+            "participant": "Agent",
+            "anchor": {
+              "type": "occurrence",
+              "value": "refundEscalated"
+            }
+          }
+        }
+      ],
+      "successions": [
+        {
+          "first": {
+            "type": "start"
+          },
+          "then": {
+            "type": "messageEnd",
+            "value": {
+              "message": "requestRefund",
+              "end": "source"
+            }
+          }
+        },
+        {
+          "first": {
+            "type": "messageEnd",
+            "value": {
+              "message": "requestRefund",
+              "end": "source"
+            }
+          },
+          "then": {
+            "type": "messageEnd",
+            "value": {
+              "message": "requestRefund",
+              "end": "target"
+            }
+          }
+        },
+        {
+          "first": {
+            "type": "messageEnd",
+            "value": {
+              "message": "requestRefund",
+              "end": "target"
+            }
+          },
+          "then": {
+            "type": "step",
+            "value": "raise"
+          }
+        },
+        {
+          "first": {
+            "type": "step",
+            "value": "raise"
+          },
+          "then": {
+            "type": "messageEnd",
+            "value": {
+              "message": "escalate",
+              "end": "source"
+            }
+          }
+        },
+        {
+          "first": {
+            "type": "messageEnd",
+            "value": {
+              "message": "escalate",
+              "end": "source"
+            }
+          },
+          "then": {
+            "type": "messageEnd",
+            "value": {
+              "message": "escalate",
+              "end": "target"
+            }
+          }
+        },
+        {
+          "first": {
+            "type": "messageEnd",
+            "value": {
+              "message": "escalate",
+              "end": "target"
+            }
+          },
+          "then": {
+            "type": "done"
+          }
+        }
+      ],
+      "realizes": [
+        "support.TicketService.raiseRefund"
+      ]
+    },
+    {
+      "name": "ApproveRefund",
+      "description": "The finance approval is its own use case: RaiseRefund and\nApproveRefund form a never_both pair, so one scenario never\nrequires both.",
+      "subject": {
+        "name": "Ticket",
+        "typeName": "nz.example.support.Ticket",
+        "steps": [
+          {
+            "name": "approve",
+            "operation": "approveRefund",
+            "requires": [
+              "ApproveRefund"
+            ]
+          }
+        ]
+      },
+      "actors": [
+        {
+          "name": "Finance"
+        }
+      ],
+      "successions": [
+        {
+          "first": {
+            "type": "start"
+          },
+          "then": {
+            "type": "step",
+            "value": "approve"
+          }
+        },
+        {
+          "first": {
+            "type": "step",
+            "value": "approve"
+          },
+          "then": {
+            "type": "done"
+          }
+        }
+      ]
+    },
+    {
+      "name": "MonitorQueue",
+      "description": "The manager watches the queue without participating in a scenario.",
+      "actors": [
+        {
+          "name": "Manager"
+        }
+      ]
+    }
+  ]
+}

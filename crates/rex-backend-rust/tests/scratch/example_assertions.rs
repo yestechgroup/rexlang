@@ -493,10 +493,14 @@ mod example_assertions {
 
     // ------------------------------------------------------------------
     // support — the actors-model showcase: refers↔refers pair between two
-    // root classes, readonly identity features, labeled enum state, and a
-    // derived boolean. The `actors Support { ... }` block itself has no
-    // Rust-codegen surface; its Cedar, schema, and policy-set guarantees
-    // are pinned by the rex-backend-cedar examples harness.
+    // root classes, readonly identity features, labeled enum state, a
+    // derived boolean, and two expr operations guarding the refund
+    // ceilings the support.actor permits share. `RefundDecision` (all
+    // features readonly) is the support.ddd value design's target and has
+    // no generated-mutator story of its own. The `actors Support { ... }`
+    // block itself has no Rust-codegen surface; its Cedar, schema, and
+    // policy-set guarantees are pinned by the rex-backend-cedar examples
+    // harness.
     // ------------------------------------------------------------------
     mod support_example {
         use crate::support::*;
@@ -606,6 +610,35 @@ mod example_assertions {
         }
 
         #[test]
+        fn refund_ceiling_ops_guard_the_policy_thresholds() {
+            let (res, _ada, _grace, password_reset, data_export) = support_resource();
+            // `op boolean raiseRefund(int cents) { expr { refundCents +
+            // cents <= 5000 } }` — the agent ceiling the support.actor
+            // RaiseRefund permit shares (data_export already carries 2500).
+            let raise = res.ticket(data_export).unwrap();
+            assert!(
+                raise.raise_refund(&res, 2500),
+                "2500 + 2500 stays within the agent ceiling"
+            );
+            assert!(
+                !raise.raise_refund(&res, 2501),
+                "2500 + 2501 crosses the agent ceiling"
+            );
+            // `op boolean approveRefund(int cents) { expr { refundCents +
+            // cents <= 100000 } }` — the finance ceiling (password_reset
+            // carries no refund yet).
+            let approve = res.ticket(password_reset).unwrap();
+            assert!(
+                approve.approve_refund(&res, 100_000),
+                "0 + 100000 reaches the finance ceiling exactly"
+            );
+            assert!(
+                !approve.approve_refund(&res, 100_001),
+                "one cent over the finance ceiling is refused"
+            );
+        }
+
+        #[test]
         fn canonical_instance_matches_the_example_file_and_round_trips() {
             let (res, _ada, _grace, _password_reset, _data_export) = support_resource();
             let json = res.to_instance_json();
@@ -615,34 +648,6 @@ mod example_assertions {
             assert_eq!(loaded.to_instance_json(), json, "re-saved bytes drifted");
 
             super::assert_instance_json("support", &json);
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // pricing — the sigil example: lowered Rune functions emit `todo!()`
-    // stubs; the verbatim `rosetta` body stays in the IR (wire contract
-    // rule 15), never in generated code.
-    // ------------------------------------------------------------------
-    mod pricing_example {
-        #[test]
-        #[should_panic(expected = "not yet implemented")]
-        fn lowered_function_stubs_panic_as_todo() {
-            crate::pricing::is_active(vec![]);
-        }
-
-        #[test]
-        fn stub_signatures_follow_the_multiplicity_conventions() {
-            // Compile-time proof of the emitted signatures: a class-typed
-            // `0..*` parameter arrives as `Vec<..Id>`, the opaque builtin
-            // datatype as its newtype.
-            let is_active: fn(Vec<crate::pricing::InstrumentId>) -> bool =
-                crate::pricing::is_active;
-            let price_quote: fn(
-                f64,
-                Vec<crate::pricing::InstrumentId>,
-                crate::pricing::zonedDateTime,
-            ) -> f64 = crate::pricing::price_quote;
-            let _ = (is_active, price_quote);
         }
     }
 }

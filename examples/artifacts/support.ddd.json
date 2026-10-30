@@ -1,0 +1,226 @@
+{
+  "formatVersion": 1,
+  "application": {
+    "name": "SupportDesk",
+    "base": "nz.example.support"
+  },
+  "modules": [
+    {
+      "name": "desk",
+      "services": [
+        {
+          "name": "TicketService",
+          "description": "Triages and resolves support tickets.",
+          "operations": [
+            {
+              "name": "raiseRefund",
+              "returnType": {
+                "type": "primitive",
+                "value": "boolean"
+              },
+              "params": [
+                {
+                  "name": "ticketNo",
+                  "type": {
+                    "type": "primitive",
+                    "value": "string"
+                  }
+                },
+                {
+                  "name": "cents",
+                  "type": {
+                    "type": "primitive",
+                    "value": "int"
+                  }
+                }
+              ],
+              "capabilities": [
+                "RaiseRefund"
+              ]
+            },
+            {
+              "name": "approveRefund",
+              "returnType": {
+                "type": "primitive",
+                "value": "boolean"
+              },
+              "params": [
+                {
+                  "name": "ticketNo",
+                  "type": {
+                    "type": "primitive",
+                    "value": "string"
+                  }
+                },
+                {
+                  "name": "cents",
+                  "type": {
+                    "type": "primitive",
+                    "value": "int"
+                  }
+                },
+                {
+                  "name": "approver",
+                  "type": {
+                    "type": "class",
+                    "value": {
+                      "package": "nz.example.support",
+                      "name": "User"
+                    }
+                  }
+                }
+              ],
+              "capabilities": [
+                "ApproveRefund"
+              ]
+            },
+            {
+              "name": "close",
+              "delegation": {
+                "target": "TicketRepository",
+                "operation": "delete"
+              },
+              "isProtected": true
+            },
+            {
+              "name": "findTickets",
+              "delegation": {
+                "target": "TicketSearch",
+                "operation": "search"
+              }
+            }
+          ],
+          "dependencies": [
+            "TicketRepository",
+            "TicketSearch"
+          ]
+        }
+      ],
+      "designs": [
+        {
+          "class": "Ticket",
+          "stereotype": "entity",
+          "flags": {
+            "scaffold": true,
+            "auditable": true,
+            "optimisticLocking": true,
+            "cache": true
+          },
+          "repository": {
+            "name": "TicketRepository",
+            "operations": [
+              {
+                "name": "findById",
+                "builtin": "findById"
+              },
+              {
+                "name": "findAll",
+                "builtin": "findAll"
+              },
+              {
+                "name": "findByExample",
+                "builtin": "findByExample"
+              },
+              {
+                "name": "findByKeys",
+                "builtin": "findByKeys"
+              },
+              {
+                "name": "save",
+                "builtin": "save"
+              },
+              {
+                "name": "delete",
+                "builtin": "delete"
+              },
+              {
+                "name": "findByTitle",
+                "returnType": {
+                  "type": "class",
+                  "value": {
+                    "package": "nz.example.support",
+                    "name": "Ticket"
+                  }
+                },
+                "params": [
+                  {
+                    "name": "title",
+                    "type": {
+                      "type": "primitive",
+                      "value": "string"
+                    }
+                  }
+                ],
+                "isProtected": true
+              }
+            ]
+          }
+        },
+        {
+          "class": "RefundDecision",
+          "stereotype": "value",
+          "flags": {
+            "nonPersistent": true
+          }
+        }
+      ],
+      "searches": [
+        {
+          "name": "TicketSearch",
+          "description": "Full-text search over the ticket queue.",
+          "entity": "Ticket",
+          "text": [
+            {
+              "property": "title",
+              "boost": 3.0
+            }
+          ],
+          "filters": [
+            {
+              "property": "state"
+            },
+            {
+              "property": "internal"
+            }
+          ],
+          "sort": [
+            {
+              "property": "title"
+            }
+          ],
+          "document": [
+            {
+              "name": "headline",
+              "expr": "title"
+            },
+            {
+              "name": "refundNote",
+              "expr": "if refundCents > 0 { \"refund pending\" } else { \"no refund\" }"
+            }
+          ],
+          "ranking": {
+            "type": "bm25"
+          },
+          "analyzer": "english",
+          "pagination": {
+            "limit": 20,
+            "maxLimit": 100,
+            "cursor": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "people",
+      "designs": [
+        {
+          "class": "User",
+          "stereotype": "dto",
+          "flags": {
+            "nonPersistent": true
+          }
+        }
+      ]
+    }
+  ]
+}
