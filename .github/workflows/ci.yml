@@ -30,4 +30,4 @@ jobs:
       - name: Format check
         run: |
           cargo fmt --all -- --check
-          cargo run -q -p rex-cli -- fmt --check examples/*.mox examples/*.actor examples/*.ifml tests/conformance/models/*.mox tests/conformance/models/*.actor tests/conformance/ddd/*.ddd tests/conformance/sigil/*.mox tests/conformance/sigil/*.actor tests/conformance/sigil/*.ddd tests/conformance/events/*.mox tests/conformance/events/*.evt tests/conformance/deploy/*.deploy tests/conformance/usecases/*.uc tests/conformance/cmmn/*.cmmn patterns/ifml/*.ifml tests/conformance/ifml/app.ifml
+          cargo run -q -p rex-cli -- fmt --check examples/*.mox examples/*.actor examples/*.ifml tests/conformance/models/*.mox tests/conformance/models/*.actor tests/conformance/ddd/*.ddd tests/conformance/sigil/*.mox tests/conformance/sigil/*.actor tests/conformance/sigil/*.ddd tests/conformance/events/*.mox tests/conformance/events/*.evt tests/conformance/deploy/*.deploy tests/conformance/usecases/*.uc tests/conformance/cmmn/*.cmmn patterns/ifml/*.ifml tests/conformance/ifml/app.ifml tests/conformance/ifml/cli.ifml
