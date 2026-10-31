@@ -12,7 +12,7 @@ use rex_ifml::{check_ifml, compile_ifml_str, IfmlCompilation, IfmlDiagnostic, If
 
 /// The interaction-flow examples, hardcoded so a missing file fails loudly
 /// (the house convention for the `examples/` harnesses).
-pub const EXAMPLES: [&str; 2] = ["ecommerce", "support"];
+pub const EXAMPLES: [&str; 3] = ["cli", "ecommerce", "support"];
 
 const EXAMPLES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
 
@@ -138,13 +138,17 @@ fn every_example_compiles_and_resolves_its_module_uses() {
     for name in &EXAMPLES {
         let compilation = compile(name);
         assert!(
-            !compilation.model.views.is_empty(),
-            "{name}.ifml must declare at least one view"
+            !compilation.model.views.is_empty() || !compilation.model.commands.is_empty(),
+            "{name}.ifml must declare at least one view or command"
         );
-        assert!(
-            !compilation.index.module_uses.is_empty(),
-            "{name}.ifml must compose pattern-library modules"
-        );
+        // Web-flavored examples compose the pattern library; a CLI example
+        // binds commands straight to actions and may carry no uses.
+        if !compilation.model.views.is_empty() {
+            assert!(
+                !compilation.index.module_uses.is_empty(),
+                "{name}.ifml must compose pattern-library modules"
+            );
+        }
         for use_site in compilation
             .index
             .module_uses
