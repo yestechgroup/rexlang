@@ -207,6 +207,49 @@ view "DeleteConfirm" {
 }
 ```
 
+### Charts
+
+Components of `type: chart` carry an inline `chart_decl`. The kind
+vocabulary is closed — `bar | line | pie | radar | metric | org` — and an
+unknown kind is a parse error.
+
+```ifml
+view "Analytics" {
+    component "revenueByRegion" {
+        type: chart;
+        chart bar {
+            label: region;
+            values: [revenue];
+            aggregate: sum;      // sum | avg | count | min | max
+        }
+    }
+
+    component "team" {
+        chart org {
+            hierarchy: managerId;   // self-referencing FK to walk
+            labels: [name, title];  // ordered node label projections
+            details: [email];       // ordered node detail projections
+            maxDepth: 4;            // client-side render pruning
+        }
+    }
+
+    component "modeled" {
+        // Placement of a chart modeled elsewhere (e.g. codegraph's
+        // `[charts]` table): the string is a permissive reference the
+        // consumer resolves against its own graph — the artifact never
+        // does.
+        chart: "headcount";
+    }
+}
+```
+
+Series kinds aggregate their `value_fields`; an absent `aggregate:` stays
+unspecified in the artifact (consumers apply their own default, e.g.
+codegraph models `count`). An org chart uses `hierarchy`/`labels`/
+`details`/`maxDepth` instead of `label`/`values`. A component cannot carry
+both a `chart: "<name>"` reference and an inline chart declaration — that
+combination is a parse error naming the component.
+
 ### CLI Commands
 
 A command-line application is the same interaction model in a different
@@ -288,7 +331,8 @@ productions.
   property assignments, then nested containers, components, event handlers,
   condition statements, and module uses.
 - **Components** — `component_declaration` with `column_decl`, `field_decl`
-  (typed inputs), and `chart_decl` members alongside properties and events.
+  (typed inputs), and `chart_decl` (closed kind vocabulary, see
+  [Charts](#charts)) members alongside properties and events.
 - **Events** — `event_handler`: `on <type> (params)? (requires ...)? (if
   expr)? -> <action> ;` with `navigate_action`, `refresh_action`,
   `action_invocation`, or `stay_statement`.
@@ -364,6 +408,16 @@ pub enum Expression {
 pub enum BinOp { Eq, Ne, Lt, Le, Gt, Ge, RegexMatch, NegRegex, Add, Sub, Mul, Div, Mod, And, Or }
 pub enum UnaryOp { Not, Neg }
 ```
+
+Chart components carry a `ComponentSpec::Chart(ChartSpec)` (inline) or
+`ComponentSpec::ChartRef(String)` (modeled-chart placement). `ChartSpec`
+holds the closed `ChartKind` vocabulary (`bar | line | pie | radar | metric
+| org`), the series pair (`labelField`/`valueFields`), the org payload
+(`hierarchyField`, `labelFields`, `detailFields`, `maxDepth`), and
+`aggregate: Option<ChartAggregate>` (`sum | avg | count | min | max`).
+Every payload field beyond `kind` is `#[serde(default)]` +
+`skip_serializing_if` — charts that do not use the new vocabulary serialize
+byte-identically to the pre-#80 shape.
 
 `rex_ifml::render_expression(&expr)` renders an expression back to its deterministic DSL source form.
 
