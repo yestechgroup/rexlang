@@ -938,41 +938,97 @@ fn parse_chart_kind(s: &str) -> ChartKind {
         "pie" => ChartKind::Pie,
         "radar" => ChartKind::Radar,
         "metric" => ChartKind::Metric,
+        "org" => ChartKind::Org,
         _ => ChartKind::Bar,
     }
 }
 
-fn parse_chart_decl(pair: Pair<Rule>) -> Option<ChartSpec> {
+/// The series-aggregation vocabulary a chart body's `aggregate:` property
+/// admits. `aggregate` values are validated post-parse (the grammar's
+/// generic `property_assignment` rule cannot express key-dependent value
+/// constraints), so unknown aggregates are hard parse errors — the same
+/// strictness the grammar gives unknown chart kinds.
+fn parse_chart_aggregate(word: &str) -> Option<ChartAggregate> {
+    match word.to_ascii_lowercase().as_str() {
+        "sum" => Some(ChartAggregate::Sum),
+        "avg" => Some(ChartAggregate::Avg),
+        "count" => Some(ChartAggregate::Count),
+        "min" => Some(ChartAggregate::Min),
+        "max" => Some(ChartAggregate::Max),
+        _ => None,
+    }
+}
+
+fn parse_chart_decl(pair: Pair<Rule>) -> Result<Option<ChartSpec>, IfmlParseError> {
     let mut inner = pair.into_inner();
-    let kind = parse_chart_kind(inner.next()?.as_str());
-    let mut label_field = None;
-    let mut value_fields = Vec::new();
+    let Some(kind_pair) = inner.next() else {
+        return Ok(None);
+    };
+    let kind = parse_chart_kind(kind_pair.as_str());
+    let mut spec = ChartSpec {
+        kind,
+        label_field: None,
+        value_fields: Vec::new(),
+        hierarchy_field: None,
+        label_fields: Vec::new(),
+        detail_fields: Vec::new(),
+        max_depth: None,
+        aggregate: None,
+    };
     if let Some(body) = inner.next() {
         for child in body.into_inner() {
             if child.as_rule() != Rule::property_assignment {
                 continue;
             }
+            let line = child.line_col().0;
             let prop = parse_property_assignment(child);
             match &prop.value {
                 ValueExpression::Identifier(id) if prop.key == "label" => {
-                    label_field = Some(id.clone());
+                    spec.label_field = Some(id.clone());
                 }
                 ValueExpression::Array(items) if prop.key == "values" => {
                     for item in items {
                         if let ValueExpression::Identifier(id) = item {
-                            value_fields.push(id.clone());
+                            spec.value_fields.push(id.clone());
                         }
                     }
+                }
+                ValueExpression::Identifier(id) if prop.key == "hierarchy" => {
+                    spec.hierarchy_field = Some(id.clone());
+                }
+                ValueExpression::Array(items) if prop.key == "labels" => {
+                    for item in items {
+                        if let ValueExpression::Identifier(id) = item {
+                            spec.label_fields.push(id.clone());
+                        }
+                    }
+                }
+                ValueExpression::Array(items) if prop.key == "details" => {
+                    for item in items {
+                        if let ValueExpression::Identifier(id) = item {
+                            spec.detail_fields.push(id.clone());
+                        }
+                    }
+                }
+                ValueExpression::Number(n) if prop.key == "maxDepth" => {
+                    spec.max_depth = Some(n.value().max(0.0) as u32);
+                }
+                ValueExpression::Identifier(id) if prop.key == "aggregate" => {
+                    let aggregate = parse_chart_aggregate(id).ok_or_else(|| {
+                        IfmlParseError::Parse {
+                            position: line.to_string(),
+                            message: format!(
+                                "unknown aggregate `{id}` (expected sum | avg | count | min | max)"
+                            ),
+                        }
+                    })?;
+                    spec.aggregate = Some(aggregate);
                 }
                 _ => {}
             }
         }
     }
-    Some(ChartSpec {
-        kind,
-        label_field,
-        value_fields,
-    })
+    Ok(Some(spec))
 }
 
 fn extract_component_type(properties: &mut Vec<PropertyAssignment>) -> Option<ComponentType> {
@@ -1003,20 +1059,35 @@ fn extract_pagination(properties: &mut Vec<PropertyAssignment>) -> bool {
     pagination
 }
 
-fn parse_component_declaration(pair: Pair<Rule>) -> ComponentDeclaration {
+fn extract_chart_ref(properties: &mut Vec<PropertyAssignment>) -> Option<String> {
+    let mut chart_ref = None;
+    properties.retain(|p| {
+        if p.key == "chart" && chart_ref.is_none() {
+            if let ValueExpression::String(s) = &p.value {
+                chart_ref = Some(s.clone());
+                return false;
+            }
+        }
+        true
+    });
+    chart_ref
+}
+
+fn parse_component_declaration(pair: Pair<Rule>) -> Result<ComponentDeclaration, IfmlParseError> {
+    let component_line = pair.line_col().0;
     let mut inner = pair.clone().into_inner();
     let name = inner.next().map(|p| parse_string(&p)).unwrap_or_default();
     let body = match inner.next() {
         Some(b) => b,
         None => {
-            return ComponentDeclaration {
+            return Ok(ComponentDeclaration {
                 name,
                 component_type: None,
                 spec: None,
                 properties: Vec::new(),
                 events: Vec::new(),
                 condition: None,
-            };
+            });
         }
     };
 
@@ -1036,7 +1107,7 @@ fn parse_component_declaration(pair: Pair<Rule>) -> ComponentDeclaration {
                 }
             }
             Rule::chart_decl => {
-                if let Some(chart) = parse_chart_decl(child) {
+                if let Some(chart) = parse_chart_decl(child)? {
                     chart_spec = Some(chart);
                 }
             }
@@ -1049,6 +1120,7 @@ fn parse_component_declaration(pair: Pair<Rule>) -> ComponentDeclaration {
     }
 
     let mut component_type = extract_component_type(&mut properties);
+    let chart_ref = extract_chart_ref(&mut properties);
     let mut spec = None;
 
     let columns_allowed = component_type.is_none() || component_type == Some(ComponentType::Table);
@@ -1072,6 +1144,22 @@ fn parse_component_declaration(pair: Pair<Rule>) -> ComponentDeclaration {
     }
 
     let chart_allowed = component_type.is_none() || component_type == Some(ComponentType::Chart);
+    if let Some(reference) = chart_ref {
+        if chart_spec.is_some() {
+            return Err(IfmlParseError::Parse {
+                position: component_line.to_string(),
+                message: format!(
+                    "component \"{name}\": `chart: \"{reference}\"` cannot be combined with an inline chart declaration"
+                ),
+            });
+        }
+        if chart_allowed {
+            if component_type.is_none() {
+                component_type = Some(ComponentType::Chart);
+            }
+            spec = Some(ComponentSpec::ChartRef(reference));
+        }
+    }
     if spec.is_none() {
         if let Some(chart) = chart_spec {
             if chart_allowed {
@@ -1083,14 +1171,14 @@ fn parse_component_declaration(pair: Pair<Rule>) -> ComponentDeclaration {
         }
     }
 
-    ComponentDeclaration {
+    Ok(ComponentDeclaration {
         name,
         component_type,
         spec,
         properties,
         events,
         condition,
-    }
+    })
 }
 
 fn parse_module_use_statement(pair: Pair<Rule>) -> ModuleUse {
@@ -1129,7 +1217,7 @@ type ViewBodyParts = (
     Option<Expression>,
 );
 
-fn parse_view_body_content(pair: Pair<Rule>) -> ViewBodyParts {
+fn parse_view_body_content(pair: Pair<Rule>) -> Result<ViewBodyParts, IfmlParseError> {
     let mut params = Vec::new();
     let mut label = None;
     let mut properties = Vec::new();
@@ -1152,8 +1240,8 @@ fn parse_view_body_content(pair: Pair<Rule>) -> ViewBodyParts {
                 }
             }
             Rule::property_assignment => properties.push(parse_property_assignment(child)),
-            Rule::container_declaration => containers.push(parse_container_declaration(child)),
-            Rule::component_declaration => components.push(parse_component_declaration(child)),
+            Rule::container_declaration => containers.push(parse_container_declaration(child)?),
+            Rule::component_declaration => components.push(parse_component_declaration(child)?),
             Rule::event_handler => events.push(parse_event_handler(child)),
             Rule::module_use_statement => module_uses.push(parse_module_use_statement(child)),
             Rule::condition_statement => {
@@ -1163,7 +1251,7 @@ fn parse_view_body_content(pair: Pair<Rule>) -> ViewBodyParts {
         }
     }
 
-    (
+    Ok((
         params,
         label,
         properties,
@@ -1172,7 +1260,7 @@ fn parse_view_body_content(pair: Pair<Rule>) -> ViewBodyParts {
         events,
         module_uses,
         condition,
-    )
+    ))
 }
 
 type ContainerBodyParts = (
@@ -1186,7 +1274,7 @@ type ContainerBodyParts = (
     Option<Expression>,
 );
 
-fn parse_container_body_content(pair: Pair<Rule>) -> ContainerBodyParts {
+fn parse_container_body_content(pair: Pair<Rule>) -> Result<ContainerBodyParts, IfmlParseError> {
     let mut params = Vec::new();
     let mut label = None;
     let mut properties = Vec::new();
@@ -1209,8 +1297,8 @@ fn parse_container_body_content(pair: Pair<Rule>) -> ContainerBodyParts {
                 }
             }
             Rule::property_assignment => properties.push(parse_property_assignment(child)),
-            Rule::container_declaration => containers.push(parse_container_declaration(child)),
-            Rule::component_declaration => components.push(parse_component_declaration(child)),
+            Rule::container_declaration => containers.push(parse_container_declaration(child)?),
+            Rule::component_declaration => components.push(parse_component_declaration(child)?),
             Rule::event_handler => events.push(parse_event_handler(child)),
             Rule::module_use_statement => module_uses.push(parse_module_use_statement(child)),
             Rule::condition_statement => {
@@ -1220,7 +1308,7 @@ fn parse_container_body_content(pair: Pair<Rule>) -> ContainerBodyParts {
         }
     }
 
-    (
+    Ok((
         params,
         label,
         properties,
@@ -1229,16 +1317,16 @@ fn parse_container_body_content(pair: Pair<Rule>) -> ContainerBodyParts {
         events,
         module_uses,
         condition,
-    )
+    ))
 }
 
-fn parse_container_declaration(pair: Pair<Rule>) -> ContainerDeclaration {
+fn parse_container_declaration(pair: Pair<Rule>) -> Result<ContainerDeclaration, IfmlParseError> {
     let mut inner = pair.clone().into_inner();
     let name = inner.next().map(|p| parse_string(&p)).unwrap_or_default();
     let body = if let Some(b) = inner.next() {
         b
     } else {
-        return ContainerDeclaration {
+        return Ok(ContainerDeclaration {
             name,
             label: None,
             is_default: false,
@@ -1251,18 +1339,18 @@ fn parse_container_declaration(pair: Pair<Rule>) -> ContainerDeclaration {
             module_uses: Vec::new(),
             condition: None,
             position: None,
-        };
+        });
     };
 
     let (params, label, properties, containers, components, events, module_uses, condition) =
-        parse_container_body_content(body);
+        parse_container_body_content(body)?;
 
     let is_default = extract_bool_property(&properties, "default");
     let is_xor = extract_bool_property(&properties, "xor");
 
     let position = extract_position_property(&properties);
 
-    ContainerDeclaration {
+    Ok(ContainerDeclaration {
         name,
         label,
         is_default,
@@ -1275,7 +1363,7 @@ fn parse_container_declaration(pair: Pair<Rule>) -> ContainerDeclaration {
         module_uses,
         condition,
         position,
-    }
+    })
 }
 
 fn extract_bool_property(properties: &[PropertyAssignment], key: &str) -> bool {
@@ -1363,13 +1451,13 @@ fn extract_identifier_list_property(properties: &[PropertyAssignment], key: &str
         .unwrap_or_default()
 }
 
-fn parse_view_declaration(pair: Pair<Rule>) -> ViewDeclaration {
+fn parse_view_declaration(pair: Pair<Rule>) -> Result<ViewDeclaration, IfmlParseError> {
     let mut inner = pair.clone().into_inner();
     let name = inner.next().map(|p| parse_string(&p)).unwrap_or_default();
     let body = if let Some(b) = inner.next() {
         b
     } else {
-        return ViewDeclaration {
+        return Ok(ViewDeclaration {
             name,
             label: None,
             is_landmark: false,
@@ -1385,11 +1473,11 @@ fn parse_view_declaration(pair: Pair<Rule>) -> ViewDeclaration {
             requires: Vec::new(),
             condition: None,
             position: None,
-        };
+        });
     };
 
     let (params, label, properties, containers, components, events, module_uses, condition) =
-        parse_view_body_content(body);
+        parse_view_body_content(body)?;
 
     let is_landmark = extract_bool_property(&properties, "landmark");
     let is_xor = extract_bool_property(&properties, "xor");
@@ -1402,7 +1490,7 @@ fn parse_view_declaration(pair: Pair<Rule>) -> ViewDeclaration {
         .filter(|p| p.key != "roles" && p.key != "requires")
         .collect();
 
-    ViewDeclaration {
+    Ok(ViewDeclaration {
         name,
         label,
         is_landmark,
@@ -1418,7 +1506,7 @@ fn parse_view_declaration(pair: Pair<Rule>) -> ViewDeclaration {
         requires,
         condition,
         position,
-    }
+    })
 }
 
 fn parse_action_declaration(pair: Pair<Rule>) -> ActionDeclaration {
@@ -1443,7 +1531,7 @@ fn parse_action_declaration(pair: Pair<Rule>) -> ActionDeclaration {
     }
 }
 
-fn parse_module_declaration(pair: Pair<Rule>) -> ModuleDeclaration {
+fn parse_module_declaration(pair: Pair<Rule>) -> Result<ModuleDeclaration, IfmlParseError> {
     let mut inner = pair.clone().into_inner();
     let name = inner.next().map(|p| parse_string(&p)).unwrap_or_default();
 
@@ -1465,15 +1553,15 @@ fn parse_module_declaration(pair: Pair<Rule>) -> ModuleDeclaration {
                 }
             }
             Rule::property_assignment => properties.push(parse_property_assignment(child)),
-            Rule::container_declaration => containers.push(parse_container_declaration(child)),
-            Rule::component_declaration => components.push(parse_component_declaration(child)),
+            Rule::container_declaration => containers.push(parse_container_declaration(child)?),
+            Rule::component_declaration => components.push(parse_component_declaration(child)?),
             Rule::event_handler => events.push(parse_event_handler(child)),
             Rule::module_use_statement => module_uses.push(parse_module_use_statement(child)),
             _ => {}
         }
     }
 
-    ModuleDeclaration {
+    Ok(ModuleDeclaration {
         name,
         input_params,
         output_params,
@@ -1482,7 +1570,7 @@ fn parse_module_declaration(pair: Pair<Rule>) -> ModuleDeclaration {
         components,
         events,
         module_uses,
-    }
+    })
 }
 
 fn parse_domain_declaration(pair: Pair<Rule>) -> DomainDeclaration {
@@ -1650,9 +1738,9 @@ pub(crate) fn parse_ifml_model(pairs: Pairs<Rule>) -> Result<IfmlModel, IfmlPars
         let rule = pair.as_rule();
         match rule {
             Rule::domain_declaration => domains.push(parse_domain_declaration(pair)),
-            Rule::view_declaration => views.push(parse_view_declaration(pair)),
+            Rule::view_declaration => views.push(parse_view_declaration(pair)?),
             Rule::action_declaration => actions.push(parse_action_declaration(pair)),
-            Rule::module_declaration => modules.push(parse_module_declaration(pair)),
+            Rule::module_declaration => modules.push(parse_module_declaration(pair)?),
             Rule::actor_declaration => actors.push(parse_actor_declaration(pair)),
             Rule::command_declaration => commands.push(parse_command_declaration(pair)),
             Rule::import_declaration => imports.push(parse_import_declaration(pair)),
@@ -2994,6 +3082,203 @@ view "V" {
         assert_eq!(spec.kind, ChartKind::Metric);
         assert_eq!(spec.label_field, Some("kpi".to_string()));
         assert!(spec.value_fields.is_empty());
+    }
+
+    #[test]
+    fn test_chart_decl_org_kind_with_payload_fields() {
+        let input = r#"
+view "Org" {
+    component "tree" {
+        type: chart;
+        chart org {
+            hierarchy: managerId;
+            labels: [name, title];
+            details: [email, phone];
+            maxDepth: 4;
+        }
+    }
+}
+"#;
+        let model = parse_ifml(input).unwrap();
+        let comp = &model.views[0].components[0];
+        assert_eq!(comp.component_type, Some(ComponentType::Chart));
+
+        let spec = match &comp.spec {
+            Some(ComponentSpec::Chart(spec)) => spec,
+            other => panic!("Expected Chart spec, got {:?}", other),
+        };
+        assert_eq!(spec.kind, ChartKind::Org);
+        assert_eq!(spec.hierarchy_field, Some("managerId".to_string()));
+        assert_eq!(
+            spec.label_fields,
+            vec!["name".to_string(), "title".to_string()]
+        );
+        assert_eq!(
+            spec.detail_fields,
+            vec!["email".to_string(), "phone".to_string()]
+        );
+        assert_eq!(spec.max_depth, Some(4));
+        assert_eq!(spec.aggregate, None);
+        assert_eq!(spec.label_field, None);
+        assert!(spec.value_fields.is_empty());
+    }
+
+    #[test]
+    fn test_chart_decl_org_bodyless_defaults() {
+        let model = parse_ifml(
+            r#"
+view "Org" {
+    component "tree" {
+        chart org;
+    }
+}
+"#,
+        )
+        .unwrap();
+        let spec = match &model.views[0].components[0].spec {
+            Some(ComponentSpec::Chart(spec)) => spec,
+            other => panic!("Expected Chart spec, got {:?}", other),
+        };
+        assert_eq!(spec.kind, ChartKind::Org);
+        assert_eq!(spec.hierarchy_field, None);
+        assert!(spec.label_fields.is_empty());
+        assert!(spec.detail_fields.is_empty());
+        assert_eq!(spec.max_depth, None);
+        assert_eq!(spec.aggregate, None);
+    }
+
+    #[test]
+    fn test_chart_decl_series_aggregate() {
+        let expected = [
+            ("sum", ChartAggregate::Sum),
+            ("avg", ChartAggregate::Avg),
+            ("count", ChartAggregate::Count),
+            ("min", ChartAggregate::Min),
+            ("max", ChartAggregate::Max),
+        ];
+        for (word, want) in expected {
+            let input = format!(
+                r#"
+view "Charts" {{
+    component "c" {{
+        chart bar {{ label: region; values: [revenue]; aggregate: {word}; }}
+    }}
+}}
+"#
+            );
+            let model = parse_ifml(&input).unwrap();
+            let comp = &model.views[0].components[0];
+            assert_eq!(comp.component_type, Some(ComponentType::Chart));
+            let spec = match &comp.spec {
+                Some(ComponentSpec::Chart(spec)) => spec,
+                other => panic!("Expected Chart spec, got {:?}", other),
+            };
+            assert_eq!(spec.kind, ChartKind::Bar);
+            assert_eq!(spec.aggregate, Some(want), "aggregate word {word:?}");
+            assert_eq!(spec.label_field, Some("region".to_string()));
+            assert_eq!(spec.value_fields, vec!["revenue".to_string()]);
+        }
+
+        // Absent aggregate stays unspecified (consumers default it).
+        let model = parse_ifml(
+            r#"
+view "Charts" {
+    component "c" {
+        chart bar { label: region; values: [revenue]; }
+    }
+}
+"#,
+        )
+        .unwrap();
+        let spec = match &model.views[0].components[0].spec {
+            Some(ComponentSpec::Chart(spec)) => spec,
+            other => panic!("Expected Chart spec, got {:?}", other),
+        };
+        assert_eq!(spec.aggregate, None);
+    }
+
+    #[test]
+    fn test_chart_decl_unknown_aggregate_is_a_parse_error() {
+        let err = parse_ifml(
+            r#"
+view "Charts" {
+    component "c" {
+        chart bar { aggregate: median; }
+    }
+}
+"#,
+        )
+        .expect_err("unknown aggregate must be a parse error");
+        assert!(
+            err.to_string().contains("median"),
+            "error names the offending aggregate: {err}"
+        );
+        assert!(
+            err.to_string().contains("aggregate"),
+            "error names the aggregate property: {err}"
+        );
+    }
+
+    #[test]
+    fn test_chart_decl_unknown_kind_is_a_parse_error() {
+        assert!(parse_ifml(
+            r#"
+view "Charts" {
+    component "c" {
+        chart sankey;
+    }
+}
+"#,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn test_chart_ref_property_places_a_modeled_chart() {
+        for source in [
+            r#"
+view "V" {
+    component "headcount" {
+        chart: "headcount";
+    }
+}
+"#,
+            r#"
+view "V" {
+    component "c" {
+        type: chart;
+        chart: "headcount";
+    }
+}
+"#,
+        ] {
+            let model = parse_ifml(source).unwrap();
+            let comp = &model.views[0].components[0];
+            assert_eq!(comp.component_type, Some(ComponentType::Chart));
+            assert_eq!(
+                comp.spec,
+                Some(ComponentSpec::ChartRef("headcount".to_string()))
+            );
+        }
+    }
+
+    #[test]
+    fn test_chart_ref_and_inline_chart_conflict_is_a_parse_error() {
+        let err = parse_ifml(
+            r#"
+view "V" {
+    component "c" {
+        chart: "headcount";
+        chart bar { label: region; values: [revenue]; }
+    }
+}
+"#,
+        )
+        .expect_err("a chart reference and an inline chart spec are mutually exclusive");
+        assert!(
+            err.to_string().contains("c"),
+            "error names the component: {err}"
+        );
     }
 
     #[test]
