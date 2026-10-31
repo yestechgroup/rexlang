@@ -527,20 +527,20 @@ fn ifml_document_symbols(snapshot: &IfmlSnapshot) -> Option<DocumentSymbolRespon
         .chain(&index.actors)
         .filter(|site| site.file == 0)
     {
-        let kind = if index.views.iter().any(|view| std::ptr::eq(view, site)) {
-            tower_lsp::lsp_types::SymbolKind::CLASS
+        let (kind, detail) = if index.views.iter().any(|view| std::ptr::eq(view, site)) {
+            (tower_lsp::lsp_types::SymbolKind::CLASS, None)
         } else if index
             .actions
             .iter()
             .any(|action| std::ptr::eq(action, site))
         {
-            tower_lsp::lsp_types::SymbolKind::FUNCTION
+            (tower_lsp::lsp_types::SymbolKind::FUNCTION, None)
         } else {
-            tower_lsp::lsp_types::SymbolKind::OBJECT
+            (tower_lsp::lsp_types::SymbolKind::OBJECT, None)
         };
         roots.push(DocumentSymbol {
             name: site.name.clone(),
-            detail: None,
+            detail,
             kind,
             tags: None,
             deprecated: None,
@@ -548,6 +548,24 @@ fn ifml_document_symbols(snapshot: &IfmlSnapshot) -> Option<DocumentSymbolRespon
             selection_range: map_range(map.clone(), site.name_span),
             children: Some(uses_under(site.span)),
         });
+    }
+    // Commands outline separately: nesting is span containment (a
+    // top-level command is one no other command contains).
+    for site in index.commands.iter().filter(|site| site.file == 0) {
+        let is_top_level = !index.commands.iter().any(|other| {
+            other.file == 0
+                && !std::ptr::eq(other, site)
+                && other.span.0 <= site.span.0
+                && site.span.1 <= other.span.1
+        });
+        if is_top_level {
+            roots.push(command_outline_symbol(
+                index,
+                &map,
+                site,
+                uses_under(site.span),
+            ));
+        }
     }
     for site in index.module_decls.iter().filter(|site| site.file == 0) {
         roots.push(DocumentSymbol {
@@ -562,6 +580,50 @@ fn ifml_document_symbols(snapshot: &IfmlSnapshot) -> Option<DocumentSymbolRespon
         });
     }
     Some(DocumentSymbolResponse::Nested(roots))
+}
+
+/// Builds one command's outline symbol: uses under it as children, plus
+/// the outline symbols of its direct subcommands. A direct subcommand is
+/// one contained in `site`'s span but in no other command also contained
+/// there (spans of distinct commands never coincide, so containment is a
+/// proper tree).
+#[allow(deprecated)] // `DocumentSymbol::deprecated` must be set explicitly
+fn command_outline_symbol(
+    index: &rex_ifml::IfmlIndex,
+    map: &PositionMap,
+    site: &rex_ifml::NamedSite,
+    mut children: Vec<DocumentSymbol>,
+) -> DocumentSymbol {
+    let descendants: Vec<&rex_ifml::NamedSite> = index
+        .commands
+        .iter()
+        .filter(|nested| {
+            nested.file == site.file
+                && !std::ptr::eq(*nested, site)
+                && nested.span.0 >= site.span.0
+                && nested.span.1 <= site.span.1
+        })
+        .collect();
+    for candidate in &descendants {
+        let is_direct = !descendants.iter().any(|other| {
+            !std::ptr::eq(*other, *candidate)
+                && other.span.0 <= candidate.span.0
+                && candidate.span.1 <= other.span.1
+        });
+        if is_direct {
+            children.push(command_outline_symbol(index, map, candidate, Vec::new()));
+        }
+    }
+    DocumentSymbol {
+        name: site.name.clone(),
+        detail: Some("command".to_string()),
+        kind: tower_lsp::lsp_types::SymbolKind::METHOD,
+        tags: None,
+        deprecated: None,
+        range: map_range(map.clone(), site.span),
+        selection_range: map_range(map.clone(), site.name_span),
+        children: Some(children),
+    }
 }
 
 /// Renders the `.ifml` hover: the module's name and input signature, the
@@ -589,6 +651,12 @@ fn ifml_hover(snapshot: &IfmlSnapshot, position: Position) -> Option<Hover> {
                 .any(|action| std::ptr::eq(action, site))
             {
                 "action"
+            } else if index
+                .commands
+                .iter()
+                .any(|command| std::ptr::eq(command, site))
+            {
+                "command"
             } else {
                 "actor"
             };
@@ -2972,6 +3040,115 @@ module "Pager" {
         assert_eq!(children[0].name, "pager");
         assert_eq!(children[0].detail.as_deref(), Some("use \"Pager\""));
         assert_eq!(symbols[1].kind, tower_lsp::lsp_types::SymbolKind::MODULE);
+    }
+
+    #[tokio::test]
+    async fn ifml_document_symbols_outline_commands_with_their_uses() {
+        let (mut service, mut socket) = initialized_service().await;
+        open_at(&mut service, &ifml_uri("queue.ifml"), PAGER_IFML).await;
+        drain_socket(&mut socket).await;
+        open_at(
+            &mut service,
+            &ifml_uri("commands.ifml"),
+            r#"import "pager.ifml";
+
+command "customers" {
+    description: "Manage customers";
+
+    use "Pager" as pager { pageSize: 25; };
+
+    command "list" {
+        output: table;
+    }
+}
+
+module "Pager" {
+    input { pageSize: Int = 25 }
+    output { total: Int }
+}
+"#,
+        )
+        .await;
+        drain_socket(&mut socket).await;
+
+        let response = service
+            .call(
+                jsonrpc::Request::build("textDocument/documentSymbol")
+                    .params(json!({
+                        "textDocument": {"uri": ifml_uri("commands.ifml").as_str()},
+                    }))
+                    .id(31)
+                    .finish(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, body) = response.into_parts();
+        let value = body.expect("documentSymbol must not error");
+        let symbols: Vec<DocumentSymbol> = serde_json::from_value(value).expect("nested symbols");
+        let names: Vec<&str> = symbols.iter().map(|symbol| symbol.name.as_str()).collect();
+        assert_eq!(names, vec!["customers", "Pager"], "roots in source order");
+        let command = &symbols[0];
+        assert_eq!(command.kind, tower_lsp::lsp_types::SymbolKind::METHOD);
+        assert_eq!(command.detail.as_deref(), Some("command"));
+        let children = command
+            .children
+            .as_ref()
+            .expect("the use and the nested subcommand nest under their command");
+        let child_names: Vec<&str> = children.iter().map(|child| child.name.as_str()).collect();
+        assert_eq!(child_names, vec!["pager", "list"], "uses then subcommands");
+        assert_eq!(
+            children[0].detail.as_deref(),
+            Some("use \"Pager\""),
+            "the use child keeps its detail"
+        );
+        assert!(
+            children[1]
+                .children
+                .as_ref()
+                .expect("subcommand child list")
+                .is_empty(),
+            "the nested subcommand carries no uses"
+        );
+        assert_eq!(symbols[1].name, "Pager");
+        assert_eq!(symbols[1].kind, tower_lsp::lsp_types::SymbolKind::MODULE);
+    }
+
+    #[tokio::test]
+    async fn ifml_hover_on_a_command_names_it_a_command() {
+        let (mut service, mut socket) = initialized_service().await;
+        open_at(
+            &mut service,
+            &ifml_uri("hover.ifml"),
+            "command \"customers\" {\n    output: table;\n}\n",
+        )
+        .await;
+        drain_socket(&mut socket).await;
+
+        let response = service
+            .call(
+                jsonrpc::Request::build("textDocument/hover")
+                    .params(json!({
+                        "textDocument": {"uri": ifml_uri("hover.ifml").as_str()},
+                        "position": {"line": 0, "character": 12}, // inside "customers"
+                    }))
+                    .id(41)
+                    .finish(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, body) = response.into_parts();
+        let hover: Hover =
+            serde_json::from_value(body.expect("hover must not error")).expect("hover shape");
+        let HoverContents::Markup(markup) = hover.contents else {
+            panic!("markdown hover");
+        };
+        assert!(
+            markup.value.contains("**command \"customers\"**"),
+            "{}",
+            markup.value
+        );
     }
 
     #[tokio::test]

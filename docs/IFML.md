@@ -207,6 +207,68 @@ view "DeleteConfirm" {
 }
 ```
 
+### CLI Commands
+
+A command-line application is the same interaction model in a different
+interaction vocabulary. Top-level `command` declarations — peers of
+`view`/`action`/`module`/`actor` — describe the terminal surface and bind
+to the same domain types and actions the views bind to; subcommands nest
+to the invocation path (`tickets show TICKET-1`).
+
+```ifml
+command "tickets" {
+    description: "Work the support ticket queue";
+    requires: [Agent];
+
+    option state: TicketState = "open";
+    option limit: Int = 20;
+
+    output: table;
+
+    on run -> action("ListTickets");
+
+    command "show" {
+        argument ticketNo: String;
+
+        output: details;
+
+        on run -> action("GetTicket");
+    }
+
+    command "refund" {
+        argument ticketNo: String;
+
+        prompt amount: number;
+        prompt confirm: confirm = false;
+
+        on run if amount > 0 -> action("RefundTicket", {
+            ticketNo: ticketNo;
+        });
+    }
+}
+```
+
+Body vocabulary:
+
+| Member | Meaning |
+|---|---|
+| `argument <name>: <Type>;` | Positional input, required by nature (what is optional is an option). |
+| `option <name>: <Type> (= default)?;` | Invocation-line input, optional by nature. |
+| `prompt <name>: <kind> (= default)?;` | Interactive input collected while the command runs — kinds: `text`, `secret`, `number`, `confirm`, `select`, `multiselect`, `date`, or a custom identifier. |
+| `on <event> (if expr)? -> …` | The shared event-handler vocabulary; `on run -> action("X", { … })` binds the command to a domain action. |
+| `use "Module" …` | Resolved and validated like any other use site (expansion keeps them as references — a command has no containers/components to splice into). |
+| nested `command` | Subcommands, to any depth. |
+| properties (`description:`, `output:`, …) | Free property bag; `description` (string) and `requires` (identifier list) are extracted into dedicated artifact fields, the view discipline. |
+
+Checking (`check_ifml`) treats a command's typed arguments and options as
+the bindings for its `if` guards and event expressions — domain types
+included, so `if agent.active` navigates `User`'s features. Generic
+identifier types and prompt names are deferred, not errors; option and
+prompt defaults get the structural literal check (the resolver's rule).
+The example `examples/cli.ifml` is the reference consumer; the deferred
+CLI ideas (modality profiles, CLI pattern modules, doc/completion
+generation, TUI constructs) are tracked in the follow-up issue.
+
 ---
 
 ## Grammar
@@ -220,7 +282,7 @@ productions.
 
 - **Entry point** — `ifml_model`: imports and `domain_declaration`s first,
   then `view_declaration` / `action_declaration` / `module_declaration` /
-  `actor_declaration` items.
+  `actor_declaration` / `command_declaration` items.
 - **Views and containers** — `view_declaration` / `container_declaration`
   share a body shape: optional `params_block` and `label_declaration`,
   property assignments, then nested containers, components, event handlers,
@@ -254,6 +316,7 @@ pub struct IfmlModel {
     pub actions: Vec<ActionDeclaration>,
     pub modules: Vec<ModuleDeclaration>,
     pub actors: Vec<ActorDeclaration>,
+    pub commands: Vec<CommandDeclaration>,   // CLI surface; subcommands nest
     pub imports: Vec<String>,
 }
 ```

@@ -182,6 +182,9 @@ pub struct IfmlIndex {
     pub actions: Vec<NamedSite>,
     /// Actor declaration sites.
     pub actors: Vec<NamedSite>,
+    /// Command declaration sites (top-level and nested subcommands, in
+    /// source order — nesting flattens).
+    pub commands: Vec<NamedSite>,
 }
 
 impl IfmlIndex {
@@ -198,6 +201,7 @@ impl IfmlIndex {
             views: Vec::new(),
             actions: Vec::new(),
             actors: Vec::new(),
+            commands: Vec::new(),
         }
     }
 
@@ -224,6 +228,10 @@ impl IfmlIndex {
         for mut named in other.actors {
             named.file = file;
             self.actors.push(named);
+        }
+        for mut named in other.commands {
+            named.file = file;
+            self.commands.push(named);
         }
         for mut target in other.action_targets {
             target.file = file;
@@ -254,7 +262,13 @@ impl IfmlIndex {
                 );
             }
         }
-        for site in self.views.iter().chain(&self.actions).chain(&self.actors) {
+        for site in self
+            .views
+            .iter()
+            .chain(&self.actions)
+            .chain(&self.actors)
+            .chain(&self.commands)
+        {
             if site.file == file {
                 consider_site(
                     &mut best,
@@ -376,6 +390,17 @@ fn index_pair(pair: &Pair<'_, Rule>, file: usize, index: &mut IfmlIndex) {
                 } else {
                     index.actors.push(site);
                 }
+            }
+            recurse(pair, file, index);
+        }
+        Rule::command_declaration => {
+            if let Some((name, name_span)) = first_string_site(pair) {
+                index.commands.push(NamedSite {
+                    file,
+                    name,
+                    name_span,
+                    span,
+                });
             }
             recurse(pair, file, index);
         }
@@ -547,6 +572,45 @@ fn literal_kind(pair: &Pair<'_, Rule>) -> Option<LiteralKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indexes_commands_and_their_uses() {
+        let text = r#"
+command "customers" {
+    use "WorkQueue" as queue { filter: Pending; };
+
+    command "list" {
+        output: table;
+    }
+}
+
+module "WorkQueue" {
+    input { filter: String = "open" }
+    output { n: Int }
+}
+"#;
+        let (_, index) = parse_ifml_indexed(text).unwrap();
+        assert_eq!(index.commands.len(), 2, "nested commands index too");
+        assert_eq!(index.commands[0].name, "customers");
+        assert_eq!(index.commands[1].name, "list");
+        assert_eq!(
+            index.module_uses.len(),
+            1,
+            "a use inside a command body is collected"
+        );
+        assert_eq!(index.module_uses[0].target, "WorkQueue");
+        assert_eq!(index.module_uses[0].alias.as_deref(), Some("queue"));
+
+        // The command declaration is an `at` site with a name span.
+        let command = &index.commands[0];
+        assert!(
+            text[command.span.0..command.span.1].starts_with("command \"customers\""),
+            "{:?}",
+            &text[command.span.0..command.span.1]
+        );
+        let name_mid = (command.name_span.0 + command.name_span.1) / 2;
+        assert!(matches!(index.at(0, name_mid), Some(AtSite::Named(_))));
+    }
 
     #[test]
     fn empty_source_indexes_one_file_and_no_sites() {

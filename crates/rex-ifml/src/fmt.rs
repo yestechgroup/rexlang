@@ -6,8 +6,8 @@
 //! them under structural layout rules:
 //!
 //! - declaration blocks (`view`/`domain`/`actor`/`action`/`module`/
-//!   `container`/`component` headers) always expand, one statement per line,
-//!   4-space indent;
+//!   `container`/`component`/`command` headers) always expand, one statement
+//!   per line, 4-space indent;
 //! - value and binding blocks (`position: { … }`, `use "M" { … }`,
 //!   `navigate("V", { … })`, `chart bar { … }`, module `input`/`output`,
 //!   `params { … }`) render inline when the whole statement fits in 85
@@ -398,7 +398,7 @@ impl Printer {
     /// Keywords that always get a separating blank line before them inside
     /// a block (canonical grouping), regardless of the source.
     fn needs_structural_blank(tok: &Tok) -> bool {
-        matches!(tok, Tok::Ident(name) if matches!(name.as_str(), "component" | "container" | "use" | "field" | "column"))
+        matches!(tok, Tok::Ident(name) if matches!(name.as_str(), "component" | "container" | "use" | "field" | "column" | "command"))
     }
 
     /// Keywords that always begin a new statement: when one appears on a
@@ -408,7 +408,7 @@ impl Printer {
             name.as_str(),
             "view" | "domain" | "actor" | "action" | "module" | "container" | "component"
                 | "field" | "use" | "on" | "column" | "import" | "params" | "input" | "output"
-                | "chart"
+                | "chart" | "command" | "argument" | "option" | "prompt"
         ))
     }
 
@@ -565,6 +565,7 @@ impl Printer {
                                 | "module"
                                 | "container"
                                 | "component"
+                                | "command"
                         ) =>
                 {
                     declaration = true;
@@ -682,10 +683,16 @@ mod tests {
     use super::*;
 
     const FIXTURE: &str = include_str!("../../../tests/conformance/ifml/app.ifml");
+    const CLI_FIXTURE: &str = include_str!("../../../tests/conformance/ifml/cli.ifml");
 
     #[test]
     fn canonical_fixture_round_trips_byte_identically() {
         assert_eq!(format_ifml(FIXTURE), FIXTURE);
+    }
+
+    #[test]
+    fn cli_fixture_round_trips_byte_identically() {
+        assert_eq!(format_ifml(CLI_FIXTURE), CLI_FIXTURE);
     }
 
     #[test]
@@ -734,6 +741,24 @@ mod tests {
     fn call_argument_binding_blocks_always_expand() {
         let src = "view \"A\" {\n    component \"c\" {\n        on select(row) -> navigate(\"V\", {\n            customerId: row.id\n        });\n    }\n}\n";
         assert_eq!(format_ifml(src), src);
+    }
+
+    #[test]
+    fn command_blocks_always_expand() {
+        // A command body never renders inline, even when it would fit:
+        // declaration headers expand like view/component headers.
+        let src = "command \"customers\" {\n    command \"ping\" {\n        argument id: Uuid;\n    }\n}\n";
+        assert_eq!(format_ifml(src), src);
+    }
+
+    #[test]
+    fn nested_subcommands_get_structural_blanks() {
+        let src = "command \"customers\" {\n    argument id: Uuid;\n    command \"ping\" {\n        argument id: Uuid;\n    }\n    command \"pong\" {\n        argument id: Uuid;\n    }\n}\n";
+        let formatted = format_ifml(src);
+        assert!(
+            formatted.contains("argument id: Uuid;\n\n    command \"ping\""),
+            "a nested command always gets its structural blank: {formatted}"
+        );
     }
 
     #[test]

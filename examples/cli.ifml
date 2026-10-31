@@ -1,0 +1,53 @@
+// The CLI counterpart of support.ifml: the same interaction model in the
+// terminal's vocabulary. Commands bind to the support domain's types and
+// actions instead of views — subcommands nest to the invocation path
+// (tickets show TICKET-1, tickets claim TICKET-1 agnes, ...), options
+// carry defaults, prompts collect what the invocation line cannot.
+
+import "support.mox";
+
+command "tickets" {
+    description: "Work the support ticket queue";
+    requires: [Agent];
+
+    option state: TicketState = "open";
+    option limit: Int = 20;
+
+    output: table;
+
+    on run -> action("ListTickets");
+
+    command "show" {
+        description: "Show one ticket";
+
+        argument ticketNo: String;
+
+        output: details;
+
+        on run -> action("GetTicket");
+    }
+
+    command "claim" {
+        description: "Claim a ticket for an agent";
+
+        argument ticketNo: String;
+        argument agent: User;
+
+        on run if agent.active -> action("ClaimTicket", {
+            ticketNo: ticketNo;
+        });
+    }
+
+    command "refund" {
+        description: "Refund a ticket";
+
+        argument ticketNo: String;
+
+        prompt amount: number;
+        prompt confirm: confirm = false;
+
+        on run if amount > 0 -> action("RefundTicket", {
+            ticketNo: ticketNo;
+        });
+    }
+}

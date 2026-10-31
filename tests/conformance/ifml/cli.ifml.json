@@ -1,0 +1,208 @@
+{
+  "formatVersion": 1,
+  "commands": [
+    {
+      "name": "customers",
+      "description": "Manage customers",
+      "arguments": [
+        {
+          "name": "id",
+          "typeRef": "Uuid"
+        }
+      ],
+      "options": [
+        {
+          "name": "status",
+          "typeRef": "String",
+          "default": null
+        },
+        {
+          "name": "limit",
+          "typeRef": "Int",
+          "default": {
+            "type": "number",
+            "value": 20.0
+          }
+        },
+        {
+          "name": "sort",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "desc"
+          }
+        }
+      ],
+      "events": [
+        {
+          "eventType": {
+            "type": "custom",
+            "value": "run"
+          },
+          "condition": null,
+          "action": {
+            "type": "actionInvocation",
+            "value": {
+              "name": "ListCustomers",
+              "body": null
+            }
+          }
+        }
+      ],
+      "subcommands": [
+        {
+          "name": "show",
+          "description": "Show one customer",
+          "arguments": [
+            {
+              "name": "id",
+              "typeRef": "Uuid"
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "run"
+              },
+              "condition": null,
+              "action": {
+                "type": "actionInvocation",
+                "value": {
+                  "name": "GetCustomer",
+                  "body": null
+                }
+              }
+            }
+          ],
+          "properties": [
+            {
+              "key": "output",
+              "value": {
+                "type": "identifier",
+                "value": "details"
+              }
+            }
+          ],
+          "condition": null
+        },
+        {
+          "name": "create",
+          "description": "Create a customer",
+          "prompts": [
+            {
+              "name": "name",
+              "kind": {
+                "type": "text"
+              },
+              "default": null
+            },
+            {
+              "name": "email",
+              "kind": {
+                "type": "text"
+              },
+              "default": null
+            },
+            {
+              "name": "type",
+              "kind": {
+                "type": "select"
+              },
+              "default": {
+                "type": "string",
+                "value": "standard"
+              }
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "run"
+              },
+              "condition": null,
+              "action": {
+                "type": "actionInvocation",
+                "value": {
+                  "name": "CreateCustomer",
+                  "body": {
+                    "properties": [
+                      {
+                        "key": "name",
+                        "value": {
+                          "type": "identifier",
+                          "value": "name"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "condition": null
+        },
+        {
+          "name": "delete",
+          "description": "Delete a customer",
+          "arguments": [
+            {
+              "name": "id",
+              "typeRef": "Uuid"
+            }
+          ],
+          "prompts": [
+            {
+              "name": "confirm",
+              "kind": {
+                "type": "confirm"
+              },
+              "default": null
+            }
+          ],
+          "events": [
+            {
+              "eventType": {
+                "type": "custom",
+                "value": "run"
+              },
+              "condition": null,
+              "action": {
+                "type": "actionInvocation",
+                "value": {
+                  "name": "DeleteCustomer",
+                  "body": {
+                    "properties": [
+                      {
+                        "key": "id",
+                        "value": {
+                          "type": "identifier",
+                          "value": "id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "condition": null
+        }
+      ],
+      "properties": [
+        {
+          "key": "output",
+          "value": {
+            "type": "identifier",
+            "value": "table"
+          }
+        }
+      ],
+      "requires": [
+        "ManageCustomers"
+      ],
+      "condition": null
+    }
+  ]
+}

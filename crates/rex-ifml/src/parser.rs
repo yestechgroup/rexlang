@@ -1334,6 +1334,16 @@ fn extract_requires_property(properties: &[PropertyAssignment]) -> Vec<String> {
     extract_identifier_list_property(properties, "requires")
 }
 
+fn extract_description_property(properties: &[PropertyAssignment]) -> Option<String> {
+    properties
+        .iter()
+        .find(|p| p.key == "description")
+        .and_then(|p| match &p.value {
+            ValueExpression::String(s) => Some(s.clone()),
+            _ => None,
+        })
+}
+
 fn extract_identifier_list_property(properties: &[PropertyAssignment], key: &str) -> Vec<String> {
     properties
         .iter()
@@ -1496,6 +1506,132 @@ fn parse_actor_declaration(pair: Pair<Rule>) -> ActorDeclaration {
     ActorDeclaration { name, properties }
 }
 
+fn parse_argument_decl(pair: Pair<Rule>) -> CommandArgument {
+    let mut inner = pair.clone().into_inner();
+    let name = inner
+        .next()
+        .map(|p| parse_identifier(&p))
+        .unwrap_or_default();
+    let type_ref = inner
+        .next()
+        .map(|p| parse_identifier(&p))
+        .unwrap_or_default();
+    CommandArgument { name, type_ref }
+}
+
+fn parse_option_decl(pair: Pair<Rule>) -> CommandOption {
+    let mut inner = pair.clone().into_inner();
+    let name = inner
+        .next()
+        .map(|p| parse_identifier(&p))
+        .unwrap_or_default();
+    let type_ref = inner
+        .next()
+        .map(|p| parse_identifier(&p))
+        .unwrap_or_default();
+    let default = inner
+        .next()
+        .filter(|p| p.as_rule() == Rule::param_default)
+        .and_then(|p| p.into_inner().next())
+        .map(|p| match p.as_rule() {
+            Rule::string => ValueExpression::String(parse_string(&p)),
+            Rule::number => ValueExpression::Number(parse_number(&p).into()),
+            Rule::boolean => ValueExpression::Bool(p.as_str() == "true"),
+            _ => ValueExpression::Identifier(p.as_str().to_string()),
+        });
+    CommandOption {
+        name,
+        type_ref,
+        default,
+    }
+}
+
+fn parse_prompt_decl(pair: Pair<Rule>) -> CommandPrompt {
+    let mut inner = pair.clone().into_inner();
+    let name = inner
+        .next()
+        .map(|p| parse_identifier(&p))
+        .unwrap_or_default();
+    let kind = inner
+        .next()
+        .map(|p| PromptKind::from(p.as_str()))
+        .unwrap_or(PromptKind::Text);
+    let default = inner
+        .next()
+        .filter(|p| p.as_rule() == Rule::param_default)
+        .and_then(|p| p.into_inner().next())
+        .map(|p| match p.as_rule() {
+            Rule::string => ValueExpression::String(parse_string(&p)),
+            Rule::number => ValueExpression::Number(parse_number(&p).into()),
+            Rule::boolean => ValueExpression::Bool(p.as_str() == "true"),
+            _ => ValueExpression::Identifier(p.as_str().to_string()),
+        });
+    CommandPrompt {
+        name,
+        kind,
+        default,
+    }
+}
+
+/// Lowers one `command` declaration, recursively through subcommands.
+/// `description` (string) and `requires` (identifier list) are extracted
+/// from the property bag — the view discipline — and the remaining bag
+/// entries stay in `properties`.
+fn parse_command_declaration(pair: Pair<Rule>) -> CommandDeclaration {
+    let mut inner = pair.clone().into_inner();
+    let name = inner.next().map(|p| parse_string(&p)).unwrap_or_default();
+
+    let mut arguments = Vec::new();
+    let mut options = Vec::new();
+    let mut prompts = Vec::new();
+    let mut events = Vec::new();
+    let mut module_uses = Vec::new();
+    let mut subcommands = Vec::new();
+    let mut properties = Vec::new();
+    let mut condition = None;
+
+    let body_members = inner
+        .next()
+        .map(|body| body.into_inner().collect::<Vec<_>>())
+        .unwrap_or_default();
+    for child in body_members {
+        match child.as_rule() {
+            Rule::property_assignment => properties.push(parse_property_assignment(child)),
+            Rule::argument_decl => arguments.push(parse_argument_decl(child)),
+            Rule::option_decl => options.push(parse_option_decl(child)),
+            Rule::prompt_decl => prompts.push(parse_prompt_decl(child)),
+            Rule::event_handler => events.push(parse_event_handler(child)),
+            Rule::module_use_statement => module_uses.push(parse_module_use_statement(child)),
+            Rule::condition_statement => {
+                condition = child.into_inner().next().map(parse_expression);
+            }
+            Rule::command_declaration => subcommands.push(parse_command_declaration(child)),
+            _ => {}
+        }
+    }
+
+    let description = extract_description_property(&properties);
+    let requires = extract_requires_property(&properties);
+    let properties: Vec<PropertyAssignment> = properties
+        .into_iter()
+        .filter(|p| p.key != "description" && p.key != "requires")
+        .collect();
+
+    CommandDeclaration {
+        name,
+        description,
+        arguments,
+        options,
+        prompts,
+        events,
+        module_uses,
+        subcommands,
+        properties,
+        requires,
+        condition,
+    }
+}
+
 fn parse_import_declaration(pair: Pair<Rule>) -> String {
     let mut inner = pair.into_inner();
     inner.next().map(|p| parse_string(&p)).unwrap_or_default()
@@ -1507,6 +1643,7 @@ pub(crate) fn parse_ifml_model(pairs: Pairs<Rule>) -> Result<IfmlModel, IfmlPars
     let mut actions = Vec::new();
     let mut modules = Vec::new();
     let mut actors = Vec::new();
+    let mut commands = Vec::new();
     let mut imports = Vec::new();
 
     for pair in pairs {
@@ -1517,6 +1654,7 @@ pub(crate) fn parse_ifml_model(pairs: Pairs<Rule>) -> Result<IfmlModel, IfmlPars
             Rule::action_declaration => actions.push(parse_action_declaration(pair)),
             Rule::module_declaration => modules.push(parse_module_declaration(pair)),
             Rule::actor_declaration => actors.push(parse_actor_declaration(pair)),
+            Rule::command_declaration => commands.push(parse_command_declaration(pair)),
             Rule::import_declaration => imports.push(parse_import_declaration(pair)),
             Rule::EOI => {}
             _ => {
@@ -1529,7 +1667,7 @@ pub(crate) fn parse_ifml_model(pairs: Pairs<Rule>) -> Result<IfmlModel, IfmlPars
     }
 
     Ok(IfmlModel::new(
-        domains, views, actions, modules, actors, imports,
+        domains, views, actions, modules, actors, commands, imports,
     ))
 }
 
@@ -1575,6 +1713,87 @@ pub fn parse_ifml_file(path: &Path) -> Result<IfmlModel, IfmlParseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_command_declaration_with_members_and_subcommands() {
+        let input = r#"
+command "customers" {
+    description: "Manage customers";
+    requires: [ManageCustomers];
+
+    argument id: Uuid;
+
+    option status: String;
+    option limit: Int = 20;
+
+    prompt confirm: confirm;
+
+    on run -> action("CreateCustomer");
+
+    command "list" {
+        option sort: String = "desc";
+        output: table;
+    }
+}
+"#;
+        let model = parse_ifml(input).unwrap();
+        assert_eq!(model.commands.len(), 1);
+        let command = &model.commands[0];
+        assert_eq!(command.name, "customers");
+        assert_eq!(
+            command.description.as_deref(),
+            Some("Manage customers"),
+            "description is extracted from the property bag"
+        );
+        assert_eq!(command.requires, vec!["ManageCustomers"]);
+        assert!(
+            !command
+                .properties
+                .iter()
+                .any(|p| p.key == "description" || p.key == "requires"),
+            "extracted bag entries don't stay in the bag"
+        );
+        assert_eq!(command.arguments.len(), 1);
+        assert_eq!(command.arguments[0].name, "id");
+        assert_eq!(command.arguments[0].type_ref, "Uuid");
+        assert_eq!(command.options.len(), 2);
+        assert_eq!(command.options[0].name, "status");
+        assert!(command.options[0].default.is_none());
+        assert_eq!(command.options[1].name, "limit");
+        assert_eq!(command.options[1].type_ref, "Int");
+        assert_eq!(
+            command.options[1].default,
+            Some(ValueExpression::Number(20.0.into()))
+        );
+        assert_eq!(command.prompts.len(), 1);
+        assert_eq!(command.prompts[0].name, "confirm");
+        assert_eq!(command.prompts[0].kind, PromptKind::Confirm);
+        assert_eq!(command.events.len(), 1);
+        match &command.events[0].action {
+            EventAction::ActionInvocation { name, .. } => {
+                assert_eq!(name, "CreateCustomer");
+            }
+            other => panic!("expected an action invocation, got {other:?}"),
+        }
+        assert_eq!(command.subcommands.len(), 1);
+        let list = &command.subcommands[0];
+        assert_eq!(list.name, "list");
+        assert_eq!(
+            list.options[0].default,
+            Some(ValueExpression::String("desc".to_string()))
+        );
+        assert!(
+            list.properties.iter().any(|p| p.key == "output"),
+            "unextracted bag entries stay in the bag"
+        );
+    }
+
+    #[test]
+    fn test_argument_outside_command_body_is_a_parse_error() {
+        assert!(parse_ifml("argument id: Uuid;").is_err());
+        assert!(parse_ifml("option limit: Int = 20;").is_err());
+        assert!(parse_ifml("prompt name: text;").is_err());
+    }
 
     #[test]
     fn test_minimal_view() {
