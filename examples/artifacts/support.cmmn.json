@@ -1,0 +1,220 @@
+{
+  "formatVersion": 1,
+  "cases": [
+    {
+      "name": "RefundDesk",
+      "description": "A refund-desk case: the work coordinated around one support ticket\nthat needs money back.",
+      "roles": [
+        {
+          "name": "triage",
+          "actor": "Agent"
+        },
+        {
+          "name": "finance",
+          "actor": "Finance"
+        },
+        {
+          "name": "escalation",
+          "actor": "Manager"
+        }
+      ],
+      "caseFile": [
+        {
+          "name": "ticket",
+          "description": "The ticket under triage.",
+          "type": {
+            "type": "class",
+            "value": {
+              "package": "nz.example.support",
+              "name": "Ticket"
+            }
+          },
+          "multiplicity": {
+            "lower": 1,
+            "upper": {
+              "finite": 1
+            }
+          }
+        },
+        {
+          "name": "decision",
+          "description": "The refund decision, once assessed.",
+          "type": {
+            "type": "class",
+            "value": {
+              "package": "nz.example.support",
+              "name": "RefundDecision"
+            }
+          },
+          "multiplicity": {
+            "lower": 0,
+            "upper": {
+              "finite": 1
+            }
+          }
+        }
+      ],
+      "planItems": [
+        {
+          "name": "Assessment",
+          "kind": {
+            "type": "stage",
+            "value": {
+              "children": [
+                "ReviewTicket",
+                "AssessRefund",
+                "ApproveRefund",
+                "Escalate",
+                "RefundSettled",
+                "CloseTicket"
+              ]
+            }
+          },
+          "entry": [
+            {
+              "onParts": [
+                {
+                  "type": "caseFile",
+                  "value": {
+                    "item": "ticket",
+                    "transition": "create"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "ReviewTicket",
+          "description": "A human triages the ticket before anything automatic runs.",
+          "kind": {
+            "type": "task",
+            "value": {
+              "performer": "triage"
+            }
+          }
+        },
+        {
+          "name": "AssessRefund",
+          "description": "The desk's own assessment runs once the review lands and only\nwhile no decision is on file; the ceiling arithmetic lives in\nthe domain (Ticket.raiseRefund), the automation binds to the\ndesigned service operation.",
+          "kind": {
+            "type": "service",
+            "value": {
+              "execute": "support.TicketService.raiseRefund"
+            }
+          },
+          "entry": [
+            {
+              "onParts": [
+                {
+                  "type": "item",
+                  "value": {
+                    "item": "ReviewTicket",
+                    "event": "complete"
+                  }
+                }
+              ],
+              "when": "decision == null"
+            }
+          ],
+          "control": {
+            "required": true
+          }
+        },
+        {
+          "name": "ApproveRefund",
+          "description": "Finance approves only what assessment could not settle.",
+          "kind": {
+            "type": "task",
+            "value": {
+              "performer": "finance"
+            }
+          },
+          "entry": [
+            {
+              "onParts": [
+                {
+                  "type": "item",
+                  "value": {
+                    "item": "AssessRefund",
+                    "event": "complete"
+                  }
+                }
+              ]
+            }
+          ],
+          "planning": "manual"
+        },
+        {
+          "name": "Escalate",
+          "description": "A manager may escalate at any point in the assessment.",
+          "kind": {
+            "type": "task",
+            "value": {
+              "performer": "escalation"
+            }
+          },
+          "planning": "manual"
+        },
+        {
+          "name": "RefundSettled",
+          "kind": {
+            "type": "milestone"
+          },
+          "entry": [
+            {
+              "onParts": [
+                {
+                  "type": "item",
+                  "value": {
+                    "item": "AssessRefund",
+                    "event": "complete"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "CloseTicket",
+          "description": "Closure terminates when the decision is on file.",
+          "kind": {
+            "type": "task",
+            "value": {
+              "performer": "triage"
+            }
+          },
+          "entry": [
+            {
+              "onParts": [
+                {
+                  "type": "item",
+                  "value": {
+                    "item": "RefundSettled",
+                    "event": "occur"
+                  }
+                }
+              ]
+            }
+          ],
+          "exit": [
+            {
+              "onParts": [
+                {
+                  "type": "caseFile",
+                  "value": {
+                    "item": "decision",
+                    "transition": "create"
+                  }
+                }
+              ]
+            }
+          ],
+          "control": {
+            "required": true
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -39,7 +39,17 @@ Root shapes, as actually serialized:
 | --- | --- |
 | Domain IR (`Model`) | `{"formatVersion": N, "rexVersion"?: "…", "packages": […]}` |
 | Actor policy (`ActorModel`) | `{"formatVersion": N, "blocks"?: […]}` — block-less serializes as exactly `{"formatVersion": N}` |
+| DDD design (`ddd::DddModel`) | `{"formatVersion": N, "applications"?: […], "modules"?: […]}` (both omitted when empty) |
+| Event contract (`events::EventModel`) | `{"formatVersion": N, "events"?: […], "channels"?: […], "subscriptions"?: […]}` (all omitted when empty) |
+| Deployment (`deploy::DeployModel`) | `{"formatVersion": N, "applications"?: […], "profiles"?: […], "deployments"?: […]}` (all omitted when empty) |
+| Use case (`usecases::UseCaseModel`) | `{"formatVersion": N, "useCases"?: […]}` (omitted when empty) |
+| Case management (`cmmn::CmmnModel`) | `{"formatVersion": N, "cases"?: […]}` (omitted when empty) |
 | Canonical instance | `{"$type": "rex.instance", "formatVersion": N, "model": "…", "objects": […]}` |
+
+Every standalone root carries its own `*_FORMAT_VERSION` marker (all `1`
+today); `rexlang artifact check` classifies non-empty roots by their
+disjoint section keys and falls back to the actor reading for the shared
+minimal `{"formatVersion": N}` bytes.
 
 - **Casing.** All field names and bare enum tags are `camelCase`
   (`formatVersion`, `isReadOnly`, `"crossReference"`). Note that `$type` /
@@ -119,7 +129,9 @@ Per file it checks the invariants below, prints `OK <path>`, and exits `1`
 naming the file and violation when anything fails:
 
 - the root shape matches a known artifact kind (IR artifact, actor
-  artifact, or `$type: "rex.instance"` canonical instance);
+  artifact, DDD design, event contract, deployment, use-case, or
+  case-management artifact, or `$type: "rex.instance"` canonical
+  instance);
 - `formatVersion` is present, an unsigned integer, and supported — a higher
   version is rejected with an error naming it;
 - structural keys are camelCase (a snake_case spelling of a known key is

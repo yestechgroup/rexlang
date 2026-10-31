@@ -1718,6 +1718,22 @@ const EXAMPLES: [&str; 7] = [
 /// Canonical `.actor` policy files: compiled against the domain they import.
 const ACTOR_EXAMPLES: [&str; 1] = ["support"];
 
+/// Canonical artifact-surface examples: each compiled against the imports
+/// it declares, all resolved relative to the file (the CLI gathers and
+/// compiles `.ddd`/`.evt`/`.uc`/`.deploy`/`.cmmn` imports exactly like a
+/// `rexlang check` of those surfaces). Their artifact bytes are pinned by
+/// `crates/rex-driver/tests/examples_artifacts.rs` and the cmmn backend's
+/// examples test.
+const ARTIFACT_EXAMPLES: [(&str, &str); 7] = [
+    ("ecommerce", "evt"),
+    ("support", "evt"),
+    ("orders", "ddd"),
+    ("support", "ddd"),
+    ("support", "uc"),
+    ("support", "deploy"),
+    ("support", "cmmn"),
+];
+
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../")
@@ -1741,6 +1757,14 @@ fn examples_suite_checks_clean_and_is_fmt_canonical() {
             workspace_root()
                 .join("examples")
                 .join(format!("{name}.actor"))
+        })
+        .collect();
+    let artifact_paths: Vec<PathBuf> = ARTIFACT_EXAMPLES
+        .iter()
+        .map(|(name, extension)| {
+            workspace_root()
+                .join("examples")
+                .join(format!("{name}.{extension}"))
         })
         .collect();
     for (name, path) in EXAMPLES.iter().zip(&paths) {
@@ -1785,11 +1809,32 @@ fn examples_suite_checks_clean_and_is_fmt_canonical() {
         );
     }
 
+    for ((name, extension), path) in ARTIFACT_EXAMPLES.iter().zip(&artifact_paths) {
+        assert!(
+            path.is_file(),
+            "missing canonical example {name}.{extension}: the examples suite is part of the harness"
+        );
+        let output = rexlang()
+            .args(["check", path.to_str().unwrap()])
+            .output()
+            .expect("run rexlang check");
+        assert!(
+            output.status.success(),
+            "rexlang check {name}.{extension} failed: {:?}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            format!("OK {}\n", path.display()),
+            "rexlang check {name}.{extension} stdout"
+        );
+    }
+
     // The examples must be in canonical format (same gate the conformance
     // models get in CI).
     let mut check = rexlang();
     check.arg("fmt").arg("--check");
-    for path in paths.iter().chain(&actor_paths) {
+    for path in paths.iter().chain(&actor_paths).chain(&artifact_paths) {
         check.arg(path.to_str().unwrap());
     }
     let output = check.output().expect("run rexlang fmt --check");

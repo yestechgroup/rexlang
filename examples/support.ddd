@@ -1,0 +1,62 @@
+// Support-desk application design over support.mox, tied by name to the
+// support.actor capabilities: the desk module designs the ticket queue
+// (entity with a scaffolded repository, an immutable refund decision,
+// and a full-text search projection), the people module projects the
+// user register as a read-side DTO.
+import "support.mox";
+
+application SupportDesk {
+    base nz.example.support
+    module desk {
+        /// Triages and resolves support tickets.
+        service TicketService {
+            inject TicketRepository;
+            inject TicketSearch;
+            boolean raiseRefund(String ticketNo, int cents) capability RaiseRefund;
+            boolean approveRefund(String ticketNo, int cents, User approver) capability ApproveRefund;
+            protected close => TicketRepository.delete;
+            findTickets => TicketSearch.search;
+        }
+        entity Ticket scaffold cache repository TicketRepository {
+            findById;
+            findAll;
+            findByExample;
+            findByKeys;
+            save;
+            delete;
+            protected Ticket findByTitle(String title);
+        }
+        /// One immutable refund decision; every stored feature of the
+        /// class is readonly, as the value contract requires.
+        value RefundDecision nonPersistent
+        /// Full-text search over the ticket queue.
+        search TicketSearch {
+            entity Ticket
+            text {
+                title boost 3
+            }
+            filters {
+                state
+                internal
+            }
+            sort {
+                title
+            }
+            document {
+                headline = title;
+                refundNote = if refundCents > 0 { "refund pending" } else { "no refund" };
+            }
+            ranking bm25
+            analyzer "english"
+            pagination {
+                limit 20
+                max 100
+                cursor
+            }
+        }
+    }
+    module people {
+        /// The user register is read through this projection only.
+        dto User nonPersistent
+    }
+}

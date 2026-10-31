@@ -156,7 +156,7 @@ view "Dashboard" {
         data: Product;
         fields: [name, salesCount];
         filter: salesCount > 1000;
-        sort: salesCount desc;
+        sort: "salesCount desc";
     }
 }
 ```
@@ -521,15 +521,15 @@ consumers.
 
 The IFML DSL is designed to feel like a *companion* to the `.mox` domain model:
 
-```ifml
+```text
 // The domain model defines "Customer" with features: name, email, phone, status
-// The IFML DSL references these by name:
+// The IFML DSL references these by name (an excerpt, not a whole file):
 
 component "grid" {
     type: list;
-    data: Customer;           // references the domain class
+    data: Customer;                // references the domain class
     fields: [name, email, phone];  // references features on Customer
-    filter: status == "active";     // expression validated against field types
+    filter: status == "active";    // expression validated against field types
 }
 ```
 

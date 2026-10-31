@@ -467,10 +467,12 @@ Sculptor concepts rexlang intentionally does not carry, and why:
 ## Worked example
 
 `tests/conformance/ddd/library.ddd`, the canonical fixture, designs a
-library application over `tests/conformance/ddd/library.mox`:
+library application over `tests/conformance/ddd/library.mox`. The fence
+below is the fixture verbatim, its import repointed so it compiles from
+this document (the docs fences are compiled by CI):
 
-```
-import "library.mox";
+```ddd
+import "../tests/conformance/ddd/library.mox";
 
 application Library {
     base nz.example.library
@@ -601,3 +603,11 @@ commits two goldens: `payrun.ddd.json` (the design artifact) and
 `payrun.xstate.json` (the lowered xstate-ir machine), byte-compared by
 `crates/rex-driver/tests/ddd_machine_golden.rs`; the machine validation
 rules are pinned by `crates/rex-driver/tests/ddd_machines.rs`.
+
+The `examples/` side ships `support.ddd` (entity/value/dto designs,
+searches, capabilities validated against `support.actor` through
+`compile_ddd_str_with_actors`) and `orders.ddd` (the aggregate-derivation
+rule over `ecommerce.mox`), byte-pinned against `examples/artifacts/` by
+`crates/rex-driver/tests/examples_artifacts.rs`. Note that
+`examples/library.mox` itself is *not* designable: its `Writer.books`
+cross reference escapes the Library aggregate (rule 13).

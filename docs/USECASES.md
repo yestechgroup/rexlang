@@ -34,13 +34,15 @@ prose and either authority disagree, they win.
 
 ## File layout and imports
 
-A `.uc` file is `import` declarations followed by `usecase` declarations:
+A `.uc` file is `import` declarations followed by `usecase` declarations.
+The fence below compiles from this document (the docs fences are compiled
+by CI); its imports are the canonical delivery fixtures:
 
-```
-import "delivery.mox"
-import "handover.ddd" as handover
-import "handover.actor"
-import "handover.evt"
+```uc
+import "../tests/conformance/usecases/delivery.mox"
+import "../tests/conformance/usecases/handover.ddd" as handover
+import "../tests/conformance/usecases/handover.actor"
+import "../tests/conformance/usecases/handover.evt"
 
 usecase HandOverParcel1 {
     subject Drone: DeliveryDrone
@@ -497,3 +499,9 @@ diagnostics; the wire shape is pinned by
 source `tests/conformance/models/usecases.uc` — don't cite that file as a
 canonical model or "fix" its spacing (the `.evt`/`.deploy` pattern).
 Regenerate goldens with `REX_UPDATE_FIXTURES=1 cargo test --workspace`.
+
+The `examples/` side ships `support.uc` — the full-stack example whose
+imports span all four buckets (`support.mox`, the aliased `support.ddd`
+design, `support.actor`, `support.evt`) and whose `RaiseRefund` /
+`ApproveRefund` split respects the `never_both` pair — byte-pinned against
+`examples/artifacts/` by `crates/rex-driver/tests/examples_artifacts.rs`.
