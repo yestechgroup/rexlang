@@ -1,0 +1,52 @@
+// CLI interaction model over the customer domain: commands bind to domain
+// types and actions through the shared event vocabulary; subcommands nest
+// to the invocation path (customers list, customers show, ...).
+
+command "customers" {
+    description: "Manage customers";
+    requires: [ManageCustomers];
+
+    argument id: Uuid;
+
+    option status: String;
+    option limit: Int = 20;
+    option sort: String = "desc";
+
+    output: table;
+
+    on run -> action("ListCustomers");
+
+    command "show" {
+        description: "Show one customer";
+
+        argument id: Uuid;
+
+        output: details;
+
+        on run -> action("GetCustomer");
+    }
+
+    command "create" {
+        description: "Create a customer";
+
+        prompt name: text;
+        prompt email: text;
+        prompt type: select = "standard";
+
+        on run -> action("CreateCustomer", {
+            name: name;
+        });
+    }
+
+    command "delete" {
+        description: "Delete a customer";
+
+        argument id: Uuid;
+
+        prompt confirm: confirm;
+
+        on run -> action("DeleteCustomer", {
+            id: id;
+        });
+    }
+}
