@@ -2,7 +2,7 @@
 ifml_model = {
     SOI ~
     (import_declaration | domain_declaration)* ~
-    (import_declaration | view_declaration | action_declaration | module_declaration | actor_declaration)* ~
+    (import_declaration | view_declaration | action_declaration | module_declaration | actor_declaration | command_declaration)* ~
     EOI
 }
 
@@ -212,6 +212,38 @@ actor_declaration = {
     "actor" ~ string ~ "{" ~
         property_assignment* ~
     "}"
+}
+
+// ── Command declarations ──────────────────────────────────────────
+// The CLI interaction vocabulary: a command binds to domain types and
+// actions (through the shared event handlers) rather than implementing
+// business logic. Subcommands nest to any depth; consumers render the
+// joined invocation path. `description`/`requires` are property-bag
+// entries the lowering extracts, mirroring views.
+command_declaration = {
+    "command" ~ string ~ command_body
+}
+
+command_body = {
+    "{" ~
+        (property_assignment | argument_decl | option_decl | prompt_decl | event_handler | condition_statement | module_use_statement | command_declaration)* ~
+    "}"
+}
+
+argument_decl = {
+    "argument" ~ identifier ~ ":" ~ type_ref ~ ";"
+}
+
+option_decl = {
+    "option" ~ identifier ~ ":" ~ type_ref ~ ("=" ~ param_default)? ~ ";"
+}
+
+prompt_decl = {
+    "prompt" ~ identifier ~ ":" ~ prompt_kind ~ ("=" ~ param_default)? ~ ";"
+}
+
+prompt_kind = {
+    "text" | "secret" | "number" | "confirm" | "select" | "multiselect" | "date" | identifier
 }
 
 // ── Conditional guards ────────────────────────────────────────────
