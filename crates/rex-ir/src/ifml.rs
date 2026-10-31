@@ -1,5 +1,5 @@
-//! The IFML interaction-model artifact: views, components, events, and
-//! navigation flows, produced by parsing `.ifml` sources.
+//! The IFML interaction-model artifact: views, components, events,
+//! navigation flows, and CLI commands, produced by parsing `.ifml` sources.
 //!
 //! This is a standalone, versioned wire artifact in the [rexlang] family,
 //! versioned independently of [`crate::FORMAT_VERSION`] via
@@ -65,6 +65,7 @@ pub enum IfmlDefinition {
     Action(ActionDeclaration),
     Module(ModuleDeclaration),
     Actor(ActorDeclaration),
+    Command(CommandDeclaration),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -724,6 +725,125 @@ pub struct ActorDeclaration {
     pub properties: Vec<PropertyAssignment>,
 }
 
+/// A top-level `command "Name" { ... }` declaration: the CLI interaction
+/// vocabulary of the same interaction model the views express. Commands
+/// bind to domain types and actions (through the shared
+/// [`EventHandler`] vocabulary, e.g. `on run -> action("CreateCustomer");`)
+/// rather than implementing business logic, so one artifact can describe a
+/// web experience and its terminal counterpart.
+///
+/// Body members: `argument`/`option`/`prompt` declarations, event
+/// handlers, `use` statements, and nested `command` subcommands
+/// (`command "customers" { command "list" { ... } }` — consumers render
+/// the joined path, e.g. `customers list`). `description` is extracted
+/// from the property bag (`description: "...";`); the remaining bag
+/// entries stay in [`CommandDeclaration::properties`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandDeclaration {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub arguments: Vec<CommandArgument>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<CommandOption>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prompts: Vec<CommandPrompt>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub events: Vec<EventHandler>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub module_uses: Vec<ModuleUse>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subcommands: Vec<CommandDeclaration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub properties: Vec<PropertyAssignment>,
+    /// Capability requirements extracted from the property bag
+    /// (`requires: [CapA];`), the view-extraction discipline.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<String>,
+    pub condition: Option<Expression>,
+}
+
+/// A positional `argument <name>: <Type>;` — required by nature; what is
+/// optional in a CLI is an option, not an argument.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandArgument {
+    pub name: String,
+    pub type_ref: String,
+}
+
+/// An `option <name>: <Type> (= default)?;` — optional by nature, which is
+/// why it carries a default and an argument does not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandOption {
+    pub name: String,
+    pub type_ref: String,
+    #[serde(default)]
+    pub default: Option<ValueExpression>,
+}
+
+/// A `prompt <name>: <kind> (= default)?;` — interactive input collected
+/// while the command executes, as opposed to arguments/options supplied on
+/// the invocation line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandPrompt {
+    pub name: String,
+    pub kind: PromptKind,
+    #[serde(default)]
+    pub default: Option<ValueExpression>,
+}
+
+/// The interaction kind of a [`CommandPrompt`] — presentation semantics
+/// (how the terminal asks), not a domain type. Custom kinds survive
+/// verbatim; evaluation stays deferred to generation time, as everywhere
+/// in this artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "camelCase")]
+pub enum PromptKind {
+    Text,
+    Secret,
+    Number,
+    Confirm,
+    Select,
+    MultiSelect,
+    Date,
+    Custom(String),
+}
+
+impl From<&str> for PromptKind {
+    fn from(s: &str) -> Self {
+        match s.to_ascii_lowercase().as_str() {
+            "text" => PromptKind::Text,
+            "secret" | "password" => PromptKind::Secret,
+            "number" => PromptKind::Number,
+            "confirm" | "boolean" => PromptKind::Confirm,
+            "select" => PromptKind::Select,
+            "multiselect" => PromptKind::MultiSelect,
+            "date" => PromptKind::Date,
+            _ => PromptKind::Custom(s.to_string()),
+        }
+    }
+}
+
+impl PromptKind {
+    pub fn as_str(&self) -> &str {
+        match self {
+            PromptKind::Text => "text",
+            PromptKind::Secret => "secret",
+            PromptKind::Number => "number",
+            PromptKind::Confirm => "confirm",
+            PromptKind::Select => "select",
+            PromptKind::MultiSelect => "multiselect",
+            PromptKind::Date => "date",
+            PromptKind::Custom(s) => s.as_str(),
+        }
+    }
+}
+
 /// The root of an IFML interaction model: a standalone, versioned wire
 /// artifact (see the [wire format contract](crate#wire-format-contract) and
 /// the [module docs](self)).
@@ -745,6 +865,11 @@ pub struct IfmlModel {
     pub modules: Vec<ModuleDeclaration>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actors: Vec<ActorDeclaration>,
+    /// Top-level `command "Name" { ... }` declarations — the CLI
+    /// interaction vocabulary. Subcommands nest inside
+    /// [`CommandDeclaration::subcommands`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<CommandDeclaration>,
     /// Raw string values of top-level `import "..."` statements, in source
     /// order. Duplicates are preserved; resolution/dedup is a resolver
     /// concern, not a parser concern.
@@ -762,6 +887,7 @@ impl IfmlModel {
         actions: Vec<ActionDeclaration>,
         modules: Vec<ModuleDeclaration>,
         actors: Vec<ActorDeclaration>,
+        commands: Vec<CommandDeclaration>,
         imports: Vec<String>,
     ) -> Self {
         Self {
@@ -771,6 +897,7 @@ impl IfmlModel {
             actions,
             modules,
             actors,
+            commands,
             imports,
         }
     }
@@ -808,6 +935,7 @@ impl IfmlModel {
 impl Default for IfmlModel {
     fn default() -> Self {
         Self::new(
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -982,6 +1110,7 @@ mod tests {
                 name: "Admin".to_string(),
                 properties: Vec::new(),
             }],
+            Vec::new(),
             vec!["rexlang/auth.actor".to_string()],
         )
     }
@@ -1054,6 +1183,109 @@ mod tests {
             }
             other => panic!("expected UnsupportedFormatVersion, got {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Commands: the CLI interaction vocabulary
+    // -----------------------------------------------------------------------
+
+    /// One command exercising every CLI member: arguments, options with a
+    /// default, prompts, an `on run` handler, and a nested subcommand.
+    fn sample_command() -> CommandDeclaration {
+        CommandDeclaration {
+            name: "customers".to_string(),
+            description: Some("Manage customers".to_string()),
+            arguments: vec![CommandArgument {
+                name: "id".to_string(),
+                type_ref: "Uuid".to_string(),
+            }],
+            options: vec![CommandOption {
+                name: "limit".to_string(),
+                type_ref: "Int".to_string(),
+                default: Some(ValueExpression::Number(Float::new(20.0))),
+            }],
+            prompts: vec![CommandPrompt {
+                name: "email".to_string(),
+                kind: PromptKind::Select,
+                default: None,
+            }],
+            events: vec![EventHandler {
+                event_type: EventType::Custom("run".to_string()),
+                params: Vec::new(),
+                requires: Vec::new(),
+                condition: None,
+                action: EventAction::ActionInvocation {
+                    name: "CreateCustomer".to_string(),
+                    body: None,
+                },
+            }],
+            module_uses: Vec::new(),
+            subcommands: vec![CommandDeclaration {
+                name: "list".to_string(),
+                description: None,
+                arguments: Vec::new(),
+                options: Vec::new(),
+                prompts: Vec::new(),
+                events: Vec::new(),
+                module_uses: Vec::new(),
+                subcommands: Vec::new(),
+                properties: Vec::new(),
+                requires: Vec::new(),
+                condition: None,
+            }],
+            properties: Vec::new(),
+            requires: Vec::new(),
+            condition: None,
+        }
+    }
+
+    #[test]
+    fn commands_round_trip_through_from_json() {
+        let mut model = sample_model();
+        model.commands = vec![sample_command()];
+        let json = model.to_json_pretty().expect("serialize");
+        let parsed = IfmlModel::from_json(&json).expect("deserialize");
+        assert_eq!(parsed, model);
+        assert_eq!(parsed.to_json_pretty().expect("re-serialize"), json);
+    }
+
+    #[test]
+    fn command_wire_shape_is_camel_case_with_tagged_enums() {
+        let mut model = sample_model();
+        model.commands = vec![sample_command()];
+        let json = model.to_json().expect("serialize");
+        assert!(json.contains("\"commands\":[{"), "{json}");
+        assert!(json.contains("\"description\":\"Manage customers\""), "{json}");
+        assert!(json.contains("\"arguments\":[{\"name\":\"id\",\"typeRef\":\"Uuid\"}]"), "{json}");
+        assert!(
+            json.contains("\"default\":{\"type\":\"number\",\"value\":20.0}"),
+            "option defaults are ValueExpressions: {json}"
+        );
+        assert!(
+            json.contains("\"kind\":{\"type\":\"select\"}"),
+            "prompt kinds are adjacent-tagged like event types: {json}"
+        );
+        assert!(json.contains("\"subcommands\":[{"), "{json}");
+        assert!(
+            json.contains("\"eventType\":{\"type\":\"custom\",\"value\":\"run\"}"),
+            "command event handlers reuse the shared event vocabulary: {json}"
+        );
+    }
+
+    /// The serde-default discipline holds for the commands vec too: a model
+    /// without commands omits the field on write, and an artifact without
+    /// the field reads back with an empty vec — older artifacts stay
+    /// wire-identical and byte-goldens are untouched.
+    #[test]
+    fn absent_commands_field_reads_back_as_empty() {
+        let json = r#"{"formatVersion":1}"#;
+        let parsed = IfmlModel::from_json(json).expect("deserialize");
+        assert!(parsed.commands.is_empty());
+        assert_eq!(
+            parsed.to_json().expect("re-serialize"),
+            r#"{"formatVersion":1}"#,
+            "empty commands are omitted on write"
+        );
     }
 
     #[test]
