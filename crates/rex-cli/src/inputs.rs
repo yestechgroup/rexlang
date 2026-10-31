@@ -51,9 +51,10 @@ pub(crate) fn expand_inputs(files: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
 
 /// Expands `rexlang check` inputs: directories scan recursively for **every
 /// supported surface** (`.mox`, `.actor`, `.ddd`, `.evt`, `.uc`, `.ifml`),
-/// not just `.mox`. Used by the directory batch mode, where each expanded
-/// file is checked independently; explicit file arguments pass through
-/// as-is.
+/// not just `.mox` — formatter-golden `X.fmt.<ext>` artifacts excepted (see
+/// [`is_formatter_golden`]). Used by the directory batch mode, where each
+/// expanded file is checked independently; explicit file arguments pass
+/// through as-is.
 pub(crate) fn expand_check_inputs(files: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
     let mut expanded = Vec::new();
     for entry in files {
@@ -83,7 +84,8 @@ fn collect_mox_files(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
 
 /// Recursively collects files under `dir` whose extension is one of
 /// `extensions` (subdirectories first come out in name order; the caller
-/// sorts the final list anyway).
+/// sorts the final list anyway). Formatter-golden artifacts (see
+/// [`is_formatter_golden`]) are never collected.
 fn collect_with_extensions(
     dir: &Path,
     extensions: &[&str],
@@ -103,11 +105,24 @@ fn collect_with_extensions(
             .extension()
             .and_then(|extension| extension.to_str())
             .is_some_and(|extension| extensions.contains(&extension))
+            && !is_formatter_golden(&path)
         {
             out.push(path);
         }
     }
     Ok(())
+}
+
+/// `true` for formatter-golden artifacts: the `X.fmt.<ext>` files the
+/// formatter's golden tests pin byte-for-byte against a canonical source
+/// that lives elsewhere (the GOLDENS table in rex-syntax's fmt tests). They
+/// are outputs, not standalone models — their imports and vocabulary
+/// snapshots only resolve next to their *sources* — so directory scans
+/// skip them. Explicit file arguments pass through untouched.
+fn is_formatter_golden(path: &Path) -> bool {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem.ends_with(".fmt"))
 }
 
 /// Recursively collects files of every supported surface under `dir`.
