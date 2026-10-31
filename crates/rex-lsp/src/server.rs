@@ -559,7 +559,12 @@ fn ifml_document_symbols(snapshot: &IfmlSnapshot) -> Option<DocumentSymbolRespon
                 && site.span.1 <= other.span.1
         });
         if is_top_level {
-            roots.push(command_outline_symbol(index, &map, site, uses_under(site.span)));
+            roots.push(command_outline_symbol(
+                index,
+                &map,
+                site,
+                uses_under(site.span),
+            ));
         }
     }
     for site in index.module_decls.iter().filter(|site| site.file == 0) {
@@ -3134,8 +3139,8 @@ module "Pager" {
             .unwrap()
             .unwrap();
         let (_, body) = response.into_parts();
-        let hover: Hover = serde_json::from_value(body.expect("hover must not error"))
-            .expect("hover shape");
+        let hover: Hover =
+            serde_json::from_value(body.expect("hover must not error")).expect("hover shape");
         let HoverContents::Markup(markup) = hover.contents else {
             panic!("markdown hover");
         };

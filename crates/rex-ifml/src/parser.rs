@@ -1778,7 +1778,10 @@ command "customers" {
         assert_eq!(command.subcommands.len(), 1);
         let list = &command.subcommands[0];
         assert_eq!(list.name, "list");
-        assert_eq!(list.options[0].default, Some(ValueExpression::String("desc".to_string())));
+        assert_eq!(
+            list.options[0].default,
+            Some(ValueExpression::String("desc".to_string()))
+        );
         assert!(
             list.properties.iter().any(|p| p.key == "output"),
             "unextracted bag entries stay in the bag"

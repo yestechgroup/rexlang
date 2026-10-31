@@ -1255,8 +1255,14 @@ mod tests {
         model.commands = vec![sample_command()];
         let json = model.to_json().expect("serialize");
         assert!(json.contains("\"commands\":[{"), "{json}");
-        assert!(json.contains("\"description\":\"Manage customers\""), "{json}");
-        assert!(json.contains("\"arguments\":[{\"name\":\"id\",\"typeRef\":\"Uuid\"}]"), "{json}");
+        assert!(
+            json.contains("\"description\":\"Manage customers\""),
+            "{json}"
+        );
+        assert!(
+            json.contains("\"arguments\":[{\"name\":\"id\",\"typeRef\":\"Uuid\"}]"),
+            "{json}"
+        );
         assert!(
             json.contains("\"default\":{\"type\":\"number\",\"value\":20.0}"),
             "option defaults are ValueExpressions: {json}"
