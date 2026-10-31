@@ -1014,14 +1014,13 @@ fn parse_chart_decl(pair: Pair<Rule>) -> Result<Option<ChartSpec>, IfmlParseErro
                     spec.max_depth = Some(n.value().max(0.0) as u32);
                 }
                 ValueExpression::Identifier(id) if prop.key == "aggregate" => {
-                    let aggregate = parse_chart_aggregate(id).ok_or_else(|| {
-                        IfmlParseError::Parse {
+                    let aggregate =
+                        parse_chart_aggregate(id).ok_or_else(|| IfmlParseError::Parse {
                             position: line.to_string(),
                             message: format!(
                                 "unknown aggregate `{id}` (expected sum | avg | count | min | max)"
                             ),
-                        }
-                    })?;
+                        })?;
                     spec.aggregate = Some(aggregate);
                 }
                 _ => {}
