@@ -31,6 +31,15 @@
 //!    pattern-library flow); bindings are the enclosing view's (or
 //!    module's) params. Literal overrides were already checked
 //!    structurally by the resolver.
+//! 6. Command expressions — `if` guards, event-handler guards, and
+//!    navigation bindings inside `command` bodies (recursively through
+//!    subcommands) — bound to the command's typed arguments and options
+//!    (domain types included), with prompt names in the skip set: prompt
+//!    kinds are presentation semantics, not expression types. Option and
+//!    prompt *defaults* are checked structurally (the resolver's literal
+//!    rule: builtins via the alias table, custom/domain types take string
+//!    literals, prompt kinds map to their obvious literal shape; custom
+//!    prompt kinds skip).
 //!
 //! # Diagnostic codes
 //!
@@ -77,7 +86,7 @@ use rex_expr::{
 };
 use rex_ir::ifml::{
     render_expression, BinOp as IfmlBinOp, ColumnDef, ComponentDeclaration, ComponentSpec,
-    EventAction, EventHandler, Expression, IfmlModel, ModuleUse, ParameterDecl,
+    EventAction, EventHandler, Expression, IfmlModel, ModuleUse, ParameterDecl, PromptKind,
     UnaryOp as IfmlUnaryOp, ValueExpression,
 };
 use rex_ir::Model;
@@ -401,6 +410,117 @@ impl<'a> Checker<'a> {
                 &module.module_uses,
                 None,
             );
+        }
+        for command in &model.commands {
+            self.check_command(command, &[]);
+        }
+    }
+
+    /// Walks one command (recursively through subcommands). Bindings are
+    /// the typed arguments and options; prompt names join the skip set —
+    /// prompt kinds are presentation semantics, not expression types, so
+    /// expressions naming a prompt are deferred. Defaults are checked
+    /// structurally (the resolver's literal rule), never speculatively.
+    fn check_command(&mut self, command: &rex_ir::ifml::CommandDeclaration, context: &[String]) {
+        let mut command_context = context.to_vec();
+        command_context.push(format!("command '{}'", command.name));
+
+        let mut params: Vec<(String, String)> = command
+            .arguments
+            .iter()
+            .map(|argument| (argument.name.clone(), argument.type_ref.clone()))
+            .collect();
+        params.extend(
+            command
+                .options
+                .iter()
+                .map(|option| (option.name.clone(), option.type_ref.clone())),
+        );
+        let mut bindings = Bindings::build(self.domains, &params);
+        bindings
+            .untyped
+            .extend(command.prompts.iter().map(|prompt| prompt.name.clone()));
+
+        if let Some(condition) = &command.condition {
+            let site = Site {
+                context: command_context.clone(),
+                span: (0, 0),
+                source: render_expression(condition),
+            };
+            self.check_expr(condition, &bindings, None, None, &site, &bindings.untyped);
+        }
+        for event in &command.events {
+            let mut event_context = command_context.clone();
+            event_context.push(format!("event '{}'", event.event_type.as_str()));
+            self.check_event(event, &bindings, None, event_context);
+        }
+        for module_use in &command.module_uses {
+            self.check_module_use(module_use, &bindings, &command_context);
+        }
+        for option in &command.options {
+            let Some(default) = &option.default else {
+                continue;
+            };
+            let Some(literal) = literal_kind(default) else {
+                continue;
+            };
+            if crate::resolve::literal_suits_type(&option.type_ref, literal) {
+                continue;
+            }
+            let site = Site {
+                context: command_context.clone(),
+                span: (0, 0),
+                source: render_value(default),
+            };
+            self.push(
+                E_TYPE_MISMATCH,
+                &site,
+                format!(
+                    "default of option '{}' does not suit {}: '{}'",
+                    option.name,
+                    option.type_ref,
+                    render_value(default)
+                ),
+            );
+        }
+        for prompt in &command.prompts {
+            let Some(default) = &prompt.default else {
+                continue;
+            };
+            let Some(literal) = literal_kind(default) else {
+                continue;
+            };
+            let suits = match prompt.kind {
+                PromptKind::Text
+                | PromptKind::Secret
+                | PromptKind::Select
+                | PromptKind::MultiSelect
+                | PromptKind::Date => literal == LiteralKind::Str,
+                PromptKind::Number => literal == LiteralKind::Num,
+                PromptKind::Confirm => literal == LiteralKind::Bool,
+                PromptKind::Custom(_) => continue,
+            };
+            if suits {
+                continue;
+            }
+            let site = Site {
+                context: command_context.clone(),
+                span: (0, 0),
+                source: render_value(default),
+            };
+            self.push(
+                E_TYPE_MISMATCH,
+                &site,
+                format!(
+                    "default of prompt '{}' does not suit {}: '{}'",
+                    prompt.name,
+                    prompt.kind.as_str(),
+                    render_value(default)
+                ),
+            );
+        }
+        for subcommand in &command.subcommands {
+            self.check_command(subcommand, &command_context);
         }
     }
 
@@ -792,6 +912,16 @@ fn param_pairs(decls: &[ParameterDecl]) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The literal shape of a command option/prompt default, when it is one.
+fn literal_kind(value: &ValueExpression) -> Option<LiteralKind> {
+    match value {
+        ValueExpression::String(_) => Some(LiteralKind::Str),
+        ValueExpression::Number(_) => Some(LiteralKind::Num),
+        ValueExpression::Bool(_) => Some(LiteralKind::Bool),
+        _ => None,
+    }
+}
+
 /// Lowers an IR condition/binding expression into the rex-expr AST, or
 /// `None` when any node is unmappable (poison: the whole expression is
 /// skipped — see the [module docs](self) skip list).
@@ -1050,6 +1180,121 @@ mod tests {
             crate::compile_ifml_str("app.ifml", source, &crate::IfmlImports::default())
                 .expect("source must parse and resolve");
         check_ifml(&compilation, Some(model))
+    }
+
+    #[test]
+    fn command_options_and_arguments_bind_typed_expressions() {
+        let source = r#"
+command "customers" {
+    argument customer: Customer;
+    option limit: Int = 20;
+
+    on run if limit > 10 -> action("ListCustomers", {
+        name: customer.name;
+    });
+}
+"#;
+        assert!(diags(source, &shop_model()).is_empty());
+
+        let invalid = source.replace("limit > 10", "limit > \"ten\"");
+        let diags = diags(&invalid, &shop_model());
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].code, E_TYPE_MISMATCH);
+        assert!(
+            diags[0].message.contains("command 'customers' event 'run'"),
+            "{}",
+            diags[0].message
+        );
+        assert!(
+            diags[0]
+                .message
+                .contains("requires numeric operands, found int and string"),
+            "{}",
+            diags[0].message
+        );
+    }
+
+    #[test]
+    fn command_argument_feature_errors_name_the_command() {
+        let source = r#"
+command "customers" {
+    argument customer: Customer;
+
+    on run if customer.nope == "x" -> stay;
+}
+"#;
+        let diags = diags(source, &shop_model());
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].code, E_UNKNOWN_FEATURE);
+        assert_eq!(
+            diags[0].message,
+            "command 'customers' event 'run': unknown feature 'nope' on class 'Customer'"
+        );
+    }
+
+    #[test]
+    fn command_generic_types_and_prompts_are_skipped() {
+        let source = r#"
+command "onboard" {
+    option tier: Tier = "gold";
+    prompt confirm: confirm;
+
+    on run if confirm == true -> action("Onboard", {
+        tier: tier;
+    });
+}
+"#;
+        assert!(
+            diags(source, &shop_model()).is_empty(),
+            "generic option types and prompt names are deferred, not errors"
+        );
+    }
+
+    #[test]
+    fn command_option_defaults_must_suit_their_type() {
+        let source = r#"
+command "customers" {
+    option limit: Int = "twenty";
+}
+"#;
+        let reported = diags(source, &shop_model());
+        assert_eq!(reported.len(), 1, "{reported:?}");
+        assert_eq!(reported[0].code, E_TYPE_MISMATCH);
+        assert!(
+            reported[0]
+                .message
+                .contains("default of option 'limit' does not suit Int: '\"twenty\"'"),
+            "{}",
+            reported[0].message
+        );
+
+        let valid = source.replace("Int = \"twenty\"", "CustomerStatus = \"active\"");
+        assert!(
+            diags(&valid, &shop_model()).is_empty(),
+            "custom/domain option types take string defaults (the resolver's rule)"
+        );
+    }
+
+    #[test]
+    fn command_prompt_defaults_must_suit_their_kind() {
+        let source = r#"
+command "onboard" {
+    prompt count: number = "lots";
+}
+"#;
+        let reported = diags(source, &shop_model());
+        assert_eq!(reported.len(), 1, "{reported:?}");
+        assert_eq!(reported[0].code, E_TYPE_MISMATCH);
+        assert!(
+            reported[0]
+                .message
+                .contains("default of prompt 'count' does not suit number: '\"lots\"'"),
+            "{}",
+            reported[0].message
+        );
+
+        let valid = source.replace("number = \"lots\"", "text = \"Ada\"");
+        assert!(diags(&valid, &shop_model()).is_empty());
     }
 
     #[test]

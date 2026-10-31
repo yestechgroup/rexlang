@@ -535,8 +535,9 @@ fn validate_use(
 /// builtins go through the shared alias table (`crate::check::builtin_type`)
 /// so the resolver and the expression checker can never disagree; any other
 /// `type_ref` is a custom-identifier type, whose only literal shape is a
-/// string (entity handles are opaque text).
-fn literal_suits_type(type_ref: &str, literal: LiteralKind) -> bool {
+/// string (entity handles are opaque text). Shared with the checker's
+/// command option-default rule, which is the same literal-vs-type question.
+pub(crate) fn literal_suits_type(type_ref: &str, literal: LiteralKind) -> bool {
     match crate::check::builtin_type(type_ref) {
         Some(builtin) => builtin.suits(literal),
         None => literal == LiteralKind::Str,
