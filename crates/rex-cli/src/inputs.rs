@@ -374,17 +374,18 @@ fn collect_ifml_imports(
     *sources = walk.sources;
     Ok(())
 }
-
-/// An `.actor` file plus the domain sources it imports, ready for
-/// [`rex_driver::compile_actors_str`].
-pub(crate) struct ActorPair {
-    /// The actor file's path as given on the command line.
+/// A surface file plus the domain sources it imports, ready for the
+/// driver's `compile_*_str` entry points. The `.actor`, `.ddd`, and `.evt`
+/// compiles take this bundle directly; `.uc` and `.cmmn` wrap it with
+/// their pre-compiled import buckets.
+pub(crate) struct DomainPair {
+    /// The surface file's path as given on the command line.
     pub(crate) path: String,
-    /// The actor file's source text.
+    /// The surface file's source text.
     pub(crate) source: String,
     /// Each imported domain as `(resolved path, source)`; the driver
-    /// matches an actor-file import by exact string or by lexical
-    /// resolution relative to the actor file's directory, so resolved
+    /// matches a surface-file import by exact string or by lexical
+    /// resolution relative to the importing file's directory, so resolved
     /// paths keep vocabulary snapshots anchored to the declaring file no
     /// matter where the process runs from.
     pub(crate) domains: Vec<(String, String)>,
@@ -395,7 +396,7 @@ pub(crate) struct ActorPair {
     sigil: SigilSources,
 }
 
-impl ActorPair {
+impl DomainPair {
     /// The import bundle the driver entry point takes.
     pub(crate) fn imports(&self) -> DomainImports {
         DomainImports {
@@ -404,8 +405,8 @@ impl ActorPair {
         }
     }
 
-    /// The source text of the file with the given driver path, if it is the
-    /// actor file, an imported domain, or a rosetta source.
+    /// The source text of the file with the given driver path, if it is
+    /// the surface file, an imported domain, or a rosetta source.
     pub(crate) fn source_of(&self, path: &str) -> Option<&str> {
         if path == self.path {
             return Some(&self.source);
@@ -424,229 +425,46 @@ impl ActorPair {
     }
 }
 
-/// Reads an `.actor` file plus every domain it imports.
+/// Reads a surface file plus every domain it imports; `import_paths`
+/// yields the file's raw (unresolved) import path strings and is empty
+/// when the file does not parse — the driver reports that.
 ///
-/// Import paths resolve relative to the actor file's own directory, and the
-/// **resolved** path is passed to the driver (the driver matches imports by
-/// exact string or by lexical resolution, and the domain's driver path also
-/// locates its `vocab/` directory — with raw import strings that lookup
-/// would be relative to the process CWD). A missing import file is a clean
-/// error naming the resolved path. Duplicate imports are read once.
-pub(crate) fn read_actor_pair(file: &Path) -> anyhow::Result<ActorPair> {
-    let source = std::fs::read_to_string(file)
-        .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
-    let path = file.display().to_string();
-    let mut domains: Vec<(String, String)> = Vec::new();
-    if let Some(ast) = &rex_syntax::parse_actors(&source).ast {
-        let dir = file
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        for import in &ast.imports {
-            if domains.iter().any(|(existing, _)| *existing == import.path) {
-                continue;
-            }
-            let resolved = dir.join(&import.path);
-            let text = std::fs::read_to_string(&resolved).map_err(|error| {
-                anyhow::anyhow!(
-                    "cannot read imported file {} (imported by {}): {error}",
-                    resolved.display(),
-                    path
-                )
-            })?;
-            domains.push((resolved.display().to_string(), text));
-        }
-    }
-    let schemas = collect_schema_imports(&domains)?;
-    let sigil = collect_sigil_imports(&domains)?;
-    Ok(ActorPair {
-        path,
-        source,
-        domains,
-        schemas,
-        sigil,
-    })
-}
-
-/// A `.ddd` file plus the domain sources it imports, ready for
-/// [`rex_driver::compile_ddd_str`].
-pub(crate) struct DddDesignPair {
-    /// The design file's path as given on the command line.
-    pub(crate) path: String,
-    /// The design file's source text.
-    pub(crate) source: String,
-    /// Each imported domain as `(resolved path, source)`, in import order;
-    /// the driver matches a design import by exact string or by lexical
-    /// resolution relative to the design file's directory, so resolved
-    /// paths keep vocabulary snapshots anchored to the declaring file no
-    /// matter where the process runs from.
-    pub(crate) domains: Vec<(String, String)>,
-    /// The domains' `import schema` content, keyed by domain path.
-    schemas: SchemaImports,
-    /// The domains' `import sigil` content, plus the rosetta sources for
-    /// rendering sigil diagnostics.
-    sigil: SigilSources,
-}
-
-impl DddDesignPair {
-    /// The import bundle the driver entry point takes.
-    pub(crate) fn imports(&self) -> DomainImports {
-        DomainImports {
-            schemas: self.schemas.clone(),
-            sigil: self.sigil.imports.clone(),
-        }
-    }
-
-    /// The source text of the file with the given driver path, if it is the
-    /// design file, an imported domain, or a rosetta source.
-    pub(crate) fn source_of(&self, path: &str) -> Option<&str> {
-        if path == self.path {
-            return Some(&self.source);
-        }
-        self.domains
-            .iter()
-            .find(|(name, _)| name == path)
-            .map(|(_, source)| source.as_str())
-            .or_else(|| {
-                self.sigil
-                    .sources
-                    .iter()
-                    .find(|(name, _)| name == path)
-                    .map(|(_, source)| source.as_str())
-            })
-    }
-}
-
-/// Reads a `.ddd` file plus every domain it imports.
-///
-/// Import paths resolve relative to the design file's own directory, and the
-/// **resolved** path is passed to the driver (the driver matches imports by
-/// exact string or by lexical resolution, and the domain's driver path also
-/// locates its `vocab/` directory — with raw import strings that lookup
-/// would be relative to the process CWD). A missing import file is a clean
-/// error naming the resolved path. Duplicate imports are read once.
-pub(crate) fn read_ddd_design(file: &Path) -> anyhow::Result<DddDesignPair> {
-    let source = std::fs::read_to_string(file)
-        .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
-    let path = file.display().to_string();
-    let mut domains: Vec<(String, String)> = Vec::new();
-    if let Some(ast) = &rex_syntax::parse_ddd(&source).ast {
-        let dir = file
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        for import in &ast.imports {
-            if domains.iter().any(|(existing, _)| *existing == import.path) {
-                continue;
-            }
-            let resolved = dir.join(&import.path);
-            let text = std::fs::read_to_string(&resolved).map_err(|error| {
-                anyhow::anyhow!(
-                    "cannot read imported file {} (imported by {}): {error}",
-                    resolved.display(),
-                    path
-                )
-            })?;
-            domains.push((resolved.display().to_string(), text));
-        }
-    }
-    let schemas = collect_schema_imports(&domains)?;
-    let sigil = collect_sigil_imports(&domains)?;
-    Ok(DddDesignPair {
-        path,
-        source,
-        domains,
-        schemas,
-        sigil,
-    })
-}
-
-/// An `.evt` file plus the domain sources it imports, ready for
-/// [`rex_driver::compile_evt_str`].
-pub(crate) struct EvtPair {
-    /// The contract file's path as given on the command line.
-    pub(crate) path: String,
-    /// The contract file's source text.
-    pub(crate) source: String,
-    /// Each imported domain as `(resolved path, source)`; the driver
-    /// matches an `.evt` import by exact string or by lexical resolution
-    /// relative to the contract file's directory, so resolved paths keep
-    /// vocabulary snapshots anchored to the declaring file no matter where
-    /// the process runs from.
-    pub(crate) domains: Vec<(String, String)>,
-    /// The domains' `import schema` content, keyed by domain path.
-    schemas: SchemaImports,
-    /// The domains' `import sigil` content, plus the rosetta sources for
-    /// rendering sigil diagnostics.
-    sigil: SigilSources,
-}
-
-impl EvtPair {
-    /// The import bundle the driver entry point takes.
-    pub(crate) fn imports(&self) -> DomainImports {
-        DomainImports {
-            schemas: self.schemas.clone(),
-            sigil: self.sigil.imports.clone(),
-        }
-    }
-
-    /// The source text of the file with the given driver path, if it is the
-    /// contract file, an imported domain, or a rosetta source.
-    pub(crate) fn source_of(&self, path: &str) -> Option<&str> {
-        if path == self.path {
-            return Some(&self.source);
-        }
-        self.domains
-            .iter()
-            .find(|(name, _)| name == path)
-            .map(|(_, source)| source.as_str())
-            .or_else(|| {
-                self.sigil
-                    .sources
-                    .iter()
-                    .find(|(name, _)| name == path)
-                    .map(|(_, source)| source.as_str())
-            })
-    }
-}
-
-/// Reads an `.evt` file plus every domain it imports.
-///
-/// Import paths resolve relative to the contract file's own directory, and
-/// the **resolved** path is passed to the driver (the driver matches
+/// Import paths resolve relative to the importing file's own directory,
+/// and the **resolved** path is passed to the driver (the driver matches
 /// imports by exact string or by lexical resolution, and the domain's
 /// driver path also locates its `vocab/` directory — with raw import
 /// strings that lookup would be relative to the process CWD). A missing
-/// import file is a clean error naming the resolved path. Duplicate imports
-/// are read once.
-pub(crate) fn read_evt_pair(file: &Path) -> anyhow::Result<EvtPair> {
+/// import file is a clean error naming the resolved path. Duplicate
+/// imports are read once.
+fn read_domain_pair(
+    file: &Path,
+    import_paths: impl Fn(&str) -> Vec<String>,
+) -> anyhow::Result<DomainPair> {
     let source = std::fs::read_to_string(file)
         .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
     let path = file.display().to_string();
     let mut domains: Vec<(String, String)> = Vec::new();
-    if let Some(ast) = &rex_syntax::parse_evt(&source).ast {
-        let dir = file
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        for import in &ast.imports {
-            if domains.iter().any(|(existing, _)| *existing == import.path) {
-                continue;
-            }
-            let resolved = dir.join(&import.path);
-            let text = std::fs::read_to_string(&resolved).map_err(|error| {
-                anyhow::anyhow!(
-                    "cannot read imported file {} (imported by {}): {error}",
-                    resolved.display(),
-                    path
-                )
-            })?;
-            domains.push((resolved.display().to_string(), text));
+    let dir = file
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    for import in import_paths(&source) {
+        if domains.iter().any(|(existing, _)| *existing == import) {
+            continue;
         }
+        let resolved = dir.join(&import);
+        let text = std::fs::read_to_string(&resolved).map_err(|error| {
+            anyhow::anyhow!(
+                "cannot read imported file {} (imported by {}): {error}",
+                resolved.display(),
+                path
+            )
+        })?;
+        domains.push((resolved.display().to_string(), text));
     }
     let schemas = collect_schema_imports(&domains)?;
     let sigil = collect_sigil_imports(&domains)?;
-    Ok(EvtPair {
+    Ok(DomainPair {
         path,
         source,
         domains,
@@ -655,19 +473,152 @@ pub(crate) fn read_evt_pair(file: &Path) -> anyhow::Result<EvtPair> {
     })
 }
 
-/// A `.uc` file plus everything it imports, ready for
-/// [`rex_driver::compile_usecase_str`].
-pub(crate) struct UcPair {
-    /// The use case file's path as given on the command line.
-    pub(crate) path: String,
-    /// The use case file's source text.
-    pub(crate) source: String,
-    /// Each imported domain as `(resolved path, source)`; the driver
-    /// matches a `.uc` import by exact string or by lexical resolution
-    /// relative to the use case file's directory, so resolved paths keep
-    /// vocabulary snapshots anchored to the declaring file no matter where
-    /// the process runs from.
+/// An `.actor` file plus the domain sources it imports, ready for
+/// [`rex_driver::compile_actors_str`].
+pub(crate) type ActorPair = DomainPair;
+
+/// Reads an `.actor` file plus every domain it imports.
+pub(crate) fn read_actor_pair(file: &Path) -> anyhow::Result<ActorPair> {
+    read_domain_pair(file, |source| {
+        rex_syntax::parse_actors(source)
+            .ast
+            .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
+            .unwrap_or_default()
+    })
+}
+
+/// A `.ddd` design file plus the domain sources it imports, ready for
+/// [`rex_driver::compile_ddd_str`].
+pub(crate) type DddDesignPair = DomainPair;
+
+/// Reads a `.ddd` file plus every domain it imports.
+pub(crate) fn read_ddd_design(file: &Path) -> anyhow::Result<DddDesignPair> {
+    read_domain_pair(file, |source| {
+        rex_syntax::parse_ddd(source)
+            .ast
+            .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
+            .unwrap_or_default()
+    })
+}
+
+/// An `.evt` contract file plus the domain sources it imports, ready for
+/// [`rex_driver::compile_evt_str`].
+pub(crate) type EvtPair = DomainPair;
+
+/// Reads an `.evt` file plus every domain it imports.
+pub(crate) fn read_evt_pair(file: &Path) -> anyhow::Result<EvtPair> {
+    read_domain_pair(file, |source| {
+        rex_syntax::parse_evt(source)
+            .ast
+            .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
+            .unwrap_or_default()
+    })
+}
+
+/// The raw `.mox` domains plus the pre-compiled `.ddd`/`.actor`/`.evt`
+/// imports of a `.uc`/`.cmmn` file, keyed by resolved path.
+pub(crate) struct GatheredImports {
+    /// Each imported `.mox` domain as `(resolved path, source)`.
     pub(crate) domains: Vec<(String, String)>,
+    /// Each imported `.ddd` design, compiled.
+    pub(crate) designs: Vec<(String, rex_ir::ddd::DddModel)>,
+    /// Each imported `.actor` policy, compiled.
+    pub(crate) actors: Vec<(String, rex_ir::ActorModel)>,
+    /// Each imported `.evt` contract, compiled.
+    pub(crate) events: Vec<(String, rex_ir::events::EventModel)>,
+}
+
+impl GatheredImports {
+    /// Reads `file`'s imports — `import_paths` yields the file's raw
+    /// import path strings — bucketed by resolved extension: `.mox` is
+    /// kept raw, `.ddd`/`.actor`/`.evt` are compiled to their artifacts,
+    /// and unknown extensions pass through so the driver reports them.
+    /// Duplicate paths are gathered once.
+    fn gather(
+        file: &Path,
+        source: &str,
+        import_paths: impl Fn(&str) -> Vec<String>,
+    ) -> anyhow::Result<GatheredImports> {
+        let mut gathered = GatheredImports {
+            domains: Vec::new(),
+            designs: Vec::new(),
+            actors: Vec::new(),
+            events: Vec::new(),
+        };
+        let path = file.display().to_string();
+        let dir = file
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        for import in import_paths(source) {
+            let resolved = dir.join(&import);
+            let resolved_path = resolved.display().to_string();
+            match resolved
+                .extension()
+                .and_then(|extension| extension.to_str())
+            {
+                Some("mox") => {
+                    if gathered
+                        .domains
+                        .iter()
+                        .any(|(existing, _)| *existing == resolved_path)
+                    {
+                        continue;
+                    }
+                    let text = std::fs::read_to_string(&resolved).map_err(|error| {
+                        anyhow::anyhow!(
+                            "cannot read imported file {} (imported by {}): {error}",
+                            resolved.display(),
+                            path
+                        )
+                    })?;
+                    gathered.domains.push((resolved_path, text));
+                }
+                Some("ddd") => {
+                    if gathered
+                        .designs
+                        .iter()
+                        .any(|(existing, _)| *existing == resolved_path)
+                    {
+                        continue;
+                    }
+                    let model = read_design_model(&resolved)?;
+                    gathered.designs.push((resolved_path, model));
+                }
+                Some("actor") => {
+                    if gathered
+                        .actors
+                        .iter()
+                        .any(|(existing, _)| *existing == resolved_path)
+                    {
+                        continue;
+                    }
+                    let model = read_actor_model(&resolved)?;
+                    gathered.actors.push((resolved_path, model));
+                }
+                Some("evt") => {
+                    if gathered
+                        .events
+                        .iter()
+                        .any(|(existing, _)| *existing == resolved_path)
+                    {
+                        continue;
+                    }
+                    let model = read_event_model(&resolved)?;
+                    gathered.events.push((resolved_path, model));
+                }
+                _ => {}
+            }
+        }
+        Ok(gathered)
+    }
+}
+/// A `.uc` file and its imports, ready for
+/// [`rex_driver::compile_usecase_str`]: the raw imported domains (in
+/// [`DomainPair`]) plus the pre-compiled `.ddd`/`.actor`/`.evt` buckets.
+pub(crate) struct UcPair {
+    /// The use case file plus its raw imported domains.
+    pub(crate) pair: DomainPair,
     /// Each imported `.ddd` design, compiled, keyed by its resolved path;
     /// the driver matches a `.uc` import by exact string or by lexical
     /// resolution relative to the use case file's directory (the `.actor`
@@ -677,136 +628,36 @@ pub(crate) struct UcPair {
     pub(crate) actors: Vec<(String, rex_ir::ActorModel)>,
     /// Each imported `.evt` contract, compiled, keyed by its resolved path.
     pub(crate) events: Vec<(String, rex_ir::events::EventModel)>,
-    /// The domains' `import schema` content, keyed by domain path.
-    schemas: SchemaImports,
-    /// The domains' `import sigil` content, plus the rosetta sources for
-    /// rendering sigil diagnostics.
-    sigil: SigilSources,
 }
 
-impl UcPair {
-    /// The import bundle the driver entry point takes.
-    pub(crate) fn imports(&self) -> DomainImports {
-        DomainImports {
-            schemas: self.schemas.clone(),
-            sigil: self.sigil.imports.clone(),
-        }
-    }
-
-    /// The source text of the file with the given driver path — the use
-    /// case file itself, an imported domain, or a rosetta source (design,
-    /// actor, and event imports arrive pre-compiled, so their diagnostics
-    /// were rendered when they were gathered).
-    pub(crate) fn source_of(&self, path: &str) -> Option<&str> {
-        if path == self.path {
-            return Some(&self.source);
-        }
-        self.domains
-            .iter()
-            .find(|(name, _)| name == path)
-            .map(|(_, source)| source.as_str())
-            .or_else(|| {
-                self.sigil
-                    .sources
-                    .iter()
-                    .find(|(name, _)| name == path)
-                    .map(|(_, source)| source.as_str())
-            })
-    }
-}
-
-/// Reads a `.uc` file plus everything it imports: `.mox` domains as raw
-/// texts, and `.ddd` designs, `.actor` policies, and `.evt` contracts each
-/// pre-compiled to their artifact (the `.deploy` gathering pattern). Import
-/// paths resolve relative to the use case file's own directory, and the
-/// **resolved** path is passed to the driver (the driver matches imports by
-/// exact string or by lexical resolution, and the domain's driver path also
-/// locates its `vocab/` directory — with raw import strings that lookup
-/// would be relative to the process CWD). A missing or non-compiling import
-/// is a clean error naming the resolved path; an import of any other
-/// extension passes through untouched so the driver reports it against its
-/// declaration. Duplicate imports are read once.
+/// Reads a `.uc` file plus every import it declares.
+///
+/// Import paths resolve relative to the use case file's own directory,
+/// bucketed by extension exactly as [`GatheredImports::gather`] describes;
+/// the **resolved** path is passed to the driver. A missing import file is
+/// a clean error naming the resolved path. Duplicate imports are read once.
 pub(crate) fn read_uc_pair(file: &Path) -> anyhow::Result<UcPair> {
     let source = std::fs::read_to_string(file)
         .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
-    let path = file.display().to_string();
-    let mut domains: Vec<(String, String)> = Vec::new();
-    let mut designs: Vec<(String, rex_ir::ddd::DddModel)> = Vec::new();
-    let mut actors: Vec<(String, rex_ir::ActorModel)> = Vec::new();
-    let mut events: Vec<(String, rex_ir::events::EventModel)> = Vec::new();
-    if let Some(ast) = &rex_syntax::parse_usecases(&source).ast {
-        let dir = file
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        for import in &ast.imports {
-            let resolved = dir.join(&import.path);
-            let resolved_path = resolved.display().to_string();
-            match resolved
-                .extension()
-                .and_then(|extension| extension.to_str())
-            {
-                Some("mox") => {
-                    if domains
-                        .iter()
-                        .any(|(existing, _)| *existing == resolved_path)
-                    {
-                        continue;
-                    }
-                    let text = std::fs::read_to_string(&resolved).map_err(|error| {
-                        anyhow::anyhow!(
-                            "cannot read imported file {} (imported by {}): {error}",
-                            resolved.display(),
-                            path
-                        )
-                    })?;
-                    domains.push((resolved_path, text));
-                }
-                Some("ddd") => {
-                    if designs
-                        .iter()
-                        .any(|(existing, _)| *existing == resolved_path)
-                    {
-                        continue;
-                    }
-                    let model = read_design_model(&resolved)?;
-                    designs.push((resolved_path, model));
-                }
-                Some("actor") => {
-                    if actors
-                        .iter()
-                        .any(|(existing, _)| *existing == resolved_path)
-                    {
-                        continue;
-                    }
-                    let model = read_actor_model(&resolved)?;
-                    actors.push((resolved_path, model));
-                }
-                Some("evt") => {
-                    if events
-                        .iter()
-                        .any(|(existing, _)| *existing == resolved_path)
-                    {
-                        continue;
-                    }
-                    let model = read_event_model(&resolved)?;
-                    events.push((resolved_path, model));
-                }
-                _ => {}
-            }
-        }
-    }
-    let schemas = collect_schema_imports(&domains)?;
-    let sigil = collect_sigil_imports(&domains)?;
+    let gathered = GatheredImports::gather(file, &source, |source| {
+        rex_syntax::parse_usecases(source)
+            .ast
+            .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
+            .unwrap_or_default()
+    })?;
+    let schemas = collect_schema_imports(&gathered.domains)?;
+    let sigil = collect_sigil_imports(&gathered.domains)?;
     Ok(UcPair {
-        path,
-        source,
-        domains,
-        designs,
-        actors,
-        events,
-        schemas,
-        sigil,
+        pair: DomainPair {
+            path: file.display().to_string(),
+            source,
+            domains: gathered.domains,
+            schemas,
+            sigil,
+        },
+        designs: gathered.designs,
+        actors: gathered.actors,
+        events: gathered.events,
     })
 }
 
@@ -814,54 +665,14 @@ pub(crate) fn read_uc_pair(file: &Path) -> anyhow::Result<UcPair> {
 /// counterpart of [`UcPair`] — domains, events, actors, and aliased
 /// designs, each keyed by its resolved path.
 pub(crate) struct CmmnPair {
-    /// The case file's path as given on the command line.
-    pub(crate) path: String,
-    /// The case file's source text.
-    pub(crate) source: String,
-    /// Each imported domain as `(resolved path, source)`.
-    pub(crate) domains: Vec<(String, String)>,
+    /// The case file plus its raw imported domains.
+    pub(crate) pair: DomainPair,
     /// Each imported `.ddd` design, compiled, keyed by its resolved path.
     pub(crate) designs: Vec<(String, rex_ir::ddd::DddModel)>,
     /// Each imported `.actor` policy, compiled, keyed by its resolved path.
     pub(crate) actors: Vec<(String, rex_ir::ActorModel)>,
     /// Each imported `.evt` contract, compiled, keyed by its resolved path.
     pub(crate) events: Vec<(String, rex_ir::events::EventModel)>,
-    /// The domains' `import schema` content, keyed by domain path.
-    schemas: SchemaImports,
-    /// The domains' `import sigil` content, plus the rosetta sources for
-    /// rendering sigil diagnostics.
-    sigil: SigilSources,
-}
-
-impl CmmnPair {
-    /// The import bundle the driver entry point takes.
-    pub(crate) fn imports(&self) -> DomainImports {
-        DomainImports {
-            schemas: self.schemas.clone(),
-            sigil: self.sigil.imports.clone(),
-        }
-    }
-
-    /// The source text of the file with the given driver path — the case
-    /// file itself, an imported domain, or a rosetta source (design, actor,
-    /// and event imports arrive pre-compiled, so their diagnostics were
-    /// rendered when they were gathered).
-    pub(crate) fn source_of(&self, path: &str) -> Option<&str> {
-        if path == self.path {
-            return Some(&self.source);
-        }
-        self.domains
-            .iter()
-            .find(|(name, _)| name == path)
-            .map(|(_, source)| source.as_str())
-            .or_else(|| {
-                self.sigil
-                    .sources
-                    .iter()
-                    .find(|(name, _)| name == path)
-                    .map(|(_, source)| source.as_str())
-            })
-    }
 }
 
 /// Reads a `.cmmn` file and gathers its imports exactly like
@@ -871,84 +682,25 @@ impl CmmnPair {
 pub(crate) fn read_cmmn_pair(file: &Path) -> anyhow::Result<CmmnPair> {
     let source = std::fs::read_to_string(file)
         .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
-    let path = file.display().to_string();
-    let mut domains: Vec<(String, String)> = Vec::new();
-    let mut designs: Vec<(String, rex_ir::ddd::DddModel)> = Vec::new();
-    let mut actors: Vec<(String, rex_ir::ActorModel)> = Vec::new();
-    let mut events: Vec<(String, rex_ir::events::EventModel)> = Vec::new();
-    if let Some(ast) = &rex_syntax::parse_cmmn(&source).ast {
-        let dir = file
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        for import in &ast.imports {
-            let resolved = dir.join(&import.path);
-            let resolved_path = resolved.display().to_string();
-            match resolved
-                .extension()
-                .and_then(|extension| extension.to_str())
-            {
-                Some("mox") => {
-                    if domains
-                        .iter()
-                        .any(|(existing, _)| *existing == resolved_path)
-                    {
-                        continue;
-                    }
-                    let text = std::fs::read_to_string(&resolved).map_err(|error| {
-                        anyhow::anyhow!(
-                            "cannot read imported file {} (imported by {}): {error}",
-                            resolved.display(),
-                            path
-                        )
-                    })?;
-                    domains.push((resolved_path, text));
-                }
-                Some("ddd") => {
-                    if designs
-                        .iter()
-                        .any(|(existing, _)| *existing == resolved_path)
-                    {
-                        continue;
-                    }
-                    let model = read_design_model(&resolved)?;
-                    designs.push((resolved_path, model));
-                }
-                Some("actor") => {
-                    if actors
-                        .iter()
-                        .any(|(existing, _)| *existing == resolved_path)
-                    {
-                        continue;
-                    }
-                    let model = read_actor_model(&resolved)?;
-                    actors.push((resolved_path, model));
-                }
-                Some("evt") => {
-                    if events
-                        .iter()
-                        .any(|(existing, _)| *existing == resolved_path)
-                    {
-                        continue;
-                    }
-                    let model = read_event_model(&resolved)?;
-                    events.push((resolved_path, model));
-                }
-                _ => {}
-            }
-        }
-    }
-    let schemas = collect_schema_imports(&domains)?;
-    let sigil = collect_sigil_imports(&domains)?;
+    let gathered = GatheredImports::gather(file, &source, |source| {
+        rex_syntax::parse_cmmn(source)
+            .ast
+            .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
+            .unwrap_or_default()
+    })?;
+    let schemas = collect_schema_imports(&gathered.domains)?;
+    let sigil = collect_sigil_imports(&gathered.domains)?;
     Ok(CmmnPair {
-        path,
-        source,
-        domains,
-        designs,
-        actors,
-        events,
-        schemas,
-        sigil,
+        pair: DomainPair {
+            path: file.display().to_string(),
+            source,
+            domains: gathered.domains,
+            schemas,
+            sigil,
+        },
+        designs: gathered.designs,
+        actors: gathered.actors,
+        events: gathered.events,
     })
 }
 

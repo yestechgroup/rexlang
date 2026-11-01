@@ -4,7 +4,7 @@
 
 use rex_driver::{render, ActorCompilation};
 
-use crate::inputs::{ActorPair, CmmnPair, DddDesignPair, DeployPair, EvtPair, UcPair};
+use crate::inputs::{ActorPair, DddDesignPair, DeployPair, DomainPair, EvtPair};
 
 /// Renders a compilation's diagnostics grouped per file: each file's
 /// diagnostics are ariadne-rendered against that file's own source, the way
@@ -67,7 +67,7 @@ pub(crate) fn report_deploy_diagnostics(
 /// imports arrive pre-compiled and their diagnostics were rendered when
 /// gathered).
 pub(crate) fn report_usecase_diagnostics(
-    pair: &UcPair,
+    pair: &DomainPair,
     compilation: &rex_driver::UseCaseCompilation,
 ) {
     render_grouped(&compilation.diagnostics, |path| pair.source_of(path));
@@ -76,7 +76,10 @@ pub(crate) fn report_usecase_diagnostics(
 /// Renders a `.cmmn` compilation's diagnostics grouped per file,
 /// ariadne-rendered against each file's own source — the case file and
 /// every imported domain.
-pub(crate) fn report_cmmn_diagnostics(pair: &CmmnPair, compilation: &rex_driver::CmmnCompilation) {
+pub(crate) fn report_cmmn_diagnostics(
+    pair: &DomainPair,
+    compilation: &rex_driver::CmmnCompilation,
+) {
     render_grouped(&compilation.diagnostics, |path| pair.source_of(path));
 }
 

@@ -118,15 +118,15 @@ pub(crate) fn run(
     } else if files.len() == 1 && is_uc_file(&files[0]) {
         let pair = read_uc_pair(&files[0])?;
         let compilation = compile_usecase_str(
-            &pair.path,
-            &pair.source,
-            &pair.domains,
-            &pair.imports(),
+            &pair.pair.path,
+            &pair.pair.source,
+            &pair.pair.domains,
+            &pair.pair.imports(),
             &pair.designs,
             &pair.actors,
             &pair.events,
         );
-        report_usecase_diagnostics(&pair, &compilation);
+        report_usecase_diagnostics(&pair.pair, &compilation);
         let Some(use_case_model) = compilation.model else {
             return Ok(ExitCode::FAILURE);
         };
@@ -139,15 +139,15 @@ pub(crate) fn run(
     } else if files.len() == 1 && is_cmmn_file(&files[0]) {
         let pair = read_cmmn_pair(&files[0])?;
         let compilation = compile_cmmn_str(
-            &pair.path,
-            &pair.source,
-            &pair.domains,
-            &pair.imports(),
+            &pair.pair.path,
+            &pair.pair.source,
+            &pair.pair.domains,
+            &pair.pair.imports(),
             &pair.designs,
             &pair.actors,
             &pair.events,
         );
-        report_cmmn_diagnostics(&pair, &compilation);
+        report_cmmn_diagnostics(&pair.pair, &compilation);
         let Some(case_model) = compilation.model else {
             return Ok(ExitCode::FAILURE);
         };
