@@ -1,0 +1,16 @@
+[package]
+name = "rex-verify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+creusot-std = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
