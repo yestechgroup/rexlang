@@ -12,7 +12,7 @@
 //! `addition` → `multiplication` → `unary` → `primary`).
 
 use super::Rule;
-use pest::iterators::Pair;
+use pest::iterators::{Pair, Pairs};
 
 use rex_ir::ifml::*;
 
@@ -23,6 +23,98 @@ use crate::parser::utils::{parse_number, parse_string};
 //   parse_value_primary   — handles primary: string, number, ident, call, field, group
 //   convert_expression_to_value — handles the full operator chain for ValueExpression
 // They are defined before parse_value_expression which is the top-level entry.
+
+/// Operator table for the `comparison` chain level. It accepts every
+/// operator symbol (the grammar routes the whole expression here when
+/// re-parsing), defaulting to `Eq`.
+fn comparison_op(s: &str) -> BinOp {
+    match s {
+        "==" => BinOp::Eq,
+        "!=" => BinOp::Ne,
+        "<" => BinOp::Lt,
+        "<=" => BinOp::Le,
+        ">" => BinOp::Gt,
+        ">=" => BinOp::Ge,
+        "~=" => BinOp::RegexMatch,
+        "!~" => BinOp::NegRegex,
+        "+" => BinOp::Add,
+        "-" => BinOp::Sub,
+        "*" => BinOp::Mul,
+        "/" => BinOp::Div,
+        "%" => BinOp::Mod,
+        "&&" => BinOp::And,
+        "||" => BinOp::Or,
+        _ => BinOp::Eq,
+    }
+}
+
+/// Operator table for the `addition`/`multiplication` chain levels.
+fn arithmetic_op(s: &str) -> BinOp {
+    match s {
+        "+" => BinOp::Add,
+        "-" => BinOp::Sub,
+        "*" => BinOp::Mul,
+        "/" => BinOp::Div,
+        "%" => BinOp::Mod,
+        _ => BinOp::Add,
+    }
+}
+
+/// Folds `a OP b OP c …` left-associatively over a level whose children
+/// are all operands sharing one operator (`logical_or`, `logical_and`).
+/// `None` only when the level has no first operand.
+fn fold_fixed<T>(
+    children: &mut Pairs<'_, Rule>,
+    op: BinOp,
+    mut leaf: impl FnMut(Pair<'_, Rule>) -> T,
+    join: impl Fn(T, BinOp, T) -> T,
+) -> Option<T> {
+    let mut result = leaf(children.next()?);
+    for right in children.by_ref() {
+        result = join(result, op.clone(), leaf(right));
+    }
+    Some(result)
+}
+
+/// Folds `a op1 b op2 c …` left-associatively over a level whose
+/// children alternate operand/op pairs (`comparison`, `addition`,
+/// `multiplication`).
+fn fold_chained<T>(
+    children: &mut Pairs<'_, Rule>,
+    op_of: impl Fn(&str) -> BinOp,
+    mut leaf: impl FnMut(Pair<'_, Rule>) -> T,
+    join: impl Fn(T, BinOp, T) -> T,
+) -> Option<T> {
+    let mut result = leaf(children.next()?);
+    while let Some(op_pair) = children.next() {
+        let op = op_of(op_pair.as_str());
+        let Some(right) = children.next() else {
+            break;
+        };
+        result = join(result, op, leaf(right));
+    }
+    Some(result)
+}
+
+fn join_value_expr(left: ValueExpression, op: BinOp, right: ValueExpression) -> ValueExpression {
+    ValueExpression::BinOp {
+        left: Box::new(left),
+        op,
+        right: Box::new(right),
+    }
+}
+
+fn join_expr(left: Expression, op: BinOp, right: Expression) -> Expression {
+    Expression::BinOp {
+        left: Box::new(left),
+        op,
+        right: Box::new(right),
+    }
+}
+
+fn fallback_value(pair: &Pair<'_, Rule>) -> ValueExpression {
+    ValueExpression::Identifier(pair.as_str().to_string())
+}
 
 fn parse_value_primary(pair: Pair<Rule>) -> ValueExpression {
     match pair.as_rule() {
@@ -91,105 +183,45 @@ fn convert_expression_to_value(pair: Pair<Rule>) -> ValueExpression {
         // logical_or: all children are operands with || between them
         Rule::logical_or => {
             let mut children = pair.clone().into_inner();
-            if let Some(first) = children.next() {
-                let mut result = convert_expression_to_value(first);
-                for right in children {
-                    let right_val = convert_expression_to_value(right);
-                    result = ValueExpression::BinOp {
-                        left: Box::new(result),
-                        op: BinOp::Or,
-                        right: Box::new(right_val),
-                    };
-                }
-                result
-            } else {
-                ValueExpression::Identifier(pair.as_str().to_string())
-            }
+            fold_fixed(
+                &mut children,
+                BinOp::Or,
+                convert_expression_to_value,
+                join_value_expr,
+            )
+            .unwrap_or_else(|| fallback_value(&pair))
         }
         // logical_and: all children are operands with && between them
         Rule::logical_and => {
             let mut children = pair.clone().into_inner();
-            if let Some(first) = children.next() {
-                let mut result = convert_expression_to_value(first);
-                for right in children {
-                    let right_val = convert_expression_to_value(right);
-                    result = ValueExpression::BinOp {
-                        left: Box::new(result),
-                        op: BinOp::And,
-                        right: Box::new(right_val),
-                    };
-                }
-                result
-            } else {
-                ValueExpression::Identifier(pair.as_str().to_string())
-            }
+            fold_fixed(
+                &mut children,
+                BinOp::And,
+                convert_expression_to_value,
+                join_value_expr,
+            )
+            .unwrap_or_else(|| fallback_value(&pair))
         }
         // comparison: children are [addition, comparison_op, addition, ...]
         Rule::comparison => {
             let mut children = pair.clone().into_inner();
-            if let Some(first) = children.next() {
-                let mut result = convert_expression_to_value(first);
-                while let Some(op_pair) = children.next() {
-                    let op_str = op_pair.as_str();
-                    let op = match op_str {
-                        "==" => BinOp::Eq,
-                        "!=" => BinOp::Ne,
-                        "<" => BinOp::Lt,
-                        "<=" => BinOp::Le,
-                        ">" => BinOp::Gt,
-                        ">=" => BinOp::Ge,
-                        "~=" => BinOp::RegexMatch,
-                        "!~" => BinOp::NegRegex,
-                        "+" => BinOp::Add,
-                        "-" => BinOp::Sub,
-                        "*" => BinOp::Mul,
-                        "/" => BinOp::Div,
-                        "%" => BinOp::Mod,
-                        "&&" => BinOp::And,
-                        "||" => BinOp::Or,
-                        _ => BinOp::Eq,
-                    };
-                    if let Some(right) = children.next() {
-                        let right_val = convert_expression_to_value(right);
-                        result = ValueExpression::BinOp {
-                            left: Box::new(result),
-                            op,
-                            right: Box::new(right_val),
-                        };
-                    }
-                }
-                result
-            } else {
-                ValueExpression::Identifier(pair.as_str().to_string())
-            }
+            fold_chained(
+                &mut children,
+                comparison_op,
+                convert_expression_to_value,
+                join_value_expr,
+            )
+            .unwrap_or_else(|| fallback_value(&pair))
         }
         Rule::addition | Rule::multiplication => {
             let mut children = pair.clone().into_inner();
-            if let Some(first) = children.next() {
-                let mut result = convert_expression_to_value(first);
-                while let Some(op_pair) = children.next() {
-                    let op_str = op_pair.as_str();
-                    let op = match op_str {
-                        "+" => BinOp::Add,
-                        "-" => BinOp::Sub,
-                        "*" => BinOp::Mul,
-                        "/" => BinOp::Div,
-                        "%" => BinOp::Mod,
-                        _ => BinOp::Add,
-                    };
-                    if let Some(right) = children.next() {
-                        let right_val = convert_expression_to_value(right);
-                        result = ValueExpression::BinOp {
-                            left: Box::new(result),
-                            op,
-                            right: Box::new(right_val),
-                        };
-                    }
-                }
-                result
-            } else {
-                ValueExpression::Identifier(pair.as_str().to_string())
-            }
+            fold_chained(
+                &mut children,
+                arithmetic_op,
+                convert_expression_to_value,
+                join_value_expr,
+            )
+            .unwrap_or_else(|| fallback_value(&pair))
         }
         Rule::unary => {
             if let Some(inner) = pair.clone().into_inner().next() {
@@ -307,103 +339,23 @@ pub(crate) fn parse_expression(pair: Pair<Rule>) -> Expression {
         }
         Rule::logical_or => {
             let mut children = pair.clone().into_inner();
-            if let Some(first) = children.next() {
-                let mut result = parse_expression(first);
-                for right in children {
-                    let right_val = parse_expression(right);
-                    result = Expression::BinOp {
-                        left: Box::new(result),
-                        op: BinOp::Or,
-                        right: Box::new(right_val),
-                    };
-                }
-                result
-            } else {
-                fallback_expr(&pair)
-            }
+            fold_fixed(&mut children, BinOp::Or, parse_expression, join_expr)
+                .unwrap_or_else(|| fallback_expr(&pair))
         }
         Rule::logical_and => {
             let mut children = pair.clone().into_inner();
-            if let Some(first) = children.next() {
-                let mut result = parse_expression(first);
-                for right in children {
-                    let right_val = parse_expression(right);
-                    result = Expression::BinOp {
-                        left: Box::new(result),
-                        op: BinOp::And,
-                        right: Box::new(right_val),
-                    };
-                }
-                result
-            } else {
-                fallback_expr(&pair)
-            }
+            fold_fixed(&mut children, BinOp::And, parse_expression, join_expr)
+                .unwrap_or_else(|| fallback_expr(&pair))
         }
         Rule::comparison => {
             let mut children = pair.clone().into_inner();
-            if let Some(first) = children.next() {
-                let mut result = parse_expression(first);
-                while let Some(op_pair) = children.next() {
-                    let op_str = op_pair.as_str();
-                    let op = match op_str {
-                        "==" => BinOp::Eq,
-                        "!=" => BinOp::Ne,
-                        "<" => BinOp::Lt,
-                        "<=" => BinOp::Le,
-                        ">" => BinOp::Gt,
-                        ">=" => BinOp::Ge,
-                        "~=" => BinOp::RegexMatch,
-                        "!~" => BinOp::NegRegex,
-                        "+" => BinOp::Add,
-                        "-" => BinOp::Sub,
-                        "*" => BinOp::Mul,
-                        "/" => BinOp::Div,
-                        "%" => BinOp::Mod,
-                        "&&" => BinOp::And,
-                        "||" => BinOp::Or,
-                        _ => BinOp::Eq,
-                    };
-                    if let Some(right) = children.next() {
-                        let right_val = parse_expression(right);
-                        result = Expression::BinOp {
-                            left: Box::new(result),
-                            op,
-                            right: Box::new(right_val),
-                        };
-                    }
-                }
-                result
-            } else {
-                fallback_expr(&pair)
-            }
+            fold_chained(&mut children, comparison_op, parse_expression, join_expr)
+                .unwrap_or_else(|| fallback_expr(&pair))
         }
         Rule::addition | Rule::multiplication => {
             let mut children = pair.clone().into_inner();
-            if let Some(first) = children.next() {
-                let mut result = parse_expression(first);
-                while let Some(op_pair) = children.next() {
-                    let op_str = op_pair.as_str();
-                    let op = match op_str {
-                        "+" => BinOp::Add,
-                        "-" => BinOp::Sub,
-                        "*" => BinOp::Mul,
-                        "/" => BinOp::Div,
-                        "%" => BinOp::Mod,
-                        _ => BinOp::Add,
-                    };
-                    if let Some(right) = children.next() {
-                        let right_val = parse_expression(right);
-                        result = Expression::BinOp {
-                            left: Box::new(result),
-                            op,
-                            right: Box::new(right_val),
-                        };
-                    }
-                }
-                result
-            } else {
-                fallback_expr(&pair)
-            }
+            fold_chained(&mut children, arithmetic_op, parse_expression, join_expr)
+                .unwrap_or_else(|| fallback_expr(&pair))
         }
         Rule::unary => {
             if let Some(inner) = pair.clone().into_inner().next() {
