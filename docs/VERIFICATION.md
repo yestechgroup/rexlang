@@ -12,10 +12,10 @@ foundation that the languages, transformations and generators depend on*.
 ## What is verified today
 
 The crate `rex-verify` hosts the first verified component: a semantic-graph
-kernel (uniquely identified nodes, single-parent containment, deduplicated
-reference edges) specified with Creusot contracts. **`cargo creusot -p
-rex-verify` is fully green** ("Proved (20 files)"): every proof obligation
-below is SMT-discharged.
+kernel (uniquely identified nodes, multi-parent DAG containment shaped like
+rexlang's `extends` lists, deduplicated reference edges) specified with
+Creusot contracts. **`cargo creusot -p rex-verify` is fully green**
+("Proved (21 files)"): every proof obligation below is SMT-discharged.
 
 - `Graph::well_formed` (`crates/rex-verify/src/lib.rs`) is the kernel
   invariant: node count below the `u32` id bound, every parent/edge endpoint
@@ -32,7 +32,10 @@ below is SMT-discharged.
   indices, identities are unique forever.
 - `Graph::link` / `Graph::reference` carry endpoint-existence preconditions
   (issue property 2); `reference` additionally ensures a recorded edge
-  stays recorded.
+  stays recorded. `link` models rexlang's `extends` lists: several parents
+  are legal, a duplicated edge is an idempotent success (never a cycle),
+  and a refused edge is exactly a closing cycle — which is how
+  `rex-driver`'s inheritance/actor cycle passes now detect cycles (see V3).
 - `Graph::is_ancestor` is proved safe (indexing) and terminating (bounded
   parent walk); `link`'s cycle rejection relies on it operationally.
 - Containment acyclicity (issue property 3) is *enforced operationally* by
@@ -57,9 +60,11 @@ missed, and the prover caught a second: `well_formed` originally allowed
 preservation ensures was *unprovable because false*, exactly the class of
 mistake formal specification exists to catch.
 
-Two avoidances, recorded for the next toolchain bump: the `Hash`,
+Avoidances, recorded for the next toolchain bump: the `Hash`,
 `PartialOrd` and `Ord` derives are omitted from `NodeId` because creusot-std
-0.14.0 leaves their refinement obligations unresolved upstream; and the
+0.14.0 leaves their refinement obligations unresolved upstream; std
+`Vec::contains` is avoided in `link` (its spec carries an unprovable
+resolution obligation) in favour of a proved bounded loop; and the
 `#[trusted]` mutation primitives exist because the prover cannot yet
 re-establish the consolidated invariant directly after a raw
 `Vec`-indexing borrow (quantifier instantiation across the borrow boundary)
@@ -97,13 +102,13 @@ a proof). Every `#[trusted]` in the tree must have a row here.
 |---|---|---|---|---|
 | V1 | Nodes always have unique identities | `add_node` `ensures`: fresh id = old count, count + 1, id ∉ old ids | `Graph::add_node` (`rex-verify`); ids are arena indices, never reused | proved |
 | V2 | Relationships always reference existing nodes | `well_formed` endpoint clauses; `link`/`reference` `requires` | `Graph` API (only constructor of ids); driver `resolve*` for the real IR | proved |
-| V3 | Containment graphs cannot contain cycles | (spec open: bounded-depth reachability predicate) | `link` ancestor guard (`is_ancestor`: proved safe + terminating); `tests/invariants.rs` `p3_*` + proptest `p3_containment_stays_acyclic`; driver `detect_inheritance_cycles` / `check_graph` for real surfaces | argued + tested (formal proof open) |
+| V3 | Containment graphs cannot contain cycles | (spec open: bounded-depth reachability predicate) | `link` ancestor guard (`is_ancestor`: proved safe + terminating); `tests/invariants.rs` `p3_*` + proptest `p3_containment_stays_acyclic`; **`rex-driver` inheritance/actor cycle passes now detect cycles via rejected `link` calls** (`detect_inheritance_cycles` / `detect_actor_cycles` on `rex_verify::Graph`); use-case `check_graph` still DFS-based | argued + tested (formal proof open); driver detection kernel-backed |
 | V4 | Type references always resolve | `rex_ir::TypeRef` "never an unresolved name" (crate docs, wire rule set) | `rex-driver` resolution + error-severity block in `compile_file`; `rex-expr::DomainTypes` for expressions | tested |
 | V5 | Mutations preserve all established invariants | `well_formed(*self)` → `well_formed(^self)` on every mutator | every `rex-verify` mutator; bridged against the trusted mutation primitives; proptest sequences with `check_invariants` oracle | proved (the children-agreement clause for the *whole* edge set is carried per-edge by `link`'s ensures + tests; consolidated `children_ok` forall documented open) |
 | V6 | Reference edges are recorded and deduplicated | `reference` `ensures` (`has_ref` persists), `requires` endpoints | `Graph::reference`; `p2_*` tests | proved |
 | V7 | `is_ancestor` is a safe, terminating guard | `requires(well_formed)`, loop variant `budget` | bounded parent walk in `is_ancestor` | proved (safety/termination; functional spec = V3, open) |
 | V8 | `check_invariants` (executable oracle) mirrors the invariant | none — `#[trusted]` | `Graph::check_invariants` + `contains_edge` + `has_containment_cycle` (all `#[trusted]`) | assumed (test-side oracle; validated by the property suites; never relied on by proofs) |
-| V9 | Mutation primitives do exactly what their contracts state | full model-effect contracts (snoc + changed fields) | `push_default_node`, `set_parent`, `push_containment`, `push_reference` (all `#[trusted]`, one-statement bodies) | assumed bodies, proved contracts (see `#[trusted]` policy) |
+| V9 | Mutation primitives do exactly what their contracts state | full model-effect contracts (snoc + changed fields) | `push_default_node`, `add_parent`, `push_containment`, `push_reference` (all `#[trusted]`, one-statement bodies) | assumed bodies, proved contracts (see `#[trusted]` policy) |
 
 ### Pipeline-level obligations (issue's five boundaries)
 

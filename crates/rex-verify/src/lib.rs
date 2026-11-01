@@ -15,6 +15,10 @@
 //! `cargo build` the contracts compile away; the executable oracle
 //! [`Graph::check_invariants`] plus the property tests in `tests/` pin the
 //! same properties empirically.
+//!
+//! Containment edges form a directed acyclic graph: a node may hold several
+//! parents (rexlang `extends` is a list), but [`Graph::link`] refuses any
+//! edge that would close a cycle, including self-edges.
 #![allow(unexpected_cfgs)]
 // The `#[creusot]`-side expansion of `pearlite!` groupings trips rustc's
 // paren lint; the parens are load-bearing for pearlite precedence.
@@ -34,6 +38,11 @@ use creusot_std::prelude::{Clone, PartialEq, *};
 pub struct NodeId(u32);
 
 impl NodeId {
+    /// The slot index of this node in its graph (`< len`).
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+
     /// Logical accessor; ghost-only, hidden from the public docs.
     #[doc(hidden)]
     #[logic]
@@ -56,7 +65,7 @@ impl DeepModel for NodeId {
 #[doc(hidden)]
 #[derive(Debug, ::core::default::Default)]
 pub struct Node {
-    pub parent: Option<NodeId>,
+    pub parents: Vec<NodeId>,
     pub contains: Vec<NodeId>,
     pub references: Vec<NodeId>,
 }
@@ -65,13 +74,14 @@ pub struct Node {
 ///
 /// Two kinds of relationships are supported:
 ///
-/// - **containment** ([`Graph::link`]): a strict, single-parent relation —
-///   the analogue of a by-value feature;
+/// - **containment** ([`Graph::link`]): a strict, cycle-free relation in
+///   which a node may hold several parents — the analogue of an
+///   `extends` list;
 /// - **reference** ([`Graph::reference`]): a shared, deduplicated edge —
 ///   the analogue of a cross reference.
 ///
-/// `link` refuses any edge that would give a node a second parent or close
-/// a containment cycle (including self-containment), so the containment
+/// `link` refuses any edge that would close a containment cycle (including
+/// self-containment) or duplicate an existing edge, so the containment
 /// relation forms a hierarchy of ancestors.
 pub struct Graph {
     /// Ghost-exposed for the proofs; hidden from the public docs.
@@ -120,41 +130,51 @@ impl Graph {
         }
     }
 
-    /// Parent-clause: a declared parent exists, differs from the node, and
-    /// lists the node among its contained children (the child half of the
-    /// parent/child agreement — see [`Graph::children_ok`]). Logical
+    /// Whether the containment edge `parent → child` is recorded.
+    #[doc(hidden)]
+    #[logic]
+    pub fn has_parent(self, child: NodeId, parent: NodeId) -> bool {
+        pearlite! {
+            exists<j: Int>
+                0 <= j && j < self.slots()[child.id_int()].parents@.len()
+                && self.slots()[child.id_int()].parents@[j] == parent
+        }
+    }
+
+    /// Parent-clause: every declared parent exists, differs from the node,
+    /// and lists the node among its contained children (the child half of
+    /// the parent/child agreement — see [`Graph::children_ok`]). Logical
     /// predicate; ghost-only, hidden from the public docs.
     #[doc(hidden)]
     #[logic(open, inline)]
     pub fn parent_ok(self, i: Int) -> bool {
         pearlite! {
-            match self.slots()[i].parent {
-                None => true,
-                Some(p) =>
-                    0 <= p.id_int() && p.id_int() < self.len_int()
-                    && p.id_int() != i
-                    && ( exists<j: Int>
-                            0 <= j
-                            && j < self.slots()[p.id_int()].contains@.len()
-                            && self.slots()[p.id_int()].contains@[j].id_int() == i )
-            }
+            forall<j: Int>
+                0 <= j && j < self.slots()[i].parents@.len() ==>
+                ( 0 <= self.slots()[i].parents@[j].id_int()
+                  && self.slots()[i].parents@[j].id_int() < self.len_int()
+                  && self.slots()[i].parents@[j].id_int() != i
+                  && ( exists<k: Int>
+                          0 <= k
+                          && k < self.slots()[self.slots()[i].parents@[j].id_int()].contains@.len()
+                          && self.slots()[self.slots()[i].parents@[j].id_int()].contains@[k].id_int() == i ) )
         }
     }
 
     /// Children-clause: every directly contained child agrees that this
-    /// node is its parent. Logical predicate; ghost-only, hidden from the
-    /// public docs. Carried by `link`'s per-edge ensures and the property
-    /// tests; not part of the consolidated invariant (register V5).
+    /// node is one of its parents. Logical predicate; ghost-only, hidden
+    /// from the public docs. Carried by `link`'s per-edge ensures and the
+    /// property tests; not part of the consolidated invariant (register
+    /// V5).
     #[doc(hidden)]
     #[logic(open, inline)]
     pub fn children_ok(self, i: Int) -> bool {
         pearlite! {
             forall<j: Int>
                 0 <= j && j < self.slots()[i].contains@.len() ==>
-                ( match self.slots()[self.slots()[i].contains@[j].id_int()].parent {
-                    None => false,
-                    Some(p) => p.id_int() == i,
-                } )
+                ( exists<k: Int>
+                      0 <= k && k < self.slots()[self.slots()[i].contains@[j].id_int()].parents@.len()
+                      && self.slots()[self.slots()[i].contains@[j].id_int()].parents@[k] == self.slots()[i].contains@[j] )
         }
     }
 
@@ -249,27 +269,23 @@ impl Graph {
                     (i < pre.len_int() || i == pre.len_int())
                         && self.parent_ok(i) && self.references_ok(i)
         }
-        proof_assert! {
-            self.len_int() <= 4294967295
-                && forall<i: Int> #[trigger(self.slots()[i])]
-                    0 <= i && i < self.len_int() ==> self.parent_ok(i) && self.references_ok(i)
-        }
         id
     }
 
     /// Makes `child` contained by `parent`.
     ///
-    /// Succeeds (returns `true` and records the edge) only if both nodes
-    /// exist, `child` has no parent yet, and `parent` is not contained in
-    /// `child` (directly or transitively) — otherwise the graph is left
-    /// untouched and `false` is returned. This refusal is what keeps the
-    /// containment relation a hierarchy of ancestors.
+    /// Succeeds (returns `true` and records the edge) if both nodes exist,
+    /// `parent` is not contained in `child` (directly or transitively),
+    /// and the edge is not already recorded — otherwise the graph is left
+    /// untouched and `false` is returned (a refused edge is exactly a
+    /// cycle). A node may hold several parents; this refusal is what keeps
+    /// the containment relation a hierarchy of ancestors.
     #[requires(self.has_id(parent))]
     #[requires(self.has_id(child))]
     #[requires(self.well_formed())]
-    #[ensures(result == true ==> (^self).slots()[child.id_int()].parent == Some(parent))]
+    #[ensures(result == true ==> (^self).has_parent(child, parent))]
     #[ensures(
-        result == true ==>
+        result == true && !self.has_parent(child, parent) ==>
             (^self).slots()[parent.id_int()].contains@.len()
                 == self.slots()[parent.id_int()].contains@.len() + 1
     )]
@@ -279,12 +295,35 @@ impl Graph {
         if !self.has_node(parent) || !self.has_node(child) || parent == child {
             return false;
         }
-        if self.nodes[child.0 as usize].parent.is_some() || self.is_ancestor(child, parent) {
+        let bound = self.nodes[child.0 as usize].parents.len();
+        let mut i = 0;
+        let mut linked = false;
+        #[invariant(i@ <= bound@)]
+        #[invariant(bound@ == self.slots()[child.id_int()].parents@.len())]
+        #[invariant(
+            forall<j: Int>
+                0 <= j && j < i@
+                    && self.slots()[child.id_int()].parents@[j] == parent ==> linked
+        )]
+        #[invariant(
+            linked ==> exists<j: Int> 0 <= j && j < i@
+                && self.slots()[child.id_int()].parents@[j] == parent
+        )]
+        while i < bound {
+            if self.nodes[child.0 as usize].parents[i] == parent {
+                linked = true;
+            }
+            i += 1;
+        }
+        if linked {
+            return true;
+        }
+        if self.is_ancestor(child, parent) {
             return false;
         }
         let pre = snapshot!(self);
         let _ = &pre;
-        set_parent(&mut self.nodes, child, parent);
+        add_parent(&mut self.nodes, child, parent);
         push_containment(&mut self.nodes, parent, child);
         proof_assert! { self.len_int() == pre.len_int() }
         proof_assert! {
@@ -303,6 +342,11 @@ impl Graph {
         proof_assert! { self.references_ok(child.id_int()) }
         proof_assert! { self.parent_ok(parent.id_int()) }
         proof_assert! { self.references_ok(parent.id_int()) }
+        proof_assert! {
+            self.len_int() < 4294967295
+                && forall<i: Int> #[trigger(self.slots()[i])]
+                    0 <= i && i < self.len_int() ==> self.parent_ok(i) && self.references_ok(i)
+        }
         proof_assert! { self.well_formed() }
         true
     }
@@ -362,11 +406,10 @@ impl Graph {
         }
     }
 
-    /// The containing node, if any.
+    /// The parents of `id` (a node may hold several).
     #[requires(self.has_id(id))]
-    #[ensures(result == self.slots()[id.id_int()].parent)]
-    pub fn parent_of(&self, id: NodeId) -> Option<NodeId> {
-        self.nodes[id.0 as usize].parent
+    pub fn parents_of(&self, id: NodeId) -> &[NodeId] {
+        &self.nodes[id.0 as usize].parents
     }
 
     /// The nodes directly contained by `id`.
@@ -390,44 +433,95 @@ impl Graph {
     }
 
     /// Whether `node` is contained in `ancestor` (a node counts as its own
-    /// ancestor).
+    /// ancestor), following any parent branch.
     ///
-    /// The parent walk is bounded by the node count, so a containment cycle
-    /// would terminate rather than loop forever; `link` relies on this for
-    /// its cycle rejection.
-    ///
-    /// The trivial contract makes the loop attributes compilable on stable
-    /// Rust (they are stripped outside Creusot); the functional "is an
-    /// ancestor" spec is a register obligation, not yet discharged.
+    /// The walk is a mark-on-push depth-first search bounded by the node
+    /// count, so it terminates regardless of the graph's shape; `link`
+    /// relies on it for its cycle rejection. The functional "is an
+    /// ancestor" spec is a register obligation (V3/V7), not yet
+    /// discharged.
     #[requires(self.well_formed())]
     #[ensures(true)]
     pub fn is_ancestor(&self, ancestor: NodeId, node: NodeId) -> bool {
         if !self.has_node(node) {
             return false;
         }
-        let mut cur = node;
-        let mut budget = self.nodes.len();
-        #[invariant(self.has_id(cur))]
-        #[variant(budget@)]
-        while budget > 0 && cur != ancestor {
-            match self.nodes[cur.0 as usize].parent {
-                Some(parent) => cur = parent,
-                None => return false,
-            }
-            budget -= 1;
+        // Mark-on-push: every node enters the stack at most once, so the
+        // budget bounds every pop.
+        let mut seen = Vec::new();
+        let mut k = 0;
+        #[invariant(k@ <= self.len_int())]
+        #[invariant(seen@.len() == k@)]
+        #[invariant(forall<j: Int> 0 <= j && j < k@ ==> seen@[j] == false)]
+        while k < self.nodes.len() {
+            seen.push(false);
+            k += 1;
         }
-        cur == ancestor
+        seen[node.0 as usize] = true;
+        let mut stack = Vec::new();
+        stack.push(node);
+        let mut budget = self.nodes.len() + 1;
+        #[invariant(seen@.len() == self.len_int())]
+        #[invariant(
+            forall<j: Int> 0 <= j && j < stack@.len() ==>
+                self.has_id(stack@[j]) && stack@[j].id_int() < seen@.len()
+                && seen@[stack@[j].id_int()] == true
+        )]
+        #[invariant(forall<j: Int> 0 <= j && j < seen@.len() ==> seen@[j] == true || seen@[j] == false)]
+        while budget > 0 {
+            let popped = stack.pop();
+            match popped {
+                None => return false,
+                Some(cur) => {
+                    budget -= 1;
+                    if cur == ancestor {
+                        return true;
+                    }
+                    let parents = self.nodes[cur.0 as usize].parents.clone();
+                    let mut j = 0;
+                    #[invariant(seen@.len() == self.len_int())]
+                    #[invariant(
+                        forall<j2: Int> 0 <= j2 && j2 < stack@.len() ==>
+                            self.has_id(stack@[j2]) && stack@[j2].id_int() < seen@.len()
+                            && seen@[stack@[j2].id_int()] == true
+                    )]
+                    #[invariant(j@ <= parents@.len())]
+                    #[invariant(forall<k: Int> 0 <= k && k < j@ ==> self.has_id(parents@[k]))]
+                    #[invariant(
+                        forall<k: Int> 0 <= k && k < j@ ==>
+                            parents@[k].id_int() < seen@.len() && seen@[parents@[k].id_int()] == true
+                    )]
+                    #[invariant(j@ < parents@.len() ==> self.has_id(parents@[j@]))]
+                    #[invariant(
+                        forall<j2: Int>
+                            j2 == j@ && j2 < parents@.len() ==>
+                                parents@[j2].id_int() < seen@.len()
+                    )]
+                    while j < parents.len() {
+                        let p = parents[j];
+                        if !seen[p.0 as usize] {
+                            seen[p.0 as usize] = true;
+                            stack.push(p);
+                        }
+                        j += 1;
+                    }
+                }
+            }
+        }
+        false
     }
 
     /// Executable mirror of the kernel invariants:
     ///
     /// 1. every containment and reference edge points at an existing node;
-    /// 2. containment is single-parent — parent and child agree on the edge;
-    /// 3. the parent chains are cycle-free (checked with bounded walks).
+    /// 2. containment edges agree on both ends — every declared parent
+    ///    lists the node among its contained children, and every contained
+    ///    child declares this node among its parents;
+    /// 3. the parent relation is cycle-free (checked with bounded walks).
     ///
     /// This is the test-side oracle for the property tests; the formal
-    /// counterpart is [`Graph::invariant`]. The oracle is `#[trusted]` for
-    /// the prover (an assumption, recorded as such in the
+    /// counterpart is [`Graph::well_formed`]. The oracle is `#[trusted]`
+    /// for the prover (an assumption, recorded as such in the
     /// proof-obligation register) because its bounded walks exist to
     /// inspect *arbitrary*, possibly malformed graphs — the very states
     /// the invariant excludes.
@@ -435,7 +529,7 @@ impl Graph {
     pub fn check_invariants(&self) -> bool {
         for (i, node) in self.nodes.iter().enumerate() {
             let id = NodeId(i as u32);
-            if let Some(parent) = node.parent {
+            for &parent in &node.parents {
                 if !self.has_node(parent) || parent == id {
                     return false;
                 }
@@ -447,7 +541,7 @@ impl Graph {
                 if !self.has_node(child) || child == id {
                     return false;
                 }
-                if self.nodes[child.0 as usize].parent != Some(id) {
+                if !self.nodes[child.0 as usize].parents.contains(&id) {
                     return false;
                 }
             }
@@ -456,7 +550,7 @@ impl Graph {
                     return false;
                 }
             }
-            if self.has_containment_cycle(id) {
+            if self.has_parent_cycle(id) {
                 return false;
             }
         }
@@ -478,26 +572,34 @@ impl Graph {
         false
     }
 
-    /// Bounded cycle check: follows parent pointers at most `len` steps.
+    /// Bounded cycle check: mark-on-push walk over parent pointers.
     ///
     /// Trusted for the prover for the same reason as
     /// [`Graph::check_invariants`] (register row V8); only called from
     /// trusted code.
     #[trusted]
-    fn has_containment_cycle(&self, start: NodeId) -> bool {
-        let mut cur = start;
-        let mut budget = self.nodes.len();
+    fn has_parent_cycle(&self, start: NodeId) -> bool {
+        let mut seen = std::vec![false; self.nodes.len()];
+        seen[start.0 as usize] = true;
+        let mut stack = Vec::new();
+        stack.push(start);
+        let mut budget = self.nodes.len() + 1;
         while budget > 0 {
-            match self.nodes[cur.0 as usize].parent {
-                Some(parent) => {
-                    if parent == start {
-                        return true;
-                    }
-                    cur = parent;
-                }
+            match stack.pop() {
                 None => return false,
+                Some(cur) => {
+                    budget -= 1;
+                    for &parent in &self.nodes[cur.0 as usize].parents {
+                        if parent == start {
+                            return true;
+                        }
+                        if !seen[parent.0 as usize] {
+                            seen[parent.0 as usize] = true;
+                            stack.push(parent);
+                        }
+                    }
+                }
             }
-            budget -= 1;
         }
         true
     }
@@ -512,39 +614,47 @@ impl Graph {
 // functions, where the invariant is re-established from these contracts.
 // They are the only `#[trusted]` mutating code — recorded in the register.
 // (They take `&mut Vec`, not `&mut [_]`: three of them push.)
+// ---------------------------------------------------------------------------
 
-/// Appends a fresh default node (no parent, no edges).
+/// Appends a fresh default node (no parents, no edges).
 #[trusted]
+#[allow(clippy::ptr_arg)] // pushes require the Vec, not a slice
 #[ensures((^nodes)@.len() == nodes@.len() + 1)]
 #[ensures(forall<k: Int> 0 <= k && k < nodes@.len() ==> (^nodes)@[k] == nodes@[k])]
-#[ensures((^nodes)@[nodes@.len()].parent == None)]
+#[ensures((^nodes)@[nodes@.len()].parents@.len() == 0)]
 #[ensures((^nodes)@[nodes@.len()].contains@.len() == 0)]
 #[ensures((^nodes)@[nodes@.len()].references@.len() == 0)]
-#[allow(clippy::ptr_arg)] // pushes require the Vec, not a slice
 fn push_default_node(nodes: &mut Vec<Node>) {
     nodes.push(Node::default());
 }
 
-/// Points `child`'s parent at `parent`, touching no other slot or field.
+/// Records `parent` in `child`'s parent list, touching no other slot or
+/// field.
 #[trusted]
+#[allow(clippy::ptr_arg)] // uniform with the sibling primitives
 #[requires(c.id_int() < nodes@.len())]
 #[ensures((^nodes)@.len() == nodes@.len())]
 #[ensures(forall<k: Int> 0 <= k && k < nodes@.len() && k != c.id_int() ==> (^nodes)@[k] == nodes@[k])]
-#[ensures((^nodes)@[c.id_int()].parent == Some(parent))]
+#[ensures((^nodes)@[c.id_int()].parents@.len() == nodes@[c.id_int()].parents@.len() + 1)]
+#[ensures((^nodes)@[c.id_int()].parents@[nodes@[c.id_int()].parents@.len()] == parent)]
+#[ensures(
+    forall<j: Int> 0 <= j && j < nodes@[c.id_int()].parents@.len() ==>
+        (^nodes)@[c.id_int()].parents@[j] == nodes@[c.id_int()].parents@[j]
+)]
 #[ensures((^nodes)@[c.id_int()].contains@ == nodes@[c.id_int()].contains@)]
 #[ensures((^nodes)@[c.id_int()].references@ == nodes@[c.id_int()].references@)]
-#[allow(clippy::ptr_arg)] // pushes require the Vec, not a slice
-fn set_parent(nodes: &mut Vec<Node>, c: NodeId, parent: NodeId) {
-    nodes[c.0 as usize].parent = Some(parent);
+fn add_parent(nodes: &mut Vec<Node>, c: NodeId, parent: NodeId) {
+    nodes[c.0 as usize].parents.push(parent);
 }
 
 /// Appends `child` to slot `p`'s containment list, touching no other slot
 /// or field.
 #[trusted]
+#[allow(clippy::ptr_arg)] // pushes require the Vec, not a slice
 #[requires(p.id_int() < nodes@.len())]
 #[ensures((^nodes)@.len() == nodes@.len())]
 #[ensures(forall<k: Int> 0 <= k && k < nodes@.len() && k != p.id_int() ==> (^nodes)@[k] == nodes@[k])]
-#[ensures((^nodes)@[p.id_int()].parent == nodes@[p.id_int()].parent)]
+#[ensures((^nodes)@[p.id_int()].parents@ == nodes@[p.id_int()].parents@)]
 #[ensures((^nodes)@[p.id_int()].references@ == nodes@[p.id_int()].references@)]
 #[ensures((^nodes)@[p.id_int()].contains@.len() == nodes@[p.id_int()].contains@.len() + 1)]
 #[ensures((^nodes)@[p.id_int()].contains@[nodes@[p.id_int()].contains@.len()] == child)]
@@ -552,7 +662,6 @@ fn set_parent(nodes: &mut Vec<Node>, c: NodeId, parent: NodeId) {
     forall<j: Int> 0 <= j && j < nodes@[p.id_int()].contains@.len() ==>
         (^nodes)@[p.id_int()].contains@[j] == nodes@[p.id_int()].contains@[j]
 )]
-#[allow(clippy::ptr_arg)] // pushes require the Vec, not a slice
 fn push_containment(nodes: &mut Vec<Node>, p: NodeId, child: NodeId) {
     nodes[p.0 as usize].contains.push(child);
 }
@@ -560,10 +669,11 @@ fn push_containment(nodes: &mut Vec<Node>, p: NodeId, child: NodeId) {
 /// Appends `to` to slot `from`'s reference list, touching no other slot or
 /// field.
 #[trusted]
+#[allow(clippy::ptr_arg)] // pushes require the Vec, not a slice
 #[requires(f.id_int() < nodes@.len())]
 #[ensures((^nodes)@.len() == nodes@.len())]
 #[ensures(forall<k: Int> 0 <= k && k < nodes@.len() && k != f.id_int() ==> (^nodes)@[k] == nodes@[k])]
-#[ensures((^nodes)@[f.id_int()].parent == nodes@[f.id_int()].parent)]
+#[ensures((^nodes)@[f.id_int()].parents@ == nodes@[f.id_int()].parents@)]
 #[ensures((^nodes)@[f.id_int()].contains@ == nodes@[f.id_int()].contains@)]
 #[ensures((^nodes)@[f.id_int()].references@.len() == nodes@[f.id_int()].references@.len() + 1)]
 #[ensures((^nodes)@[f.id_int()].references@[nodes@[f.id_int()].references@.len()] == to)]
@@ -571,7 +681,6 @@ fn push_containment(nodes: &mut Vec<Node>, p: NodeId, child: NodeId) {
     forall<j: Int> 0 <= j && j < nodes@[f.id_int()].references@.len() ==>
         (^nodes)@[f.id_int()].references@[j] == nodes@[f.id_int()].references@[j]
 )]
-#[allow(clippy::ptr_arg)] // pushes require the Vec, not a slice
 fn push_reference(nodes: &mut Vec<Node>, f: NodeId, to: NodeId) {
     nodes[f.0 as usize].references.push(to);
 }

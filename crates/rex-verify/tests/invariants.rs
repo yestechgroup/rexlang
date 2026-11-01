@@ -88,7 +88,7 @@ fn p3_self_containment_rejected() {
     let mut g = Graph::new();
     let a = g.add_node();
     assert!(!g.link(a, a));
-    assert_eq!(g.parent_of(a), None);
+    assert_eq!(g.parents_of(a), &[]);
     assert!(g.check_invariants());
 }
 
@@ -117,15 +117,30 @@ fn p3_transitive_cycle_rejected() {
     assert!(g.check_invariants());
 }
 
+/// A node may hold several parents (rexlang `extends` is a list); only
+/// cycles and self-edges are refused.
 #[test]
-fn p3_child_has_at_most_one_parent() {
+fn p3_multiple_parents_allowed() {
     let mut g = Graph::new();
     let a = g.add_node();
     let b = g.add_node();
     let c = g.add_node();
+    assert!(g.link(a, c));
+    assert!(g.link(b, c));
+    assert_eq!(g.parents_of(c), &[a, b]);
+    assert!(g.check_invariants());
+}
+
+/// Relinking the same edge is a no-op success — it is not a cycle and must
+/// not be reported as one.
+#[test]
+fn p3_duplicate_edge_is_idempotent() {
+    let mut g = Graph::new();
+    let a = g.add_node();
+    let b = g.add_node();
     assert!(g.link(a, b));
-    assert!(!g.link(c, b), "b already parented by a");
-    assert_eq!(g.parent_of(b), Some(a));
+    assert!(g.link(a, b), "an existing edge is not a cycle");
+    assert_eq!(g.parents_of(b), &[a]);
     assert!(g.check_invariants());
 }
 
@@ -144,12 +159,35 @@ fn p3_is_ancestor_reflects_the_containment_chain() {
     assert!(!g.is_ancestor(b, a));
 }
 
+/// Reachability through any parent branch: a diamond makes the root an
+/// ancestor of the sink.
+#[test]
+fn p3_is_ancestor_follows_any_parent_branch() {
+    let mut g = Graph::new();
+    let root = g.add_node();
+    let left = g.add_node();
+    let right = g.add_node();
+    let sink = g.add_node();
+    assert!(g.link(root, left));
+    assert!(g.link(root, right));
+    assert!(g.link(left, sink));
+    assert!(g.link(right, sink));
+    assert!(
+        g.is_ancestor(root, sink),
+        "reachable through left and right"
+    );
+    assert!(g.is_ancestor(left, sink));
+    assert!(g.is_ancestor(right, sink));
+    assert!(!g.is_ancestor(sink, root));
+    assert!(g.check_invariants());
+}
+
 /// Regression test for the counterexample shrunk by
 /// `p5_invariants_hold_after_random_mutation_sequences`: linking under an
 /// existing subtree root re-roots the whole subtree and must keep every
 /// invariant (including the parent chains of the moved descendants).
 #[test]
-fn p5_reparenting_updates_subtree_depths() {
+fn p5_reparenting_keeps_invariants() {
     let mut g = Graph::new();
     let a = g.add_node();
     let b = g.add_node();
@@ -157,7 +195,7 @@ fn p5_reparenting_updates_subtree_depths() {
     assert!(g.link(a, b));
     assert!(g.link(c, a));
     assert!(g.check_invariants());
-    assert_eq!(g.parent_of(b), Some(a));
+    assert_eq!(g.parents_of(b), &[a]);
     assert!(
         g.is_ancestor(c, b),
         "the moved subtree travels with its root"
@@ -261,14 +299,29 @@ proptest! {
         let mut g = Graph::new();
         for op in &ops {
             apply(&mut g, op);
-            // Walk every parent chain to exhaustion: any cycle would loop forever.
+            // For every containment edge child ⇒ parent: the parent must
+            // not reach the child through parent pointers — otherwise the
+            // edge closes a cycle. (Pop-time revisits are fine in a DAG:
+            // diamonds re-converge without cycling, so this is a
+            // mark-on-pop reachability walk per edge.)
             for i in 0..g.len() {
-                let mut visited: Vec<NodeId> = Vec::new();
-                let mut cur = Some(g.nth_id(i));
-                while let Some(id) = cur {
-                    prop_assert!(!visited.contains(&id), "containment cycle through {id:?}");
-                    visited.push(id);
-                    cur = g.parent_of(id);
+                let id = g.nth_id(i);
+                for parent in g.parents_of(id) {
+                    let mut seen: Vec<NodeId> = Vec::new();
+                    let mut stack = vec![*parent];
+                    while let Some(x) = stack.pop() {
+                        if seen.contains(&x) {
+                            continue;
+                        }
+                        seen.push(x);
+                        prop_assert!(
+                            x != id,
+                            "cycle: parent {parent:?} reaches its child {id:?}"
+                        );
+                        for grand in g.parents_of(x) {
+                            stack.push(*grand);
+                        }
+                    }
                 }
             }
         }
