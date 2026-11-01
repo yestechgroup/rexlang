@@ -1,8 +1,7 @@
 //! Views and containers. Both declarations share one body shape
 //! (params, label, properties, nested containers/components, event
-//! handlers, `use` statements, condition); `parse_view_body_content`
-//! and `parse_container_body_content` walk it for their respective
-//! callers.
+//! handlers, `use` statements, condition); `parse_body_content` walks
+//! it for both callers.
 
 use super::IfmlParseError;
 use super::Rule;
@@ -19,75 +18,20 @@ use crate::parser::utils::{
     extract_roles_property, parse_parameter_block, parse_string,
 };
 
-type ViewBodyParts = (
-    Vec<ParameterDecl>,
-    Option<String>,
-    Vec<PropertyAssignment>,
-    Vec<ContainerDeclaration>,
-    Vec<ComponentDeclaration>,
-    Vec<EventHandler>,
-    Vec<ModuleUse>,
-    Option<Expression>,
-);
-
-fn parse_view_body_content(pair: Pair<Rule>) -> Result<ViewBodyParts, IfmlParseError> {
-    let mut params = Vec::new();
-    let mut label = None;
-    let mut properties = Vec::new();
-    let mut containers = Vec::new();
-    let mut components = Vec::new();
-    let mut events = Vec::new();
-    let mut module_uses = Vec::new();
-    let mut condition = None;
-
-    for child in pair.clone().into_inner() {
-        match child.as_rule() {
-            Rule::params_block => {
-                if let Some(block) = child.into_inner().next() {
-                    params = parse_parameter_block(block);
-                }
-            }
-            Rule::label_declaration => {
-                if let Some(s) = child.into_inner().next() {
-                    label = Some(parse_string(&s));
-                }
-            }
-            Rule::property_assignment => properties.push(parse_property_assignment(child)),
-            Rule::container_declaration => containers.push(parse_container_declaration(child)?),
-            Rule::component_declaration => components.push(parse_component_declaration(child)?),
-            Rule::event_handler => events.push(parse_event_handler(child)),
-            Rule::module_use_statement => module_uses.push(parse_module_use_statement(child)),
-            Rule::condition_statement => {
-                condition = child.into_inner().next().map(parse_expression);
-            }
-            _ => {}
-        }
-    }
-
-    Ok((
-        params,
-        label,
-        properties,
-        containers,
-        components,
-        events,
-        module_uses,
-        condition,
-    ))
+/// Everything a view or container body can declare. The grammar gives
+/// both declarations the same body rule, so one walker serves both.
+struct BodyContent {
+    params: Vec<ParameterDecl>,
+    label: Option<String>,
+    properties: Vec<PropertyAssignment>,
+    containers: Vec<ContainerDeclaration>,
+    components: Vec<ComponentDeclaration>,
+    events: Vec<EventHandler>,
+    module_uses: Vec<ModuleUse>,
+    condition: Option<Expression>,
 }
 
-type ContainerBodyParts = (
-    Vec<ParameterDecl>,
-    Option<String>,
-    Vec<PropertyAssignment>,
-    Vec<ContainerDeclaration>,
-    Vec<ComponentDeclaration>,
-    Vec<EventHandler>,
-    Vec<ModuleUse>,
-    Option<Expression>,
-);
-
-fn parse_container_body_content(pair: Pair<Rule>) -> Result<ContainerBodyParts, IfmlParseError> {
+fn parse_body_content(pair: Pair<Rule>) -> Result<BodyContent, IfmlParseError> {
     let mut params = Vec::new();
     let mut label = None;
     let mut properties = Vec::new();
@@ -121,7 +65,7 @@ fn parse_container_body_content(pair: Pair<Rule>) -> Result<ContainerBodyParts, 
         }
     }
 
-    Ok((
+    Ok(BodyContent {
         params,
         label,
         properties,
@@ -130,7 +74,7 @@ fn parse_container_body_content(pair: Pair<Rule>) -> Result<ContainerBodyParts, 
         events,
         module_uses,
         condition,
-    ))
+    })
 }
 
 pub(crate) fn parse_container_declaration(
@@ -157,8 +101,16 @@ pub(crate) fn parse_container_declaration(
         });
     };
 
-    let (params, label, properties, containers, components, events, module_uses, condition) =
-        parse_container_body_content(body)?;
+    let BodyContent {
+        params,
+        label,
+        properties,
+        containers,
+        components,
+        events,
+        module_uses,
+        condition,
+    } = parse_body_content(body)?;
 
     let is_default = extract_bool_property(&properties, "default");
     let is_xor = extract_bool_property(&properties, "xor");
@@ -206,8 +158,16 @@ pub(crate) fn parse_view_declaration(pair: Pair<Rule>) -> Result<ViewDeclaration
         });
     };
 
-    let (params, label, properties, containers, components, events, module_uses, condition) =
-        parse_view_body_content(body)?;
+    let BodyContent {
+        params,
+        label,
+        properties,
+        containers,
+        components,
+        events,
+        module_uses,
+        condition,
+    } = parse_body_content(body)?;
 
     let is_landmark = extract_bool_property(&properties, "landmark");
     let is_xor = extract_bool_property(&properties, "xor");
