@@ -1,1 +1,4 @@
 /target
+/verif
+/.creusot-cache*
+/.why3find
