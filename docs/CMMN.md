@@ -125,7 +125,7 @@ name, and a case's root items are the ones no stage lists.
 ## Grammar
 
 The normative EBNF lives once in the parser module docs
-([`crates/rex-syntax/src/parser.rs`](../crates/rex-syntax/src/parser.rs),
+([`crates/rex-syntax/src/parser/mod.rs`](../crates/rex-syntax/src/parser/mod.rs),
 section "`.cmmn` case management sources"); `rexlang fmt` canonicalizes to
 the layout documented on [`format_cmmn`](../crates/rex-syntax/src/fmt.rs).
 Every `case` word is a contextual identifier (escapable with `^`);

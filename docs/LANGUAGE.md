@@ -7,7 +7,7 @@ reference; crate docs cover implementation.
 
 **Grammar authority.** The normative EBNF for every rexlang surface lives
 exactly once, in the parser module docs
-(`crates/rex-syntax/src/parser.rs`, rendered as
+(`crates/rex-syntax/src/parser/mod.rs`, rendered as
 [`rex_syntax::parser`](https://docs.rs/rex-syntax/latest/rex_syntax/parser/) —
 sections: *`.mox` model sources*, *the shared `actors_block`*, *`.actor`
 policy files*, *`.ddd` design sources*, *`.evt` event-contract sources*,

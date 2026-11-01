@@ -4,7 +4,7 @@ Rust cargo workspace. `.mox` modeling sources compile to a Core IR artifact; bac
 
 ## Pipeline (crate ownership)
 
-Surfaces are parsed in `rex-syntax` (logos lexer + chumsky parser, one parse/fmt entry point per surface), resolved/validated/lowered in `rex-driver` (salsa-based: resolve, validate, lower, navigation index, diagnostics), and land as versioned `rex-ir` artifacts that `rex-backend-rust` / `rex-backend-jsonschema` / `rex-backend-cedar` and downstream consumers ingest. The **normative grammar (EBNF) per surface lives exactly once** in the parser module docs (`crates/rex-syntax/src/parser.rs`); docs link to it instead of restating it (`.ifml`: the Pest grammar file; `.rosetta`: external toolchain). A new surface is a table row, not an appended sentence.
+Surfaces are parsed in `rex-syntax` (logos lexer + chumsky parser, one parse/fmt entry point per surface), resolved/validated/lowered in `rex-driver` (salsa-based: resolve, validate, lower, navigation index, diagnostics), and land as versioned `rex-ir` artifacts that `rex-backend-rust` / `rex-backend-jsonschema` / `rex-backend-cedar` and downstream consumers ingest. The **normative grammar (EBNF) per surface lives exactly once** in the parser module docs (`crates/rex-syntax/src/parser/mod.rs`); docs link to it instead of restating it (`.ifml`: the Pest grammar file; `.rosetta`: external toolchain). A new surface is a table row, not an appended sentence.
 
 | Surface / file kind | Parse → fmt (`rex-syntax`) | Compile (`rex-driver`) → artifact (`rex-ir`) | Docs |
 |---|---|---|---|

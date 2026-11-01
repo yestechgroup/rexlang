@@ -116,7 +116,7 @@ Excerpt of the committed golden artifact
 The normative EBNF for the `.evt` surface lives exactly once, in the parser
 module docs under [*`.evt` event-contract
 sources*](https://docs.rs/rex-syntax/latest/rex_syntax/parser/index.html)
-(`crates/rex-syntax/src/parser.rs`) — the single authority for `evt_file`,
+(`crates/rex-syntax/src/parser/mod.rs`) — the single authority for `evt_file`,
 `evt_import`, `event_decl`, `field`, `channel_decl`, `publishes_entry`, and
 `subscription_decl`; this page keeps only the language-level rules.
 

@@ -24,7 +24,7 @@ ever declares, publishes, or subscribes to anything.
 exactly like the `DddModel`, `EventModel`, and `IfmlModel` artifacts.
 
 The normative grammar lives exactly once — the *`.uc` use case sources*
-section of the parser module docs (`crates/rex-syntax/src/parser.rs`); the
+section of the parser module docs (`crates/rex-syntax/src/parser/mod.rs`); the
 normative compile contract — entry points, resolution semantics, and
 validation rules — is documented on `rex_driver::compile_usecase_str`
 (`crates/rex-driver/src/lib.rs`). This page is the language reference; when

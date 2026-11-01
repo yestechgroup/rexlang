@@ -80,7 +80,7 @@ let model = rex_ir::ddd::DddModel::from_json(&json)?;    // version-gated reload
 The normative EBNF for the `.ddd` surface lives exactly once, in the parser
 module docs under [*`.ddd` design
 sources*](https://docs.rs/rex-syntax/latest/rex_syntax/parser/index.html)
-(`crates/rex-syntax/src/parser.rs`) — the single authority for `ddd_file`,
+(`crates/rex-syntax/src/parser/mod.rs`) — the single authority for `ddd_file`,
 `application_decl`, `module_decl`, `service_decl`, `design_decl`,
 `repository_decl`, `machine_decl`, and `search_decl`; this page keeps only
 the language-level rules. The `.ddd` keyword tables in
@@ -235,7 +235,7 @@ block (the formatter's canonical order; one per design). `machine`,
 `initial`, `terminal`, and `via` are contextual words like every `.ddd`
 word. The normative grammar (`machine_decl`, `machine_member`,
 `transition`, `guard_clause`) lives in the parser module docs
-(`crates/rex-syntax/src/parser.rs`); the canonical fixture's machine gives
+(`crates/rex-syntax/src/parser/mod.rs`); the canonical fixture's machine gives
 the shape:
 
 ```

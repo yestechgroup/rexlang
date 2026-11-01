@@ -134,7 +134,7 @@ let model = rex_ir::deploy::DeployModel::from_json(&json)?; // version-gated rel
 The normative EBNF for the `.deploy` surface lives exactly once, in the
 parser module docs under [*`.deploy` deployment
 sources*](https://docs.rs/rex-syntax/latest/rex_syntax/parser/index.html)
-(`crates/rex-syntax/src/parser.rs`) — the single authority for
+(`crates/rex-syntax/src/parser/mod.rs`) — the single authority for
 `deploy_file`, `application_decl`, `component_decl`, `profile_decl`,
 `policy_decl`, `deployment_decl`, and the setting/mapping productions;
 this page keeps only the language-level rules. The `.deploy` keyword
