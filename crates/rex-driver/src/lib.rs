@@ -35,6 +35,7 @@ pub(crate) mod lower;
 pub mod machines;
 pub mod manifest;
 pub mod navigation;
+pub(crate) mod pipeline;
 pub(crate) mod sigil;
 pub(crate) mod usecases;
 pub mod workspace_imports;

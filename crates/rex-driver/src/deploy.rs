@@ -34,6 +34,7 @@ use rex_syntax::Span;
 
 use crate::diagnostic::Diagnostic;
 use crate::import_matches;
+use crate::pipeline;
 
 /// The closed capability vocabulary a component's `requires` clause may
 /// name (extensible per target implementation, but validated so a typo is
@@ -174,7 +175,7 @@ pub(crate) fn compile_deploy_file(
     designs: &[(String, DddModel)],
     flows: &[(String, IfmlModel)],
 ) -> (Option<DeployModel>, Vec<(String, Diagnostic)>) {
-    let mut diags: Vec<(String, Diagnostic)> = parse_diagnostics
+    let diags: Vec<(String, Diagnostic)> = parse_diagnostics
         .iter()
         .map(|diagnostic| (path.to_string(), diagnostic.clone()))
         .collect();
@@ -792,10 +793,7 @@ pub(crate) fn compile_deploy_file(
         model.deployments.push(deployment_out);
     }
 
-    diags.extend(local.into_iter().map(|d| (path.to_string(), d)));
-
-    let blocked = diags.iter().any(|(_, diagnostic)| diagnostic.is_error());
-    ((!blocked).then_some(model), diags)
+    pipeline::engine_finish(path, local, diags, model)
 }
 
 /// The two-segment split of a `component.setting` path.

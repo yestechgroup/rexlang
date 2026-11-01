@@ -14,6 +14,7 @@ use rex_syntax::ast as mox;
 use rex_syntax::Span;
 
 use crate::diagnostic::{Diagnostic, DiagnosticCode};
+use crate::pipeline;
 
 /// The kind of a top-level declaration that occupies the package namespace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4587,33 +4588,22 @@ pub(crate) fn compile_actor_file(
     actor_diagnostics: &[Diagnostic],
     domains: &[DomainUnit],
 ) -> (Option<ir::ActorModel>, Vec<(String, Diagnostic)>) {
-    let mut diags: Vec<(String, Diagnostic)> = Vec::new();
-    for diagnostic in actor_diagnostics {
-        diags.push((actor_path.to_string(), diagnostic.clone()));
-    }
-
     // Import resolution: each import must name one of the provided domains.
     let imports = actor_ast
         .map(|ast| ast.imports.as_slice())
         .unwrap_or_default();
+    let mut import_diagnostics = Vec::new();
     for import in imports {
         if !domains.iter().any(|unit| unit.path == import.path) {
-            diags.push((
-                actor_path.to_string(),
-                Diagnostic::error(
-                    format!("imported file \"{}\" was not provided", import.path),
-                    Some(import.span),
-                ),
+            import_diagnostics.push(Diagnostic::error(
+                format!("imported file \"{}\" was not provided", import.path),
+                Some(import.span),
             ));
         }
     }
 
-    // Domain diagnostics propagate under their own file, in import order.
-    for unit in domains {
-        for diagnostic in &unit.diagnostics {
-            diags.push((unit.path.clone(), diagnostic.clone()));
-        }
-    }
+    let mut diags =
+        pipeline::engine_diags(actor_path, actor_diagnostics, import_diagnostics, domains);
 
     // The combined namespace of the usable domains (imported and
     // error-free), in first-appearance order. A domain that lowered

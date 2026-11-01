@@ -28,6 +28,7 @@ use rex_syntax::Span;
 
 use crate::diagnostic::Diagnostic;
 use crate::lower::{self, DomainPackage, DomainUnit};
+use crate::pipeline;
 
 /// A service declared anywhere in the application, for cross-reference
 /// validation (delegations, injects).
@@ -110,32 +111,20 @@ pub(crate) fn compile_ddd_file(
     domains: &[DomainUnit],
     actors: Option<&rex_ir::ActorModel>,
 ) -> (Option<DddModel>, Vec<(String, Diagnostic)>) {
-    let mut diags: Vec<(String, Diagnostic)> = parse_diagnostics
-        .iter()
-        .map(|diagnostic| (path.to_string(), diagnostic.clone()))
-        .collect();
-
     // Import resolution: each import must name one of the provided domains
     // (duplicates are fine — the domain joins the union once).
     let imports = ast.map(|file| file.imports.as_slice()).unwrap_or_default();
+    let mut import_diagnostics = Vec::new();
     for import in imports {
         if !domains.iter().any(|unit| unit.path == import.path) {
-            diags.push((
-                path.to_string(),
-                Diagnostic::error(
-                    format!("imported file \"{}\" was not provided", import.path),
-                    Some(import.span),
-                ),
+            import_diagnostics.push(Diagnostic::error(
+                format!("imported file \"{}\" was not provided", import.path),
+                Some(import.span),
             ));
         }
     }
 
-    // Domain diagnostics propagate under their own file, in import order.
-    for unit in domains {
-        for diagnostic in &unit.diagnostics {
-            diags.push((unit.path.clone(), diagnostic.clone()));
-        }
-    }
+    let diags = pipeline::engine_diags(path, parse_diagnostics, import_diagnostics, domains);
 
     let Some(ast) = ast else {
         return (None, diags);
@@ -1335,10 +1324,7 @@ pub(crate) fn compile_ddd_file(
         }
     }
 
-    diags.extend(local.into_iter().map(|d| (path.to_string(), d)));
-
-    let blocked = diags.iter().any(|(_, diagnostic)| diagnostic.is_error());
-    ((!blocked).then_some(model), diags)
+    pipeline::engine_finish(path, local, diags, model)
 }
 
 /// `true` when every imported domain lowered successfully (vacuously true
