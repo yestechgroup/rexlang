@@ -437,6 +437,47 @@ fn unknown_step_operation_is_an_error() {
     );
 }
 
+/// A sigil-typed subject keeps the documented step contract: the lowered
+/// `RateType` enum is not a class, so a step on it produces the exact
+/// must-be-class-typed diagnostic with the exact help — steps never
+/// resolve the package functions sigil lowering also produces.
+#[test]
+fn a_step_on_a_sigil_typed_subject_still_errors_with_the_documented_help() {
+    let mox = std::fs::read_to_string(fixture_path("tests/conformance/sigil/funcs.mox"))
+        .expect("read funcs.mox");
+    let rosetta = std::fs::read_to_string(fixture_path("tests/conformance/sigil/funcs.rosetta"))
+        .expect("read funcs.rosetta");
+    let domains = [("funcs.mox".to_string(), mox)];
+    let imports = rex_driver::DomainImports {
+        sigil: rex_driver::SigilImports::new().provide("funcs.mox", "funcs.rosetta", rosetta),
+        ..rex_driver::DomainImports::default()
+    };
+    let source = concat!(
+        "import \"funcs.mox\"\n",
+        "\n",
+        "usecase U {\n",
+        "    subject R: RateType {\n",
+        "        perform fix: nope;\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile_usecase_str("bad.uc", source, &domains, &imports, &[], &[], &[]);
+    expect_diagnostic(
+        &compilation,
+        "subject 'R' in use case 'U' must be class-typed to perform steps",
+    );
+    let diagnostic = compilation
+        .diagnostics
+        .iter()
+        .find(|(path, _)| path == "bad.uc")
+        .map(|(_, diagnostic)| diagnostic)
+        .expect("the step diagnostic");
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("steps invoke operations, which only classes declare")
+    );
+}
+
 #[test]
 fn a_step_on_an_actor_is_an_error() {
     let source = concat!(

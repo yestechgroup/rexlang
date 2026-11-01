@@ -1707,6 +1707,59 @@ fn search_document_expressions_type_check_with_the_entity() {
     single(&compilation, "invalid document expression in field 'blurb'");
 }
 
+/// A document expression may call a sigil-lowered package function: the
+/// domain lowers through the sigil pipeline, so `Package::functions`
+/// populate the `DomainTypes` the document-expression checker builds with
+/// `TypeContext::from_model`.
+#[test]
+fn a_ddd_document_expression_may_call_a_package_function() {
+    let mox = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/conformance/sigil/funcs.mox"),
+    )
+    .expect("read funcs.mox");
+    let rosetta = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/conformance/sigil/funcs.rosetta"),
+    )
+    .expect("read funcs.rosetta");
+    let domains = vec![("funcs.mox".to_string(), mox)];
+    let imports = rex_driver::DomainImports {
+        sigil: rex_driver::SigilImports::new().provide("funcs.mox", "funcs.rosetta", rosetta),
+        ..rex_driver::DomainImports::default()
+    };
+    let source = concat!(
+        "import \"funcs.mox\"\n",
+        "\n",
+        "application A {\n",
+        "    module m {\n",
+        "        entity Underlier\n",
+        "        search UnderlierSearch {\n",
+        "            entity Underlier\n",
+        "            document {\n",
+        "                rate = calcRate(1.0, [\"a\"]);\n",
+        "            }\n",
+        "        }\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile_ddd_str("design.ddd", source, &domains, &imports);
+    assert_clean(&compilation);
+    let document = &compilation.model.expect("model").modules[0].searches[0].document;
+    assert_eq!(document[0].expr, "calcRate(1.0, [\"a\"])");
+
+    // An unknown callee keeps the standard document-expression diagnostic
+    // shape, wrapping the checker's unknown-function message.
+    let source = source.replace("rate = calcRate(1.0, [\"a\"]);", "rate = unknownCall(1);");
+    let compilation = compile_ddd_str("design.ddd", &source, &domains, &imports);
+    let diagnostic = single(&compilation, "invalid document expression in field 'rate'");
+    assert!(
+        diagnostic.message.contains("unknown function"),
+        "expected the unknown-function message, got: {}",
+        diagnostic.message
+    );
+}
+
 #[test]
 fn search_document_field_names_are_unique() {
     let source = concat!(
