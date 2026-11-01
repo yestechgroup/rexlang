@@ -2650,6 +2650,40 @@ fn check_empty_directory_is_a_clean_error() {
     assert!(stderr.contains("no model files found"), "{stderr}");
 }
 
+/// Formatter-golden artifacts (`X.fmt.<ext>` — the byte-golden output of
+/// formatting a canonical model elsewhere) are not standalone models: their
+/// imports and vocabulary snapshots only resolve next to their *sources*.
+/// Directory batch mode must skip them rather than try to compile them.
+#[test]
+fn check_directory_batch_skips_formatter_goldens() {
+    let dir = scratch_dir().join("batch-fmt-goldens");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    std::fs::write(dir.join("good.mox"), GOOD).expect("write mox");
+    // A well-formed golden whose source-side import dangles in this dir —
+    // compiling it would fail with "cannot read imported file".
+    std::fs::write(dir.join("library.fmt.mox"), "import \"library.mox\"\n").expect("write golden");
+    // A syntactically broken golden proves the skip is unconditional.
+    std::fs::write(dir.join("broken.fmt.mox"), "not a model at all").expect("write broken golden");
+
+    let output = rexlang()
+        .args(["check", dir.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert!(
+        output.status.success(),
+        "formatter goldens are skipped: stderr: {:?} stdout: {:?}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.matches("OK").count(),
+        1,
+        "only the real model is checked: {stdout}"
+    );
+    assert!(stdout.contains("good.mox"), "{stdout}");
+}
+
 // --- `.deploy` deployment files ------------------------------------------------
 
 const DEPLOY_DOMAIN: &str = "package demo\n\nclass Book { String title }\n";

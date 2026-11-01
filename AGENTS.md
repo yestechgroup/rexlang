@@ -31,7 +31,7 @@ cargo test -p rex-driver --test navigation      # one test suite
 cargo clippy --workspace --all-targets          # must be ZERO warnings
 cargo fmt --all                                 # rustfmt
 cargo run -p rex-cli -- fmt --check tests/conformance/models/*.mox tests/conformance/models/*.actor   # fixture format gate (.ddd gate: tests/conformance/ddd/*.ddd; sigil gate: tests/conformance/sigil/*.mox; .evt gate: tests/conformance/events/*.evt; .deploy gate: tests/conformance/deploy/*.deploy; .uc gate: tests/conformance/usecases/*.uc; .cmmn gate: tests/conformance/cmmn/*.cmmn; .ifml gates: tests/conformance/ifml/app.ifml, patterns/ifml/*.ifml, examples/*.ifml)
-cargo run -p rex-cli -- check tests/conformance/                            # directory batch mode: every supported surface under a dir checks independently
+cargo run -p rex-cli -- check tests/conformance/                            # directory batch mode: every supported surface under a dir checks independently (formatter-golden `X.fmt.<ext>` artifacts are skipped — they are outputs whose imports/vocab resolve next to their sources, not standalone models)
 REX_UPDATE_FIXTURES=1 cargo test --workspace    # regenerate golden files
 ```
 
