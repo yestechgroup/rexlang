@@ -980,16 +980,11 @@ pub struct DomainImports {
 /// assert!(compilation.diagnostics.is_empty());
 /// assert_eq!(compilation.model.unwrap().blocks.len(), 1);
 /// ```
-pub fn compile_actors_str(
-    actor_path: &str,
-    actor_source: &str,
-    domains: &[(String, String)],
-    imports: &DomainImports,
-) -> ActorCompilation {
-    let db = Database::new();
-    let actor = SourceFile::new(&db, actor_path.to_string(), actor_source.to_string());
+/// The one-shot wrappers' domain sources: each `(path, source)` pair as a
+/// salsa input file, duplicate paths read once (first occurrence wins).
+fn domain_files(db: &dyn Db, domains: &[(String, String)]) -> Vec<SourceFile> {
     let mut seen: Vec<&str> = Vec::new();
-    let files: Vec<SourceFile> = domains
+    domains
         .iter()
         .filter(|(path, _)| {
             if seen.contains(&path.as_str()) {
@@ -998,8 +993,19 @@ pub fn compile_actors_str(
             seen.push(path.as_str());
             true
         })
-        .map(|(path, source)| SourceFile::new(&db, path.clone(), source.clone()))
-        .collect();
+        .map(|(path, source)| SourceFile::new(db, path.clone(), source.clone()))
+        .collect()
+}
+
+pub fn compile_actors_str(
+    actor_path: &str,
+    actor_source: &str,
+    domains: &[(String, String)],
+    imports: &DomainImports,
+) -> ActorCompilation {
+    let db = Database::new();
+    let actor = SourceFile::new(&db, actor_path.to_string(), actor_source.to_string());
+    let files = domain_files(&db, domains);
     compile_actors_with(&db, actor, files, imports)
 }
 
@@ -1308,18 +1314,7 @@ fn compile_ddd_str_inner(
 ) -> DddCompilation {
     let db = Database::new();
     let design = SourceFile::new(&db, path.to_string(), source.to_string());
-    let mut seen: Vec<&str> = Vec::new();
-    let files: Vec<SourceFile> = domains
-        .iter()
-        .filter(|(path, _)| {
-            if seen.contains(&path.as_str()) {
-                return false;
-            }
-            seen.push(path.as_str());
-            true
-        })
-        .map(|(path, source)| SourceFile::new(&db, path.clone(), source.clone()))
-        .collect();
+    let files = domain_files(&db, domains);
     compile_ddd_with(&db, design, files, actors, imports)
 }
 
@@ -1422,18 +1417,7 @@ pub fn compile_evt_str(
 ) -> EventCompilation {
     let db = Database::new();
     let contract = SourceFile::new(&db, path.to_string(), source.to_string());
-    let mut seen: Vec<&str> = Vec::new();
-    let files: Vec<SourceFile> = domains
-        .iter()
-        .filter(|(path, _)| {
-            if seen.contains(&path.as_str()) {
-                return false;
-            }
-            seen.push(path.as_str());
-            true
-        })
-        .map(|(path, source)| SourceFile::new(&db, path.clone(), source.clone()))
-        .collect();
+    let files = domain_files(&db, domains);
     compile_evt_with(&db, contract, files, imports)
 }
 
@@ -1676,18 +1660,7 @@ pub fn compile_usecase_str(
 ) -> UseCaseCompilation {
     let db = Database::new();
     let file = SourceFile::new(&db, path.to_string(), source.to_string());
-    let mut seen: Vec<&str> = Vec::new();
-    let files: Vec<SourceFile> = domains
-        .iter()
-        .filter(|(path, _)| {
-            if seen.contains(&path.as_str()) {
-                return false;
-            }
-            seen.push(path.as_str());
-            true
-        })
-        .map(|(path, source)| SourceFile::new(&db, path.clone(), source.clone()))
-        .collect();
+    let files = domain_files(&db, domains);
     compile_usecase_with(&db, file, files, designs, actors, events, imports)
 }
 
@@ -1859,18 +1832,7 @@ pub fn compile_cmmn_str(
 ) -> CmmnCompilation {
     let db = Database::new();
     let file = SourceFile::new(&db, path.to_string(), source.to_string());
-    let mut seen: Vec<&str> = Vec::new();
-    let files: Vec<SourceFile> = domains
-        .iter()
-        .filter(|(path, _)| {
-            if seen.contains(&path.as_str()) {
-                return false;
-            }
-            seen.push(path.as_str());
-            true
-        })
-        .map(|(path, source)| SourceFile::new(&db, path.clone(), source.clone()))
-        .collect();
+    let files = domain_files(&db, domains);
     compile_cmmn_with(&db, file, files, designs, actors, events, imports)
 }
 
