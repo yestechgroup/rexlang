@@ -2544,6 +2544,7 @@ dependencies = [
  "rex-ifml",
  "rex-ir",
  "rex-syntax",
+ "rex-verify",
  "rex-vocab",
  "salsa",
  "serde",

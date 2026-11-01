@@ -3396,22 +3396,60 @@ fn default_span(default: &mox::DefaultValue) -> Span {
 /// edges, keyed by `(package, name)` so cross-package edges are followed),
 /// reporting the first cycle found. Diagnostics are tagged with the file
 /// that closes the cycle.
+///
+/// The detection is the verified `rex-verify` kernel: `link(super, sub)`
+/// refuses exactly the edges that would close a cycle (kernel proofs V1/V2/
+/// V5 — see `docs/VERIFICATION.md`), so a rejected link *is* a cycle, and
+/// duplicate `extends` edges report success (they are not cycles). The
+/// reported ring is reconstructed by walking the kernel's parent chains
+/// from the refused edge's child around to itself; in models with several
+/// independent cycles this is the first rejected edge in declaration order,
+/// which may be a different rotation of the same ring than a depth-first
+/// walk would name.
 fn detect_inheritance_cycles(classes: &[ClassRecord], diags: &mut Vec<(String, Diagnostic)>) {
     let index: HashMap<(&str, &str), &ClassRecord> = classes
         .iter()
         .map(|class| ((class.package.as_str(), class.name.as_str()), class))
         .collect();
-    let mut state: HashMap<(&str, &str), u8> = HashMap::new();
+    let mut graph = rex_verify::Graph::new();
+    // Node ids are assigned in `classes` order, so `keys[id.index()]` is
+    // that node's `(package, name)` key.
+    let keys: Vec<(&str, &str)> = classes
+        .iter()
+        .map(|class| (class.package.as_str(), class.name.as_str()))
+        .collect();
+    let mut ids: HashMap<(&str, &str), rex_verify::NodeId> = HashMap::new();
+    for key in &keys {
+        let id = graph.add_node();
+        ids.insert(*key, id);
+    }
     for class in classes {
-        let mut path: Vec<(&str, &str)> = Vec::new();
-        if let Some(cycle) = visit_class(
-            (class.package.as_str(), class.name.as_str()),
-            &index,
-            &mut state,
-            &mut path,
-        ) {
-            let record = index.get(&cycle[0]).expect("cycle member is indexed");
-            let names: Vec<&str> = cycle.iter().map(|(_, name)| *name).collect();
+        let sub = ids[&(class.package.as_str(), class.name.as_str())];
+        for superclass in class
+            .def
+            .extends
+            .iter()
+            .filter_map(|type_ref| match type_ref {
+                ir::TypeRef::Class { package, name, .. } => Some((package.as_str(), name.as_str())),
+                _ => None,
+            })
+        {
+            let Some(sup) = ids.get(&superclass) else {
+                // Unknown super: a resolution diagnostic is emitted
+                // elsewhere; the cycle pass treats it as a leaf, like the
+                // kernel index miss it is.
+                continue;
+            };
+            if graph.link(*sup, sub) {
+                continue;
+            }
+            let ring: Vec<(&str, &str)> = if *sup == sub {
+                vec![keys[sub.index()], keys[sub.index()]]
+            } else {
+                parent_ring(&graph, &keys, *sup, sub)
+            };
+            let record = index.get(&ring[0]).expect("cycle member is indexed");
+            let names: Vec<&str> = ring.iter().map(|(_, name)| *name).collect();
             diags.push((
                 record.file.clone(),
                 Diagnostic::error(
@@ -3424,44 +3462,39 @@ fn detect_inheritance_cycles(classes: &[ClassRecord], diags: &mut Vec<(String, D
     }
 }
 
-/// Iterative-depth-first visit; returns the cycle path when a back edge is
-/// found. `state`: absent = unvisited, `1` = on the current path, `2` = done.
-fn visit_class<'a>(
-    class: (&'a str, &'a str),
-    index: &HashMap<(&'a str, &'a str), &'a ClassRecord>,
-    state: &mut HashMap<(&'a str, &'a str), u8>,
-    path: &mut Vec<(&'a str, &'a str)>,
-) -> Option<Vec<(&'a str, &'a str)>> {
-    match state.get(&class) {
-        Some(1) => {
-            let start = path.iter().position(|member| *member == class).unwrap_or(0);
-            let mut cycle: Vec<(&str, &str)> = path[start..].to_vec();
-            cycle.push(class);
-            return Some(cycle);
+/// The containment ring that `link(sup, sub)` refused: the pre-existing
+/// `sup ⇒* sub` chain (the kernel's parent edges, walked from `sup`) plus
+/// the refused `sub ⇒ sup` edge that closes it. The refusal guarantees the
+/// chain exists (`is_ancestor` found `sub` among `sup`'s containment
+/// ancestors through these same edges).
+fn parent_ring<'k>(
+    graph: &rex_verify::Graph,
+    keys: &[(&'k str, &'k str)],
+    sup: rex_verify::NodeId,
+    sub: rex_verify::NodeId,
+) -> Vec<(&'k str, &'k str)> {
+    let mut chain: Vec<rex_verify::NodeId> = vec![sup];
+    let mut seen: Vec<rex_verify::NodeId> = vec![sup];
+    while let Some(&cur) = chain.last() {
+        if cur == sub {
+            break;
         }
-        Some(_) => return None,
-        None => {}
-    }
-    state.insert(class, 1);
-    path.push(class);
-    if let Some(record) = index.get(&class) {
-        for superclass in record
-            .def
-            .extends
-            .iter()
-            .filter_map(|type_ref| match type_ref {
-                ir::TypeRef::Class { package, name, .. } => Some((package.as_str(), name.as_str())),
-                _ => None,
-            })
-        {
-            if let Some(cycle) = visit_class(superclass, index, state, path) {
-                return Some(cycle);
+        let mut advanced = false;
+        for &p in graph.parents_of(cur) {
+            if !seen.contains(&p) {
+                seen.push(p);
+                chain.push(p);
+                advanced = true;
+                break;
             }
         }
+        if !advanced {
+            chain.pop();
+        }
     }
-    path.pop();
-    state.insert(class, 2);
-    None
+    let mut ring: Vec<(&'k str, &'k str)> = chain.iter().map(|&n| keys[n.index()]).collect();
+    ring.push(keys[sup.index()]);
+    ring
 }
 
 /// Validates opposite pairing, mutually:
@@ -3936,6 +3969,12 @@ fn actor_parents(record: &ActorsRecord) -> HashMap<&str, &str> {
 /// cycle per block (span on the actor that closes it). Each diagnostic is
 /// tagged with the block's own file. Returns `true` when any cycle was
 /// found; callers skip the ancestor-walking passes.
+///
+/// The detection is the verified `rex-verify` kernel (see
+/// `detect_inheritance_cycles`): `link(super, sub)` refuses exactly the
+/// edges that would close a cycle, and the reported ring is reconstructed
+/// by walking the kernel's parent chains from the refused edge's child
+/// around to itself.
 fn detect_actor_cycles(records: &[ActorsRecord], diags: &mut Vec<(String, Diagnostic)>) -> bool {
     let mut cyclic = false;
     for record in records {
@@ -3945,55 +3984,76 @@ fn detect_actor_cycles(records: &[ActorsRecord], diags: &mut Vec<(String, Diagno
             .iter()
             .map(|(name, span)| (name.as_str(), *span))
             .collect();
-        let mut state: HashMap<&str, u8> = HashMap::new();
+        let keys: Vec<&str> = record
+            .actor_names
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
+        let mut graph = rex_verify::Graph::new();
+        let mut ids: HashMap<&str, rex_verify::NodeId> = HashMap::new();
+        for key in &keys {
+            ids.insert(key, graph.add_node());
+        }
         for (name, span) in &record.actor_names {
-            let mut path: Vec<&str> = Vec::new();
-            if let Some(cycle) = visit_actor(name.as_str(), &index, &mut state, &mut path) {
-                let span = spans.get(cycle[0]).copied().unwrap_or(*span);
-                diags.push((
-                    record.file.clone(),
-                    Diagnostic::error(
-                        format!("actor inheritance cycle: {}", cycle.join(" -> ")),
-                        Some(span),
-                    ),
-                ));
-                cyclic = true;
-                break;
+            let sub = ids[name.as_str()];
+            let Some(&sup) = index.get(name.as_str()).and_then(|parent| ids.get(parent)) else {
+                // Unknown (or absent) parent: not an edge the cycle pass
+                // can follow; resolution problems surface elsewhere.
+                continue;
+            };
+            if graph.link(sup, sub) {
+                continue;
             }
+            let ring: Vec<&str> = if sup == sub {
+                vec![keys[sub.index()], keys[sub.index()]]
+            } else {
+                actor_ring(&graph, &keys, sup, sub)
+            };
+            let span = spans.get(ring[0]).copied().unwrap_or(*span);
+            diags.push((
+                record.file.clone(),
+                Diagnostic::error(
+                    format!("actor inheritance cycle: {}", ring.join(" -> ")),
+                    Some(span),
+                ),
+            ));
+            cyclic = true;
+            break;
         }
     }
     cyclic
 }
 
-/// Iterative-depth-first visit over `extends` edges; returns the cycle path
-/// when a back edge is found. `state`: absent = unvisited, `1` = on the
-/// current path, `2` = done.
-fn visit_actor<'a>(
-    actor: &'a str,
-    index: &HashMap<&'a str, &'a str>,
-    state: &mut HashMap<&'a str, u8>,
-    path: &mut Vec<&'a str>,
-) -> Option<Vec<&'a str>> {
-    match state.get(actor) {
-        Some(1) => {
-            let start = path.iter().position(|name| *name == actor).unwrap_or(0);
-            let mut cycle: Vec<&str> = path[start..].to_vec();
-            cycle.push(actor);
-            return Some(cycle);
+/// The containment ring that `link(sup, sub)` refused, in actor-name form
+/// (see `parent_ring` for the class-side twin).
+fn actor_ring<'k>(
+    graph: &rex_verify::Graph,
+    keys: &[&'k str],
+    sup: rex_verify::NodeId,
+    sub: rex_verify::NodeId,
+) -> Vec<&'k str> {
+    let mut chain: Vec<rex_verify::NodeId> = vec![sup];
+    let mut seen: Vec<rex_verify::NodeId> = vec![sup];
+    while let Some(&cur) = chain.last() {
+        if cur == sub {
+            break;
         }
-        Some(_) => return None,
-        None => {}
-    }
-    state.insert(actor, 1);
-    path.push(actor);
-    if let Some(parent) = index.get(actor) {
-        if let Some(cycle) = visit_actor(parent, index, state, path) {
-            return Some(cycle);
+        let mut advanced = false;
+        for &p in graph.parents_of(cur) {
+            if !seen.contains(&p) {
+                seen.push(p);
+                chain.push(p);
+                advanced = true;
+                break;
+            }
+        }
+        if !advanced {
+            chain.pop();
         }
     }
-    path.pop();
-    state.insert(actor, 2);
-    None
+    let mut ring: Vec<&'k str> = chain.iter().map(|&n| keys[n.index()]).collect();
+    ring.push(keys[sup.index()]);
+    ring
 }
 
 /// The actor's own name plus every transitive `extends` ancestor
