@@ -15,6 +15,7 @@ members = [
     "crates/rex-lsp",
     "crates/rex-runtime",
     "crates/rex-cli",
+    "crates/rex-verify",
 ]
 
 [workspace.package]
@@ -44,6 +45,7 @@ rex-backend-common = { path = "crates/rex-backend-common" }
 rex-vocab = { path = "crates/rex-vocab" }
 rex-lsp = { path = "crates/rex-lsp" }
 rex-runtime = { path = "crates/rex-runtime" }
+rex-verify = { path = "crates/rex-verify" }
 
 # The Rune DSL (`.rosetta`) toolchain, pinned by rev — the embedding
 # contract is documented in sigil's docs/api-stability.md (sigil-model is
@@ -65,6 +67,7 @@ askama = "0.14"
 chumsky = "0.10"
 clap = { version = "4.5", features = ["derive"] }
 jsonschema = "0.55"
+creusot-std = "0.14.0"
 logos = "0.15"
 pest = "2"
 pest_derive = "2"
