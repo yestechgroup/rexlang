@@ -63,9 +63,6 @@
 //!
 //! [rexlang]: https://github.com/anton-makes/rexlang
 
-use std::cmp::Ordering;
-use std::hash::{Hash, Hasher};
-
 use serde::{Deserialize, Serialize};
 
 use crate::{IrError, Multiplicity, OperationParam, TypeRef};
@@ -130,12 +127,12 @@ impl DddModel {
 
     /// Serializes the artifact to pretty-printed (2-space indent) JSON.
     pub fn to_json_pretty(&self) -> Result<String, IrError> {
-        Ok(serde_json::to_string_pretty(self)?)
+        crate::wire::to_json_pretty(self)
     }
 
     /// Serializes the artifact to compact JSON.
     pub fn to_json(&self) -> Result<String, IrError> {
-        Ok(serde_json::to_string(self)?)
+        crate::wire::to_json(self)
     }
 
     /// Deserializes a design artifact from JSON, rejecting artifacts whose
@@ -143,19 +140,12 @@ impl DddModel {
     ///
     /// Unknown fields are ignored for forward compatibility.
     pub fn from_json(json: &str) -> Result<Self, IrError> {
-        let value: serde_json::Value = serde_json::from_str(json)?;
-        let found = value
-            .get("formatVersion")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or_default() as u32;
-        if found != DDD_MODEL_FORMAT_VERSION {
-            return Err(IrError::UnsupportedFormatVersion {
-                found,
-                expected: DDD_MODEL_FORMAT_VERSION,
-            });
-        }
-        Ok(serde_json::from_value(value)?)
+        crate::wire::from_json(json)
     }
+}
+
+impl crate::wire::VersionedArtifact for DddModel {
+    const FORMAT_VERSION: u32 = DDD_MODEL_FORMAT_VERSION;
 }
 
 impl Default for DddModel {
@@ -813,89 +803,39 @@ impl SearchField {
     }
 }
 
-/// The relevance-boost weight of a [`SearchField`] (`boost <n>` in the
-/// source): an ordered, equality-preserving wrapper around `f32`, so the
-/// artifact chain derives [`Eq`] end to end (wire contract rule 14).
-///
-/// # Wire layout
-///
-/// `#[serde(transparent)]`: a `Boost` serializes and deserializes exactly
-/// as the bare JSON number it wraps — artifacts are byte-identical to the
-/// raw-`f32` encoding.
-///
-/// # Equality and hashing
-///
-/// [`PartialEq`]/[`Eq`] follow `f32::total_cmp` semantics: equality is
-/// bit-pattern equality, which makes it reflexive even for `NaN` (a `NaN`
-/// equals only another `NaN` with the same bit pattern) and distinguishes
-/// `-0.0` from `0.0` (both deliberate). [`Hash`] hashes the raw bit
-/// pattern, consistent with that equality.
-///
-/// # Ordering
-///
-/// [`Ord`]/[`PartialOrd`] are `f32::total_cmp`: a genuine total order
-/// (`-0.0 < 0.0`, every `NaN` above [`f32::INFINITY`]), so boosts can be
-/// sorted and compared like any other key.
-///
-/// # Where `NaN`/`-0.0` can come from
-///
-/// The `.ddd` grammar accepts only integer boosts (`boost 3`) and JSON
-/// cannot encode `NaN`, so neither source nor wire artifacts produce one
-/// today; the `NaN`/`-0.0` behavior above is the type's deliberate
-/// contract for programmatic construction and any future float-tolerant
-/// syntax, not dead-letter handling.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Boost(f32);
-
-impl Boost {
-    /// Wraps a raw `f32` weight.
-    pub fn new(value: f32) -> Self {
-        Self(value)
-    }
-
-    /// The raw `f32` weight.
-    pub fn value(self) -> f32 {
-        self.0
-    }
-}
-
-impl From<f32> for Boost {
-    fn from(value: f32) -> Self {
-        Self(value)
-    }
-}
-
-impl From<Boost> for f32 {
-    fn from(value: Boost) -> Self {
-        value.0
-    }
-}
-
-impl PartialEq for Boost {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.total_cmp(&other.0) == Ordering::Equal
-    }
-}
-
-impl Eq for Boost {}
-
-impl Hash for Boost {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.to_bits().hash(state);
-    }
-}
-
-impl Ord for Boost {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.0.total_cmp(&other.0)
-    }
-}
-
-impl PartialOrd for Boost {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
+crate::wire::total_order_float! {
+    /// The relevance-boost weight of a [`SearchField`] (`boost <n>` in the
+    /// source): an ordered, equality-preserving wrapper around `f32`, so the
+    /// artifact chain derives [`Eq`] end to end (wire contract rule 14).
+    ///
+    /// # Wire layout
+    ///
+    /// `#[serde(transparent)]`: a `Boost` serializes and deserializes exactly
+    /// as the bare JSON number it wraps — artifacts are byte-identical to the
+    /// raw-`f32` encoding.
+    ///
+    /// # Equality and hashing
+    ///
+    /// [`PartialEq`]/[`Eq`] follow `f32::total_cmp` semantics: equality is
+    /// bit-pattern equality, which makes it reflexive even for `NaN` (a `NaN`
+    /// equals only another `NaN` with the same bit pattern) and distinguishes
+    /// `-0.0` from `0.0` (both deliberate). [`Hash`] hashes the raw bit
+    /// pattern, consistent with that equality.
+    ///
+    /// # Ordering
+    ///
+    /// [`Ord`]/[`PartialOrd`] are `f32::total_cmp`: a genuine total order
+    /// (`-0.0 < 0.0`, every `NaN` above [`f32::INFINITY`]), so boosts can be
+    /// sorted and compared like any other key.
+    ///
+    /// # Where `NaN`/`-0.0` can come from
+    ///
+    /// The `.ddd` grammar accepts only integer boosts (`boost 3`) and JSON
+    /// cannot encode `NaN`, so neither source nor wire artifacts produce one
+    /// today; the `NaN`/`-0.0` behavior above is the type's deliberate
+    /// contract for programmatic construction and any future float-tolerant
+    /// syntax, not dead-letter handling.
+    Boost(f32)
 }
 
 /// A structured filter key of a [`SearchDef`]: an exact-match facet a query
