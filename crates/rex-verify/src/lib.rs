@@ -26,6 +26,8 @@
 
 use creusot_std::prelude::{Clone, PartialEq, *};
 
+pub mod feature_ids;
+
 /// The unique identity of a node in a [`Graph`].
 ///
 /// Ids are only created by [`Graph::add_node`], are never reused, and are
