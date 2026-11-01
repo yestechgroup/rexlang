@@ -9,15 +9,17 @@ use rex_driver::{
 };
 
 use crate::inputs::{
-    compile_sources, expand_inputs, is_actor_file, is_cmmn_file, is_ddd_file, is_deploy_file,
-    is_evt_file, is_ifml_file, is_uc_file, read_actor_pair, read_cmmn_pair, read_ddd_design,
-    read_deploy_pair, read_evt_pair, read_ifml_inputs, read_sources, read_uc_pair,
+    expand_inputs, is_actor_file, is_cmmn_file, is_ddd_file, is_deploy_file, is_evt_file,
+    is_ifml_file, is_uc_file, read_actor_pair, read_cmmn_pair, read_ddd_design, read_deploy_pair,
+    read_evt_pair, read_ifml_inputs, read_uc_pair,
 };
 use crate::report::{
     report_actor_diagnostics, report_cmmn_diagnostics, report_ddd_diagnostics,
     report_deploy_diagnostics, report_evt_diagnostics, report_ifml_diagnostics,
-    report_multi_diagnostics, report_usecase_diagnostics,
+    report_usecase_diagnostics,
 };
+
+use super::pipeline::{compile_reported_sources, emit_json};
 
 pub(crate) fn run(
     files: Vec<PathBuf>,
@@ -37,11 +39,7 @@ pub(crate) fn run(
         let Some(ddd_model) = compilation.model else {
             return Ok(ExitCode::FAILURE);
         };
-        let json = ddd_model.to_json_pretty()?;
-        match out {
-            Some(out_path) => std::fs::write(out_path, json)?,
-            None => println!("{json}"),
-        }
+        emit_json(ddd_model.to_json_pretty()?, out.as_deref())?;
         Ok(ExitCode::SUCCESS)
     } else if files.len() == 1 && is_actor_file(&files[0]) {
         let pair = read_actor_pair(&files[0])?;
@@ -51,11 +49,7 @@ pub(crate) fn run(
         let Some(actor_model) = compilation.model else {
             return Ok(ExitCode::FAILURE);
         };
-        let json = actor_model.to_json_pretty()?;
-        match out {
-            Some(out_path) => std::fs::write(out_path, json)?,
-            None => println!("{json}"),
-        }
+        emit_json(actor_model.to_json_pretty()?, out.as_deref())?;
         Ok(ExitCode::SUCCESS)
     } else if files.len() == 1 && is_ifml_file(&files[0]) {
         let inputs = read_ifml_inputs(&files[0])?;
@@ -83,11 +77,7 @@ pub(crate) fn run(
         } else {
             compilation.model
         };
-        let json = model.to_json_pretty()?;
-        match out {
-            Some(out_path) => std::fs::write(out_path, json)?,
-            None => println!("{json}"),
-        }
+        emit_json(model.to_json_pretty()?, out.as_deref())?;
         Ok(ExitCode::SUCCESS)
     } else if files.len() == 1 && is_evt_file(&files[0]) {
         let pair = read_evt_pair(&files[0])?;
@@ -96,11 +86,7 @@ pub(crate) fn run(
         let Some(event_model) = compilation.model else {
             return Ok(ExitCode::FAILURE);
         };
-        let json = event_model.to_json_pretty()?;
-        match out {
-            Some(out_path) => std::fs::write(out_path, json)?,
-            None => println!("{json}"),
-        }
+        emit_json(event_model.to_json_pretty()?, out.as_deref())?;
         Ok(ExitCode::SUCCESS)
     } else if files.len() == 1 && is_deploy_file(&files[0]) {
         let pair = read_deploy_pair(&files[0])?;
@@ -109,71 +95,48 @@ pub(crate) fn run(
         let Some(deploy_model) = compilation.model else {
             return Ok(ExitCode::FAILURE);
         };
-        let json = deploy_model.to_json_pretty()?;
-        match out {
-            Some(out_path) => std::fs::write(out_path, json)?,
-            None => println!("{json}"),
-        }
+        emit_json(deploy_model.to_json_pretty()?, out.as_deref())?;
         Ok(ExitCode::SUCCESS)
     } else if files.len() == 1 && is_uc_file(&files[0]) {
         let pair = read_uc_pair(&files[0])?;
         let compilation = compile_usecase_str(
-            &pair.path,
-            &pair.source,
-            &pair.domains,
-            &pair.imports(),
+            &pair.pair.path,
+            &pair.pair.source,
+            &pair.pair.domains,
+            &pair.pair.imports(),
             &pair.designs,
             &pair.actors,
             &pair.events,
         );
-        report_usecase_diagnostics(&pair, &compilation);
+        report_usecase_diagnostics(&pair.pair, &compilation);
         let Some(use_case_model) = compilation.model else {
             return Ok(ExitCode::FAILURE);
         };
-        let json = use_case_model.to_json_pretty()?;
-        match out {
-            Some(out_path) => std::fs::write(out_path, json)?,
-            None => println!("{json}"),
-        }
+        emit_json(use_case_model.to_json_pretty()?, out.as_deref())?;
         Ok(ExitCode::SUCCESS)
     } else if files.len() == 1 && is_cmmn_file(&files[0]) {
         let pair = read_cmmn_pair(&files[0])?;
         let compilation = compile_cmmn_str(
-            &pair.path,
-            &pair.source,
-            &pair.domains,
-            &pair.imports(),
+            &pair.pair.path,
+            &pair.pair.source,
+            &pair.pair.domains,
+            &pair.pair.imports(),
             &pair.designs,
             &pair.actors,
             &pair.events,
         );
-        report_cmmn_diagnostics(&pair, &compilation);
+        report_cmmn_diagnostics(&pair.pair, &compilation);
         let Some(case_model) = compilation.model else {
             return Ok(ExitCode::FAILURE);
         };
-        let json = case_model.to_json_pretty()?;
-        match out {
-            Some(out_path) => std::fs::write(out_path, json)?,
-            None => println!("{json}"),
-        }
+        emit_json(case_model.to_json_pretty()?, out.as_deref())?;
         Ok(ExitCode::SUCCESS)
     } else {
-        let sources = read_sources(&files)?;
-        let (compilation, sigil_sources) = compile_sources(&sources)?;
-        report_multi_diagnostics(
-            &sources,
-            &sigil_sources.sources,
-            &compilation.diagnostics,
-            &compilation.sigil_diagnostics,
-        );
+        let (_, compilation) = compile_reported_sources(&files)?;
         let Some(model) = compilation.model else {
             return Ok(ExitCode::FAILURE);
         };
-        let json = model.to_json_pretty()?;
-        match out {
-            Some(out_path) => std::fs::write(out_path, json)?,
-            None => println!("{json}"),
-        }
+        emit_json(model.to_json_pretty()?, out.as_deref())?;
         Ok(ExitCode::SUCCESS)
     }
 }

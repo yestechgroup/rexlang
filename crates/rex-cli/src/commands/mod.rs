@@ -6,4 +6,5 @@ pub(crate) mod fmt;
 pub(crate) mod gen;
 pub(crate) mod ir;
 pub(crate) mod lsp;
+pub(crate) mod pipeline;
 pub(crate) mod vocab;

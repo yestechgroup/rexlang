@@ -9,15 +9,17 @@ use rex_driver::{
 };
 
 use crate::inputs::{
-    compile_sources, expand_check_inputs, expand_inputs, is_actor_file, is_cmmn_file, is_ddd_file,
-    is_deploy_file, is_evt_file, is_ifml_file, is_uc_file, read_actor_pair, read_cmmn_pair,
-    read_ddd_design, read_deploy_pair, read_evt_pair, read_ifml_inputs, read_sources, read_uc_pair,
+    expand_check_inputs, expand_inputs, is_actor_file, is_cmmn_file, is_ddd_file, is_deploy_file,
+    is_evt_file, is_ifml_file, is_uc_file, read_actor_pair, read_cmmn_pair, read_ddd_design,
+    read_deploy_pair, read_evt_pair, read_ifml_inputs, read_uc_pair,
 };
 use crate::report::{
     report_actor_diagnostics, report_cmmn_diagnostics, report_ddd_diagnostics,
     report_deploy_diagnostics, report_evt_diagnostics, report_ifml_diagnostics,
-    report_multi_diagnostics, report_usecase_diagnostics,
+    report_usecase_diagnostics,
 };
+
+use super::pipeline::{check_exit, compile_reported_sources};
 
 pub(crate) fn run(files: Vec<PathBuf>) -> anyhow::Result<ExitCode> {
     // Directory inputs enter batch mode: every supported surface under the
@@ -68,11 +70,7 @@ fn check_one(files: &[PathBuf]) -> anyhow::Result<ExitCode> {
             };
         let binding = rex_ifml::check_ifml(&compilation, inputs.domains.as_ref());
         report_ifml_diagnostics(&sources(&compilation), &binding);
-        if binding.is_empty() {
-            println!("OK {}", inputs.path);
-            return Ok(ExitCode::SUCCESS);
-        }
-        Ok(ExitCode::FAILURE)
+        Ok(check_exit(binding.is_empty(), &inputs.path))
     } else if files.len() == 1 && is_ddd_file(&files[0]) {
         let design = read_ddd_design(&files[0])?;
         let compilation = compile_ddd_str(
@@ -82,88 +80,51 @@ fn check_one(files: &[PathBuf]) -> anyhow::Result<ExitCode> {
             &design.imports(),
         );
         report_ddd_diagnostics(&design, &compilation);
-        if compilation.model.is_some() {
-            println!("OK {}", design.path);
-            Ok(ExitCode::SUCCESS)
-        } else {
-            Ok(ExitCode::FAILURE)
-        }
+        Ok(check_exit(compilation.model.is_some(), &design.path))
     } else if files.len() == 1 && is_actor_file(&files[0]) {
         let pair = read_actor_pair(&files[0])?;
         let compilation =
             compile_actors_str(&pair.path, &pair.source, &pair.domains, &pair.imports());
         report_actor_diagnostics(&pair, &compilation);
-        if compilation.model.is_some() {
-            println!("OK {}", pair.path);
-            Ok(ExitCode::SUCCESS)
-        } else {
-            Ok(ExitCode::FAILURE)
-        }
+        Ok(check_exit(compilation.model.is_some(), &pair.path))
     } else if files.len() == 1 && is_evt_file(&files[0]) {
         let pair = read_evt_pair(&files[0])?;
         let compilation = compile_evt_str(&pair.path, &pair.source, &pair.domains, &pair.imports());
         report_evt_diagnostics(&pair, &compilation);
-        if compilation.model.is_some() {
-            println!("OK {}", pair.path);
-            Ok(ExitCode::SUCCESS)
-        } else {
-            Ok(ExitCode::FAILURE)
-        }
+        Ok(check_exit(compilation.model.is_some(), &pair.path))
     } else if files.len() == 1 && is_deploy_file(&files[0]) {
         let pair = read_deploy_pair(&files[0])?;
         let compilation = compile_deploy_str(&pair.path, &pair.source, &pair.designs, &pair.flows);
         report_deploy_diagnostics(&pair, &compilation);
-        if compilation.model.is_some() {
-            println!("OK {}", pair.path);
-            Ok(ExitCode::SUCCESS)
-        } else {
-            Ok(ExitCode::FAILURE)
-        }
+        Ok(check_exit(compilation.model.is_some(), &pair.path))
     } else if files.len() == 1 && is_uc_file(&files[0]) {
         let pair = read_uc_pair(&files[0])?;
         let compilation = compile_usecase_str(
-            &pair.path,
-            &pair.source,
-            &pair.domains,
-            &pair.imports(),
+            &pair.pair.path,
+            &pair.pair.source,
+            &pair.pair.domains,
+            &pair.pair.imports(),
             &pair.designs,
             &pair.actors,
             &pair.events,
         );
-        report_usecase_diagnostics(&pair, &compilation);
-        if compilation.model.is_some() {
-            println!("OK {}", pair.path);
-            Ok(ExitCode::SUCCESS)
-        } else {
-            Ok(ExitCode::FAILURE)
-        }
+        report_usecase_diagnostics(&pair.pair, &compilation);
+        Ok(check_exit(compilation.model.is_some(), &pair.pair.path))
     } else if files.len() == 1 && is_cmmn_file(&files[0]) {
         let pair = read_cmmn_pair(&files[0])?;
         let compilation = compile_cmmn_str(
-            &pair.path,
-            &pair.source,
-            &pair.domains,
-            &pair.imports(),
+            &pair.pair.path,
+            &pair.pair.source,
+            &pair.pair.domains,
+            &pair.pair.imports(),
             &pair.designs,
             &pair.actors,
             &pair.events,
         );
-        report_cmmn_diagnostics(&pair, &compilation);
-        if compilation.model.is_some() {
-            println!("OK {}", pair.path);
-            Ok(ExitCode::SUCCESS)
-        } else {
-            Ok(ExitCode::FAILURE)
-        }
+        report_cmmn_diagnostics(&pair.pair, &compilation);
+        Ok(check_exit(compilation.model.is_some(), &pair.pair.path))
     } else {
-        let sources = read_sources(&files)?;
-        let (compilation, sigil_sources) = compile_sources(&sources)?;
-        report_multi_diagnostics(
-            &sources,
-            &sigil_sources.sources,
-            &compilation.diagnostics,
-            &compilation.sigil_diagnostics,
-        );
+        let (sources, compilation) = compile_reported_sources(&files)?;
         if compilation.model.is_some() {
             for (path, _) in &sources {
                 println!("OK {path}");
