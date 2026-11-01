@@ -107,14 +107,7 @@ pub fn generate(model: &Model) -> anyhow::Result<BTreeMap<String, String>> {
 /// Generates the Rust code for `model` and writes it into `out_dir`.
 pub fn generate_to_dir(model: &Model, out_dir: &Path) -> anyhow::Result<()> {
     let files = generate(model)?;
-    for (relative, contents) in &files {
-        let path = out_dir.join(relative);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(path, contents)?;
-    }
-    Ok(())
+    rex_backend_common::write_files(&files, out_dir)
 }
 
 /// A generated class with everything the emitter needs precomputed.

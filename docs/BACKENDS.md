@@ -89,9 +89,10 @@ order. `cedar-policy` (a dev-dependency of `rex-backend-cedar`) enables it,
 so a workspace that pulls in Cedar codegen inherits insertion order
 everywhere. Emitters that rely on implicit map ordering will emit keys in
 whatever order that build happened to produce. **Canonicalize key order
-yourself before serializing** — see `canonical_key_order` in
-`crates/rex-backend-jsonschema/src/lib.rs`, which recursively re-inserts
-keys in a pinned order.
+yourself before serializing** — `canonical_key_order` in
+`crates/rex-backend-common` recursively re-inserts
+keys in a pinned order; the JSON Schema and Cedar backends both run it
+over their emitted documents.
 
 ## Semver and `formatVersion` policy
 
