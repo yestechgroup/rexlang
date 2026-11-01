@@ -105,7 +105,7 @@ input_body = { "{" ~ property_assignment* ~ "}" }
 
 chart_decl = { "chart" ~ chart_kind ~ (chart_body | ";") }
 
-chart_kind = { "bar" | "line" | "pie" | "radar" | "metric" }
+chart_kind = { "bar" | "line" | "pie" | "radar" | "metric" | "org" }
 
 chart_body = { "{" ~ property_assignment* ~ "}" }
 

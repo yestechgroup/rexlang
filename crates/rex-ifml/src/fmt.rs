@@ -784,4 +784,11 @@ mod tests {
             "view \"A\" {\n    label \"x\";\n\n    label \"y\";\n}\n"
         );
     }
+
+    #[test]
+    fn chart_org_payloads_aggregates_and_refs_round_trip() {
+        let src = "view \"A\" {\n    component \"tree\" {\n        chart org {\n            hierarchy: managerId;\n            labels: [name, title];\n            details: [email];\n            maxDepth: 4;\n        }\n    }\n\n    component \"rev\" {\n        chart bar { label: region; values: [revenue]; aggregate: sum; }\n    }\n\n    component \"placed\" {\n        chart: \"headcount\";\n    }\n}\n";
+        assert_eq!(format_ifml(src), src);
+        assert_eq!(format_ifml(&format_ifml(src)), src);
+    }
 }

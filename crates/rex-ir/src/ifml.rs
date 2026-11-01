@@ -305,6 +305,10 @@ pub enum ComponentSpec {
     Table(TableSpec),
     Form(FormSpec),
     Chart(ChartSpec),
+    /// Placement of a *modeled* chart authored elsewhere (e.g. codegraph's
+    /// `[charts]` table): the payload is a permissive name — resolution
+    /// against the model graph is the consumer's job, never the parser's.
+    ChartRef(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -418,9 +422,42 @@ impl From<&str> for InputFieldType {
 #[serde(rename_all = "camelCase")]
 pub struct ChartSpec {
     pub kind: ChartKind,
+    /// Series charts only: the category axis field. Org charts carry the
+    /// ordered [`ChartSpec::label_fields`] projections instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_field: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub value_fields: Vec<String>,
+    /// Org charts only: the self-referencing FK the hierarchy lowers over.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hierarchy_field: Option<String>,
+    /// Org charts only: ordered node label projections.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub label_fields: Vec<String>,
+    /// Org charts only: ordered node detail projections.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub detail_fields: Vec<String>,
+    /// Org charts only: client-side render pruning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_depth: Option<u32>,
+    /// Series charts only: aggregation applied to [`ChartSpec::value_fields`]
+    /// (`None` = unspecified; consumers apply their own default, e.g.
+    /// codegraph models `count`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aggregate: Option<ChartAggregate>,
+}
+
+/// Aggregation vocabulary for series charts (`bar | line | pie | radar |
+/// metric`), applied to the chart's `value_fields`. Serialized as bare
+/// lowercase camelCase strings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChartAggregate {
+    Sum,
+    Avg,
+    Count,
+    Min,
+    Max,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -431,6 +468,7 @@ pub enum ChartKind {
     Pie,
     Radar,
     Metric,
+    Org,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1339,6 +1377,11 @@ mod tests {
             kind: ChartKind::Bar,
             label_field: Some("month".to_string()),
             value_fields: vec!["sales".to_string()],
+            hierarchy_field: None,
+            label_fields: Vec::new(),
+            detail_fields: Vec::new(),
+            max_depth: None,
+            aggregate: None,
         };
         let json = serde_json::to_string(&spec).expect("serialize chart spec");
         assert_eq!(
@@ -1347,6 +1390,106 @@ mod tests {
         );
         let json = serde_json::to_string(&BinOp::RegexMatch).expect("serialize bin op");
         assert_eq!(json, r#""regexMatch""#);
+    }
+
+    // -----------------------------------------------------------------------
+    // Chart vocabulary (issue #80): org kind, org payload fields, series
+    // aggregates, and modeled-chart references
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn org_chart_kind_serializes_as_bare_string() {
+        let json = serde_json::to_string(&ChartKind::Org).expect("serialize chart kind");
+        assert_eq!(json, r#""org""#);
+    }
+
+    #[test]
+    fn org_chart_spec_round_trips_with_payload_fields() {
+        let spec = ChartSpec {
+            kind: ChartKind::Org,
+            label_field: None,
+            value_fields: Vec::new(),
+            hierarchy_field: Some("managerId".to_string()),
+            label_fields: vec!["name".to_string(), "title".to_string()],
+            detail_fields: vec!["email".to_string()],
+            max_depth: Some(4),
+            aggregate: None,
+        };
+        let json = serde_json::to_string(&spec).expect("serialize org chart spec");
+        assert_eq!(
+            json,
+            r#"{"kind":"org","hierarchyField":"managerId","labelFields":["name","title"],"detailFields":["email"],"maxDepth":4}"#
+        );
+        let parsed: ChartSpec = serde_json::from_str(&json).expect("deserialize org chart spec");
+        assert_eq!(parsed, spec);
+    }
+
+    /// The serde-default discipline: a series chart that does not use the
+    /// new vocabulary serializes exactly as before the fields existed, so
+    /// byte-goldens and older readers are untouched.
+    #[test]
+    fn chart_spec_wire_shape_is_unchanged_when_org_fields_are_absent() {
+        let spec = ChartSpec {
+            kind: ChartKind::Bar,
+            label_field: Some("month".to_string()),
+            value_fields: vec!["sales".to_string()],
+            hierarchy_field: None,
+            label_fields: Vec::new(),
+            detail_fields: Vec::new(),
+            max_depth: None,
+            aggregate: None,
+        };
+        let json = serde_json::to_string(&spec).expect("serialize chart spec");
+        assert_eq!(
+            json,
+            r#"{"kind":"bar","labelField":"month","valueFields":["sales"]}"#
+        );
+        let parsed: ChartSpec = serde_json::from_str(&json).expect("deserialize chart spec");
+        assert_eq!(parsed, spec);
+    }
+
+    #[test]
+    fn chart_aggregate_vocabulary_serializes_lowercase() {
+        let expected = [
+            (ChartAggregate::Sum, "sum"),
+            (ChartAggregate::Avg, "avg"),
+            (ChartAggregate::Count, "count"),
+            (ChartAggregate::Min, "min"),
+            (ChartAggregate::Max, "max"),
+        ];
+        for (aggregate, wire) in expected {
+            let json = serde_json::to_string(&aggregate).expect("serialize aggregate");
+            assert_eq!(json, format!(r#""{wire}""#));
+            let parsed: ChartAggregate =
+                serde_json::from_str(&json).expect("deserialize aggregate");
+            assert_eq!(parsed, aggregate);
+        }
+    }
+
+    #[test]
+    fn chart_ref_component_spec_serializes_as_tagged_string() {
+        let spec = ComponentSpec::ChartRef("org".to_string());
+        let json = serde_json::to_string(&spec).expect("serialize chart ref");
+        assert_eq!(json, r#"{"type":"chartRef","value":"org"}"#);
+        let parsed: ComponentSpec = serde_json::from_str(&json).expect("deserialize chart ref");
+        assert_eq!(parsed, spec);
+    }
+
+    #[test]
+    fn chart_ref_component_round_trips_through_model_json() {
+        let mut model = sample_model();
+        model.views[0].components.push(ComponentDeclaration {
+            name: "modeled".to_string(),
+            component_type: Some(ComponentType::Chart),
+            spec: Some(ComponentSpec::ChartRef("headcount".to_string())),
+            properties: Vec::new(),
+            events: Vec::new(),
+            condition: None,
+        });
+        let json = model.to_json_pretty().expect("serialize");
+        let parsed = IfmlModel::from_json(&json).expect("deserialize");
+        assert_eq!(parsed, model);
+        assert_eq!(parsed.to_json_pretty().expect("re-serialize"), json);
     }
 
     #[test]
