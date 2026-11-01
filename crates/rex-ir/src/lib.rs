@@ -155,6 +155,7 @@ pub mod deploy;
 pub mod events;
 pub mod ifml;
 pub mod usecases;
+mod wire;
 
 /// The artifact format version this crate writes and accepts.
 ///
@@ -221,12 +222,12 @@ impl Model {
 
     /// Serializes the model to pretty-printed (2-space indent) JSON.
     pub fn to_json_pretty(&self) -> Result<String, IrError> {
-        Ok(serde_json::to_string_pretty(self)?)
+        wire::to_json_pretty(self)
     }
 
     /// Serializes the model to compact JSON.
     pub fn to_json(&self) -> Result<String, IrError> {
-        Ok(serde_json::to_string(self)?)
+        wire::to_json(self)
     }
 
     /// Deserializes a model from JSON, rejecting artifacts whose
@@ -234,19 +235,12 @@ impl Model {
     ///
     /// Unknown fields are ignored for forward compatibility.
     pub fn from_json(json: &str) -> Result<Self, IrError> {
-        let value: serde_json::Value = serde_json::from_str(json)?;
-        let found = value
-            .get("formatVersion")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or_default() as u32;
-        if found != FORMAT_VERSION {
-            return Err(IrError::UnsupportedFormatVersion {
-                found,
-                expected: FORMAT_VERSION,
-            });
-        }
-        Ok(serde_json::from_value(value)?)
+        wire::from_json(json)
     }
+}
+
+impl wire::VersionedArtifact for Model {
+    const FORMAT_VERSION: u32 = FORMAT_VERSION;
 }
 
 impl Default for Model {
@@ -790,11 +784,9 @@ pub struct FeatureConstraints {
     pub unique: bool,
 }
 
-/// `skip_serializing_if` helper for additive `bool` fields: `false` adds no
-/// bytes to the wire format.
-fn is_false(value: &bool) -> bool {
-    !*value
-}
+// The `skip_serializing_if` path above resolves `is_false` in this
+// module's scope; the shared predicate lives in `wire`.
+use crate::wire::is_false;
 
 impl FeatureConstraints {
     /// `true` when no constraint is set (the field is omitted on serialize).
@@ -1430,12 +1422,12 @@ impl ActorModel {
 
     /// Serializes the artifact to pretty-printed (2-space indent) JSON.
     pub fn to_json_pretty(&self) -> Result<String, IrError> {
-        Ok(serde_json::to_string_pretty(self)?)
+        wire::to_json_pretty(self)
     }
 
     /// Serializes the artifact to compact JSON.
     pub fn to_json(&self) -> Result<String, IrError> {
-        Ok(serde_json::to_string(self)?)
+        wire::to_json(self)
     }
 
     /// Deserializes an actor-policy artifact from JSON, rejecting artifacts
@@ -1443,19 +1435,12 @@ impl ActorModel {
     ///
     /// Unknown fields are ignored for forward compatibility.
     pub fn from_json(json: &str) -> Result<Self, IrError> {
-        let value: serde_json::Value = serde_json::from_str(json)?;
-        let found = value
-            .get("formatVersion")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or_default() as u32;
-        if found != ACTOR_MODEL_FORMAT_VERSION {
-            return Err(IrError::UnsupportedFormatVersion {
-                found,
-                expected: ACTOR_MODEL_FORMAT_VERSION,
-            });
-        }
-        Ok(serde_json::from_value(value)?)
+        wire::from_json(json)
     }
+}
+
+impl wire::VersionedArtifact for ActorModel {
+    const FORMAT_VERSION: u32 = ACTOR_MODEL_FORMAT_VERSION;
 }
 
 impl Default for ActorModel {

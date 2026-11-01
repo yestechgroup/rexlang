@@ -41,9 +41,6 @@
 //!
 //! [rexlang]: https://github.com/anton-makes/rexlang
 
-use std::cmp::Ordering;
-use std::hash::{Hash, Hasher};
-
 use serde::{Deserialize, Serialize};
 
 use crate::IrError;
@@ -105,89 +102,39 @@ pub struct ViewDeclaration {
     pub position: Option<Position>,
 }
 
-/// The ordered, equality-preserving wrapper for every `f64` this artifact
-/// carries — layout coordinates ([`Position`]), property-bag numbers
-/// ([`ValueExpression::Number`]), and condition literals
-/// ([`Expression::NumLit`]) — so [`IfmlModel`] and everything nested in it
-/// derive [`Eq`] (wire contract rule 14).
-///
-/// # Wire layout
-///
-/// `#[serde(transparent)]`: a `Float` serializes and deserializes exactly
-/// as the bare JSON number it wraps — artifacts are byte-identical to the
-/// raw-`f64` encoding.
-///
-/// # Equality and hashing
-///
-/// [`PartialEq`]/[`Eq`] follow `f64::total_cmp` semantics: equality is
-/// bit-pattern equality, which makes it reflexive even for `NaN` (a `NaN`
-/// equals only another `NaN` with the same bit pattern) and distinguishes
-/// `-0.0` from `0.0` (both deliberate). [`Hash`] hashes the raw bit
-/// pattern, consistent with that equality.
-///
-/// # Ordering
-///
-/// [`Ord`]/[`PartialOrd`] are `f64::total_cmp`: a genuine total order
-/// (`-0.0 < 0.0`, every `NaN` above [`f64::INFINITY`]).
-///
-/// # Where `NaN`/`-0.0` can come from
-///
-/// The `.ifml` grammar accepts only finite numeric literals and JSON
-/// cannot encode `NaN`, so neither source nor wire artifacts produce one
-/// today; the `NaN`/`-0.0` behavior above is the type's deliberate
-/// contract for programmatic construction, not dead-letter handling.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Float(f64);
-
-impl Float {
-    /// Wraps a raw `f64`.
-    pub fn new(value: f64) -> Self {
-        Self(value)
-    }
-
-    /// The raw `f64`.
-    pub fn value(self) -> f64 {
-        self.0
-    }
-}
-
-impl From<f64> for Float {
-    fn from(value: f64) -> Self {
-        Self(value)
-    }
-}
-
-impl From<Float> for f64 {
-    fn from(value: Float) -> Self {
-        value.0
-    }
-}
-
-impl PartialEq for Float {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.total_cmp(&other.0) == Ordering::Equal
-    }
-}
-
-impl Eq for Float {}
-
-impl Hash for Float {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.to_bits().hash(state);
-    }
-}
-
-impl Ord for Float {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.0.total_cmp(&other.0)
-    }
-}
-
-impl PartialOrd for Float {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
+crate::wire::total_order_float! {
+    /// The ordered, equality-preserving wrapper for every `f64` this artifact
+    /// carries — layout coordinates ([`Position`]), property-bag numbers
+    /// ([`ValueExpression::Number`]), and condition literals
+    /// ([`Expression::NumLit`]) — so [`IfmlModel`] and everything nested in it
+    /// derive [`Eq`] (wire contract rule 14).
+    ///
+    /// # Wire layout
+    ///
+    /// `#[serde(transparent)]`: a `Float` serializes and deserializes exactly
+    /// as the bare JSON number it wraps — artifacts are byte-identical to the
+    /// raw-`f64` encoding.
+    ///
+    /// # Equality and hashing
+    ///
+    /// [`PartialEq`]/[`Eq`] follow `f64::total_cmp` semantics: equality is
+    /// bit-pattern equality, which makes it reflexive even for `NaN` (a `NaN`
+    /// equals only another `NaN` with the same bit pattern) and distinguishes
+    /// `-0.0` from `0.0` (both deliberate). [`Hash`] hashes the raw bit
+    /// pattern, consistent with that equality.
+    ///
+    /// # Ordering
+    ///
+    /// [`Ord`]/[`PartialOrd`] are `f64::total_cmp`: a genuine total order
+    /// (`-0.0 < 0.0`, every `NaN` above [`f64::INFINITY`]).
+    ///
+    /// # Where `NaN`/`-0.0` can come from
+    ///
+    /// The `.ifml` grammar accepts only finite numeric literals and JSON
+    /// cannot encode `NaN`, so neither source nor wire artifacts produce one
+    /// today; the `NaN`/`-0.0` behavior above is the type's deliberate
+    /// contract for programmatic construction, not dead-letter handling.
+    Float(f64)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -891,7 +838,6 @@ pub struct IfmlModel {
     /// Artifact format version. Always [`IFML_MODEL_FORMAT_VERSION`] for
     /// artifacts this crate writes; [`IfmlModel::from_json`] rejects
     /// anything else.
-    #[serde(default)]
     pub format_version: u32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub domains: Vec<DomainDeclaration>,
@@ -942,12 +888,12 @@ impl IfmlModel {
 
     /// Serializes the artifact to pretty-printed (2-space indent) JSON.
     pub fn to_json_pretty(&self) -> Result<String, IrError> {
-        Ok(serde_json::to_string_pretty(self)?)
+        crate::wire::to_json_pretty(self)
     }
 
     /// Serializes the artifact to compact JSON.
     pub fn to_json(&self) -> Result<String, IrError> {
-        Ok(serde_json::to_string(self)?)
+        crate::wire::to_json(self)
     }
 
     /// Deserializes an IFML artifact from JSON, rejecting artifacts whose
@@ -955,19 +901,12 @@ impl IfmlModel {
     ///
     /// Unknown fields are ignored for forward compatibility.
     pub fn from_json(json: &str) -> Result<Self, IrError> {
-        let value: serde_json::Value = serde_json::from_str(json)?;
-        let found = value
-            .get("formatVersion")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or_default() as u32;
-        if found != IFML_MODEL_FORMAT_VERSION {
-            return Err(IrError::UnsupportedFormatVersion {
-                found,
-                expected: IFML_MODEL_FORMAT_VERSION,
-            });
-        }
-        Ok(serde_json::from_value(value)?)
+        crate::wire::from_json(json)
     }
+}
+
+impl crate::wire::VersionedArtifact for IfmlModel {
+    const FORMAT_VERSION: u32 = IFML_MODEL_FORMAT_VERSION;
 }
 
 impl Default for IfmlModel {
