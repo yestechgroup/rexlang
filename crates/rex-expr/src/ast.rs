@@ -94,6 +94,16 @@ pub enum ExprKind {
         /// `true` when invoked through `?.`.
         optional_safe: bool,
     },
+    /// A bare free-function call `name(args)` with no receiver (issue #63):
+    /// resolved against the sigil-lowered package functions of the domain
+    /// union. Like the `date` constructor, the form is contextual on the
+    /// parentheses — a bare `name` without them is a [`ExprKind::Name`].
+    FunctionCall {
+        /// The function name as written.
+        name: Spanned<String>,
+        /// Arguments in source order.
+        args: Vec<Expr>,
+    },
     /// The fixed collection algebra: `receiver.kind(lambda?)` (spec A1–A6).
     Algebra {
         /// The collection being folded over.

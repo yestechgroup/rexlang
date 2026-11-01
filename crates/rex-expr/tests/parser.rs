@@ -63,6 +63,13 @@ fn plain(expr: &Expr) -> Expr {
             args: args.iter().map(plain).collect(),
             optional_safe: *optional_safe,
         },
+        ExprKind::FunctionCall { name, args } => ExprKind::FunctionCall {
+            name: Spanned {
+                value: name.value.clone(),
+                span: zero,
+            },
+            args: args.iter().map(plain).collect(),
+        },
         ExprKind::Algebra {
             receiver,
             kind,
@@ -683,12 +690,95 @@ fn garbage_never_panics() {
 
 #[test]
 fn algebra_names_are_contextual_and_keywords_are_reserved() {
-    // `first` etc. are ordinary identifiers outside call position; a bare call
-    // has no receiver and the grammar has no free functions.
-    let result = parse("first(1)");
-    assert!(result.ast.is_none() || !result.errors.is_empty());
+    // A bare call is now the free-function form (issue #63): algebra names
+    // are ordinary identifiers there too...
+    match kind(&ok("first(1)")) {
+        ExprKind::FunctionCall { name, args } => {
+            assert_eq!(name.value, "first");
+            assert_eq!(args.len(), 1);
+        }
+        other => panic!("expected a function call, got {other:?}"),
+    }
+    // ...while the algebra itself stays receiver-bound.
+    assert!(matches!(
+        kind(&ok("xs.first(x => x)")),
+        ExprKind::Algebra {
+            kind: AlgebraKind::First,
+            ..
+        }
+    ));
+    // A bare `date` with no parentheses is still a name, and the
+    // string-literal form is still the date constructor.
+    assert_eq!(kind(&ok("date")), nm("date"));
+    assert!(matches!(
+        &ok(r#"date("2026-01-01")"#).kind,
+        ExprKind::Date { .. }
+    ));
     // Keywords cannot be identifiers: this must not parse as `if + 1`.
     assert!(!parse("if + 1").errors.is_empty());
+    // A bare name without parentheses is still a variable reference.
+    assert_eq!(kind(&ok("foo")), nm("foo"));
+}
+
+#[test]
+fn a_bare_call_parses_as_a_function_call_without_a_receiver() {
+    let call = ok("priceQuote(notional, legs)");
+    match kind(&call) {
+        ExprKind::FunctionCall { name, args } => {
+            assert_eq!(name.value, "priceQuote");
+            assert_eq!(name.span, (0..10).into());
+            assert_eq!(args.len(), 2);
+            assert_eq!(kind(&args[0]), nm("notional"));
+            assert_eq!(kind(&args[1]), nm("legs"));
+        }
+        other => panic!("expected a function call, got {other:?}"),
+    }
+    assert_eq!(call.span, (0..26).into(), "the node spans the whole call");
+
+    // A nested bare call parses as an argument.
+    let nested = ok("f(g(1))");
+    match kind(&nested) {
+        ExprKind::FunctionCall { name, args } => {
+            assert_eq!(name.value, "f");
+            assert_eq!(args.len(), 1);
+            match kind(&args[0]) {
+                ExprKind::FunctionCall { name, args } => {
+                    assert_eq!(name.value, "g");
+                    assert_eq!(args.len(), 1);
+                    assert_eq!(kind(&args[0]), int(1));
+                }
+                other => panic!("expected a nested function call, got {other:?}"),
+            }
+        }
+        other => panic!("expected a function call, got {other:?}"),
+    }
+
+    // The lexer skips whitespace, so `foo (1)` and `foo(1)` are token
+    // identical: both are calls.
+    assert_eq!(shape("foo (1)").kind, shape("foo(1)").kind);
+}
+
+#[test]
+fn a_receiver_call_parses_unchanged() {
+    // The receiver form keeps its own node: a bare call never captures it,
+    // and the receiver call never falls back to free functions.
+    let call = ok(r#"library.findBook("x")"#);
+    match kind(&call) {
+        ExprKind::Call {
+            receiver,
+            name,
+            args,
+            optional_safe,
+        } => {
+            assert_eq!(kind(&receiver), nm("library"));
+            assert_eq!(name.value, "findBook");
+            assert_eq!(args.len(), 1);
+            assert_eq!(kind(&args[0]), ExprKind::String("x".to_string()));
+            assert!(!optional_safe);
+        }
+        other => panic!("expected a receiver call, got {other:?}"),
+    }
+    assert_eq!(call.span, (0..21).into());
 }
 
 // ---------------------------------------------------------------------------

@@ -356,6 +356,13 @@ impl Lowerer<'_, '_> {
                 args,
                 optional_safe,
             } => self.call(receiver, name, args, *optional_safe),
+            // Increment 4 of the free-function-call feature (issue #63)
+            // replaces this with real lowering; today the checker admits a
+            // form the backend cannot emit yet.
+            ExprKind::FunctionCall { name, .. } => Err(LowerError::new(format!(
+                "free-function call `{}` is not lowered yet",
+                name.value
+            ))),
             ExprKind::Algebra {
                 receiver,
                 kind,

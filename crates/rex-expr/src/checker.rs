@@ -18,7 +18,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use rex_ir::{Feature, Model, Operation, PrimitiveType, TypeRef};
+use rex_ir::{Feature, Model, Operation, OperationParam, PrimitiveType, TypeRef};
 
 use crate::ast::{AlgebraKind, BinOp, Expr, ExprKind, Span, Spanned, UnOp};
 use crate::error::ExprError;
@@ -40,6 +40,20 @@ pub struct ClassInfo {
     pub operations: Vec<Operation>,
 }
 
+/// The signature of one sigil-lowered package function (`rex_ir::Package::functions`),
+/// registered under its bare name. Several packages may declare the same
+/// bare name: their signatures coexist in insertion order, and a call
+/// resolving to more than one is an ambiguity error naming every package.
+#[derive(Debug, Clone)]
+pub struct FunctionSignature {
+    /// The declaring package's dotted name.
+    pub package: String,
+    /// The resolved return type.
+    pub return_type: TypeRef,
+    /// Parameters in declaration order.
+    pub params: Vec<OperationParam>,
+}
+
 /// The unified domain-object index: the generic binding seam every surface
 /// lowers into. Classes carry their resolvable members (features, operations,
 /// supertypes); every other named type is registered by kind. Built from a
@@ -52,6 +66,7 @@ pub struct ClassInfo {
 pub struct DomainTypes {
     classes: BTreeMap<(String, String), ClassInfo>,
     named: BTreeMap<(String, String), NamedKind>,
+    functions: BTreeMap<String, Vec<FunctionSignature>>,
 }
 
 /// Compatibility alias: the type universe of a model, as consumed by
@@ -83,6 +98,16 @@ impl DomainTypes {
             }
             for vocabulary in &package.vocabularies {
                 context.insert_named(&package.name, &vocabulary.name, NamedKind::Vocabulary);
+            }
+            for function in &package.functions {
+                context.insert_function(
+                    &function.name,
+                    FunctionSignature {
+                        package: package.name.clone(),
+                        return_type: function.return_type.clone(),
+                        params: function.params.clone(),
+                    },
+                );
             }
         }
         context
@@ -117,12 +142,27 @@ impl DomainTypes {
             .insert((package.to_string(), name.to_string()), kind);
     }
 
+    /// Registers one free-function signature under its bare name. Further
+    /// insertions under the same name (same or different package) coexist
+    /// in insertion order; a call is ambiguous when more than one remains.
+    pub fn insert_function(&mut self, name: &str, signature: FunctionSignature) {
+        self.functions
+            .entry(name.to_string())
+            .or_default()
+            .push(signature);
+    }
+
     /// Merges `other` into `self`; `other`'s entries win on collision. This
     /// is how domain unions are assembled: one [`DomainTypes`] per
-    /// contributing surface, combined before binding.
+    /// contributing surface, combined before binding. The function tables
+    /// union instead: per-name signature vecs append, so neither side's
+    /// candidates are dropped (map-level `extend` would drop the left vec).
     pub fn merge(&mut self, other: DomainTypes) {
         self.classes.extend(other.classes);
         self.named.extend(other.named);
+        for (name, signatures) in other.functions {
+            self.functions.entry(name).or_default().extend(signatures);
+        }
     }
 
     /// Looks up a class's resolvable members.
@@ -237,6 +277,7 @@ impl TypeChecker {
                 args,
                 optional_safe,
             } => self.call(scope, receiver, *optional_safe, name, args, errors),
+            ExprKind::FunctionCall { name, args } => self.function_call(scope, name, args, errors),
             ExprKind::Algebra {
                 receiver,
                 kind,
@@ -860,6 +901,81 @@ impl TypeChecker {
         self.wrap_optional(Ty::from_type_ref(&operation.return_type), optional_safe)
     }
 
+    /// The bare free-function call (issue #63): resolves against the
+    /// sigil-lowered package functions of the domain union only — a
+    /// receiver call never falls back to them, and a bare call never sees
+    /// class operations. A name declared by several packages is an
+    /// ambiguity error naming them all; an unknown name is a type error at
+    /// the name span, with a did-you-mean hint when exactly one indexed
+    /// function is within edit distance 2. Parameters follow the
+    /// receiver-call shape (`param_result_ty`: multiplicity-mapped, L1
+    /// literal adaptation via the expected type, R1–R4 on the arguments);
+    /// the declared return type is the call's type. There is no `?.` form:
+    /// a function has no receiver to be optional.
+    fn function_call(
+        &self,
+        scope: &Scope,
+        name: &Spanned<String>,
+        args: &[Expr],
+        errors: &mut Vec<ExprError>,
+    ) -> Checked {
+        let Some(candidates) = self.context.functions.get(&name.value) else {
+            let mut message = format!("unknown function `{}`", name.value);
+            if let Some(candidate) = did_you_mean(&name.value, self.context.functions.keys()) {
+                message.push_str(&format!("; did you mean `{candidate}`?"));
+            }
+            errors.push(ExprError::new(message, name.span));
+            return Err(());
+        };
+        if candidates.len() > 1 {
+            let packages = candidates
+                .iter()
+                .map(|signature| signature.package.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            errors.push(ExprError::new(
+                format!(
+                    "ambiguous function `{}`: declared in {}",
+                    name.value, packages
+                ),
+                name.span,
+            ));
+            return Err(());
+        }
+        let signature = &candidates[0];
+
+        if args.len() != signature.params.len() {
+            errors.push(ExprError::new(
+                format!(
+                    "arity mismatch: function `{}` expects {} argument(s), found {}",
+                    name.value,
+                    signature.params.len(),
+                    args.len()
+                ),
+                name.span,
+            ));
+            return Err(());
+        }
+
+        for (arg, param) in args.iter().zip(&signature.params) {
+            let expected = param_result_ty(param);
+            if let Ok(ty) = self.check(scope, arg, Some(&expected), errors) {
+                if ty != expected {
+                    errors.push(ExprError::new(
+                        format!(
+                            "argument type mismatch in call to `{}`: expected {expected}, \
+                             found {ty}",
+                            name.value
+                        ),
+                        arg.span,
+                    ));
+                }
+            }
+        }
+
+        Ok(Ty::from_type_ref(&signature.return_type))
+    }
+
     /// The typed calendar algebra on `date` receivers (spec R5–R8):
     /// `plus_days(int) -> date`, `plus_months(int) -> date` (month-end
     /// clamp), `diff_days(date) -> int`. The `int` arguments follow L1;
@@ -1262,4 +1378,53 @@ fn feature_result_ty(feature: &Feature) -> Ty {
         _ if feature.multiplicity.lower == 0 => base.optional(),
         _ => base,
     }
+}
+
+/// The argument type a free-function parameter expects: the declared type,
+/// `List` when the multiplicity is many, `Option` when the lower bound is 0
+/// (the `feature_result_ty` mapping, minus the container case — a function
+/// parameter has no feature kind). No R3 auto-propagation: an `Option`
+/// argument where the parameter expects the plain inner type is a type
+/// error, enforced by exact expected-vs-found equality.
+fn param_result_ty(param: &OperationParam) -> Ty {
+    let base = Ty::from_type_ref(&param.type_);
+    match &param.multiplicity {
+        Some(multiplicity) if multiplicity.is_many() => base.list(),
+        Some(multiplicity) if multiplicity.lower == 0 => base.optional(),
+        _ => base,
+    }
+}
+
+/// The single indexed function name within Levenshtein distance 2 of
+/// `requested` (case-sensitive), for the unknown-function hint; `None`
+/// when zero or several names qualify.
+fn did_you_mean<'a, I>(requested: &str, indexed: I) -> Option<String>
+where
+    I: IntoIterator<Item = &'a String>,
+{
+    let mut candidates = indexed
+        .into_iter()
+        .filter(|name| levenshtein(requested, name) <= 2)
+        .map(|name| name.as_str());
+    let first = candidates.next()?;
+    candidates.next().is_none().then(|| first.to_string())
+}
+
+/// The Levenshtein edit distance (plain two-row DP; function names are
+/// short, so no bandwidth optimization).
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut previous: Vec<usize> = (0..=b.len()).collect();
+    for i in 1..=a.len() {
+        let mut current = vec![i];
+        for j in 1..=b.len() {
+            let substitution = previous[j - 1] + usize::from(a[i - 1] != b[j - 1]);
+            let deletion = previous[j] + 1;
+            let insertion = current[j - 1] + 1;
+            current.push(substitution.min(deletion).min(insertion));
+        }
+        previous = current;
+    }
+    previous[b.len()]
 }

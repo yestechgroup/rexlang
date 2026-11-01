@@ -4,7 +4,9 @@
 //! a second operation). Test names cite the rule numbers of
 //! `docs/EXPRESSIONS.md` (R1–R4, L1–L2, U1, A1–A6, R9).
 
-use rex_expr::{parse, DomainTypes, ExprKind, NamedKind, Ty, TypeChecker, TypeContext};
+use rex_expr::{
+    parse, DomainTypes, ExprKind, FunctionSignature, NamedKind, Ty, TypeChecker, TypeContext,
+};
 use rex_ir::{
     ClassDef, DatatypeDef, EnumDef, EnumLiteral, Feature, FeatureKind, Model, Multiplicity,
     Operation, OperationParam, Package, PrimitiveType, TypeRef,
@@ -153,6 +155,44 @@ fn library_model() -> Model {
             )
             .with_opposite("Book", "authors"),
         ],
+    ));
+    // Package-level free functions (the sigil-lowered shape, issue #63):
+    // the bare-call resolution surface. `findBook` deliberately collides
+    // with the Library op of the same name — the receiver form must keep
+    // resolving the class op.
+    package.functions.push(Operation::new(
+        "priceQuote",
+        TypeRef::Primitive(PrimitiveType::Long),
+        vec![
+            OperationParam {
+                name: "notional".to_string(),
+                type_: TypeRef::Primitive(PrimitiveType::Int),
+                multiplicity: None,
+            },
+            OperationParam {
+                name: "legs".to_string(),
+                type_: TypeRef::Primitive(PrimitiveType::String),
+                multiplicity: Some(Multiplicity::MANY),
+            },
+        ],
+    ));
+    package.functions.push(Operation::new(
+        "categorize",
+        TypeRef::Primitive(PrimitiveType::Int),
+        vec![OperationParam {
+            name: "title".to_string(),
+            type_: TypeRef::Primitive(PrimitiveType::String),
+            multiplicity: None,
+        }],
+    ));
+    package.functions.push(Operation::new(
+        "findBook",
+        TypeRef::Primitive(PrimitiveType::Int),
+        vec![OperationParam {
+            name: "title".to_string(),
+            type_: TypeRef::Primitive(PrimitiveType::String),
+            multiplicity: None,
+        }],
     ));
     model.packages.push(package);
     model
@@ -387,6 +427,116 @@ fn op_calls_check_arity_and_types() {
     assert_err(r#"library.findCat("x")"#, "unknown");
     // calling an operation on a non-class receiver
     assert_err("book.pages.trim()", "unknown");
+}
+
+// ---------------------------------------------------------------------------
+// Bare package-function calls (issue #63)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_bare_call_resolves_and_checks_arity_and_param_multiplicity() {
+    // priceQuote(notional: int, legs: string 0..*) -> long: the scalar
+    // param takes an int, the many param takes a List, and the declared
+    // return type flows.
+    assert_ty(r#"priceQuote(book.pages, [book.title, "x"])"#, Ty::long());
+    // categorize(title: string) -> int.
+    assert_ty("categorize(book.title)", Ty::int());
+
+    // A scalar argument does not satisfy a many param.
+    assert_err("priceQuote(book.pages, book.title)", "argument");
+    // Arity mirrors the receiver-call message shape.
+    assert_err("priceQuote()", "arity");
+    assert_err("priceQuote(book.pages)", "arity");
+    assert_err(r#"categorize()"#, "arity");
+    // No implicit long -> int on a parameter either (L2); an in-range
+    // literal adapts per L1.
+    assert_err("priceQuote(book.downloads, [book.title])", "argument");
+    assert_ty("priceQuote(2026, [book.title])", Ty::long());
+}
+
+#[test]
+fn an_ambiguous_bare_call_is_an_error_naming_both_packages() {
+    // The same function name declared by two packages of the union: the
+    // call names every declaring package, in the union's insertion order,
+    // and never falls through to one of the candidates.
+    let mut model = library_model();
+    let mut rates = Package::new("sigil::nz.example.rates");
+    rates.functions.push(Operation::new(
+        "priceQuote",
+        TypeRef::Primitive(PrimitiveType::Int),
+        vec![],
+    ));
+    model.packages.push(rates);
+    let parsed = parse("priceQuote(book.pages, [book.title])");
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let errors = TypeChecker::new(DomainTypes::from_model(&model))
+        .type_of(parsed.ast.as_ref().expect("ast"))
+        .expect_err("ambiguous");
+    let error = errors
+        .iter()
+        .find(|e| e.message.contains("ambiguous"))
+        .expect("an ambiguity error");
+    assert_eq!(
+        error.message,
+        "ambiguous function `priceQuote`: declared in nz.example.library, \
+         sigil::nz.example.rates"
+    );
+    assert_eq!(error.span, (0..10).into(), "the span points at the name");
+}
+
+#[test]
+fn an_unknown_function_is_an_error_with_a_did_you_mean_hint() {
+    // Exactly one indexed name within Levenshtein distance 2 -> the hint.
+    let errors = assert_err("priceQute(book.pages)", "unknown function");
+    assert!(
+        errors[0].message.contains("did you mean `priceQuote`?"),
+        "{errors:?}"
+    );
+    assert_eq!(errors[0].span, (0..9).into(), "the span points at the name");
+    // A miss beyond distance 2 stays a plain unknown-function error.
+    let errors = assert_err("netPrice(book.pages)", "unknown function");
+    assert!(
+        !errors.iter().any(|e| e.message.contains("did you mean")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn optional_arguments_do_not_auto_propagate_r3() {
+    // R3 propagation is a receiver-side rule: an `Option`-typed argument is
+    // NOT unwrapped to satisfy a plain parameter — expected-vs-found is
+    // exact equality.
+    let errors = assert_err("categorize(book.citation)", "argument");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("expected string, found Option<string>")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn r1_r4_apply_to_call_arguments() {
+    // R1: constant overflow inside an argument is still a compile error.
+    assert_err(r#"priceQuote(2147483647 + 1, [book.title])"#, "R1");
+    // R4: so is a constant zero divisor inside an argument.
+    assert_err("priceQuote(book.pages / 0, [book.title])", "R4");
+    // In-range constant arguments type normally.
+    assert_ty("priceQuote(10 / 2, [book.title])", Ty::long());
+}
+
+#[test]
+fn a_receiver_call_still_resolves_class_ops_only() {
+    // `findBook` is both a Library op and an indexed package function; the
+    // receiver form keeps resolving the class op (signature from the op).
+    assert_ty(r#"library.findBook("x")"#, book());
+    // And a package function is invisible to the receiver form: it stays
+    // an unknown operation, never falling back to the function index.
+    let errors = assert_err("library.priceQuote(1)", "unknown operation");
+    assert!(
+        !errors.iter().any(|e| e.message.contains("function")),
+        "the receiver form must not mention functions: {errors:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -858,6 +1008,109 @@ fn domain_types_is_assembled_incrementally_and_merges() {
     assert_eq!(
         assembled.named_kind(PKG, "BookCategory"),
         Some(NamedKind::Enum)
+    );
+}
+
+#[test]
+fn insert_function_registers_a_signature_for_model_less_hosts() {
+    // The `insert_class`/`insert_named` seam: a host without a full Model
+    // contributes bindable free functions the same way.
+    let mut domains = DomainTypes::default();
+    domains.insert_function(
+        "score",
+        FunctionSignature {
+            package: "sigil::scoring".to_string(),
+            return_type: TypeRef::Primitive(PrimitiveType::Long),
+            params: vec![OperationParam {
+                name: "value".to_string(),
+                type_: TypeRef::Primitive(PrimitiveType::Int),
+                multiplicity: None,
+            }],
+        },
+    );
+    let check = |source: &str| {
+        let parsed = parse(source);
+        assert!(parsed.errors.is_empty(), "{source:?}: {:?}", parsed.errors);
+        TypeChecker::new(domains.clone()).type_of(parsed.ast.as_ref().expect("ast"))
+    };
+    assert_eq!(check("score(41 + 1)").unwrap(), Ty::long());
+    assert!(check("score()")
+        .unwrap_err()
+        .iter()
+        .any(|e| e.message.contains("arity")));
+}
+
+#[test]
+fn from_model_picks_up_package_functions_including_synthetic_sigil_packages() {
+    // Every package contributes its functions keyed by bare name — a
+    // synthetic sigil namespace exactly like a plain domain package.
+    let mut model = Model::new();
+    let mut domain = Package::new(PKG);
+    domain.functions.push(Operation::new(
+        "priceQuote",
+        TypeRef::Primitive(PrimitiveType::Long),
+        vec![],
+    ));
+    let mut sigil = Package::new("sigil::nz.example.rules");
+    sigil.functions.push(Operation::new(
+        "score",
+        TypeRef::Primitive(PrimitiveType::Int),
+        vec![OperationParam {
+            name: "weights".to_string(),
+            type_: TypeRef::Primitive(PrimitiveType::Int),
+            multiplicity: Some(Multiplicity::MANY),
+        }],
+    ));
+    model.packages.push(domain);
+    model.packages.push(sigil);
+
+    let check = |source: &str| {
+        let parsed = parse(source);
+        assert!(parsed.errors.is_empty(), "{source:?}: {:?}", parsed.errors);
+        TypeChecker::new(DomainTypes::from_model(&model)).type_of(parsed.ast.as_ref().expect("ast"))
+    };
+    assert_eq!(check("priceQuote()").unwrap(), Ty::long());
+    assert_eq!(check("score([1, 2])").unwrap(), Ty::int());
+}
+
+#[test]
+fn merge_unions_function_tables_without_dropping_either_side() {
+    // `BTreeMap::extend` at the map level would drop the left-hand vec on a
+    // name collision; `merge` appends, leaving both candidates resolvable —
+    // the call then reports the ambiguity naming both packages.
+    let mut left = DomainTypes::default();
+    left.insert_function(
+        "price",
+        FunctionSignature {
+            package: "a.pricing".to_string(),
+            return_type: TypeRef::Primitive(PrimitiveType::Int),
+            params: vec![],
+        },
+    );
+    let mut right = DomainTypes::default();
+    right.insert_function(
+        "price",
+        FunctionSignature {
+            package: "b.pricing".to_string(),
+            return_type: TypeRef::Primitive(PrimitiveType::Int),
+            params: vec![],
+        },
+    );
+    left.merge(right);
+
+    let parsed = parse("price()");
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let errors = TypeChecker::new(left)
+        .type_of(parsed.ast.as_ref().expect("ast"))
+        .expect_err("ambiguous");
+    let error = errors
+        .iter()
+        .find(|e| e.message.contains("ambiguous"))
+        .expect("an ambiguity error");
+    assert!(
+        error.message.contains("a.pricing") && error.message.contains("b.pricing"),
+        "{:?}",
+        error.message
     );
 }
 
