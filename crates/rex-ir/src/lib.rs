@@ -603,6 +603,12 @@ impl ClassDef {
     /// inserting, removing, or reordering features) — never on a model that
     /// has been serialized for or by consumers, since reordering features
     /// invalidates previously published ids.
+    ///
+    /// Formally specified as register row V10 in `docs/VERIFICATION.md`:
+    /// the proof lives in `rex-verify::feature_ids` (spec mirror — in-crate
+    /// proofs are blocked by upstream creusot-std derive gaps, see the
+    /// register), and the `feature_ids` characterization tests pin this
+    /// executable to the proved shape.
     pub fn assign_feature_ids(&mut self) {
         for (index, feature) in self.features.iter_mut().enumerate() {
             feature.id = index as u32;

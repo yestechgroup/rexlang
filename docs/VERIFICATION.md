@@ -64,7 +64,11 @@ Avoidances, recorded for the next toolchain bump: the `Hash`,
 `PartialOrd` and `Ord` derives are omitted from `NodeId` because creusot-std
 0.14.0 leaves their refinement obligations unresolved upstream; std
 `Vec::contains` is avoided in `link` (its spec carries an unprovable
-resolution obligation) in favour of a proved bounded loop; and the
+resolution obligation) in favour of a proved bounded loop; in-crate
+`rex-ir` proofs are blocked by the same family of gaps (the wire types'
+standard `PartialEq`/`Hash`/`Ord` derives demand `DeepModel` instances and
+refinement obligations creusot-std 0.14.0 does not discharge — hence the
+`feature_ids` spec mirror, to be moved in-crate on a toolchain bump); and the
 `#[trusted]` mutation primitives exist because the prover cannot yet
 re-establish the consolidated invariant directly after a raw
 `Vec`-indexing borrow (quantifier instantiation across the borrow boundary)
@@ -108,6 +112,7 @@ a proof). Every `#[trusted]` in the tree must have a row here.
 | V6 | Reference edges are recorded and deduplicated | `reference` `ensures` (`has_ref` persists), `requires` endpoints | `Graph::reference`; `p2_*` tests | proved |
 | V7 | `is_ancestor` is a safe, terminating guard | `requires(well_formed)`, loop variant `budget` | bounded parent walk in `is_ancestor` | proved (safety/termination; functional spec = V3, open) |
 | V8 | `check_invariants` (executable oracle) mirrors the invariant | none — `#[trusted]` | `Graph::check_invariants` + `contains_edge` + `has_containment_cycle` (all `#[trusted]`) | assumed (test-side oracle; validated by the property suites; never relied on by proofs) |
+| V10 | Wire rule 3: a feature's stable id equals its 0-based declaration index; `assign_feature_ids` establishes it and changes nothing else | `rex_verify::feature_ids::assign_ids` `ensures` (length unchanged, `id(i) == i` for all slots, within the `u32` bound) | proved over the spec mirror `rex_verify::feature_ids` (identical loop shape + trusted one-statement primitive `set_id`); `rex-ir`'s `ClassDef::assign_feature_ids` pinned executably by `crates/rex-ir/tests/feature_ids.rs` | proved (spec mirror); in-crate `rex-ir` translation blocked upstream (see avoidances) |
 | V9 | Mutation primitives do exactly what their contracts state | full model-effect contracts (snoc + changed fields) | `push_default_node`, `add_parent`, `push_containment`, `push_reference` (all `#[trusted]`, one-statement bodies) | assumed bodies, proved contracts (see `#[trusted]` policy) |
 
 ### Pipeline-level obligations (issue's five boundaries)
