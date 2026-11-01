@@ -47,16 +47,29 @@
 //! |------|---------|
 //! | `E0100` | A component's `data:` entity does not resolve to exactly one class in the domain model (`unknown data entity 'X'`, or `ambiguous data entity 'X'` when several packages declare the name). |
 //! | `E0101` | A type mismatch: an expression contradicts the type its site expects (`expected <ty>, found <ty> in '<expr>'`, overrides), or rex-expr reports any other semantic rule violation (R1/R2/R4/R9/...), carried through verbatim. |
-//! | `E0102` | Unknown feature or operation on a navigation path (rex-expr's `unknown feature ...` / `unknown operation ...`), prefixed with site context (`view 'Dashboard' component 'orders': ...`). |
+//! | `E0102` | Unknown feature or operation on a navigation path (rex-expr's `unknown feature ...` / `unknown operation ...`), or an unknown/ambiguous bare package-function call (`unknown function ...` / `ambiguous function ...`), prefixed with site context (`view 'Dashboard' component 'orders': ...`). |
 //! | `E0103` | Unknown variable: a name that is not a view/container/module parameter, not a `data:` feature, and not an event parameter (`unknown name 'x'`), prefixed with site context. |
+//!
+//! # Bare calls
+//!
+//! A bare call (`today()`, `score(...)`) lowers as a package-function call
+//! and type-checks against the domain's `Package::functions`: a defined
+//! name is fully checked (arity, argument types, return type), an unknown
+//! name is an `E0102` diagnostic (with rex-expr's did-you-mean hint when
+//! one indexed function is close), and a name declared by several packages
+//! is an ambiguity diagnostic naming them all. `date("YYYY-MM-DD")` keeps
+//! its meaning as the calendar-date constructor — the constructor form
+//! (exactly one string-literal argument) is matched before the generic
+//! mapping, so any other argument shape falls through to the function
+//! table. A bare call produces **no** diagnostic in exactly two cases: an
+//! argument is poisoned (the whole expression is skipped, below), or
+//! domains are absent (checking is disabled entirely).
 //!
 //! # Silently skipped constructs
 //!
 //! A poisoned lowering or an untypeable context produces **no** diagnostic
 //! — one unmappable node disables the whole expression:
 //!
-//! - bare calls other than `date("YYYY-MM-DD")` (`today()`, `score(...)`)
-//!   — rex-expr has no free functions;
 //! - the `%`, `~=`, and `!~` operators — rex-expr has no such operators;
 //! - `Array`/`Object` literal property values;
 //! - expressions referencing event parameters, or parameters whose declared
@@ -878,12 +891,17 @@ impl<'a> Checker<'a> {
 }
 
 /// Maps a rex-expr error message onto a diagnostic code: name-resolution
-/// failures are unknown variables, feature/operation resolution failures
-/// are navigation errors, everything else is a type mismatch.
+/// failures are unknown variables, feature/operation/function resolution
+/// failures are navigation errors (unknown or ambiguous bare-function
+/// names included), everything else is a type mismatch.
 fn classify(message: &str) -> (&'static str, String) {
     if message.starts_with("unknown name") {
         (E_UNKNOWN_VARIABLE, message.to_string())
-    } else if message.starts_with("unknown feature") || message.starts_with("unknown operation") {
+    } else if message.starts_with("unknown feature")
+        || message.starts_with("unknown operation")
+        || message.starts_with("unknown function")
+        || message.starts_with("ambiguous function")
+    {
         (E_UNKNOWN_FEATURE, message.to_string())
     } else {
         (E_TYPE_MISMATCH, message.to_string())
@@ -950,36 +968,54 @@ fn lower(expr: &Expression) -> Option<Expr> {
             optional_safe: false,
         },
         // The date constructor is expressible through the surface grammar
-        // (`date("2026-01-01")`): one string-literal argument. Every other
-        // bare call (`today()`, `score(...)`) has no rex-expr shape.
-        Expression::Call { name, args } => {
-            if name == "date" {
-                match args.as_slice() {
-                    [Expression::StringLit(text)] => ExprKind::Date {
-                        text: text.clone(),
-                        literal_span: no_span(),
-                    },
-                    _ => return None,
-                }
-            } else {
-                return None;
-            }
-        }
+        // (`date("2026-01-01")`): exactly one string-literal argument,
+        // checked before the generic mapping below. Every other bare call
+        // (`today()`, `score(...)`) lowers as a package-function call,
+        // resolved by the type checker against the domain's
+        // `Package::functions` — a poisoned argument poisons the whole
+        // call (the one-unmappable-node rule).
+        Expression::Call { name, args } => match args.as_slice() {
+            [Expression::StringLit(text)] if name == "date" => ExprKind::Date {
+                text: text.clone(),
+                literal_span: no_span(),
+            },
+            _ => ExprKind::FunctionCall {
+                name: Spanned {
+                    value: name.clone(),
+                    span: no_span(),
+                },
+                args: args.iter().map(lower).collect::<Option<Vec<_>>>()?,
+            },
+        },
     };
     Some(Expr::new(kind, no_span()))
 }
 
-/// The [`lower`] twin for property/override values: literals and
-/// expressions map, arrays/objects/calls poison the whole value.
+/// The [`lower`] twin for property/override values: literals, expressions,
+/// and bare function calls map, arrays/objects poison the whole value.
 fn lower_value(value: &ValueExpression) -> Option<Expr> {
     let kind = match value {
         ValueExpression::Identifier(name) => ExprKind::Name(name.clone()),
         ValueExpression::String(text) => ExprKind::String(text.clone()),
         ValueExpression::Number(number) => numeric_literal(number.value()),
         ValueExpression::Bool(value) => ExprKind::Bool(*value),
-        ValueExpression::Array(_) | ValueExpression::Object(_) | ValueExpression::Call(..) => {
-            return None;
-        }
+        ValueExpression::Array(_) | ValueExpression::Object(_) => return None,
+        // The surface's one call form mirrors [`lower`]: the date
+        // constructor needs exactly one string literal, everything else is
+        // a package-function call over the lowered arguments.
+        ValueExpression::Call(name, args) => match args.as_slice() {
+            [ValueExpression::String(text)] if name == "date" => ExprKind::Date {
+                text: text.clone(),
+                literal_span: no_span(),
+            },
+            _ => ExprKind::FunctionCall {
+                name: Spanned {
+                    value: name.clone(),
+                    span: no_span(),
+                },
+                args: args.iter().map(lower_value).collect::<Option<Vec<_>>>()?,
+            },
+        },
         ValueExpression::FieldAccess { object, field } => ExprKind::FeatureAccess {
             receiver: Box::new(lower_value(object)?),
             name: Spanned {
@@ -1047,6 +1083,7 @@ fn references_any(expr: &Expr, names: &BTreeSet<String>) -> bool {
     match &expr.kind {
         ExprKind::Name(name) => names.contains(name),
         ExprKind::FeatureAccess { receiver, .. } => references_any(receiver, names),
+        ExprKind::FunctionCall { args, .. } => args.iter().any(|arg| references_any(arg, names)),
         ExprKind::Binary { lhs, rhs, .. } => {
             references_any(lhs, names) || references_any(rhs, names)
         }
@@ -1109,7 +1146,10 @@ fn no_span() -> Span {
 mod tests {
     use super::*;
 
-    use rex_ir::{ClassDef, Feature, FeatureKind, Multiplicity, Package, PrimitiveType, TypeRef};
+    use rex_ir::{
+        ClassDef, Feature, FeatureKind, Multiplicity, Operation, OperationParam, Package,
+        PrimitiveType, TypeRef,
+    };
 
     const PKG: &str = "nz.example.shop";
 
@@ -1172,6 +1212,27 @@ mod tests {
             vec![attr("name", PrimitiveType::String)],
         ));
         model.packages.push(package);
+        model
+    }
+
+    /// A `score(int) -> boolean` package function — the shape a lowered
+    /// sigil import contributes to `Package::functions`.
+    fn score_function() -> Operation {
+        Operation::new(
+            "score",
+            TypeRef::Primitive(PrimitiveType::Boolean),
+            vec![OperationParam {
+                name: "value".to_string(),
+                type_: TypeRef::Primitive(PrimitiveType::Int),
+                multiplicity: None,
+            }],
+        )
+    }
+
+    /// The shop domain plus the `score(int) -> boolean` package function.
+    fn scored_shop_model() -> Model {
+        let mut model = shop_model();
+        model.packages[0].functions.push(score_function());
         model
     }
 
@@ -1570,6 +1631,98 @@ view "Catalog" {
     }
 
     #[test]
+    fn a_handler_may_call_a_package_function() {
+        let source = r#"
+view "Catalog" {
+    component "orders" {
+        type: list;
+        data: Product;
+
+        on select(row) if score(price) == true -> stay;
+    }
+}
+"#;
+        assert!(diags(source, &scored_shop_model()).is_empty());
+
+        // The call is typed, not silently deferred: a wrong argument type
+        // reports against the function signature.
+        let invalid = source.replace("score(price)", "score(\"x\")");
+        let diags = diags(&invalid, &scored_shop_model());
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(
+            diags[0]
+                .message
+                .contains("argument type mismatch in call to 'score'"),
+            "{}",
+            diags[0].message
+        );
+    }
+
+    #[test]
+    fn an_unknown_function_in_a_handler_is_a_checker_diagnostic() {
+        let source = r#"
+view "Catalog" {
+    component "orders" {
+        type: list;
+        data: Product;
+
+        on select(row) if today() == date("2026-01-01") -> stay;
+    }
+}
+"#;
+        let diags = diags(source, &scored_shop_model());
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].code, E_UNKNOWN_FEATURE);
+        assert!(
+            diags[0].message.contains("unknown function 'today'"),
+            "{}",
+            diags[0].message
+        );
+    }
+
+    #[test]
+    fn an_ambiguous_function_call_is_a_diagnostic_naming_both_packages() {
+        let mut model = Model::new();
+        for package_name in ["shop.a", "shop.b"] {
+            let mut package = Package::new(package_name);
+            package.functions.push(score_function());
+            if package_name == "shop.a" {
+                // The entity resolves uniquely; only the function name is
+                // declared twice.
+                package.classes.push(ClassDef::new(
+                    "Product",
+                    vec![],
+                    vec![attr("price", PrimitiveType::Int)],
+                ));
+            }
+            model.packages.push(package);
+        }
+
+        let source = r#"
+view "Catalog" {
+    component "orders" {
+        type: list;
+        data: Product;
+        filter: score(price) == true;
+    }
+}
+"#;
+        let diags = diags(source, &model);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].code, E_UNKNOWN_FEATURE);
+        assert!(
+            diags[0].message.contains("ambiguous function 'score'"),
+            "{}",
+            diags[0].message
+        );
+        assert!(
+            diags[0].message.contains("shop.a") && diags[0].message.contains("shop.b"),
+            "{}",
+            diags[0].message
+        );
+    }
+
+    #[test]
     fn navigation_binding_pairs_are_checked() {
         let source = r#"
 view "Detail" {
@@ -1597,19 +1750,43 @@ view "Detail" {
     }
 
     #[test]
-    fn bare_call_is_skipped() {
+    fn bare_call_skips_only_poisoned_args_or_absent_domains() {
         let source = r#"
 view "Report" {
-    if today() == "x";
-
     component "orders" {
         type: list;
         data: Product;
-        filter: today() == "active";
+        filter: score(price % 2) == true;
     }
 }
 "#;
-        assert!(diags(source, &shop_model()).is_empty());
+        // A poisoned argument (`%` has no rex-expr operator) poisons the
+        // whole call: no diagnostic even though `score` is defined.
+        assert!(diags(source, &scored_shop_model()).is_empty());
+
+        let unknown = r#"
+view "Report" {
+    component "orders" {
+        type: list;
+        data: Product;
+        filter: today() == "x";
+    }
+}
+"#;
+        // With domains present the undefined call is a diagnostic.
+        let diags = diags(unknown, &scored_shop_model());
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(
+            diags[0].message.contains("unknown function 'today'"),
+            "{}",
+            diags[0].message
+        );
+
+        // With domains absent checking is disabled entirely.
+        let compilation =
+            crate::compile_ifml_str("app.ifml", unknown, &crate::IfmlImports::default())
+                .expect("source must parse and resolve");
+        assert!(check_ifml(&compilation, None).is_empty());
     }
 
     #[test]
@@ -1699,14 +1876,65 @@ view "Catalog" {
         let wrapped = Expression::Group(Box::new(Expression::BinOp {
             left: Box::new(Expression::Ident("a".to_string())),
             op: IfmlBinOp::Eq,
-            right: Box::new(modulo),
+            right: Box::new(modulo.clone()),
         }));
         assert!(lower(&wrapped).is_none());
+        // A poisoned argument poisons the whole call.
         assert!(lower(&Expression::Call {
-            name: "today".to_string(),
-            args: vec![],
+            name: "score".to_string(),
+            args: vec![modulo],
         })
         .is_none());
+        // Every other bare call lowers as a package-function call.
+        assert_eq!(
+            lower(&Expression::Call {
+                name: "today".to_string(),
+                args: vec![],
+            })
+            .map(|expr| expr.kind),
+            Some(ExprKind::FunctionCall {
+                name: Spanned {
+                    value: "today".to_string(),
+                    span: no_span(),
+                },
+                args: vec![],
+            })
+        );
+        assert_eq!(
+            lower_value(&ValueExpression::Call("today".to_string(), vec![])).map(|expr| expr.kind),
+            Some(ExprKind::FunctionCall {
+                name: Spanned {
+                    value: "today".to_string(),
+                    span: no_span(),
+                },
+                args: vec![],
+            })
+        );
         assert!(lower_value(&ValueExpression::Array(vec![ValueExpression::Bool(true)])).is_none());
+    }
+
+    #[test]
+    fn date_literal_stays_the_date_constructor() {
+        let lowered = lower(&Expression::Call {
+            name: "date".to_string(),
+            args: vec![Expression::StringLit("2026-01-01".to_string())],
+        })
+        .expect("the date constructor maps");
+        assert_eq!(
+            lowered.kind,
+            ExprKind::Date {
+                text: "2026-01-01".to_string(),
+                literal_span: no_span(),
+            }
+        );
+        // The constructor special-case needs exactly one string literal;
+        // any other argument shape falls through to the generic bare-call
+        // mapping.
+        let generic = lower(&Expression::Call {
+            name: "date".to_string(),
+            args: vec![],
+        })
+        .expect("a non-constructor date call still lowers");
+        assert!(matches!(generic.kind, ExprKind::FunctionCall { .. }));
     }
 }
