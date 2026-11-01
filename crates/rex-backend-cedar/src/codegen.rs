@@ -36,6 +36,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use rex_backend_common::canonical_key_order;
 use rex_expr::{Expr, ExprKind, UnOp};
 use rex_ir::{
     ActorModel, ActorsDef, ClassDef, Feature, FeatureKind, GrantEffect, Model, PrimitiveType,
@@ -83,14 +84,7 @@ pub fn generate_for_model(model: &Model) -> anyhow::Result<BTreeMap<String, Stri
 /// Generates Cedar output for the pair and writes it into `out_dir`.
 pub fn generate_to_dir(actors: &ActorModel, model: &Model, out_dir: &Path) -> anyhow::Result<()> {
     let files = generate(actors, model)?;
-    for (relative, contents) in &files {
-        let path = out_dir.join(relative);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(path, contents)?;
-    }
-    Ok(())
+    rex_backend_common::write_files(&files, out_dir)
 }
 
 /// The two-line banner every generated policy file starts with.
@@ -256,25 +250,6 @@ fn schema_json(actors: &ActorsDef, model: &Model) -> anyhow::Result<String> {
     Ok(serde_json::to_string_pretty(&canonical_key_order(
         serde_json::Value::Object(root),
     ))?)
-}
-
-/// Recursively re-inserts object keys in alphabetical order, so the emitted
-/// bytes are pinned no matter which key order `serde_json::Map` uses (it is
-/// a `BTreeMap` unless some crate in the build graph enables the
-/// `preserve_order` feature, which flips it to insertion order).
-fn canonical_key_order(value: serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Object(map) => {
-            let mut entries: Vec<(String, serde_json::Value)> = map.into_iter().collect();
-            entries.sort_by(|left, right| left.0.cmp(&right.0));
-            entries
-                .into_iter()
-                .map(|(key, value)| (key, canonical_key_order(value)))
-                .collect::<serde_json::Map<String, serde_json::Value>>()
-                .into()
-        }
-        other => other,
-    }
 }
 
 /// `true` if any grant naming `actor` carries an effect entry (permit or

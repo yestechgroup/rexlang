@@ -2429,6 +2429,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cedar-policy",
+ "rex-backend-common",
  "rex-driver",
  "rex-expr",
  "rex-ir",
@@ -2448,12 +2449,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "rex-backend-common"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+]
+
+[[package]]
 name = "rex-backend-jsonschema"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "jsonschema",
  "proptest",
+ "rex-backend-common",
  "rex-driver",
  "rex-ir",
  "serde_json",
@@ -2465,6 +2475,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "proptest",
+ "rex-backend-common",
  "rex-driver",
  "rex-expr",
  "rex-ir",

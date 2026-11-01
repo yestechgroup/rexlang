@@ -25,6 +25,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use rex_backend_common::{canonical_key_order, snake_case};
 use rex_ir::{
     ClassDef, DatatypeDef, EnumDef, Feature, FeatureConstraints, FeatureKind, Model, Multiplicity,
     PrimitiveType, TypeRef, Upper, VocabularyDef,
@@ -55,36 +56,10 @@ pub fn generate(model: &Model, profile: Profile) -> anyhow::Result<BTreeMap<Stri
     Ok(files)
 }
 
-/// Recursively re-inserts object keys in alphabetical order, so the emitted
-/// bytes are pinned no matter which key order `serde_json::Map` uses (it is
-/// a `BTreeMap` unless some crate in the build graph enables the
-/// `preserve_order` feature, which flips it to insertion order).
-fn canonical_key_order(value: serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Object(map) => {
-            let mut entries: Vec<(String, serde_json::Value)> = map.into_iter().collect();
-            entries.sort_by(|left, right| left.0.cmp(&right.0));
-            entries
-                .into_iter()
-                .map(|(key, value)| (key, canonical_key_order(value)))
-                .collect::<serde_json::Map<String, serde_json::Value>>()
-                .into()
-        }
-        other => other,
-    }
-}
-
 /// Generates the JSON Schema for `model` and writes it into `out_dir`.
 pub fn generate_to_dir(model: &Model, profile: Profile, out_dir: &Path) -> anyhow::Result<()> {
     let files = generate(model, profile)?;
-    for (relative, contents) in &files {
-        let path = out_dir.join(relative);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(path, contents)?;
-    }
-    Ok(())
+    rex_backend_common::write_files(&files, out_dir)
 }
 
 /// The draft every generated schema declares.
@@ -827,33 +802,6 @@ fn class_comment(class: &ClassDef, include_derived: bool) -> Option<String> {
         }
     }
     (!parts.is_empty()).then(|| parts.join("; "))
-}
-
-/// Converts a class name to the snake_case singular used in canonical
-/// instance ids (`"Book"` → `"book"`, `"Library"` → `"library"`), mirroring
-/// the instance serializer.
-fn snake_case(name: &str) -> String {
-    let chars: Vec<char> = name.chars().collect();
-    let mut out = String::with_capacity(name.len() + 4);
-    for (index, ch) in chars.iter().copied().enumerate() {
-        if ch.is_ascii_uppercase() {
-            let prev_lower_or_digit = index
-                .checked_sub(1)
-                .map(|p| chars[p].is_ascii_lowercase() || chars[p].is_ascii_digit())
-                .unwrap_or(false);
-            let next_lower = chars
-                .get(index + 1)
-                .map(|n| n.is_ascii_lowercase())
-                .unwrap_or(false);
-            if prev_lower_or_digit || (index > 0 && next_lower) {
-                out.push('_');
-            }
-            out.extend(ch.to_lowercase());
-        } else {
-            out.push(ch);
-        }
-    }
-    out
 }
 
 #[cfg(test)]

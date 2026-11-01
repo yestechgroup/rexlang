@@ -10,6 +10,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+rex-backend-common = { workspace = true }
 rex-ir = { workspace = true }
 anyhow = { workspace = true }
 serde_json = { workspace = true }
