@@ -30,6 +30,7 @@ use rex_syntax::Span;
 use crate::diagnostic::Diagnostic;
 use crate::import_matches;
 use crate::lower::{self, DomainPackage, DomainUnit};
+use crate::pipeline;
 
 /// The provided-artifact bucket an import hits when it names a `.ddd`
 /// design (the designs entry of the four-bucket hit array).
@@ -109,11 +110,6 @@ pub(crate) fn compile_usecase_file(
     actors: &[(String, ActorModel)],
     events: &[(String, EventModel)],
 ) -> (Option<UseCaseModel>, Vec<(String, Diagnostic)>) {
-    let mut diags: Vec<(String, Diagnostic)> = parse_diagnostics
-        .iter()
-        .map(|diagnostic| (path.to_string(), diagnostic.clone()))
-        .collect();
-
     let imports = ast.map(|file| file.imports.as_slice()).unwrap_or_default();
 
     // Which provided bucket each import resolves against (exact path or
@@ -139,24 +135,21 @@ pub(crate) fn compile_usecase_file(
         })
         .collect();
 
+    let mut import_diagnostics = Vec::new();
     for (import, hit) in imports.iter().zip(&hits) {
         // Rule 1 — every import must name a provided artifact of any
         // surface.
         if !hit.iter().any(|hit| *hit) {
-            diags.push((
-                path.to_string(),
-                Diagnostic::error(
-                    format!("imported file \"{}\" was not provided", import.path),
-                    Some(import.span),
-                ),
+            import_diagnostics.push(Diagnostic::error(
+                format!("imported file \"{}\" was not provided", import.path),
+                Some(import.span),
             ));
             continue;
         }
         // Rule 1 — aliases exist for `realizes`, which names designs; every
         // other surface rejects them.
         if import.alias.is_some() && !hit[BUCKET_DESIGNS] {
-            diags.push((
-                path.to_string(),
+            import_diagnostics.push(
                 Diagnostic::error(
                     format!(
                         "import \"{}\" is not a design; only design imports take an alias",
@@ -165,16 +158,11 @@ pub(crate) fn compile_usecase_file(
                     Some(import.span),
                 )
                 .with_help("alias the `.ddd` design a `realizes` binding names"),
-            ));
+            );
         }
     }
 
-    // Domain diagnostics propagate under their own file, in import order.
-    for unit in domains {
-        for diagnostic in &unit.diagnostics {
-            diags.push((unit.path.clone(), diagnostic.clone()));
-        }
-    }
+    let diags = pipeline::engine_diags(path, parse_diagnostics, import_diagnostics, domains);
 
     let Some(ast) = ast else {
         return (None, diags);
@@ -654,10 +642,7 @@ pub(crate) fn compile_usecase_file(
         model.use_cases.push(out);
     }
 
-    diags.extend(local.into_iter().map(|d| (path.to_string(), d)));
-
-    let blocked = diags.iter().any(|(_, diagnostic)| diagnostic.is_error());
-    ((!blocked).then_some(model), diags)
+    pipeline::engine_finish(path, local, diags, model)
 }
 
 /// Rule 3 — the step's operation must name an operation on the subject's
