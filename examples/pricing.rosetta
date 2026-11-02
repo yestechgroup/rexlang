@@ -19,3 +19,5 @@ func priceQuote: <"Compute the price of a quote.">
 
 	set price:
 		notional
+
+library function spread(base number) number <"A spread over the given base.">
