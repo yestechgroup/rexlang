@@ -52,7 +52,9 @@ Creusot contracts. **`cargo creusot -p rex-verify` is fully green**
   (`compile_file`). See the register's pipeline rows.
 
 The same properties are pinned empirically by `crates/rex-verify/tests/`
-(unit tests named `p1_*`…`p5_*` plus proptest mutation sequences). The
+(unit tests named `p1_*`…`p5_*` plus proptest mutation sequences; register
+row V11 adds the `p11_*` interaction-reference discipline — see its row
+below). The
 property tests are not decoration: during development they shrank a real
 counterexample (stale subtree state under re-rooting) that the unit suite
 missed, and the prover caught a second: `well_formed` originally allowed
@@ -113,7 +115,8 @@ a proof). Every `#[trusted]` in the tree must have a row here.
 | V7 | `is_ancestor` is a safe, terminating guard | `requires(well_formed)`, loop variant `budget` | bounded parent walk in `is_ancestor` | proved (safety/termination; functional spec = V3, open) |
 | V8 | `check_invariants` (executable oracle) mirrors the invariant | none — `#[trusted]` | `Graph::check_invariants` + `contains_edge` + `has_containment_cycle` (all `#[trusted]`) | assumed (test-side oracle; validated by the property suites; never relied on by proofs) |
 | V10 | Wire rule 3: a feature's stable id equals its 0-based declaration index; `assign_feature_ids` establishes it and changes nothing else | `rex_verify::feature_ids::assign_ids` `ensures` (length unchanged, `id(i) == i` for all slots, within the `u32` bound) | proved over the spec mirror `rex_verify::feature_ids` (identical loop shape + trusted one-statement primitive `set_id`); `rex-ir`'s `ClassDef::assign_feature_ids` pinned executably by `crates/rex-ir/tests/feature_ids.rs` | proved (spec mirror); in-crate `rex-ir` translation blocked upstream (see avoidances) |
-| V9 | Mutation primitives do exactly what their contracts state | full model-effect contracts (snoc + changed fields) | `push_default_node`, `add_parent`, `push_containment`, `push_reference` (all `#[trusted]`, one-statement bodies) | assumed bodies, proved contracts (see `#[trusted]` policy) |
+ | V9 | Mutation primitives do exactly what their contracts state | full model-effect contracts (snoc + changed fields) | `push_default_node`, `add_parent`, `push_containment`, `push_reference` (all `#[trusted]`, one-statement bodies) | assumed bodies, proved contracts (see `#[trusted]` policy) |
+| V11 | Interaction references always resolve to declarations ([issue #112](https://github.com/yestechgroup/rexlang/issues/112)): every interaction reference edge — `action("X")`, `navigate("X")`, `refresh("X")` — terminates at a **declaration-backed** node, never a synthesized one | every invocation edge's endpoint ∈ the declared set (`InvocationGraph::check_invariants` in `crates/rex-verify/tests/invariants.rs`, `p11_*`) | `rex-ifml`'s `check_references` cross-reference pass (`E0104`–`E0106`, main-file sites, union-wide declarations) flowing into `rexlang check`'s error block and the LSP's published diagnostics; the proptest validates the oracle against an independent recomputation over random histories | tested (honest staging per V4's precedent — the kernel tracks no node metadata yet; the graph-level `proved` form belongs in `rex-verify` once the ingest stops synthesizing endpoints from invocations, the codegraph companion) |
 
 ### Pipeline-level obligations (issue's five boundaries)
 

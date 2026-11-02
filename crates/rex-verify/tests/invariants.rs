@@ -13,6 +13,11 @@
 //!   `TypeRef` design and the driver's validation; the kernel's reference
 //!   edges are the graph-level analogue covered by P2.
 //! - **P5** — mutations preserve all established invariants.
+//! - **P11** — interaction references always resolve to declarations
+//!   (register row V11, [issue #112](https://github.com/yestechgroup/rexlang/issues/112)):
+//!   every invocation edge terminates at a declaration-backed node, never
+//!   a synthesized one — pinned by a test-side discipline until the
+//!   kernel carries node metadata.
 
 use proptest::prelude::*;
 use rex_verify::{Graph, NodeId};
@@ -324,6 +329,157 @@ proptest! {
                     }
                 }
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// P11 — interaction references always resolve to declarations (V11)
+// ---------------------------------------------------------------------------
+//
+// The graph-level form of the invariant the `.ifml` checker enforces
+// (issue #112): an invocation edge — a reference standing for
+// `action("X")` / `navigate("X")` / `refresh("X")` — must terminate at a
+// declaration-backed node, never at a synthesized one. The kernel tracks
+// no node metadata, so the property is pinned by a test-side discipline
+// mirroring the enforcement chain (`rex-ifml` `check_references` +
+// `rex check`'s error block): `InvocationGraph` partitions nodes into
+// declaration-backed and synthesized, and its oracle fails when an
+// invocation edge dangles. The kernel-level form of the invariant belongs
+// in `rex-verify` itself once the graph ingest stops synthesizing
+// endpoints (the codegraph companion) — until then the register row is
+// honestly `tested`, not `proved`.
+
+/// A [`Graph`] plus the invocation-edge discipline of issue #112: nodes
+/// are either declaration-backed or synthesized, and V11 demands every
+/// invocation edge's endpoint be declaration-backed.
+#[derive(Default)]
+struct InvocationGraph {
+    graph: Graph,
+    /// All nodes in creation order (declared and synthesized interleave).
+    nodes: Vec<NodeId>,
+    /// The declaration-backed subset of `nodes`.
+    declared: Vec<NodeId>,
+    /// `(from, to)` invocation edges, in creation order.
+    invocations: Vec<(NodeId, NodeId)>,
+}
+
+impl InvocationGraph {
+    fn declare(&mut self) -> NodeId {
+        let id = self.graph.add_node();
+        self.nodes.push(id);
+        self.declared.push(id);
+        id
+    }
+
+    fn synthesize(&mut self) -> NodeId {
+        let id = self.graph.add_node();
+        self.nodes.push(id);
+        id
+    }
+
+    /// Records an invocation edge `from → to` (a kernel reference edge —
+    /// the graph-level shape of `action("X")` lowering to a reference).
+    fn invoke(&mut self, from: NodeId, to: NodeId) {
+        self.graph.reference(from, to);
+        self.invocations.push((from, to));
+    }
+
+    fn is_declared(&self, id: NodeId) -> bool {
+        self.declared.contains(&id)
+    }
+
+    /// V11's executable form: the kernel invariants hold AND every
+    /// invocation edge terminates at a declaration-backed node.
+    fn check_invariants(&self) -> bool {
+        self.graph.check_invariants()
+            && self.invocations.iter().all(|(_, to)| self.is_declared(*to))
+    }
+}
+
+/// A synthesized endpoint — the ingest-side failure mode the register row
+/// describes: the invocation "has" a live endpoint (fabricated from the
+/// reference itself), so the kernel alone cannot tell declaration-backed
+/// from synthesized, and the oracle must fail anyway.
+#[test]
+fn p11_dangling_invocation_edge_trips_the_oracle() {
+    let mut g = InvocationGraph::default();
+    let view = g.declare();
+    let synthesized = g.synthesize();
+    g.invoke(view, synthesized);
+    assert!(
+        !g.check_invariants(),
+        "an invocation edge to a synthesized node violates V11"
+    );
+}
+
+/// The disciplined counterpart: declaration-backed endpoints pass.
+#[test]
+fn p11_declared_invocation_edge_passes_the_oracle() {
+    let mut g = InvocationGraph::default();
+    let view = g.declare();
+    let action = g.declare();
+    g.invoke(view, action);
+    assert!(g.check_invariants());
+}
+
+#[derive(Clone, Debug)]
+enum InvocationOp {
+    Declare,
+    Synthesize,
+    Invoke(u32, u32),
+}
+
+fn invocation_sequence(max: usize) -> impl Strategy<Value = Vec<InvocationOp>> {
+    proptest::collection::vec(
+        prop_oneof![
+            Just(InvocationOp::Declare),
+            Just(InvocationOp::Synthesize),
+            (any::<u32>(), any::<u32>()).prop_map(|(a, b)| InvocationOp::Invoke(a, b)),
+        ],
+        0..max,
+    )
+}
+
+proptest! {
+    /// Histories mixing declaration-backed and synthesized nodes with
+    /// invocation edges between arbitrary live nodes. The oracle's verdict
+    /// must match an independent recomputation of V11 from the recorded
+    /// history — the same validate-the-oracle discipline the kernel's V8
+    /// row documents — and the kernel invariants hold throughout (V5).
+    #[test]
+    fn p11_invocation_edges_terminate_at_declaration_backed_nodes(
+        ops in invocation_sequence(100),
+    ) {
+        let mut g = InvocationGraph::default();
+        for op in &ops {
+            let live = g.nodes.len();
+            match *op {
+                InvocationOp::Declare => {
+                    g.declare();
+                }
+                InvocationOp::Synthesize => {
+                    g.synthesize();
+                }
+                InvocationOp::Invoke(a, b) if live >= 2 => {
+                    let from = g.nodes[a as usize % live];
+                    let to = g.nodes[b as usize % live];
+                    g.invoke(from, to);
+                }
+                InvocationOp::Invoke(..) => {}
+            }
+            let every_endpoint_declared = g
+                .invocations
+                .iter()
+                .all(|(_, to)| g.is_declared(*to));
+            prop_assert!(
+                g.graph.check_invariants(),
+                "kernel invariants violated after {op:?}"
+            );
+            prop_assert!(
+                g.check_invariants() == every_endpoint_declared,
+                "oracle verdict must equal V11 over the recorded history (after {op:?})"
+            );
         }
     }
 }
