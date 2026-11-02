@@ -1,5 +1,19 @@
 {
   "formatVersion": 1,
+  "actions": [
+    {
+      "name": "ListCustomers"
+    },
+    {
+      "name": "GetCustomer"
+    },
+    {
+      "name": "CreateCustomer"
+    },
+    {
+      "name": "DeleteCustomer"
+    }
+  ],
   "commands": [
     {
       "name": "customers",

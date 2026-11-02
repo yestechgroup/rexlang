@@ -53,3 +53,11 @@ view "Queue" {
         on raise(values) -> action("RaiseRefund");
     }
 }
+
+action "ApproveRefund" {
+    target: Ticket;
+}
+
+action "RaiseRefund" {
+    target: Ticket;
+}

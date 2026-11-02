@@ -67,6 +67,10 @@ view "CustomerEdit" {
     }
 }
 
+view "CustomerDetail" {
+    params { customerId: Uuid };
+}
+
 view "Report" {
     xor: true;
 

@@ -51,3 +51,19 @@ command "tickets" {
         });
     }
 }
+
+action "ListTickets" {
+    target: Ticket;
+}
+
+action "GetTicket" {
+    target: Ticket;
+}
+
+action "ClaimTicket" {
+    target: Ticket;
+}
+
+action "RefundTicket" {
+    target: Ticket;
+}

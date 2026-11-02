@@ -5,8 +5,9 @@
 //! type-checkable expression (`rex_ir::ifml::Expression` and
 //! `rex_ir::ifml::ValueExpression`) into the [`rex_expr`] AST, and checks it
 //! with a [`rex_expr::TypeChecker`] over a [`rex_expr::DomainTypes`] index
-//! built from the (optional) domain model. With `domains: None` checking is
-//! disabled entirely and the result is always empty.
+//! built from the (optional) domain model. With `domains: None` expression
+//! checking is disabled; the interaction cross-reference pass (below) still
+//! runs.
 //!
 //! # What is checked, and with which bindings
 //!
@@ -49,6 +50,20 @@
 //! | `E0101` | A type mismatch: an expression contradicts the type its site expects (`expected <ty>, found <ty> in '<expr>'`, overrides), or rex-expr reports any other semantic rule violation (R1/R2/R4/R9/...), carried through verbatim. |
 //! | `E0102` | Unknown feature or operation on a navigation path (rex-expr's `unknown feature ...` / `unknown operation ...`), or an unknown/ambiguous bare package-function call (`unknown function ...` / `ambiguous function ...`), prefixed with site context (`view 'Dashboard' component 'orders': ...`). |
 //! | `E0103` | Unknown variable: a name that is not a view/container/module parameter, not a `data:` feature, and not an event parameter (`unknown name 'x'`), prefixed with site context. |
+//! | `E0104` | An `action("X")` invocation whose name resolves to no `action "X" { target: ...; }` declaration (`action 'X' is not declared — add action "X" { target: <Entity>; }`). |
+//! | `E0105` | A `navigate("X")` target that is not a declared view (`navigate target 'X' is not a declared view`). |
+//! | `E0106` | A `refresh("X")` target that is not a declared component (`refresh target 'X' is not a declared component`). |
+//!
+//! # Interaction references
+//!
+//! The cross-reference pass resolves every `action(...)`/`navigate(...)`/
+//! `refresh(...)` string in the main file against the declarations of the
+//! whole compilation (main file plus imports, name-union-wide — the same
+//! scope `data:` entities resolve in). It needs no domain model and runs
+//! even when `domains: None`; only main-file sites are diagnosed, an
+//! imported file's dangling reference belongs to that file's own
+//! compilation's report. Spans point at the referenced string token, and
+//! diagnostics land before the expression diagnostics (source order).
 //!
 //! # Bare calls
 //!
@@ -118,12 +133,20 @@ pub const E_TYPE_MISMATCH: &str = "E0101";
 pub const E_UNKNOWN_FEATURE: &str = "E0102";
 /// An unbound name (not a parameter, not a feature, not an event parameter).
 pub const E_UNKNOWN_VARIABLE: &str = "E0103";
+/// An `action("X")` invocation whose name resolves to no
+/// `action "X" { ... }` declaration.
+pub const E_UNKNOWN_ACTION: &str = "E0104";
+/// A `navigate("X")` target that is not a declared view.
+pub const E_UNKNOWN_VIEW: &str = "E0105";
+/// A `refresh("X")` target that is not a declared component.
+pub const E_UNKNOWN_COMPONENT: &str = "E0106";
 
-/// Checks all type-checkable expressions in a compiled IFML model against
-/// an optional domain model. Returns type-error diagnostics; constructs the
-/// checker cannot type are silently skipped (see the
-/// [module docs](self) skip list). With `domains: None` the result is
-/// always empty.
+/// Checks a compiled IFML model: the interaction cross-reference pass
+/// (every `action(...)`/`navigate(...)`/`refresh(...)` reference resolves
+/// to a declaration — domain-independent, always runs) plus, when a
+/// domain model is given, every type-checkable expression. Constructs the
+/// checker cannot type are silently skipped (see the [module docs](self)
+/// skip list). With `domains: None` only the cross-reference pass runs.
 ///
 /// ```
 /// use rex_ifml::{check_ifml, compile_ifml_str, IfmlImports};
@@ -141,12 +164,14 @@ pub const E_UNKNOWN_VARIABLE: &str = "E0103";
 /// )
 /// .expect("compiles");
 ///
-/// // No domain model: checking is disabled entirely.
+/// // No domain model: expression checking is disabled; the
+/// // interaction cross-reference pass still runs.
 /// assert!(check_ifml(&compilation, None).is_empty());
 /// ```
 pub fn check_ifml(compilation: &IfmlCompilation, domains: Option<&Model>) -> Vec<IfmlDiagnostic> {
+    let mut diags = check_references(compilation);
     let Some(domains) = domains else {
-        return Vec::new();
+        return diags;
     };
     let index = &compilation.index;
     let domains = DomainIndex::new(domains);
@@ -164,7 +189,81 @@ pub fn check_ifml(compilation: &IfmlCompilation, domains: Option<&Model>) -> Vec
         diags: Vec::new(),
     };
     checker.check_model(&compilation.model);
-    checker.diags
+    diags.extend(checker.diags);
+    diags
+}
+
+/// The interaction cross-reference pass: every navigation/action string
+/// reference in the **main file** resolves to a declaration, union-wide
+/// across the whole compilation (the main file plus its imports) —
+///
+/// - `action("X")` → an `action "X" { target: ...; }` declaration
+///   (`E0104`, with the add-it message: declarations carry the `target`
+///   the lowering needs, so an implicit declaration from a reference
+///   would have nothing to bind to);
+/// - `navigate("X")` → a `view "X"` declaration (`E0105`);
+/// - `refresh("X")` → a component declaration (`E0106`).
+///
+/// Spans come from the index's
+/// [`TargetSite`](crate::index::TargetSite)s (the referenced string
+/// token itself — editor squiggles land on the name), and only main-file
+/// sites are diagnosed: an imported file's dangling reference is that
+/// file's own compilation's report, the resolver's rule for unknown
+/// module uses.
+fn check_references(compilation: &IfmlCompilation) -> Vec<IfmlDiagnostic> {
+    let index = &compilation.index;
+    let actions: BTreeSet<&str> = index
+        .actions
+        .iter()
+        .map(|site| site.name.as_str())
+        .collect();
+    let views: BTreeSet<&str> = index.views.iter().map(|site| site.name.as_str()).collect();
+    let components: BTreeSet<&str> = index
+        .components
+        .iter()
+        .map(|site| site.name.as_str())
+        .collect();
+    let mut diags = Vec::new();
+    for site in &index.action_targets {
+        if site.file != 0 {
+            continue;
+        }
+        let (code, message) = match site.action.as_str() {
+            "navigate" => (
+                E_UNKNOWN_VIEW,
+                format!("navigate target '{}' is not a declared view", site.target),
+            ),
+            "refresh" => (
+                E_UNKNOWN_COMPONENT,
+                format!(
+                    "refresh target '{}' is not a declared component",
+                    site.target
+                ),
+            ),
+            _ => (
+                E_UNKNOWN_ACTION,
+                format!(
+                    "action '{}' is not declared — add action \"{}\" {{ target: <Entity>; }}",
+                    site.target, site.target
+                ),
+            ),
+        };
+        let known = match site.action.as_str() {
+            "navigate" => views.contains(site.target.as_str()),
+            "refresh" => components.contains(site.target.as_str()),
+            _ => actions.contains(site.target.as_str()),
+        };
+        if known {
+            continue;
+        }
+        diags.push(IfmlDiagnostic {
+            code,
+            message,
+            span: site.name_span,
+            file: index.files[0].path.clone(),
+        });
+    }
+    diags
 }
 
 /// Why a bare entity name does not resolve to exactly one class.
@@ -1254,6 +1353,10 @@ command "customers" {
         name: customer.name;
     });
 }
+
+action "ListCustomers" {
+    target: Customer;
+}
 "#;
         assert!(diags(source, &shop_model()).is_empty());
 
@@ -1303,6 +1406,10 @@ command "onboard" {
     on run if confirm == true -> action("Onboard", {
         tier: tier;
     });
+}
+
+action "Onboard" {
+    target: Customer;
 }
 "#;
         assert!(
@@ -1735,6 +1842,10 @@ view "Detail" {
         on select(row) -> navigate("Editor", { total: product.price });
     }
 }
+
+view "Editor" {
+    params { total: Int };
+}
 "#;
         assert!(diags(source, &shop_model()).is_empty());
 
@@ -1936,5 +2047,231 @@ view "Catalog" {
         })
         .expect("a non-constructor date call still lowers");
         assert!(matches!(generic.kind, ExprKind::FunctionCall { .. }));
+    }
+
+    // --- interaction-reference resolution (issue #112) ------------------
+
+    #[test]
+    fn dangling_action_invocation_is_reported() {
+        let source = r#"
+view "Queue" {
+    component "intake" {
+        type: form;
+
+        on raise(values) -> action("RaiseRefund");
+    }
+}
+"#;
+        let diags = diags(source, &shop_model());
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].code, E_UNKNOWN_ACTION);
+        assert_eq!(diags[0].file, "app.ifml");
+        assert_eq!(
+            diags[0].message,
+            "action 'RaiseRefund' is not declared — add action \"RaiseRefund\" { target: <Entity>; }"
+        );
+        // The span is the referenced string token itself, ready for an
+        // editor squiggle.
+        let (start, end) = diags[0].span;
+        assert_eq!(&source[start..end], "\"RaiseRefund\"");
+    }
+
+    #[test]
+    fn declared_action_invocation_is_clean() {
+        let source = r#"
+view "Queue" {
+    component "intake" {
+        type: form;
+
+        on raise(values) -> action("RaiseRefund");
+    }
+}
+
+action "RaiseRefund" {
+    target: Customer;
+}
+"#;
+        assert!(diags(source, &shop_model()).is_empty());
+    }
+
+    #[test]
+    fn nested_action_invocations_are_checked_too() {
+        let source = r#"
+view "Queue" {
+    component "intake" {
+        type: form;
+
+        on raise(values) -> action("Outer", {
+            on success -> action("MissingInner");
+        });
+    }
+}
+
+action "Outer" {
+    target: Customer;
+}
+"#;
+        let diags = diags(source, &shop_model());
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].code, E_UNKNOWN_ACTION);
+        assert!(
+            diags[0].message.contains("'MissingInner'"),
+            "{}",
+            diags[0].message
+        );
+    }
+
+    #[test]
+    fn action_declared_in_an_imported_file_resolves() {
+        let source = r#"
+import "lib.ifml";
+
+view "Queue" {
+    component "intake" {
+        type: form;
+
+        on raise(values) -> action("RaiseRefund");
+    }
+}
+"#;
+        let mut imports = crate::IfmlImports::default();
+        imports.provide(
+            "app.ifml",
+            "lib.ifml",
+            "action \"RaiseRefund\" { target: Customer; }",
+        );
+        let compilation = crate::compile_ifml_str("app.ifml", source, &imports)
+            .expect("source must parse and resolve");
+        assert!(check_ifml(&compilation, Some(&shop_model())).is_empty());
+    }
+
+    #[test]
+    fn imported_file_sites_are_not_diagnosed() {
+        // An imported file's dangling reference is that file's own
+        // compilation's report — the resolver's main-file-only rule.
+        let source = r#"
+import "lib.ifml";
+
+view "Queue" {
+    component "intake" {
+        type: form;
+
+        on raise(values) -> stay;
+    }
+}
+"#;
+        let mut imports = crate::IfmlImports::default();
+        imports.provide(
+            "app.ifml",
+            "lib.ifml",
+            "view \"Lib\" { component \"c\" { type: list; on select(row) -> action(\"Missing\"); } }",
+        );
+        let compilation = crate::compile_ifml_str("app.ifml", source, &imports)
+            .expect("source must parse and resolve");
+        assert!(check_ifml(&compilation, Some(&shop_model())).is_empty());
+    }
+
+    #[test]
+    fn interaction_references_resolve_without_domains() {
+        let source = r#"
+view "Queue" {
+    component "intake" {
+        type: form;
+
+        on raise(values) -> action("RaiseRefund");
+    }
+}
+"#;
+        let compilation =
+            crate::compile_ifml_str("app.ifml", source, &crate::IfmlImports::default())
+                .expect("source must parse and resolve");
+        let diags = check_ifml(&compilation, None);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].code, E_UNKNOWN_ACTION);
+    }
+
+    #[test]
+    fn navigate_target_must_be_a_declared_view() {
+        let source = r#"
+view "Queue" {
+    component "rows" {
+        type: list;
+
+        on select(row) -> navigate("Detail", { id: row.id });
+    }
+}
+
+view "Detail" {
+    component "form" {
+        type: form;
+    }
+}
+"#;
+        assert!(diags(source, &shop_model()).is_empty());
+
+        let dangling = source.replace("navigate(\"Detail\"", "navigate(\"Missing\"");
+        let diags = diags(&dangling, &shop_model());
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].code, E_UNKNOWN_VIEW);
+        assert_eq!(
+            diags[0].message,
+            "navigate target 'Missing' is not a declared view"
+        );
+        let (start, end) = diags[0].span;
+        assert_eq!(&dangling[start..end], "\"Missing\"");
+    }
+
+    #[test]
+    fn refresh_target_must_be_a_declared_component() {
+        let source = r#"
+view "Queue" {
+    component "rows" {
+        type: list;
+
+        on change -> refresh("rows");
+    }
+}
+
+module "Panel" {
+    input { page: Int = 1 }
+    output { n: Int }
+
+    component "pager" {
+        type: list;
+    }
+}
+"#;
+        assert!(
+            diags(source, &shop_model()).is_empty(),
+            "own and module-declared components resolve"
+        );
+
+        let dangling = source.replace("refresh(\"rows\")", "refresh(\"nope\")");
+        let diags = diags(&dangling, &shop_model());
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].code, E_UNKNOWN_COMPONENT);
+        assert_eq!(
+            diags[0].message,
+            "refresh target 'nope' is not a declared component"
+        );
+        let (start, end) = diags[0].span;
+        assert_eq!(&dangling[start..end], "\"nope\"");
+    }
+
+    #[test]
+    fn command_navigation_targets_resolve_too() {
+        let source = r#"
+command "customers" {
+    on run -> navigate("Missing");
+}
+"#;
+        let diags = diags(source, &shop_model());
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].code, E_UNKNOWN_VIEW);
+        assert!(
+            diags[0].message.contains("'Missing'"),
+            "{}",
+            diags[0].message
+        );
     }
 }
