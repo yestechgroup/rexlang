@@ -426,7 +426,7 @@ byte-identically to the pre-#80 shape.
 ## Downstream Consumption
 
 The `rexlang` language server supports the surface: diagnostics (resolver
-`E0001`–`E0009` + typed-binding `E0100`–`E0103`), document symbols, hover
+`E0001`–`E0009` + typed-binding `E0100`–`E0106`), document symbols, hover
 (module signatures), go-to-definition on `use` sites (cross-file), and
 `textDocument/formatting` backed by the canonical formatter. Imports fetch
 from open editor buffers first, disk second.
@@ -458,7 +458,7 @@ crates/rex-ifml/
 │   ├── parser.rs         # Pest parser wrapper + IfmlParseError
 │   ├── index.rs          # Span side-table (IfmlIndex): module decls/uses, views, actions, actors — never serialized
 │   ├── resolve.rs        # Cross-file module resolution: IfmlImports bundle, compile_ifml_str, IfmlDiagnostic (E0001–E0009)
-│   ├── check.rs          # Typed expression checking against a domain Model, via rex_expr::DomainTypes (E0100–E0103)
+│   ├── check.rs          # Typed expression checking against a domain Model, via rex_expr::DomainTypes (E0100–E0106); interaction cross-reference pass
 │   ├── fmt.rs            # Comment-preserving canonical formatter
 │   └── grammar/
 │       └── ifml.pest     # Pest grammar file
@@ -522,8 +522,34 @@ Constructs the shared expression language cannot type (`%`, the
 `~=`/`!~` regex operators, array/object values) are also skipped
 silently: evaluation stays deferred to generation time, as below. Diagnostics `E0100`–`E0103` (unknown data
 entity, type mismatch, unknown feature, unknown name) name the site:
-`view 'X' component 'orders': …`. With `domains: None` the checker is a
-no-op.
+`view 'X' component 'orders': …`. With `domains: None` expression
+checking is off; the interaction cross-reference pass below still runs.
+
+### Interaction References
+
+Every interaction reference resolves against declarations, union-wide
+across the compilation (the main file plus its `.ifml` imports — the same
+name scope `data:` entities resolve in), regardless of whether a domain
+model is available:
+
+| Reference | Must resolve to | Diagnostic |
+|---|---|---|
+| `action("X")` | an `action "X" { target: …; }` declaration | `E0104` — `action 'X' is not declared — add action "X" { target: <Entity>; }` |
+| `navigate("X")` | a `view "X"` declaration | `E0105` — `navigate target 'X' is not a declared view` |
+| `refresh("X")` | a component declaration (any body, imported files included) | `E0106` — `refresh target 'X' is not a declared component` |
+
+Action invocations cannot be inferred from their references: declarations
+carry the `target` the lowering needs, so a dangling `action("X")` would
+silently lower to neither a UI control nor a route — hence an error, not
+a synthesized declaration. Only main-file sites are diagnosed; an
+imported file's dangling reference belongs to that file's own
+compilation's report (the resolver's rule for unknown module uses). The
+diagnostic span is the referenced string token itself, so editor
+squiggles land on the name; the LSP publishes these like every other
+checker diagnostic. This is verification register row
+**V11** ("interaction references always resolve to declarations",
+`docs/VERIFICATION.md`) — `tested`, with the graph-level proof staged
+behind the kernel gaining node metadata.
 
 ### Reference Pattern Library
 

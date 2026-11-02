@@ -447,6 +447,22 @@
       "position": null
     },
     {
+      "name": "CustomerDetail",
+      "label": null,
+      "isLandmark": false,
+      "isXor": false,
+      "isModal": false,
+      "params": [
+        {
+          "name": "customerId",
+          "typeRef": "Uuid",
+          "default": null
+        }
+      ],
+      "condition": null,
+      "position": null
+    },
+    {
       "name": "Report",
       "label": null,
       "isLandmark": false,

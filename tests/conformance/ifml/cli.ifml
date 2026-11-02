@@ -50,3 +50,15 @@ command "customers" {
         });
     }
 }
+
+action "ListCustomers" {
+}
+
+action "GetCustomer" {
+}
+
+action "CreateCustomer" {
+}
+
+action "DeleteCustomer" {
+}

@@ -2451,6 +2451,15 @@ view "Catalogue" {
         });
     }
 }
+
+view "Detail" {
+    params { productId: String };
+
+    component "form" {
+        type: details;
+        data: Product;
+    }
+}
 "#;
 
 const PAGER_IFML: &str = r#"module "Pager" {

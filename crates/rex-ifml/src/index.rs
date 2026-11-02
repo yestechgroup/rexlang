@@ -182,6 +182,9 @@ pub struct IfmlIndex {
     pub actions: Vec<NamedSite>,
     /// Actor declaration sites.
     pub actors: Vec<NamedSite>,
+    /// Component declaration sites (view, container, and module bodies —
+    /// in compilation order, source order within a file).
+    pub components: Vec<NamedSite>,
     /// Command declaration sites (top-level and nested subcommands, in
     /// source order — nesting flattens).
     pub commands: Vec<NamedSite>,
@@ -201,6 +204,7 @@ impl IfmlIndex {
             views: Vec::new(),
             actions: Vec::new(),
             actors: Vec::new(),
+            components: Vec::new(),
             commands: Vec::new(),
         }
     }
@@ -228,6 +232,10 @@ impl IfmlIndex {
         for mut named in other.actors {
             named.file = file;
             self.actors.push(named);
+        }
+        for mut named in other.components {
+            named.file = file;
+            self.components.push(named);
         }
         for mut named in other.commands {
             named.file = file;
@@ -390,6 +398,17 @@ fn index_pair(pair: &Pair<'_, Rule>, file: usize, index: &mut IfmlIndex) {
                 } else {
                     index.actors.push(site);
                 }
+            }
+            recurse(pair, file, index);
+        }
+        Rule::component_declaration => {
+            if let Some((name, name_span)) = first_string_site(pair) {
+                index.components.push(NamedSite {
+                    file,
+                    name,
+                    name_span,
+                    span,
+                });
             }
             recurse(pair, file, index);
         }
@@ -623,6 +642,7 @@ module "WorkQueue" {
         assert!(index.views.is_empty());
         assert!(index.actions.is_empty());
         assert!(index.actors.is_empty());
+        assert!(index.components.is_empty());
     }
 
     #[test]
@@ -663,6 +683,18 @@ module "Pagination" {
         assert_eq!(index.actions[0].name, "DoIt");
         assert_eq!(index.actors.len(), 1);
         assert_eq!(index.actors[0].name, "Admin");
+
+        // components across view and module bodies, in source order
+        assert_eq!(index.components.len(), 2);
+        assert_eq!(index.components[0].name, "grid");
+        assert_eq!(index.components[1].name, "pager");
+        for site in &index.components {
+            assert!(site.name_span.0 < site.name_span.1, "{site:?}");
+        }
+        assert_eq!(
+            &text[index.components[0].name_span.0..index.components[0].name_span.1],
+            "\"grid\""
+        );
 
         assert_eq!(index.module_decls.len(), 1);
         let decl = &index.module_decls[0];
