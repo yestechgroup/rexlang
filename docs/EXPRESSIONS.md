@@ -67,6 +67,7 @@ member      := NAME ("(" args? ")")?
 args        := expr ("," expr)*
 primary     := INT | FLOAT | STRING | "true" | "false" | "null" | NAME
              | "date" "(" STRING ")"
+             | NAME "(" args ")"
              | "(" expr ")"
              | "[" (expr ("," expr)*)? "]"
              | "if" expr "{" expr "}" "else" "{" expr "}"
@@ -89,8 +90,11 @@ Notes:
   algebra table): `first` takes an optional lambda, `filter`/`map`/`any`
   require exactly one lambda, `size`/`sum` take none. Any other `NAME` with
   parentheses is an operation call on a model-declared `op`.
-- A bare `NAME` is a variable reference: a `let` binding or a lambda
-  parameter. Feature access always has an explicit receiver.
+- A bare `NAME` is a variable reference — a `let` binding or a lambda
+  parameter — except in the bare-call form `NAME "(" args ")"`, which is a
+  package-function call (see "Function calls" under the type system). A bare
+  `NAME` with no parentheses is never a call. Feature access always has an
+  explicit receiver.
 
 ### Precedence (loosest to tightest)
 
@@ -165,6 +169,20 @@ and no literal adaptation. The `if` expression's type is that type.
 - `op` call: the declared return type, after argument checking (arity and
   per-parameter types; a class-typed parameter expects that `Named` type).
   L1 applies to arguments.
+
+**Function calls.** The bare form `name(args)` (no receiver) resolves
+against the sigil-lowered package functions of the domain union
+(`rex_ir::Package::functions`), indexed by bare name across every package.
+A name declared by several packages is a type error naming them all; an
+unknown name is a type error at the name span (with a did-you-mean hint when
+exactly one indexed function is within edit distance 2). Each parameter
+expects its declared type mapped by multiplicity — `is_many` → `List(T)`,
+lower bound 0 → `Option(T)`, else `T` — with L1 literal adaptation and the
+R1–R4 argument rules unchanged; there is no R3 auto-propagation, so an
+`Option` argument does not satisfy a plain parameter. The declared return
+type is the call's type; there is no `?.` form (a function has no receiver
+to be optional). Receiver calls (`x.name(...)`) never consult the function
+index — they resolve class operations only.
 
 Unknown features, unknown operations, and unknown names are type errors whose
 diagnostic span points at the offending name token.

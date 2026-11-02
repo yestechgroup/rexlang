@@ -244,11 +244,30 @@ fn generate_unit(model: &Model) -> anyhow::Result<String> {
 /// convention); a `rosetta`-only or body-less function — today every
 /// lowered Rune function — emits a `todo!()` stub named after the
 /// function, because the verbatim Rune text is never emitted as code (wire
-/// contract rule 15). An `expr` body is a generate-time error: the neutral
-/// expression language has no free functions yet (rex-expr resolves calls
-/// against a receiver's class). Emits nothing for function-less models,
-/// keeping their generated code byte-identical.
+/// contract rule 15). Bare `expr`-body calls (issue #63) lower to exactly
+/// these stubs. An `expr` body *on a function itself* is a generate-time
+/// error: function bodies are the Rune statement IR's job
+/// (docs/RUNE-BODIES.md), not the neutral expression language's. Function
+/// names must stay unique after snake_case (two packages declaring the
+/// same name, or `fooBar`/`foo_bar`, collide in the flattened module) —
+/// generation bails naming both declarations. Emits nothing for
+/// function-less models, keeping their generated code byte-identical.
 fn emit_functions(e: &mut String, unit: &Unit<'_>) -> anyhow::Result<()> {
+    let mut seen: BTreeMap<String, String> = BTreeMap::new();
+    for package in &unit.model.packages {
+        for function in &package.functions {
+            let snake = rust_ident(&snake_case(&function.name));
+            if let Some(first) = seen.get(&snake) {
+                bail!(
+                    "duplicate function name '{snake}' ('{first}' and '{}') across packages; \
+                     the Rust backend flattens packages into one module and requires unique \
+                     snake_case function names",
+                    function.name
+                );
+            }
+            seen.insert(snake, function.name.clone());
+        }
+    }
     for package in &unit.model.packages {
         for function in &package.functions {
             let expr_body = function.bodies.get("expr");
@@ -262,8 +281,8 @@ fn emit_functions(e: &mut String, unit: &Unit<'_>) -> anyhow::Result<()> {
             }
             if expr_body.is_some() {
                 bail!(
-                    "function '{}' has an 'expr' body; the neutral expression \
-                     language has no free functions yet",
+                    "function '{}' has an 'expr' body; function bodies are not lowered yet \
+                     (docs/RUNE-BODIES.md)",
                     function.name
                 );
             }

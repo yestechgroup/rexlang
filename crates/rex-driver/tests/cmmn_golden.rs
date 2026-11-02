@@ -547,6 +547,77 @@ fn an_event_on_part_binds_by_event_name() {
     );
 }
 
+/// Compiles a case source against the conformance sigil-func pair: the
+/// `funcs.mox` domain lowers through the sigil pipeline (the provided
+/// rosetta content), so its synthetic packages carry the lowered
+/// `Package::functions` the `when` universe must see.
+fn compile_with_sigil_domain(source: &str) -> CmmnCompilation {
+    let mox = std::fs::read_to_string(fixture_path("tests/conformance/sigil/funcs.mox"))
+        .expect("read funcs.mox");
+    let rosetta = std::fs::read_to_string(fixture_path("tests/conformance/sigil/funcs.rosetta"))
+        .expect("read funcs.rosetta");
+    compile_cmmn_str(
+        "case.cmmn",
+        source,
+        &[("funcs.mox".to_string(), mox)],
+        &rex_driver::DomainImports {
+            sigil: rex_driver::SigilImports::new().provide("funcs.mox", "funcs.rosetta", rosetta),
+            ..rex_driver::DomainImports::default()
+        },
+        &[],
+        &[],
+        &[],
+    )
+}
+
+/// The lowered package functions are callable in `when` guard positions:
+/// `calcRate` takes `(notional number (1..1), legIds string (0..*))` and
+/// returns `rate number`, so the comparison lowers to a boolean criterion.
+#[test]
+fn a_cmmn_when_may_call_a_package_function() {
+    let compilation = compile_with_sigil_domain(concat!(
+        "import \"funcs.mox\"\n",
+        "\n",
+        "case C {\n",
+        "    task T {}\n",
+        "    milestone M {\n",
+        "        entry on T.complete when (calcRate(1.0, [\"a\"]) > 0.0);\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "expected clean compile: {:?}",
+        compilation
+            .diagnostics
+            .iter()
+            .map(|(_, diagnostic)| &diagnostic.message)
+            .collect::<Vec<_>>()
+    );
+    let model = compilation.model.expect("artifact");
+    assert_eq!(
+        model.cases[0].plan_items[1].entry[0].when.as_deref(),
+        Some("calcRate(1.0, [\"a\"]) > 0.0")
+    );
+}
+
+/// An unknown callee keeps the checker's standard unknown-function
+/// diagnostic (with its did-you-mean help when a close name exists).
+#[test]
+fn an_unknown_function_call_in_a_when_is_an_error() {
+    let compilation = compile_with_sigil_domain(concat!(
+        "import \"funcs.mox\"\n",
+        "\n",
+        "case C {\n",
+        "    task T {}\n",
+        "    milestone M {\n",
+        "        entry on T.completed when (unknownCall(1));\n",
+        "    }\n",
+        "}\n",
+    ));
+    expect_diagnostic(&compilation, "unknown function");
+}
+
 #[test]
 fn discretionary_tasks_and_flags_lower_to_their_wire_fields() {
     let compilation = compile_with_buckets(

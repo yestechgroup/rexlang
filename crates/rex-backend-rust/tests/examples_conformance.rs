@@ -46,7 +46,7 @@ fn sigil_example_carries_function_signatures_and_verbatim_bodies() {
             .iter()
             .map(|f| f.name.as_str())
             .collect::<Vec<_>>(),
-        vec!["isActive", "priceQuote"],
+        vec!["isActive", "priceQuote", "spread"],
         "lowered functions in declaration order"
     );
 
@@ -74,6 +74,23 @@ fn sigil_example_carries_function_signatures_and_verbatim_bodies() {
             .iter()
             .any(|package| package.name == "com.rosetta.model"),
         "referencing zonedDateTime must emit the builtin package"
+    );
+
+    let spread = &package.functions[2];
+    assert_eq!(spread.params.len(), 1);
+    assert!(
+        spread.params[0].multiplicity.is_none(),
+        "a scalar library-function parameter carries no multiplicity"
+    );
+    assert_eq!(
+        spread.params[0].type_,
+        rex_ir::TypeRef::Primitive(rex_ir::PrimitiveType::Double),
+        "a scalar `number` parameter lowers to the Double primitive"
+    );
+    assert_eq!(
+        spread.return_type,
+        rex_ir::TypeRef::Primitive(rex_ir::PrimitiveType::Double),
+        "a scalar `number` return lowers to the Double primitive"
     );
 
     // The verbatim bodies round-trip: byte-exact slices of the rosetta

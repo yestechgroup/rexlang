@@ -134,6 +134,25 @@ fn library_model() -> Model {
         TypeRef::Primitive(PrimitiveType::String),
         vec![],
     ));
+    // A sigil-lowered package function (the `rex_ir::Package::functions`
+    // shape wire contract rule 15 lowers Rune declarations to): long return,
+    // a required long param, and a many string param.
+    package.functions.push(Operation::new(
+        "priceQuote",
+        TypeRef::Primitive(PrimitiveType::Long),
+        vec![
+            OperationParam {
+                name: "notional".to_string(),
+                type_: TypeRef::Primitive(PrimitiveType::Long),
+                multiplicity: None,
+            },
+            OperationParam {
+                name: "legIds".to_string(),
+                type_: TypeRef::Primitive(PrimitiveType::String),
+                multiplicity: Some(Multiplicity::MANY),
+            },
+        ],
+    ));
     model.packages.push(package);
     model
 }
@@ -663,4 +682,84 @@ fn date_collections_lower_with_the_generic_algebra() {
         "renewals.map(d => d.diff_days(effectiveDate))",
         "self.renewals.clone().iter().map(|d| ((*d).diff_days(self.effective_date))).collect::<Vec<_>>()",
     );
+}
+
+// ---------------------------------------------------------------------------
+// Bare free-function calls (issue #63): the emitted stub's exact name
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_bare_call_lowers_to_the_free_stub_call() {
+    // The snake_case stub name `emit_functions` generates, an L1-adapted
+    // int-literal argument (`notional: long`), and a many string argument.
+    lower_in(
+        "Book",
+        "priceQuote(2026, [\"L1\"])",
+        "price_quote(2026i64, vec![\"L1\".to_string()])",
+    );
+}
+
+#[test]
+fn an_ambiguous_bare_call_bails_naming_both_packages() {
+    // The same function name declared by two packages: lowering names every
+    // declaring package, mirroring the checker's ambiguity wording.
+    let mut model = library_model();
+    let mut rates = Package::new("sigil::nz.example.rates");
+    rates.functions.push(Operation::new(
+        "priceQuote",
+        TypeRef::Primitive(PrimitiveType::Int),
+        vec![],
+    ));
+    model.packages.push(rates);
+    let parsed = parse(r#"priceQuote("a")"#);
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let ctx = LowerCtx::new(&model, PKG, "Book", &[]);
+    let error =
+        lower_expr(parsed.ast.as_ref().expect("ast"), &Ty::long(), &ctx).expect_err("ambiguous");
+    assert_eq!(
+        error.message,
+        "ambiguous function `priceQuote`: declared in nz.example.library, \
+         sigil::nz.example.rates"
+    );
+}
+
+#[test]
+fn an_interface_typed_function_call_bails_naming_the_function() {
+    // Interfaces have no struct representation, so an interface-typed
+    // function signature cannot be called in generated code.
+    let mut model = library_model();
+    model.packages[0]
+        .interfaces
+        .push(rex_ir::InterfaceDef::new("Lendable"));
+    model.packages[0].functions.push(Operation::new(
+        "latestQuote",
+        TypeRef::Interface {
+            package: PKG.to_string(),
+            name: "Lendable".to_string(),
+        },
+        vec![],
+    ));
+    let parsed = parse("latestQuote()");
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let ctx = LowerCtx::new(&model, PKG, "Book", &[]);
+    let error = lower_expr(parsed.ast.as_ref().expect("ast"), &Ty::Null, &ctx)
+        .expect_err("interface-typed");
+    assert_eq!(
+        error.message,
+        "function `latestQuote` has an interface-typed signature; interfaces \
+         have no struct representation"
+    );
+}
+
+#[test]
+fn an_unknown_function_call_bails() {
+    // The checker rejects the name before lowering; the lowering still
+    // fails closed on its own resolution, so the tree is lowered directly.
+    let model = library_model();
+    let parsed = parse("noSuchFunction()");
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let ctx = LowerCtx::new(&model, PKG, "Book", &[]);
+    let error = lower_expr(parsed.ast.as_ref().expect("ast"), &Ty::Null, &ctx)
+        .expect_err("unknown function");
+    assert_eq!(error.message, "unknown function `noSuchFunction`");
 }

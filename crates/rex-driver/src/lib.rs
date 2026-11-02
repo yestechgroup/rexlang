@@ -1590,7 +1590,10 @@ fn compile_usecase_with(
 ///    walking `extends` (cycles guarded by a seen set; a class-typed
 ///    extends target naming no class of the union errors; interface targets
 ///    end the walk — they carry no operations). Sigil-lowered classes have
-///    attributes only, so operations never resolve through them.
+///    attributes only, so operations never resolve through them. The
+///    lowered package functions stay callable from expression positions
+///    that share the domain's `DomainTypes` (`.cmmn` `when` guards, `.ddd`
+///    document expressions, generated code) — steps never resolve them.
 /// 4. **Placement** — steps are subject-only (a step on an actor errors);
 ///    occurrences are allowed on any participant.
 /// 5. **Message end binding** — for each message and each side, exactly one

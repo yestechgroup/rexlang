@@ -919,6 +919,9 @@ fn translate(
         ExprKind::Call { .. } => {
             return Err(fail("an operation call".to_string()));
         }
+        ExprKind::FunctionCall { .. } => {
+            return Err(fail("a free-function call".to_string()));
+        }
         ExprKind::Algebra {
             receiver,
             kind,

@@ -54,6 +54,30 @@
               "isId": false,
               "isReadOnly": false
             }
+          ],
+          "operations": [
+            {
+              "name": "doubleRate",
+              "returnType": {
+                "type": "primitive",
+                "value": "double"
+              },
+              "params": [
+                {
+                  "name": "u",
+                  "type": {
+                    "type": "class",
+                    "value": {
+                      "package": "rex.sigil.funcs",
+                      "name": "Underlier"
+                    }
+                  }
+                }
+              ],
+              "bodies": {
+                "expr": " calcRate(2.0, [\"leg-1\"]) "
+              }
+            }
           ]
         }
       ]

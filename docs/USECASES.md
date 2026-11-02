@@ -410,7 +410,12 @@ Sigil-lowered classes participate in the union namespace like any other
 domain type (typed subjects and payload types resolve through them). Rune
 functions lower to package-level `functions` (rule 8 of the sigil
 contract), never onto a class — sigil classes carry no operations, so
-sigil-typed subjects cannot take steps (rule 3).
+sigil-typed subjects cannot take steps (rule 3). The lowered functions
+are not inert: every expression position that shares the domain's
+`DomainTypes` can call them — `.cmmn` `when` guards, `.ddd` document
+expressions, IFML handlers, and generated code. Use-case steps remain
+subject+operation only: a step never resolves a package function (the
+pinned non-goal behind rule 3).
 
 ---
 

@@ -5,4 +5,7 @@ import sigil "pricing.rosetta"
 class Quote {
     String symbol
     double notional
+    op double withSpread(double base) {
+        expr { spread(base) }
+    }
 }

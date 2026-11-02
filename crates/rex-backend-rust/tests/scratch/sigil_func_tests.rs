@@ -18,4 +18,25 @@ mod sigil_func_assertions {
     fn calling_a_stub_panics_as_todo() {
         crate::any_active(vec!["TR1".to_string(), "TR2".to_string()]);
     }
+
+    #[test]
+    fn the_expr_body_op_reaches_the_stub_through_a_bare_call() {
+        // Compile-time proof of the lowered `expr`-body method: its body is
+        // the free stub call, with the class-typed parameter as a typed id.
+        let double_rate: fn(&crate::Desk, &crate::Resource, crate::UnderlierId) -> f64 =
+            crate::Desk::double_rate;
+        let _ = double_rate;
+    }
+
+    #[test]
+    #[should_panic(expected = "not yet implemented")]
+    fn calling_the_expr_body_op_panics_as_todo() {
+        // The stub contract, now reachable through an `expr` body: the Desk
+        // method lowers the bare `calcRate(...)` call to `calc_rate`, whose
+        // body panics as `todo!()`.
+        let mut res = crate::Resource::default();
+        let underlier = res.new_underlier();
+        let desk = res.new_desk();
+        res.desk(desk).unwrap().double_rate(&res, underlier);
+    }
 }

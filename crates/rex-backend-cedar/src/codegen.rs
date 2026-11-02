@@ -408,6 +408,7 @@ fn emit_condition(expr: &Expr, capability: &str, class: &ClassDef) -> anyhow::Re
         }
         ExprKind::Coalesce { .. } => Err(reject("`?:`")),
         ExprKind::Call { .. } => Err(reject("an operation call")),
+        ExprKind::FunctionCall { .. } => Err(reject("a free-function call")),
         ExprKind::Algebra { kind, .. } => Err(reject(&format!("collection algebra `{kind}`"))),
         ExprKind::If { .. } => Err(reject("`if`")),
         ExprKind::Let { .. } => Err(reject("`let`")),

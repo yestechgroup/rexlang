@@ -650,4 +650,57 @@ mod example_assertions {
             super::assert_instance_json("support", &json);
         }
     }
+
+    // ------------------------------------------------------------------
+    // pricing — the sigil showcase: sigil-lowered package functions are
+    // emitted as free `todo!()` stubs, and a class op's bare `expr`-body
+    // call lowers to exactly such a stub (`withSpread` → `with_spread`
+    // calling `spread`, the scalar-number library function).
+    // ------------------------------------------------------------------
+    mod pricing_example {
+        use crate::pricing::*;
+
+        #[test]
+        fn with_spread_lowers_the_bare_call_to_the_emitted_stub() {
+            // Compile-time proof of the lowered signatures: the op method
+            // carries the resource + its scalar `double` parameter, and the
+            // library function is a plain scalar free function.
+            let with_spread: fn(&Quote, &Resource, f64) -> f64 = Quote::with_spread;
+            let spread: fn(f64) -> f64 = crate::pricing::spread;
+            let _ = (with_spread, spread);
+
+            // The method's body is the stub call: read the scratch crate's
+            // own generated source and pin the lowered body text (the bare
+            // `spread(base)` call, snake_case name, typed parameter id).
+            let source = std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/lib.rs"
+            ))
+            .expect("read the scratch crate's generated lib.rs");
+            let body = source
+                .split("pub fn with_spread")
+                .nth(1)
+                .expect("the generated `with_spread` method");
+            let body = body
+                .split("pub fn ")
+                .next()
+                .expect("the `with_spread` method's body block");
+            assert!(
+                body.contains("spread(base)"),
+                "the `with_spread` body must lower the bare call to the emitted \
+                 `spread` stub:\n{body}"
+            );
+        }
+
+        #[test]
+        #[should_panic(expected = "not yet implemented")]
+        fn calling_with_spread_panics_through_the_todo_stub() {
+            // The stub contract, reachable through the op's `expr` body: the
+            // method lowers the bare `spread(base)` call to the free stub,
+            // whose body panics as `todo!()`.
+            let mut res = Resource::default();
+            let quote = res.new_quote();
+            res.quote(quote).unwrap().with_spread(&res, 0.05);
+        }
+    }
 }

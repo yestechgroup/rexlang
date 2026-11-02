@@ -513,11 +513,14 @@ resolver's override check): `String`/`Uuid` → string, `Int` → int,
 `Float` → float, `Boolean` → boolean, `DateTime` → the expression
 language's calendar `date` (a checking alias — no time-of-day
 reasoning). Generic (identifier) input types stay deferred — expressions
-relying on them are skipped, not errors. Constructs the shared
-expression language cannot type (bare calls other than
-`date("YYYY-MM-DD")`, `%`, the `~=`/`!~` regex operators, array/object
-values) are also skipped silently: evaluation stays deferred to
-generation time, as below. Diagnostics `E0100`–`E0103` (unknown data
+relying on them are skipped, not errors. Bare calls (`today()`,
+`score(...)`) type-check against the domain's `Package::functions`
+(unknown or ambiguous names are `E0102` diagnostics;
+`date("YYYY-MM-DD")` stays the calendar-date constructor), while a call
+with an otherwise-untypeable argument stays silently skipped.
+Constructs the shared expression language cannot type (`%`, the
+`~=`/`!~` regex operators, array/object values) are also skipped
+silently: evaluation stays deferred to generation time, as below. Diagnostics `E0100`–`E0103` (unknown data
 entity, type mismatch, unknown feature, unknown name) name the site:
 `view 'X' component 'orders': …`. With `domains: None` the checker is a
 no-op.

@@ -234,6 +234,47 @@ impl<'a> LowerCtx<'a> {
         )))
     }
 
+    /// Looks a bare free-function call up across every package's functions
+    /// (the flattened module's namespace): zero candidates is unknown,
+    /// more than one is an ambiguity naming every declaring package,
+    /// mirroring the checker's wording. An interface-typed signature names
+    /// the function and bails: interfaces have no struct representation,
+    /// so no generated stub could receive or return one.
+    fn find_function(&self, name: &str) -> Result<Operation, LowerError> {
+        let mut packages = Vec::new();
+        let mut found = None;
+        for package in &self.model.packages {
+            for function in &package.functions {
+                if function.name == name {
+                    packages.push(package.name.clone());
+                    found = Some(function.clone());
+                }
+            }
+        }
+        match packages.len() {
+            0 => Err(LowerError::new(format!("unknown function `{name}`"))),
+            1 => {
+                let function = found.expect("exactly one candidate");
+                let interface_typed = matches!(function.return_type, TypeRef::Interface { .. })
+                    || function
+                        .params
+                        .iter()
+                        .any(|param| matches!(param.type_, TypeRef::Interface { .. }));
+                if interface_typed {
+                    return Err(LowerError::new(format!(
+                        "function `{name}` has an interface-typed signature; interfaces \
+                         have no struct representation"
+                    )));
+                }
+                Ok(function)
+            }
+            _ => Err(LowerError::new(format!(
+                "ambiguous function `{name}`: declared in {}",
+                packages.join(", ")
+            ))),
+        }
+    }
+
     /// The class and its class supertypes, nearest first (cycle-safe).
     fn class_chain(&self, package: &str, class: &str) -> Vec<(String, String)> {
         let mut chain = vec![(package.to_string(), class.to_string())];
@@ -356,6 +397,7 @@ impl Lowerer<'_, '_> {
                 args,
                 optional_safe,
             } => self.call(receiver, name, args, *optional_safe),
+            ExprKind::FunctionCall { name, args } => self.function_call(name, args),
             ExprKind::Algebra {
                 receiver,
                 kind,
@@ -635,6 +677,27 @@ impl Lowerer<'_, '_> {
                 )
             }
         })
+    }
+
+    /// A bare free-function call (issue #63): the free stub `emit_functions`
+    /// generates, named exactly `rust_ident(&snake_case(name))` and resolved
+    /// against every package's functions in the model. Arguments follow the
+    /// receiver-call shape (L1 literal adaptation via the expected type).
+    fn function_call(
+        &mut self,
+        name: &rex_expr::Spanned<String>,
+        args: &[Expr],
+    ) -> Result<String, LowerError> {
+        let function = self.ctx.find_function(&name.value)?;
+        let mut lowered_args = Vec::new();
+        for (arg, param) in args.iter().zip(&function.params) {
+            // L1: an integer-literal argument adapts to a long parameter.
+            let expected = Ty::from_type_ref(&param.type_);
+            let arg_ty = self.operand_ty(arg, expected == Ty::long())?;
+            lowered_args.push(self.lower(arg, &arg_ty)?);
+        }
+        let function_name = rust_ident(&snake_case(&function.name));
+        Ok(format!("{}({})", function_name, lowered_args.join(", ")))
     }
 
     /// The calendar algebra on `date` receivers (spec R5–R8): the runtime
