@@ -30,7 +30,8 @@ pub(crate) fn emit_header(e: &mut String, model: &Model, unit: &Unit<'_>) {
     {
         e.push_str(
             "//! - sigil-lowered package functions are emitted as free functions; a\n\
-             //!   `rust` body emits verbatim, anything else is a `todo!()` stub — the\n\
+             //!   `rust` body emits verbatim, body-less/`rosetta` functions are\n\
+             //!   `todo!()` stubs (which bare `expr`-body calls lower to); the\n\
              //!   verbatim `rosetta` body stays in the IR, never in generated code;\n",
         );
     }
