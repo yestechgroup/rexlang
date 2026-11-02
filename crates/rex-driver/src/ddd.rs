@@ -120,6 +120,19 @@ struct Registries<'a> {
 /// diagnostic was produced anywhere) plus the diagnostics from every file,
 /// each tagged with its path.
 ///
+/// The engine runs as a stage sequence, each stage a free function of this
+/// module taking its context explicitly and returning its local
+/// diagnostics: the prologue ([`check_design_imports`] feeding
+/// [`pipeline::engine_diags`]), rule 1 + the union model
+/// ([`rule_1_base_package`], [`union_model`]), the per-module lowering
+/// stages ([`collect_machine_scopes`], [`lower_module_services`],
+/// [`lower_module_designs`], [`lower_module_searches`]), and the deferred
+/// validations ([`rule_11_bind_searches`], [`rule_6_aggregate_boundary`],
+/// [`rule_13_aggregate_references`], [`rule_9_resolve_injects`],
+/// [`rule_8_resolve_delegations`], [`rule_10_validate_capabilities`]) —
+/// the emission order of those stages is the diagnostics contract, pinned
+/// by the `ddd_diagnostic_order` characterization suite.
+///
 /// See [`compile_ddd_str`](crate::compile_ddd_str) for the normative
 /// contract.
 pub(crate) fn compile_ddd_file(
@@ -1572,16 +1585,12 @@ fn collect_machine_scopes(
             machine.type_.name.full_name(),
             module.name.text
         );
-        let Some(class) = lower::resolve_ddd_class(
-            &class_type_ref(&design.class),
-            &packages,
-            base,
-            &help,
-            local,
-        ) else {
+        let Some(class) =
+            lower::resolve_ddd_class(&class_type_ref(&design.class), packages, base, &help, local)
+        else {
             continue;
         };
-        let enum_type = lower::resolve_ddd_type(&machine.type_, &packages, base, local);
+        let enum_type = lower::resolve_ddd_type(&machine.type_, packages, base, local);
         let rex_ir::TypeRef::Enum {
             package: enum_package,
             name: enum_name,
