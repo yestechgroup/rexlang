@@ -47,6 +47,7 @@
 //! is deliberately *not* an error: what to do about an unfetched import
 //! is host policy (the CLI hard-errors, the LSP degrades).
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::workspace_imports::{collect_schema_imports, collect_sigil_imports};
@@ -351,10 +352,12 @@ pub struct DeployPairs {
 /// Gathers a `.deploy` file's imports into [`DeployPairs`] — the CLI's
 /// `read_deploy_pair`/`read_design_model`/`read_flow_model` discipline.
 /// Designs gather exactly like the `.uc` bucket; flows fetch their text
-/// and walk their own `.ifml` closure through a bridged two-key fetch
-/// (`dir_of(importer).join(import)` — importer identities here are always
-/// resolved disk-path keys, so bridging the path-keyed fetch is safe),
-/// then compile. The flow's `.actor`/`.mox` imports ride through the same
+/// and walk their own `.ifml` closure through a bridged two-key fetch.
+/// The walker recurses under **as-written import strings** (only the
+/// entry identity is a resolved disk-path key), so the bridge keeps an
+/// identity → resolved-key map per flow: each import resolves relative to
+/// the resolved key its importer was actually fetched under, never the
+/// process CWD. The flow's `.actor`/`.mox` imports ride through the same
 /// bridge but the deploy lowering consumes none, so they are dropped.
 pub fn gather_deploy_imports(
     path_key: &str,
@@ -384,11 +387,22 @@ pub fn gather_deploy_imports(
                     continue;
                 }
                 let text = fetch(&key).ok_or_else(|| cannot_read(&key, path_key))?;
+                // The walker recurses under as-written import strings, so
+                // map every identity to the resolved key its content was
+                // fetched under — seeded with the entry identity (the
+                // flow's own resolved key) and extended on every fetch.
+                let mut keys: BTreeMap<String, String> = BTreeMap::new();
+                keys.insert(key.clone(), key.clone());
                 let mut bridge = |importer: &str, import: &str| -> Option<(String, String)> {
-                    let resolved = dir_of(importer).join(import);
-                    let key = resolved.display().to_string();
-                    let text = fetch(&key)?;
-                    Some((key, text))
+                    let base = keys
+                        .get(importer)
+                        .cloned()
+                        .unwrap_or_else(|| importer.to_string());
+                    let resolved = dir_of(&base).join(import);
+                    let resolved_key = resolved.display().to_string();
+                    let text = fetch(&resolved_key)?;
+                    keys.insert(import.to_string(), resolved_key.clone());
+                    Some((resolved_key, text))
                 };
                 let project = gather_ifml_project(&key, &text, &mut bridge);
                 match rex_ifml::compile_ifml_str(&key, &text, &project.imports) {

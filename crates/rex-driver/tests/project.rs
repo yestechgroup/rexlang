@@ -218,6 +218,31 @@ fn gather_usecase_imports_errors_on_a_missing_import() {
     );
 }
 
+/// Depth-≥2 flow nesting: `a.ifml` imports `sub/b.ifml`, which imports
+/// `c.ifml`, whose module `a.ifml` uses. The walker recurses under
+/// as-written import strings, so the deploy gather must map identities to
+/// resolved keys — a bridge that treats every importer as a disk path
+/// resolves `c.ifml` against the process CWD and the flow fails to
+/// compile.
+#[test]
+fn gather_deploy_imports_resolves_nested_flow_imports_relative_to_their_importer() {
+    const NESTED_C_IFML: &str =
+        "module \"Widget\" { input { count: Int } output { total: Int } }\n";
+    const NESTED_B_IFML: &str = "import \"c.ifml\";\n";
+    const NESTED_A_IFML: &str =
+        "import \"sub/b.ifml\";\n\nview \"List\" { use \"Widget\" as widget { count: 1; } }\n";
+    let mut host = path_fetch(BTreeMap::from([
+        ("lib/a.ifml", NESTED_A_IFML),
+        ("lib/sub/b.ifml", NESTED_B_IFML),
+        ("lib/sub/c.ifml", NESTED_C_IFML),
+    ]));
+    let imports = |_: &str| vec!["a.ifml".to_string()];
+    let pairs = gather_deploy_imports("lib/app.deploy", "// deploy", imports, &mut host)
+        .expect("the nested flow closure gathers and compiles");
+    assert_eq!(pairs.flows.len(), 1);
+    assert_eq!(pairs.flows[0].0, "lib/a.ifml");
+}
+
 #[test]
 fn gather_deploy_imports_compiles_design_and_flow_pairs() {
     let mut host = path_fetch(BTreeMap::from([
