@@ -142,6 +142,7 @@ mod tests {
     use crate::deploy::{DeployModel, DEPLOY_MODEL_FORMAT_VERSION};
     use crate::events::{EventModel, EVENT_MODEL_FORMAT_VERSION};
     use crate::ifml::{IfmlModel, IFML_MODEL_FORMAT_VERSION};
+    use crate::ifml_manifest::{IfmlManifest, IFML_MANIFEST_FORMAT_VERSION};
     use crate::usecases::{UseCaseModel, USE_CASE_MODEL_FORMAT_VERSION};
     use crate::{ActorModel, IrError, Model, ACTOR_MODEL_FORMAT_VERSION, FORMAT_VERSION};
 
@@ -166,6 +167,8 @@ mod tests {
         assert_eq!(usecases.format_version, USE_CASE_MODEL_FORMAT_VERSION);
         let ifml: IfmlModel = from_json("{\"formatVersion\":1}").unwrap();
         assert_eq!(ifml.format_version, IFML_MODEL_FORMAT_VERSION);
+        let manifest: IfmlManifest = from_json("{\"formatVersion\":1}").unwrap();
+        assert_eq!(manifest.format_version, IFML_MANIFEST_FORMAT_VERSION);
         let cmmn: CmmnModel = from_json("{\"formatVersion\":1}").unwrap();
         assert_eq!(cmmn.format_version, CMMN_MODEL_FORMAT_VERSION);
 
@@ -177,6 +180,7 @@ mod tests {
             rejects_version::<DeployModel>(json);
             rejects_version::<UseCaseModel>(json);
             rejects_version::<IfmlModel>(json);
+            rejects_version::<IfmlManifest>(json);
             rejects_version::<CmmnModel>(json);
         }
     }

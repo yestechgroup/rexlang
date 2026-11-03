@@ -154,6 +154,7 @@ pub mod ddd;
 pub mod deploy;
 pub mod events;
 pub mod ifml;
+pub mod ifml_manifest;
 pub mod usecases;
 mod wire;
 
