@@ -378,10 +378,7 @@ fn collect_ifml_imports(
                 }
             }
         } else if import.ends_with(".actor") {
-            if actor_paths
-                .iter()
-                .any(|existing| *existing == resolved_path)
-            {
+            if actor_paths.contains(&resolved_path) {
                 return None;
             }
             match read_actor_model(&resolved) {
