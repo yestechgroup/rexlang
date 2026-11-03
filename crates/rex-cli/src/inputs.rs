@@ -341,7 +341,7 @@ fn collect_ifml_imports(
                 Ok(text) => {
                     disk_paths.insert(import.to_string(), resolved);
                     bundle.provide(importer, import, text.clone());
-                    Some(text)
+                    Some((resolved_path, text))
                 }
                 Err(error) => {
                     if read_error.is_none() {

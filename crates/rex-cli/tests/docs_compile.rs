@@ -235,9 +235,10 @@ fn compile_flow(path: &str, source: &str) -> (String, rex_ir::ifml::IfmlModel) {
         let resolved = importer_disk.parent().unwrap().join(import);
         if import.ends_with(".ifml") && resolved.is_file() {
             let imported = std::fs::read_to_string(&resolved).ok()?;
+            let resolved_path = resolved.display().to_string();
             disk_paths.insert(import.to_string(), resolved);
             imports.provide(importer, import, imported.clone());
-            Some(imported)
+            Some((resolved_path, imported))
         } else {
             None
         }
@@ -457,9 +458,10 @@ fn compile_fence(fence: &Fence, workspace: &Path) -> String {
                 let resolved = importer_disk.parent().unwrap().join(import);
                 if import.ends_with(".ifml") && resolved.is_file() {
                     let imported = std::fs::read_to_string(&resolved).ok()?;
+                    let resolved_path = resolved.display().to_string();
                     disk_paths.insert(import.to_string(), resolved);
                     imports.provide(importer, import, imported.clone());
-                    Some(imported)
+                    Some((resolved_path, imported))
                 } else {
                     None
                 }

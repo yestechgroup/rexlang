@@ -268,7 +268,7 @@ impl RexBackend {
             }
             if import.ends_with(".ifml") {
                 closure.bundle.provide(importer, import, fetched.clone());
-                return Some(fetched);
+                return Some((resolved_path, fetched));
             }
             if import.ends_with(".actor") {
                 if !actor_paths
