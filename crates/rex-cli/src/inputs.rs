@@ -245,21 +245,30 @@ pub(crate) struct IfmlInputs {
     pub(crate) actors: Vec<rex_ir::ActorModel>,
 }
 
-/// Gathers one `.ifml` file's import closure from disk through
-/// [`gather_ifml_project`]: the fetch closure maps the walker's identities
-/// — the as-written import strings `.ifml` recursion recurses under, and
-/// the resolved keys this closure hands back (an imported `.actor`
-/// policy's own `.mox` imports are fetched under the policy's resolved
-/// key) — to disk paths. Other extensions pass through unread (today's
-/// silent pass-through). The first unreadable import is captured (the
-/// CLI's hard-error policy) and returned alongside the project.
-fn gather_ifml_from_disk(
-    key: &str,
-    disk: &Path,
-    source: &str,
-) -> (rex_driver::IfmlProject, Option<anyhow::Error>) {
+/// Reads an `.ifml` file plus every `.ifml`, `.mox`, and `.actor` file it
+/// imports, transitively — gathered through [`rex_driver::project`], the
+/// shared host-side resolver. Import paths resolve relative to the importing
+/// file's own directory on disk, while the resolver keys each import by
+/// the importing file's identity and the import string **as written** (the
+/// resolver is filesystem-free and sees only the strings). The disk fetch
+/// closure keeps the CLI's read-error policy: the first unreadable import
+/// surfaces as an error after the walk, naming the resolved path. Imported
+/// `.mox` files are compiled to Core IR and unioned for typed expression
+/// binding; imported `.actor` files are compiled to actor models for
+/// authorization checking; a domain or actor model that fails to compile
+/// is a hard error.
+pub(crate) fn read_ifml_inputs(file: &Path) -> anyhow::Result<IfmlInputs> {
+    let source = std::fs::read_to_string(file)
+        .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
+    let path = file.display().to_string();
+    // Disk paths per identity: the walker only ever sees identities — the
+    // as-written import strings `.ifml` recursion recurses under, and the
+    // resolved keys this closure hands back (an imported `.actor` policy's
+    // own `.mox` imports are fetched under the policy's resolved key) — so
+    // every key handed out is mapped the same way the entry identity is.
+    // Other extensions pass through unread (today's silent pass-through).
     let mut disk_paths: BTreeMap<String, PathBuf> = BTreeMap::new();
-    disk_paths.insert(key.to_string(), disk.to_path_buf());
+    disk_paths.insert(path.clone(), file.to_path_buf());
     let mut read_error: Option<anyhow::Error> = None;
     let mut fetch = |importer: &str, import: &str| -> Option<(String, String)> {
         if !(import.ends_with(".ifml") || import.ends_with(".mox") || import.ends_with(".actor")) {
@@ -288,27 +297,7 @@ fn gather_ifml_from_disk(
             }
         }
     };
-    let project = gather_ifml_project(key, source, &mut fetch);
-    (project, read_error)
-}
-
-/// Reads an `.ifml` file plus every `.ifml`, `.mox`, and `.actor` file it
-/// imports, transitively — gathered through [`rex_driver::project`], the
-/// shared host-side resolver. Import paths resolve relative to the importing
-/// file's own directory on disk, while the resolver keys each import by
-/// the importing file's identity and the import string **as written** (the
-/// resolver is filesystem-free and sees only the strings). The disk fetch
-/// closure keeps the CLI's read-error policy: the first unreadable import
-/// surfaces as an error after the walk, naming the resolved path. Imported
-/// `.mox` files are compiled to Core IR and unioned for typed expression
-/// binding; imported `.actor` files are compiled to actor models for
-/// authorization checking; a domain or actor model that fails to compile
-/// is a hard error.
-pub(crate) fn read_ifml_inputs(file: &Path) -> anyhow::Result<IfmlInputs> {
-    let source = std::fs::read_to_string(file)
-        .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
-    let path = file.display().to_string();
-    let (project, read_error) = gather_ifml_from_disk(&path, file, &source);
+    let project = gather_ifml_project(&path, &source, &mut fetch);
     if let Some(error) = read_error {
         return Err(error);
     }
@@ -617,71 +606,30 @@ impl DeployPair {
 }
 
 /// Reads a `.deploy` file plus every `.ddd` design and `.ifml` flow it
-/// imports, each compiled to its artifact. Designs gather through
-/// [`gather_deploy_imports`]; import paths resolve relative to the deploy
-/// file's own directory, and the **resolved** path is passed to the
-/// driver. A missing or non-compiling import is a clean error; duplicate
-/// imports are gathered once.
-///
-/// Flows gather through [`gather_ifml_from_disk`] rather than the
-/// gatherer's own flow bridge: the walker's nested importer identities are
-/// the as-written import strings ([`rex_ifml::walk_ifml_imports`]), which
-/// only a host that tracks disk paths per identity can map — a flow whose
-/// imports themselves import (the pattern libraries) would resolve against
-/// the process CWD there. The deploy lowering consumes neither a flow's
-/// `.mox`/`.actor` imports nor its actors, so [`gather_ifml_project`]'s
-/// extra buckets are dropped.
+/// imports, each compiled to its artifact — gathered through
+/// [`gather_deploy_imports`]. Import paths resolve relative to the deploy
+/// file's own directory; the **resolved** path is passed to the driver.
+/// A missing or non-compiling import is a clean error; duplicate imports
+/// are gathered once.
 pub(crate) fn read_deploy_pair(file: &Path) -> anyhow::Result<DeployPair> {
     let source = std::fs::read_to_string(file)
         .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
-    let path = file.display().to_string();
     let pairs = gather_deploy_imports(
-        &path,
+        &file.display().to_string(),
         &source,
         |source| {
             rex_syntax::parse_deploy(source)
                 .ast
-                .map(|ast| {
-                    ast.imports
-                        .into_iter()
-                        .map(|import| import.path)
-                        .filter(|import| import.ends_with(".ddd"))
-                        .collect()
-                })
+                .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
                 .unwrap_or_default()
         },
         &mut fetch_disk,
     )
     .map_err(|message| anyhow::anyhow!(message))?;
-    let mut flows: Vec<(String, rex_ir::ifml::IfmlModel)> = Vec::new();
-    if let Some(ast) = &rex_syntax::parse_deploy(&source).ast {
-        let dir = dir_of(file);
-        for import in &ast.imports {
-            if !import.path.ends_with(".ifml") {
-                continue;
-            }
-            let resolved = dir.join(&import.path);
-            let key = resolved.display().to_string();
-            if flows.iter().any(|(existing, _)| *existing == key) {
-                continue;
-            }
-            let text = fetch_disk(&key).ok_or_else(|| {
-                anyhow::anyhow!("cannot read imported file {key} (imported by {path})")
-            })?;
-            let (project, read_error) = gather_ifml_from_disk(&key, &resolved, &text);
-            if let Some(error) = read_error {
-                return Err(error);
-            }
-            match rex_ifml::compile_ifml_str(&key, &text, &project.imports) {
-                Ok(compilation) => flows.push((key, compilation.model)),
-                Err(_) => anyhow::bail!("imported flow {key} does not compile"),
-            }
-        }
-    }
     Ok(DeployPair {
-        path,
+        path: file.display().to_string(),
         source,
         designs: pairs.designs,
-        flows,
+        flows: pairs.flows,
     })
 }

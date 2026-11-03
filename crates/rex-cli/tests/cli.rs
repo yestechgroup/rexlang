@@ -2970,6 +2970,42 @@ fn check_succeeds_on_deploy_pair() {
     );
 }
 
+/// The nested-flow guard for the driver's deploy gather: the deploy
+/// imports a flow whose own imports import a pattern module — depth-2
+/// flow nesting, resolved through the gatherer's identity→key map. Without
+/// that map a flow's nested imports resolve against the process CWD and
+/// the flow "does not compile".
+#[test]
+fn check_succeeds_on_a_deploy_with_a_nested_flow_import() {
+    write_source("deploy-domain.mox", DEPLOY_DOMAIN);
+    write_source("deploy-design.ddd", DEPLOY_DESIGN);
+    write_source(
+        "pattern.ifml",
+        "module \"Pager\" {\n    input { pageSize: Int = 25 }\n    output { total: Int }\n\n    component \"pager\" {\n        type: list;\n        data: Item;\n    }\n}\n",
+    );
+    write_source(
+        "flow.ifml",
+        "import \"pattern.ifml\";\n\nview \"Home\" {\n    use \"Pager\" as pager { pageSize: 10; };\n\n    component \"list\" {\n        type: list;\n        data: Book;\n    }\n}\n",
+    );
+    let deploy = write_source(
+        "nested.deploy",
+        "import \"deploy-design.ddd\"\nimport \"flow.ifml\"\n\napplication Svc {\n    component lending: api {\n        design \"deploy-design.ddd#media\"\n    }\n    component web: frontend {\n        flow \"flow.ifml\"\n    }\n    component db: database {\n        engine: postgres\n    }\n    connects web -> lending\n    connects lending -> db\n}\n\nprofile prod {\n    target: kubernetes\n    defaults {\n        lending.replicas: 2\n    }\n    require (lending.replicas >= 2)\n}\n\ndeployment dev for Svc {\n    use prod\n}\n",
+    );
+    let output = rexlang()
+        .args(["check", deploy.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("OK {}\n", deploy.display())
+    );
+}
+
 #[test]
 fn check_fails_on_broken_deploy_with_capability_error() {
     write_source("deploy-domain.mox", DEPLOY_DOMAIN);
