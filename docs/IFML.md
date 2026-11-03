@@ -426,7 +426,8 @@ byte-identically to the pre-#80 shape.
 ## Downstream Consumption
 
 The `rexlang` language server supports the surface: diagnostics (resolver
-`E0001`–`E0009` + typed-binding `E0100`–`E0106`), document symbols, hover
+`E0001`–`E0009` + typed-binding `E0100`–`E0108`, authorization included),
+document symbols, hover
 (module signatures), go-to-definition on `use` sites (cross-file), and
 `textDocument/formatting` backed by the canonical formatter. Imports fetch
 from open editor buffers first, disk second.
@@ -454,11 +455,11 @@ Expression evaluation is **deferred to generation time** — the artifact stores
 crates/rex-ifml/
 ├── Cargo.toml
 ├── src/
-│   ├── lib.rs            # Public API: parse_ifml, parse_ifml_file, parse_ifml_indexed, compile_ifml_str, check_ifml, format_ifml + re-exports of rex_ir::ifml
+│   ├── lib.rs            # Public API: parse_ifml, parse_ifml_file, parse_ifml_indexed, compile_ifml_str, check_ifml(+_with_actors), format_ifml + re-exports of rex_ir::ifml
 │   ├── parser.rs         # Pest parser wrapper + IfmlParseError
-│   ├── index.rs          # Span side-table (IfmlIndex): module decls/uses, views, actions, actors — never serialized
+│   ├── index.rs          # Span side-table (IfmlIndex): module decls/uses, views, actions, actors, auth sites — never serialized
 │   ├── resolve.rs        # Cross-file module resolution: IfmlImports bundle, compile_ifml_str, IfmlDiagnostic (E0001–E0009)
-│   ├── check.rs          # Typed expression checking against a domain Model, via rex_expr::DomainTypes (E0100–E0106); interaction cross-reference pass
+│   ├── check.rs          # Typed expression checking against a domain Model, via rex_expr::DomainTypes (E0100–E0106); interaction cross-reference (E0104–E0106) and authorization (E0107–E0108) passes
 │   ├── fmt.rs            # Comment-preserving canonical formatter
 │   └── grammar/
 │       └── ifml.pest     # Pest grammar file
@@ -550,6 +551,33 @@ checker diagnostic. This is verification register row
 **V11** ("interaction references always resolve to declarations",
 `docs/VERIFICATION.md`) — `tested`, with the graph-level proof staged
 behind the kernel gaining node metadata.
+
+### Authorization References
+
+`check_ifml_with_actors(&compilation, domains, actors)` adds the
+authorization dimension: every `requires:`/`roles:` name in the main
+file — view-level properties and event-level `requires:` prefixes —
+resolves bare-name union-wide against the capability and actor tables
+of the actor models the host provides:
+
+| Site | Must resolve to | Diagnostic |
+|---|---|---|
+| `requires: [X, …]` (view property or event prefix) | a `capability X on …` in any provided actors block | `E0107` — `capability 'X' is not declared — add "capability X on <Class>;" to an actors block` |
+| `roles: [r, …]` (view property) | an `actor r` in any provided actors block | `E0108` — `role 'r' is not declared — add "actor r;" to an actors block` |
+
+An empty actor slice skips the pass entirely — the same contract as
+`domains: None` for expressions. Hosts gather the flow's `.actor`
+imports when they exist: the CLI resolves them relative to the
+importing file and compiles them like `rexlang check` on the policy (a
+missing or non-compiling policy is a clean error naming the resolved
+path), the LSP does the same with open documents winning over disk and
+degrades to no authorization checking in incomplete workspaces. Only
+main-file sites are diagnosed (the interaction-reference rule), spans
+land on the name tokens, and a view gated on a capability no policy
+declares can no longer compile clean — the #112 defect class one
+level up. The conformance fixture pair
+`tests/conformance/ifml/rexlang/auth.{mox,actor}` makes `app.ifml`'s
+`import "rexlang/auth.actor"` load-bearing.
 
 ### Reference Pattern Library
 

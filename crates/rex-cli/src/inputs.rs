@@ -212,7 +212,7 @@ pub(crate) fn is_ifml_file(file: &Path) -> bool {
 }
 
 /// An `.ifml` file plus everything it imports, ready for
-/// [`rex_ifml::compile_ifml_str`] and [`rex_ifml::check_ifml`].
+/// [`rex_ifml::compile_ifml_str`] and [`rex_ifml::check_ifml_with_actors`].
 pub(crate) struct IfmlInputs {
     /// The interaction file's path as given on the command line.
     pub(crate) path: String,
