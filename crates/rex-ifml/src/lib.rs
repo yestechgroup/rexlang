@@ -66,12 +66,12 @@ mod index;
 mod parser;
 mod resolve;
 
-pub use check::check_ifml;
+pub use check::{check_ifml, check_ifml_with_actors};
 pub use expand::expand_ifml;
 pub use fmt::format_ifml;
 pub use index::{
-    parse_ifml_indexed, AtSite, IfmlIndex, IndexFile, IndexParam, LiteralKind, ModuleDeclSite,
-    ModuleUseSite, NamedSite, TargetSite, UseOverride,
+    parse_ifml_indexed, AtSite, AuthKind, AuthSite, IfmlIndex, IndexFile, IndexParam, LiteralKind,
+    ModuleDeclSite, ModuleUseSite, NamedSite, TargetSite, UseOverride,
 };
 pub use parser::*;
 pub use resolve::{
