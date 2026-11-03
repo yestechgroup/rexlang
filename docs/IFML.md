@@ -455,19 +455,22 @@ Expression evaluation is **deferred to generation time** — the artifact stores
 crates/rex-ifml/
 ├── Cargo.toml
 ├── src/
-│   ├── lib.rs            # Public API: parse_ifml, parse_ifml_file, parse_ifml_indexed, compile_ifml_str, check_ifml(+_with_actors), format_ifml + re-exports of rex_ir::ifml
+│   ├── lib.rs            # Public API: parse_ifml, parse_ifml_file, parse_ifml_indexed, compile_ifml_str, check_ifml(+_with_actors), expand_ifml, manifest_ifml, format_ifml + re-exports of rex_ir::ifml
 │   ├── parser.rs         # Pest parser wrapper + IfmlParseError
-│   ├── index.rs          # Span side-table (IfmlIndex): module decls/uses, views, actions, actors, auth sites — never serialized
+│   ├── index.rs          # Span side-table (IfmlIndex): module decls/uses, views, containers, actions, actors, components, commands, auth sites — never serialized
 │   ├── resolve.rs        # Cross-file module resolution: IfmlImports bundle, compile_ifml_str, IfmlDiagnostic (E0001–E0009)
-│   ├── check.rs          # Typed expression checking against a domain Model, via rex_expr::DomainTypes (E0100–E0106); interaction cross-reference (E0104–E0106) and authorization (E0107–E0108) passes
+│   ├── check.rs          # Typed expression checking against a domain Model, via rex_expr::DomainTypes (E0100–E0106); interaction cross-reference (E0104–E0106) and authorization (E0107–E0108) passes over instantiated-module sites
+│   ├── expand.rs         # Module-use expansion (opt-in for the IR artifact; the manifest always derives from it)
+│   ├── manifest.rs       # The control/route manifest emitter: IfmlCompilation (+ imports, + optional domain union) → rex_ir::ifml_manifest::IfmlManifest
 │   ├── fmt.rs            # Comment-preserving canonical formatter
 │   └── grammar/
 │       └── ifml.pest     # Pest grammar file
 └── tests/
-    ├── golden.rs         # Conformance golden (REX_UPDATE_FIXTURES=1 regenerates)
+    ├── golden.rs         # Conformance goldens — IR artifacts and manifests (REX_UPDATE_FIXTURES=1 regenerates)
+    ├── manifest.rs       # The manifest emitter's derivation contract
     ├── resolve.rs        # Resolver conformance tests
     ├── patterns.rs       # patterns/ifml library compiles clean; composition + negative cases
-    └── examples.rs       # examples/*.ifml compile, type-check, and are fmt-canonical
+    └── examples.rs       # examples/*.ifml compile, type-check, are fmt-canonical, and manifest byte-identically
 ```
 
 ### Module Resolution
@@ -536,21 +539,27 @@ model is available:
 | Reference | Must resolve to | Diagnostic |
 |---|---|---|
 | `action("X")` | an `action "X" { target: …; }` declaration | `E0104` — `action 'X' is not declared — add action "X" { target: <Entity>; }` |
-| `navigate("X")` | a `view "X"` declaration | `E0105` — `navigate target 'X' is not a declared view` |
+| `navigate("X")` | a `view "X"` **or container** declaration | `E0105` — `navigate target 'X' is not a declared view or container` |
 | `refresh("X")` | a component declaration (any body, imported files included) | `E0106` — `refresh target 'X' is not a declared component` |
 
 Action invocations cannot be inferred from their references: declarations
 carry the `target` the lowering needs, so a dangling `action("X")` would
 silently lower to neither a UI control nor a route — hence an error, not
-a synthesized declaration. Only main-file sites are diagnosed; an
-imported file's dangling reference belongs to that file's own
-compilation's report (the resolver's rule for unknown module uses). The
+a synthesized declaration. Container targets are what make wizard-style
+patterns expressible: a module's steps navigate between the module's own
+containers. Sites on **instantiated** files are diagnosed — the entry
+file instantiates a module by `use`-ing it (transitively through module
+composition), and a used module's body references are the app's surface,
+so their dangling names are errors with spans in the imported file.
+Sibling modules of the same imported file that the app never uses stay
+inert: their references belong to their own compilation's report. The
 diagnostic span is the referenced string token itself, so editor
 squiggles land on the name; the LSP publishes these like every other
 checker diagnostic. This is verification register row
 **V11** ("interaction references always resolve to declarations",
-`docs/VERIFICATION.md`) — `tested`, with the graph-level proof staged
-behind the kernel gaining node metadata.
+`docs/VERIFICATION.md`) — `tested`, enforced through both the checker and
+the manifest artifact boundary (below), with the graph-level proof
+staged behind the kernel gaining node metadata.
 
 ### Authorization References
 
@@ -571,13 +580,57 @@ imports when they exist: the CLI resolves them relative to the
 importing file and compiles them like `rexlang check` on the policy (a
 missing or non-compiling policy is a clean error naming the resolved
 path), the LSP does the same with open documents winning over disk and
-degrades to no authorization checking in incomplete workspaces. Only
-main-file sites are diagnosed (the interaction-reference rule), spans
-land on the name tokens, and a view gated on a capability no policy
-declares can no longer compile clean — the #112 defect class one
-level up. The conformance fixture pair
+degrades to no authorization checking in incomplete workspaces. The
+same instantiation rule as the interaction pass applies: a module the
+app `use`s contributes its `requires:`/`roles:` sites to the app's
+surface; uninstantiated modules keep their names to their own
+compilation's report. Spans land on the name tokens, and a view gated
+on a capability no policy declares can no longer compile clean — the
+#112 defect class one level up. The conformance fixture pair
 `tests/conformance/ifml/rexlang/auth.{mox,actor}` makes `app.ifml`'s
 `import "rexlang/auth.actor"` load-bearing.
+
+### Control/Route Manifest
+
+`rexlang manifest <file.ifml> [-o out.json]` exports the **control/route
+manifest** (`rex_ir::ifml_manifest::IfmlManifest`, versioned
+independently via `IFML_MANIFEST_FORMAT_VERSION`) — the positive artifact
+for what the interaction model lowers to, derived from the compilation
+*after* resolution and checking:
+
+- **routes** (`views`): each view with its flags (`landmark`/`xor`/
+  `modal`), params, `roles:`/`requires:` gates, and condition;
+- **controls**: one entry per component on the **expanded** view tree
+  (module `use` sites inlined, overrides applied — pattern-contributed UI
+  is indistinguishable from app-authored UI), flattened with its
+  container path, carrying the component type, the `data:` entity as
+  written plus its resolved `(package, class)` when the host provides
+  the domain union, and the form fields / table columns;
+- **edges**: every `navigate` / `refresh` / `action(...)` invocation with
+  its trigger event, `if` guard, `requires:` gates, and binding pairs;
+  nested action-body handlers (`on success`/`on error`) become their own
+  edges on the same source; command handlers are edges sourced by the
+  invocation path;
+- **actions**: the declaration-backed actions with their `target:`
+  entities (resolved `(package, class)` included);
+- **commands**: the CLI vocabulary flattened to invocation paths
+  (`tickets.show`), with typed arguments, options and prompts (defaults
+  included), `requires:` gates, and descriptions.
+
+The derivation contract is the manifest's reason to exist: **every edge's
+target is declaration-backed by construction**. The checker
+(`E0104`–`E0106`, instantiated modules included) gates emission, so a
+dangling reference is an error before any manifest can exist — consumers
+ingest the manifest without re-deriving resolution and without
+synthesizing endpoints (the #112 ingest-defect class is structurally
+impossible at this boundary; verification row **V11** names it as
+enforcement). Emission is deterministic (source order throughout) and
+the wire follows the house discipline: camelCase, adjacent tagging,
+`#[serde(default)]` + `skip_serializing_if` everywhere — an empty model
+serializes as exactly `{"formatVersion":1}`. Golden manifests pin the
+semantic product: `tests/conformance/ifml/{app,cli}.manifest.json` and
+`examples/artifacts/{cli,ecommerce,support}.manifest.json` (the
+`examples_artifacts` precedent).
 
 ### Reference Pattern Library
 
@@ -622,6 +675,20 @@ view "Storefront" {
     use "Catalogue" as catalogue { items: products; };
 }
 ```
+
+Instantiation makes the pattern's body the app's surface: every
+reference inside a used module resolves like app-authored code
+(`navigate("ItemDetail")` needs the app to declare that view or
+container; `action("AddToCart")` needs the action — the
+instantiation rule of E0104–E0106 above). App-facing targets stay
+deliberately undeclared in the library: declaring what you back is the
+consumer's job, and the reference consumers
+(`examples/ecommerce.ifml`, `examples/support.ifml`) show the
+declaration blocks. The library's own wiring resolves internally —
+`Wizard`'s steps navigate its own containers, `SearchPanel` refreshes
+its own `results` component — and the presentational modules carry no
+interaction references at all (`Pagination`'s pager binds page state;
+paging is not navigation).
 
 `examples/ecommerce.ifml` and `examples/support.ifml` are the reference
 consumers.

@@ -63,6 +63,7 @@ mod check;
 mod expand;
 mod fmt;
 mod index;
+mod manifest;
 mod parser;
 mod resolve;
 
@@ -73,6 +74,7 @@ pub use index::{
     parse_ifml_indexed, AtSite, AuthKind, AuthSite, IfmlIndex, IndexFile, IndexParam, LiteralKind,
     ModuleDeclSite, ModuleUseSite, NamedSite, TargetSite, UseOverride,
 };
+pub use manifest::manifest_ifml;
 pub use parser::*;
 pub use resolve::{
     compile_ifml_lenient, compile_ifml_str, walk_ifml_imports, IfmlCompilation, IfmlDiagnostic,
@@ -81,3 +83,4 @@ pub use resolve::{
     E_UNKNOWN_MODULE,
 };
 pub use rex_ir::ifml::*;
+pub use rex_ir::ifml_manifest::{IfmlManifest, IFML_MANIFEST_FORMAT_VERSION};

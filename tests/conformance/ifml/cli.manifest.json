@@ -1,0 +1,194 @@
+{
+  "formatVersion": 1,
+  "edges": [
+    {
+      "source": {
+        "type": "command",
+        "value": {
+          "path": [
+            "customers"
+          ]
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "run"
+      },
+      "kind": "action",
+      "target": "ListCustomers"
+    },
+    {
+      "source": {
+        "type": "command",
+        "value": {
+          "path": [
+            "customers",
+            "show"
+          ]
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "run"
+      },
+      "kind": "action",
+      "target": "GetCustomer"
+    },
+    {
+      "source": {
+        "type": "command",
+        "value": {
+          "path": [
+            "customers",
+            "create"
+          ]
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "run"
+      },
+      "kind": "action",
+      "target": "CreateCustomer"
+    },
+    {
+      "source": {
+        "type": "command",
+        "value": {
+          "path": [
+            "customers",
+            "delete"
+          ]
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "run"
+      },
+      "kind": "action",
+      "target": "DeleteCustomer"
+    }
+  ],
+  "actions": [
+    {
+      "name": "ListCustomers"
+    },
+    {
+      "name": "GetCustomer"
+    },
+    {
+      "name": "CreateCustomer"
+    },
+    {
+      "name": "DeleteCustomer"
+    }
+  ],
+  "commands": [
+    {
+      "path": [
+        "customers"
+      ],
+      "description": "Manage customers",
+      "arguments": [
+        {
+          "name": "id",
+          "typeRef": "Uuid"
+        }
+      ],
+      "options": [
+        {
+          "name": "status",
+          "typeRef": "String",
+          "default": null
+        },
+        {
+          "name": "limit",
+          "typeRef": "Int",
+          "default": {
+            "type": "number",
+            "value": 20.0
+          }
+        },
+        {
+          "name": "sort",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "desc"
+          }
+        }
+      ],
+      "requires": [
+        "ManageCustomers"
+      ]
+    },
+    {
+      "path": [
+        "customers",
+        "show"
+      ],
+      "description": "Show one customer",
+      "arguments": [
+        {
+          "name": "id",
+          "typeRef": "Uuid"
+        }
+      ]
+    },
+    {
+      "path": [
+        "customers",
+        "create"
+      ],
+      "description": "Create a customer",
+      "prompts": [
+        {
+          "name": "name",
+          "kind": {
+            "type": "text"
+          },
+          "default": null
+        },
+        {
+          "name": "email",
+          "kind": {
+            "type": "text"
+          },
+          "default": null
+        },
+        {
+          "name": "type",
+          "kind": {
+            "type": "select"
+          },
+          "default": {
+            "type": "string",
+            "value": "standard"
+          }
+        }
+      ]
+    },
+    {
+      "path": [
+        "customers",
+        "delete"
+      ],
+      "description": "Delete a customer",
+      "arguments": [
+        {
+          "name": "id",
+          "typeRef": "Uuid"
+        }
+      ],
+      "prompts": [
+        {
+          "name": "confirm",
+          "kind": {
+            "type": "confirm"
+          },
+          "default": null
+        }
+      ]
+    }
+  ]
+}

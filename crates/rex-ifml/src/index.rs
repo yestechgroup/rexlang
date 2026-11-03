@@ -213,6 +213,9 @@ pub struct IfmlIndex {
     /// Component declaration sites (view, container, and module bodies —
     /// in compilation order, source order within a file).
     pub components: Vec<NamedSite>,
+    /// Container declaration sites (view, container, and module bodies —
+    /// in compilation order, source order within a file).
+    pub containers: Vec<NamedSite>,
     /// Command declaration sites (top-level and nested subcommands, in
     /// source order — nesting flattens).
     pub commands: Vec<NamedSite>,
@@ -234,6 +237,7 @@ impl IfmlIndex {
             actions: Vec::new(),
             actors: Vec::new(),
             components: Vec::new(),
+            containers: Vec::new(),
             commands: Vec::new(),
         }
     }
@@ -265,6 +269,10 @@ impl IfmlIndex {
         for mut named in other.components {
             named.file = file;
             self.components.push(named);
+        }
+        for mut named in other.containers {
+            named.file = file;
+            self.containers.push(named);
         }
         for mut named in other.commands {
             named.file = file;
@@ -308,6 +316,7 @@ impl IfmlIndex {
             .iter()
             .chain(&self.actions)
             .chain(&self.actors)
+            .chain(&self.containers)
             .chain(&self.commands)
         {
             if site.file == file {
@@ -437,6 +446,17 @@ fn index_pair(pair: &Pair<'_, Rule>, file: usize, index: &mut IfmlIndex) {
         Rule::component_declaration => {
             if let Some((name, name_span)) = first_string_site(pair) {
                 index.components.push(NamedSite {
+                    file,
+                    name,
+                    name_span,
+                    span,
+                });
+            }
+            recurse(pair, file, index);
+        }
+        Rule::container_declaration => {
+            if let Some((name, name_span)) = first_string_site(pair) {
+                index.containers.push(NamedSite {
                     file,
                     name,
                     name_span,
@@ -730,6 +750,45 @@ module "WorkQueue" {
     }
 
     #[test]
+    fn containers_are_indexed_with_spans() {
+        let text = r#"
+view "Wizard" {
+    container "stepOne" {
+        default: true;
+        container "nested" {
+            component "entry" { type: form; }
+        }
+    }
+    container "stepTwo" {
+        component "review" { type: details; }
+    }
+}
+
+module "Pager" {
+    input { page: Int = 1 }
+    output { n: Int }
+
+    container "page" {
+        component "pager" { type: list; }
+    }
+}
+"#;
+        let (_, index) = parse_ifml_indexed(text).unwrap();
+        assert_eq!(index.containers.len(), 4, "{:?}", index.containers);
+        assert_eq!(index.containers[0].name, "stepOne");
+        assert_eq!(index.containers[1].name, "nested");
+        assert_eq!(index.containers[2].name, "stepTwo");
+        assert_eq!(index.containers[3].name, "page", "module containers too");
+        // Spans are byte offsets that slice back to the declaration.
+        for site in &index.containers {
+            let slice = &text[site.span.0..site.span.1];
+            assert!(slice.starts_with("container "), "{slice:?}");
+            let mid = (site.name_span.0 + site.name_span.1) / 2;
+            assert!(matches!(index.at(0, mid), Some(AtSite::Named(_))));
+        }
+    }
+
+    #[test]
     fn empty_source_indexes_one_file_and_no_sites() {
         let (model, index) = parse_ifml_indexed("").unwrap();
         assert_eq!(model, IfmlModel::default());
@@ -741,6 +800,7 @@ module "WorkQueue" {
         assert!(index.actions.is_empty());
         assert!(index.actors.is_empty());
         assert!(index.components.is_empty());
+        assert!(index.containers.is_empty());
     }
 
     #[test]

@@ -274,6 +274,23 @@
             }
           ],
           "condition": null
+        },
+        {
+          "name": "results",
+          "componentType": {
+            "type": "list"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "Item"
+              }
+            }
+          ],
+          "condition": null
         }
       ]
     },

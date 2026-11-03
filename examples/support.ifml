@@ -54,6 +54,38 @@ view "Queue" {
     }
 }
 
+// Targets the instantiated patterns navigate to and the actions their
+// controls invoke — declared where they are backed, per the
+// reference-resolution rule (E0104–E0106).
+
+view "Folder" {
+    params { id: Uuid };
+}
+
+view "ItemDetail" {
+    params { id: Uuid };
+}
+
+view "WorkItem" {
+    params { id: Uuid };
+}
+
+action "MarkRead" {
+    target: Ticket;
+}
+
+action "Assign" {
+    target: Ticket;
+}
+
+action "Approve" {
+    target: Ticket;
+}
+
+action "Reject" {
+    target: Ticket;
+}
+
 action "ApproveRefund" {
     target: Ticket;
 }

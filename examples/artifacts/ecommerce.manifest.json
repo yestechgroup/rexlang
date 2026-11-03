@@ -1,0 +1,723 @@
+{
+  "formatVersion": 1,
+  "views": [
+    {
+      "name": "Storefront",
+      "label": "Storefront",
+      "isLandmark": true,
+      "isXor": false,
+      "isModal": false,
+      "params": [
+        {
+          "name": "products",
+          "typeRef": "Product",
+          "default": null
+        },
+        {
+          "name": "categories",
+          "typeRef": "Product",
+          "default": null
+        },
+        {
+          "name": "filters",
+          "typeRef": "Product",
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "ProductPage",
+      "label": "Product Detail",
+      "isLandmark": false,
+      "isXor": false,
+      "isModal": false,
+      "params": [
+        {
+          "name": "product",
+          "typeRef": "Product",
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "CartPage",
+      "label": "Cart",
+      "isLandmark": false,
+      "isXor": false,
+      "isModal": false,
+      "params": [
+        {
+          "name": "lines",
+          "typeRef": "OrderLine",
+          "default": null
+        },
+        {
+          "name": "order",
+          "typeRef": "Order",
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "Checkout",
+      "label": "Checkout Wizard",
+      "isLandmark": false,
+      "isXor": false,
+      "isModal": false,
+      "params": [
+        {
+          "name": "order",
+          "typeRef": "Order",
+          "default": null
+        },
+        {
+          "name": "customer",
+          "typeRef": "Customer",
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "Category",
+      "isLandmark": false,
+      "isXor": false,
+      "isModal": false,
+      "params": [
+        {
+          "name": "id",
+          "typeRef": "Uuid",
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "ItemDetail",
+      "isLandmark": false,
+      "isXor": false,
+      "isModal": false,
+      "params": [
+        {
+          "name": "id",
+          "typeRef": "Uuid",
+          "default": null
+        }
+      ]
+    }
+  ],
+  "controls": [
+    {
+      "view": "Storefront",
+      "name": "deals",
+      "componentType": {
+        "type": "list"
+      },
+      "data": "Product",
+      "resolvedData": {
+        "package": "nz.example.shop",
+        "name": "Product"
+      }
+    },
+    {
+      "view": "Storefront",
+      "name": "categories",
+      "componentType": {
+        "type": "menu"
+      },
+      "data": "Item"
+    },
+    {
+      "view": "Storefront",
+      "name": "panel",
+      "componentType": {
+        "type": "search"
+      }
+    },
+    {
+      "view": "Storefront",
+      "name": "results",
+      "componentType": {
+        "type": "list"
+      },
+      "data": "Item"
+    },
+    {
+      "view": "Storefront",
+      "name": "grid",
+      "componentType": {
+        "type": "list"
+      },
+      "data": "Item"
+    },
+    {
+      "view": "Storefront",
+      "name": "pager",
+      "componentType": {
+        "type": "list"
+      },
+      "data": "Item"
+    },
+    {
+      "view": "ProductPage",
+      "name": "buy",
+      "componentType": {
+        "type": "form"
+      },
+      "data": "Product",
+      "resolvedData": {
+        "package": "nz.example.shop",
+        "name": "Product"
+      }
+    },
+    {
+      "view": "ProductPage",
+      "name": "media",
+      "componentType": {
+        "type": "image"
+      },
+      "data": "Item"
+    },
+    {
+      "view": "ProductPage",
+      "name": "attributes",
+      "componentType": {
+        "type": "details"
+      },
+      "data": "Item"
+    },
+    {
+      "view": "ProductPage",
+      "name": "pricing",
+      "componentType": {
+        "type": "chart"
+      }
+    },
+    {
+      "view": "ProductPage",
+      "name": "face",
+      "componentType": {
+        "type": "details"
+      },
+      "data": "Item"
+    },
+    {
+      "view": "CartPage",
+      "name": "items",
+      "componentType": {
+        "type": "table"
+      },
+      "data": "OrderLine",
+      "resolvedData": {
+        "package": "nz.example.shop",
+        "name": "OrderLine"
+      },
+      "columns": [
+        {
+          "type": "expression",
+          "value": {
+            "label": "Total",
+            "expr": {
+              "type": "binOp",
+              "value": {
+                "left": {
+                  "type": "ident",
+                  "value": "quantity"
+                },
+                "op": "mul",
+                "right": {
+                  "type": "ident",
+                  "value": "unitPrice"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "view": "CartPage",
+      "name": "items",
+      "componentType": {
+        "type": "list"
+      },
+      "data": "Item"
+    },
+    {
+      "view": "CartPage",
+      "name": "summary",
+      "componentType": {
+        "type": "chart"
+      }
+    },
+    {
+      "view": "CartPage",
+      "name": "bar",
+      "componentType": {
+        "type": "chart"
+      }
+    },
+    {
+      "view": "Checkout",
+      "name": "review",
+      "componentType": {
+        "type": "details"
+      },
+      "data": "Item"
+    },
+    {
+      "view": "Checkout",
+      "name": "form",
+      "componentType": {
+        "type": "form"
+      },
+      "data": "Item"
+    },
+    {
+      "view": "Checkout",
+      "containers": [
+        "wizard",
+        "stepOne"
+      ],
+      "name": "entry",
+      "componentType": {
+        "type": "form"
+      },
+      "data": "Item"
+    },
+    {
+      "view": "Checkout",
+      "containers": [
+        "wizard",
+        "stepTwo"
+      ],
+      "name": "review",
+      "componentType": {
+        "type": "details"
+      },
+      "data": "Item"
+    },
+    {
+      "view": "Checkout",
+      "containers": [
+        "wizard",
+        "stepThree"
+      ],
+      "name": "confirm",
+      "componentType": {
+        "type": "details"
+      },
+      "data": "Item"
+    }
+  ],
+  "edges": [
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "Storefront",
+          "component": "deals"
+        }
+      },
+      "trigger": {
+        "type": "select"
+      },
+      "kind": "navigate",
+      "target": "ProductPage",
+      "bindings": [
+        [
+          "product",
+          {
+            "type": "fieldExpr",
+            "value": {
+              "object": {
+                "type": "ident",
+                "value": "card"
+              },
+              "field": "sku"
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "Storefront",
+          "component": "categories"
+        }
+      },
+      "trigger": {
+        "type": "select"
+      },
+      "kind": "navigate",
+      "target": "Category",
+      "bindings": [
+        [
+          "id",
+          {
+            "type": "fieldExpr",
+            "value": {
+              "object": {
+                "type": "ident",
+                "value": "category"
+              },
+              "field": "id"
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "Storefront",
+          "component": "panel"
+        }
+      },
+      "trigger": {
+        "type": "submit"
+      },
+      "kind": "refresh",
+      "target": "results",
+      "bindings": [
+        [
+          "query",
+          {
+            "type": "fieldExpr",
+            "value": {
+              "object": {
+                "type": "ident",
+                "value": "values"
+              },
+              "field": "query"
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "Storefront",
+          "component": "grid"
+        }
+      },
+      "trigger": {
+        "type": "select"
+      },
+      "kind": "navigate",
+      "target": "ItemDetail",
+      "bindings": [
+        [
+          "id",
+          {
+            "type": "fieldExpr",
+            "value": {
+              "object": {
+                "type": "ident",
+                "value": "card"
+              },
+              "field": "id"
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "ProductPage",
+          "component": "buy"
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "addToCart"
+      },
+      "kind": "navigate",
+      "target": "CartPage",
+      "bindings": [
+        [
+          "sku",
+          {
+            "type": "fieldExpr",
+            "value": {
+              "object": {
+                "type": "ident",
+                "value": "product"
+              },
+              "field": "sku"
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "ProductPage",
+          "component": "pricing"
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "addToCart"
+      },
+      "kind": "action",
+      "target": "AddToCart"
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "ProductPage",
+          "component": "face"
+        }
+      },
+      "trigger": {
+        "type": "click"
+      },
+      "kind": "navigate",
+      "target": "ItemDetail"
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "CartPage",
+          "component": "items"
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "checkout"
+      },
+      "kind": "navigate",
+      "target": "Checkout",
+      "bindings": [
+        [
+          "order",
+          {
+            "type": "ident",
+            "value": "order"
+          }
+        ]
+      ]
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "CartPage",
+          "component": "items"
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "checkout"
+      },
+      "kind": "navigate",
+      "target": "Checkout"
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "Checkout",
+          "component": "review"
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "placeOrder"
+      },
+      "kind": "action",
+      "target": "PlaceOrder"
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "Checkout",
+          "component": "form"
+        }
+      },
+      "trigger": {
+        "type": "submit"
+      },
+      "kind": "action",
+      "target": "Save"
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "Checkout",
+          "component": "form"
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "success"
+      },
+      "kind": "navigate",
+      "target": "ItemDetail",
+      "bindings": [
+        [
+          "id",
+          {
+            "type": "fieldExpr",
+            "value": {
+              "object": {
+                "type": "ident",
+                "value": "values"
+              },
+              "field": "id"
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "Checkout",
+          "component": "entry"
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "next"
+      },
+      "condition": {
+        "type": "binOp",
+        "value": {
+          "left": {
+            "type": "fieldExpr",
+            "value": {
+              "object": {
+                "type": "ident",
+                "value": "values"
+              },
+              "field": "name"
+            }
+          },
+          "op": "ne",
+          "right": {
+            "type": "stringLit",
+            "value": ""
+          }
+        }
+      },
+      "kind": "navigate",
+      "target": "stepTwo",
+      "bindings": [
+        [
+          "draft",
+          {
+            "type": "ident",
+            "value": "values"
+          }
+        ]
+      ]
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "Checkout",
+          "component": "review"
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "previous"
+      },
+      "kind": "navigate",
+      "target": "stepOne"
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "Checkout",
+          "component": "review"
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "next"
+      },
+      "kind": "navigate",
+      "target": "stepThree"
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "Checkout",
+          "component": "confirm"
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "previous"
+      },
+      "kind": "navigate",
+      "target": "stepTwo"
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "Checkout",
+          "component": "confirm"
+        }
+      },
+      "trigger": {
+        "type": "confirm"
+      },
+      "kind": "action",
+      "target": "CompleteWizard"
+    }
+  ],
+  "actions": [
+    {
+      "name": "AddToCart",
+      "target": "Product",
+      "resolvedTarget": {
+        "package": "nz.example.shop",
+        "name": "Product"
+      }
+    },
+    {
+      "name": "PlaceOrder",
+      "target": "Order",
+      "resolvedTarget": {
+        "package": "nz.example.shop",
+        "name": "Order"
+      }
+    },
+    {
+      "name": "Save",
+      "target": "Customer",
+      "resolvedTarget": {
+        "package": "nz.example.shop",
+        "name": "Customer"
+      }
+    },
+    {
+      "name": "CompleteWizard",
+      "target": "Order",
+      "resolvedTarget": {
+        "package": "nz.example.shop",
+        "name": "Order"
+      }
+    }
+  ]
+}

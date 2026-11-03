@@ -1,0 +1,221 @@
+{
+  "formatVersion": 1,
+  "edges": [
+    {
+      "source": {
+        "type": "command",
+        "value": {
+          "path": [
+            "tickets"
+          ]
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "run"
+      },
+      "kind": "action",
+      "target": "ListTickets"
+    },
+    {
+      "source": {
+        "type": "command",
+        "value": {
+          "path": [
+            "tickets",
+            "show"
+          ]
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "run"
+      },
+      "kind": "action",
+      "target": "GetTicket"
+    },
+    {
+      "source": {
+        "type": "command",
+        "value": {
+          "path": [
+            "tickets",
+            "claim"
+          ]
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "run"
+      },
+      "condition": {
+        "type": "fieldExpr",
+        "value": {
+          "object": {
+            "type": "ident",
+            "value": "agent"
+          },
+          "field": "active"
+        }
+      },
+      "kind": "action",
+      "target": "ClaimTicket"
+    },
+    {
+      "source": {
+        "type": "command",
+        "value": {
+          "path": [
+            "tickets",
+            "refund"
+          ]
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "run"
+      },
+      "condition": {
+        "type": "binOp",
+        "value": {
+          "left": {
+            "type": "ident",
+            "value": "amount"
+          },
+          "op": "gt",
+          "right": {
+            "type": "numLit",
+            "value": 0.0
+          }
+        }
+      },
+      "kind": "action",
+      "target": "RefundTicket"
+    }
+  ],
+  "actions": [
+    {
+      "name": "ListTickets",
+      "target": "Ticket",
+      "resolvedTarget": {
+        "package": "nz.example.support",
+        "name": "Ticket"
+      }
+    },
+    {
+      "name": "GetTicket",
+      "target": "Ticket",
+      "resolvedTarget": {
+        "package": "nz.example.support",
+        "name": "Ticket"
+      }
+    },
+    {
+      "name": "ClaimTicket",
+      "target": "Ticket",
+      "resolvedTarget": {
+        "package": "nz.example.support",
+        "name": "Ticket"
+      }
+    },
+    {
+      "name": "RefundTicket",
+      "target": "Ticket",
+      "resolvedTarget": {
+        "package": "nz.example.support",
+        "name": "Ticket"
+      }
+    }
+  ],
+  "commands": [
+    {
+      "path": [
+        "tickets"
+      ],
+      "description": "Work the support ticket queue",
+      "options": [
+        {
+          "name": "state",
+          "typeRef": "TicketState",
+          "default": {
+            "type": "string",
+            "value": "open"
+          }
+        },
+        {
+          "name": "limit",
+          "typeRef": "Int",
+          "default": {
+            "type": "number",
+            "value": 20.0
+          }
+        }
+      ],
+      "requires": [
+        "Agent"
+      ]
+    },
+    {
+      "path": [
+        "tickets",
+        "show"
+      ],
+      "description": "Show one ticket",
+      "arguments": [
+        {
+          "name": "ticketNo",
+          "typeRef": "String"
+        }
+      ]
+    },
+    {
+      "path": [
+        "tickets",
+        "claim"
+      ],
+      "description": "Claim a ticket for an agent",
+      "arguments": [
+        {
+          "name": "ticketNo",
+          "typeRef": "String"
+        },
+        {
+          "name": "agent",
+          "typeRef": "User"
+        }
+      ]
+    },
+    {
+      "path": [
+        "tickets",
+        "refund"
+      ],
+      "description": "Refund a ticket",
+      "arguments": [
+        {
+          "name": "ticketNo",
+          "typeRef": "String"
+        }
+      ],
+      "prompts": [
+        {
+          "name": "amount",
+          "kind": {
+            "type": "number"
+          },
+          "default": null
+        },
+        {
+          "name": "confirm",
+          "kind": {
+            "type": "confirm"
+          },
+          "default": {
+            "type": "bool",
+            "value": false
+          }
+        }
+      ]
+    }
+  ]
+}
