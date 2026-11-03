@@ -523,8 +523,9 @@ is a tested property, not an aspiration.
 
 | Command | Purpose |
 |---|---|
-| `rexlang check <file>...` | validate; ariadne-rendered diagnostics grouped per file (every surface: `.mox`, `.actor`, `.ddd`, `.evt`, `.deploy`, `.uc`, `.cmmn`, `.ifml`; a `.mox` input may be a directory, scanned recursively for `*.mox`) |
+| `rexlang check <file>...` | validate; ariadne-rendered diagnostics grouped per file (every surface: `.mox`, `.actor`, `.ddd`, `.evt`, `.deploy`, `.uc`, `.cmmn`, `.ifml`; a directory argument enters **project mode**: every supported surface under it is gathered into one snapshot and checked independently, each file's imports resolving map-first from the snapshot and sibling artifacts reused compile-once) |
 | `rexlang ir <file>... -o <out>` | emit the Core IR artifact (`.actor`: the ActorModel artifact; `.ddd`: the DDD design artifact; `.evt`: the EventModel artifact; `.uc`/`.cmmn`: the standalone artifact; several `.mox`: one multi-package model) |
+| `rexlang build <paths>... -o <dir>` | one JSON artifact per supported input file at `<dir>/<input path>.json` — the `rexlang ir` artifact for that surface; the output directory defaults to `target/rex`; directories enter project mode like `check`; exits `1` when any file fails, while compiling files still emit |
 | `rexlang gen rust <file>... -o <dir>` | arena-based Rust models |
 | `rexlang gen json-schema <file>... --profile wire\|api -o <dir>` | JSON Schema |
 | `rexlang gen cedar <file>... -o <dir>` | Cedar policies + schema (`.mox`: inline blocks; `.actor`: file + imported domains) |
