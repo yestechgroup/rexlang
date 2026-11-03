@@ -53,6 +53,8 @@
 //! | `E0104` | An `action("X")` invocation whose name resolves to no `action "X" { target: ...; }` declaration (`action 'X' is not declared — add action "X" { target: <Entity>; }`). |
 //! | `E0105` | A `navigate("X")` target that is not a declared view (`navigate target 'X' is not a declared view`). |
 //! | `E0106` | A `refresh("X")` target that is not a declared component (`refresh target 'X' is not a declared component`). |
+//! | `E0107` | A `requires:` capability name no provided actor model declares (`capability 'X' is not declared — add "capability X on <Class>;" to an actors block`). |
+//! | `E0108` | A `roles:` name no provided actor model declares as an actor (`role 'X' is not declared — add "actor X;" to an actors block`). |
 //!
 //! # Interaction references
 //!
@@ -64,6 +66,22 @@
 //! imported file's dangling reference belongs to that file's own
 //! compilation's report. Spans point at the referenced string token, and
 //! diagnostics land before the expression diagnostics (source order).
+//!
+//! # Authorization references
+//!
+//! [`check_ifml_with_actors`] additionally resolves every `requires:` /
+//! `roles:` name in the main file — view-level properties and event-level
+//! `requires:` prefixes — against the actor models the host provides:
+//! `requires:` against declared capability names, `roles:` against
+//! declared actor names, bare-name union-wide across all blocks. An empty
+//! actor slice skips the pass entirely (the same contract as
+//! `domains: None` for expressions): hosts gather `.actor` imports when
+//! they exist, and a flow whose actor layer is absent keeps its current
+//! behavior. Sites and spans come from the index's `auth_sites` — exactly
+//! the shapes the lowering extracts (view-body `roles:`/`requires:`
+//! properties, `event_requires` prefixes) — so the index and the IR can
+//! never disagree about what is an authorization site. Diagnostics land
+//! with the interaction references, before the expression diagnostics.
 //!
 //! # Bare calls
 //!
@@ -117,10 +135,9 @@ use rex_ir::ifml::{
     EventAction, EventHandler, Expression, IfmlModel, ModuleUse, ParameterDecl, PromptKind,
     UnaryOp as IfmlUnaryOp, ValueExpression,
 };
-use rex_ir::Model;
-use rex_ir::PrimitiveType;
+use rex_ir::{ActorModel, Model, PrimitiveType};
 
-use crate::index::{IfmlIndex, LiteralKind};
+use crate::index::{AuthKind, IfmlIndex, LiteralKind};
 use crate::resolve::{IfmlCompilation, IfmlDiagnostic};
 
 /// A component's `data:` entity does not resolve to exactly one class in
@@ -140,6 +157,10 @@ pub const E_UNKNOWN_ACTION: &str = "E0104";
 pub const E_UNKNOWN_VIEW: &str = "E0105";
 /// A `refresh("X")` target that is not a declared component.
 pub const E_UNKNOWN_COMPONENT: &str = "E0106";
+/// A `requires:` capability name that no provided actor model declares.
+pub const E_UNKNOWN_CAPABILITY: &str = "E0107";
+/// A `roles:` name that no provided actor model declares as an actor.
+pub const E_UNKNOWN_ROLE: &str = "E0108";
 
 /// Checks a compiled IFML model: the interaction cross-reference pass
 /// (every `action(...)`/`navigate(...)`/`refresh(...)` reference resolves
@@ -169,7 +190,22 @@ pub const E_UNKNOWN_COMPONENT: &str = "E0106";
 /// assert!(check_ifml(&compilation, None).is_empty());
 /// ```
 pub fn check_ifml(compilation: &IfmlCompilation, domains: Option<&Model>) -> Vec<IfmlDiagnostic> {
+    check_ifml_with_actors(compilation, domains, &[])
+}
+
+/// [`check_ifml`] plus the authorization dimension: every main-file
+/// `requires:`/`roles:` name resolves against the union of the provided
+/// actor models' capability and actor names (bare names, the same
+/// discipline as `data:` entities). An empty slice provides no actor
+/// dimension and skips the pass entirely — the same "checking off"
+/// contract `domains: None` gives the expression checks.
+pub fn check_ifml_with_actors(
+    compilation: &IfmlCompilation,
+    domains: Option<&Model>,
+    actors: &[ActorModel],
+) -> Vec<IfmlDiagnostic> {
     let mut diags = check_references(compilation);
+    diags.extend(check_authorization(compilation, actors));
     let Some(domains) = domains else {
         return diags;
     };
@@ -190,6 +226,75 @@ pub fn check_ifml(compilation: &IfmlCompilation, domains: Option<&Model>) -> Vec
     };
     checker.check_model(&compilation.model);
     diags.extend(checker.diags);
+    diags
+}
+
+/// The authorization pass: every main-file `requires:`/`roles:` name
+/// resolves union-wide across all provided actor models' blocks —
+/// `requires:` against declared capability names (`E0107`), `roles:`
+/// against declared actor names (`E0108`). Spans come from the index's
+/// [`AuthSite`](crate::index::AuthSite)s (the name token itself — editor
+/// squiggles land on the name), and only main-file sites are diagnosed:
+/// an imported file's dangling name is that file's own compilation's
+/// report, the resolver's rule for unknown module uses.
+fn check_authorization(
+    compilation: &IfmlCompilation,
+    actors: &[ActorModel],
+) -> Vec<IfmlDiagnostic> {
+    if actors.is_empty() {
+        return Vec::new();
+    }
+    let capabilities: BTreeSet<&str> = actors
+        .iter()
+        .flat_map(|model| model.blocks.iter())
+        .flat_map(|block| block.capabilities.iter())
+        .map(|capability| capability.name.as_str())
+        .collect();
+    let roles: BTreeSet<&str> = actors
+        .iter()
+        .flat_map(|model| model.blocks.iter())
+        .flat_map(|block| block.actors.iter())
+        .map(|actor| actor.name.as_str())
+        .collect();
+    let index = &compilation.index;
+    let mut diags = Vec::new();
+    for site in &index.auth_sites {
+        if site.file != 0 {
+            continue;
+        }
+        let (code, message) = match site.kind {
+            AuthKind::Capability => {
+                if capabilities.contains(site.name.as_str()) {
+                    continue;
+                }
+                (
+                    E_UNKNOWN_CAPABILITY,
+                    format!(
+                        "capability '{}' is not declared — add \"capability {} on <Class>;\" to an actors block",
+                        site.name, site.name
+                    ),
+                )
+            }
+            AuthKind::Role => {
+                if roles.contains(site.name.as_str()) {
+                    continue;
+                }
+                (
+                    E_UNKNOWN_ROLE,
+                    format!(
+                        "role '{}' is not declared — add \"actor {};\" to an actors block",
+                        site.name, site.name
+                    ),
+                )
+            }
+        };
+        diags.push(IfmlDiagnostic {
+            code,
+            message,
+            span: site.name_span,
+            file: index.files[0].path.clone(),
+        });
+    }
     diags
 }
 
@@ -1246,8 +1351,8 @@ mod tests {
     use super::*;
 
     use rex_ir::{
-        ClassDef, Feature, FeatureKind, Multiplicity, Operation, OperationParam, Package,
-        PrimitiveType, TypeRef,
+        ActorDef, ActorModel, ActorsDef, CapabilityDef, ClassDef, Feature, FeatureKind,
+        Multiplicity, Operation, OperationParam, Package, PrimitiveType, TypeRef,
     };
 
     const PKG: &str = "nz.example.shop";
@@ -1340,6 +1445,164 @@ mod tests {
             crate::compile_ifml_str("app.ifml", source, &crate::IfmlImports::default())
                 .expect("source must parse and resolve");
         check_ifml(&compilation, Some(model))
+    }
+
+    /// An actors layer declaring what app-style flows require: two
+    /// capabilities on `Customer` and two roles.
+    fn auth_model() -> ActorModel {
+        ActorModel::new().block(
+            ActorsDef::new("Auth")
+                .actor(ActorDef::new("admin"))
+                .actor(ActorDef::new("manager"))
+                .capability(CapabilityDef::new("ManageCustomer", class_ref("Customer")))
+                .capability(CapabilityDef::new("ApproveCustomer", class_ref("Customer"))),
+        )
+    }
+
+    fn diags_with_actors(
+        source: &str,
+        model: &Model,
+        actors: &[ActorModel],
+    ) -> Vec<IfmlDiagnostic> {
+        let compilation =
+            crate::compile_ifml_str("app.ifml", source, &crate::IfmlImports::default())
+                .expect("source must parse and resolve");
+        check_ifml_with_actors(&compilation, Some(model), actors)
+    }
+
+    #[test]
+    fn unknown_capability_reports_e0107_on_the_requires_site() {
+        let source = r#"
+view "Edit" {
+    requires: [ManageCustomer, Ghost];
+}
+"#;
+        let diags = diags_with_actors(source, &shop_model(), &[auth_model()]);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].code, E_UNKNOWN_CAPABILITY);
+        assert_eq!(
+            diags[0].message,
+            "capability 'Ghost' is not declared — add \"capability Ghost on <Class>;\" to an actors block"
+        );
+        let (start, end) = diags[0].span;
+        assert_eq!(&source[start..end], "Ghost");
+    }
+
+    #[test]
+    fn unknown_role_reports_e0108_on_the_roles_site() {
+        let source = r#"
+view "List" {
+    roles: [admin, ghost];
+}
+"#;
+        let diags = diags_with_actors(source, &shop_model(), &[auth_model()]);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].code, E_UNKNOWN_ROLE);
+        assert_eq!(
+            diags[0].message,
+            "role 'ghost' is not declared — add \"actor ghost;\" to an actors block"
+        );
+        let (start, end) = diags[0].span;
+        assert_eq!(&source[start..end], "ghost");
+    }
+
+    #[test]
+    fn known_capabilities_and_roles_produce_no_diagnostics() {
+        let source = r#"
+view "Edit" {
+    requires: [ManageCustomer, ApproveCustomer];
+    roles: [admin, manager];
+
+    component "form" {
+        on save(v) requires: [ManageCustomer] -> stay;
+    }
+}
+"#;
+        assert!(diags_with_actors(source, &shop_model(), &[auth_model()]).is_empty());
+    }
+
+    #[test]
+    fn actor_tables_union_across_models_and_blocks() {
+        let billing = ActorModel::new().block(
+            ActorsDef::new("Billing")
+                .actor(ActorDef::new("auditor"))
+                .capability(CapabilityDef::new("RunBilling", class_ref("Order"))),
+        );
+        let source = r#"
+view "Ledger" {
+    requires: [ManageCustomer, RunBilling];
+    roles: [manager, auditor];
+}
+"#;
+        let diags = diags_with_actors(source, &shop_model(), &[auth_model(), billing]);
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn empty_actor_models_skip_authorization_checking() {
+        // The compatibility contract: without an actor dimension no
+        // authorization diagnostic is ever produced.
+        let source = r#"
+view "Edit" {
+    requires: [Ghost];
+    roles: [ghost];
+}
+"#;
+        let compilation =
+            crate::compile_ifml_str("app.ifml", source, &crate::IfmlImports::default())
+                .expect("source must parse and resolve");
+        assert!(check_ifml(&compilation, Some(&shop_model())).is_empty());
+        assert!(check_ifml_with_actors(&compilation, Some(&shop_model()), &[]).is_empty());
+        assert!(check_ifml_with_actors(&compilation, None, &[]).is_empty());
+    }
+
+    #[test]
+    fn imported_files_authorization_sites_are_that_files_own_report() {
+        // Main-file-only discipline, same as the interaction
+        // cross-reference: the imported file's dangling `requires` is
+        // diagnosed when that file is compiled as the main file, not in
+        // the importer's report.
+        let main = r#"import "part.ifml";
+
+view "Home" {
+    roles: [admin];
+}
+"#;
+        let part = r#"view "Sub" {
+    requires: [Ghost];
+    roles: [admin];
+}
+"#;
+        let mut imports = crate::IfmlImports::default();
+        imports.provide("app.ifml", "part.ifml", part.to_string());
+        let compilation =
+            crate::compile_ifml_str("app.ifml", main, &imports).expect("main compiles");
+        let diags = check_ifml_with_actors(&compilation, Some(&shop_model()), &[auth_model()]);
+        assert!(diags.is_empty(), "{diags:?}");
+
+        let own = crate::compile_ifml_str("part.ifml", part, &crate::IfmlImports::default())
+            .expect("part compiles");
+        let diags = check_ifml_with_actors(&own, Some(&shop_model()), &[auth_model()]);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].code, E_UNKNOWN_CAPABILITY);
+    }
+
+    #[test]
+    fn authorization_and_expression_checks_compose() {
+        let source = r#"
+view "Edit" {
+    requires: [Ghost];
+
+    component "grid" {
+        type: list;
+        data: Widget;
+    }
+}
+"#;
+        let diags = diags_with_actors(source, &shop_model(), &[auth_model()]);
+        let codes: Vec<&str> = diags.iter().map(|diagnostic| diagnostic.code).collect();
+        assert!(codes.contains(&E_UNKNOWN_CAPABILITY), "{diags:?}");
+        assert!(codes.contains(&E_UNKNOWN_ENTITY), "{diags:?}");
     }
 
     #[test]
