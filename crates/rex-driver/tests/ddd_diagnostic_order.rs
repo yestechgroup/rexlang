@@ -20,6 +20,8 @@ package nz.example.order
 
 enum Status {
     Draft as "D" = 0
+    Open as "O" = 1
+    Held as "H" = 2
 }
 
 class Cart {
