@@ -22,6 +22,11 @@
 //!   EventModel artifact; on `.deploy` files the standalone DeployModel
 //!   artifact; on `.uc` files the standalone UseCaseModel artifact, on `.cmmn` files the standalone CmmnModel artifact; on
 //!   `.ifml` files the standalone IfmlModel artifact.
+//! * `rexlang build <paths>... [-o <dir>]` — compile every input and write
+//!   each file's `ir` artifact JSON to `<dir>/<input path>.json` (the
+//!   output directory defaults to `target/rex`). Directories enter project
+//!   mode like `check`; exits `1` when any file fails, while compiling
+//!   files still emit their artifacts.
 //! * `rexlang artifact check <artifact.json>...` — validate wire-format
 //!   artifacts (Core IR, standalone actor policy, DDD design, canonical
 //!   instance) without the originating model; exits `1` on any violation.
@@ -83,6 +88,24 @@ enum Command {
         /// contents (overrides applied) before emitting.
         #[arg(long)]
         expand: bool,
+    },
+    /// Compile every input file and write each artifact JSON into the
+    /// output directory (default `target/rex`): `.mox` files emit the Core
+    /// IR, `.actor` files the ActorModel artifact, `.ddd` files the DDD
+    /// design artifact, `.evt` files the EventModel artifact, `.deploy`
+    /// files the DeployModel artifact, `.uc` files the UseCaseModel
+    /// artifact, `.cmmn` files the CmmnModel artifact, and `.ifml` files
+    /// the IfmlModel artifact — one artifact per file at
+    /// `<out>/<input path>.json`. Directories enter project mode like
+    /// `check`: every supported surface under them emits its own artifact.
+    /// Exits `1` when any file fails; compiling files still emit.
+    Build {
+        /// Files or directories to compile.
+        files: Vec<PathBuf>,
+        /// Directory to write the artifacts into (`<input path>.json` per
+        /// file).
+        #[arg(short, long, value_name = "DIR", default_value = "target/rex")]
+        out: PathBuf,
     },
     /// Code generation from compiled `.mox` files.
     Gen {
@@ -211,6 +234,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     match cli.command {
         Command::Check { files } => commands::check::run(files),
         Command::Ir { files, out, expand } => commands::ir::run(files, out, expand),
+        Command::Build { files, out } => commands::build::run(files, out),
         Command::Gen { target } => commands::gen::run(target),
         Command::Fmt { check, files } => commands::fmt::run(check, files),
         Command::Artifact {
