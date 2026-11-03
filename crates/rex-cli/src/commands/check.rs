@@ -3,34 +3,24 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use rex_driver::{
-    compile_actors_str, compile_cmmn_str, compile_ddd_str, compile_deploy_str, compile_evt_str,
-    compile_usecase_str,
-};
+use crate::inputs::{expand_check_inputs, expand_inputs};
+use crate::project::Project;
 
-use crate::inputs::{
-    expand_check_inputs, expand_inputs, is_actor_file, is_cmmn_file, is_ddd_file, is_deploy_file,
-    is_evt_file, is_ifml_file, is_uc_file, read_actor_pair, read_cmmn_pair, read_ddd_design,
-    read_deploy_pair, read_evt_pair, read_ifml_inputs, read_uc_pair,
-};
-use crate::report::{
-    report_actor_diagnostics, report_cmmn_diagnostics, report_ddd_diagnostics,
-    report_deploy_diagnostics, report_evt_diagnostics, report_ifml_diagnostics,
-    report_usecase_diagnostics,
-};
-
-use super::pipeline::{check_exit, compile_reported_sources};
+use super::pipeline::compile_surface;
 
 pub(crate) fn run(files: Vec<PathBuf>) -> anyhow::Result<ExitCode> {
-    // Directory inputs enter batch mode: every supported surface under the
-    // directory is checked **independently** (per-file pipeline). Pass
+    // Directory inputs enter project mode: one snapshot of every supported
+    // surface under the directory, each file checked **independently**
+    // (per-file pipeline) with its imports resolving map-first from the
+    // snapshot and sibling artifacts reused lookup-before-compute. Pass
     // several `.mox` files explicitly to compile them as one multi-package
-    // model instead.
+    // model instead — that path keeps no project context.
     if files.iter().any(|file| file.is_dir()) {
         let expanded = expand_check_inputs(&files)?;
+        let mut project = Project::gather(&expanded);
         let mut failed = 0usize;
         for file in &expanded {
-            match check_one(std::slice::from_ref(file)) {
+            match check_files(std::slice::from_ref(file), Some(&mut project)) {
                 Ok(ExitCode::SUCCESS) => {}
                 Ok(_) => failed += 1,
                 Err(error) => {
@@ -45,94 +35,17 @@ pub(crate) fn run(files: Vec<PathBuf>) -> anyhow::Result<ExitCode> {
         }
         return Ok(ExitCode::SUCCESS);
     }
-    check_one(&expand_inputs(&files)?)
+    check_files(&expand_inputs(&files)?, None)
 }
 
-fn check_one(files: &[PathBuf]) -> anyhow::Result<ExitCode> {
-    let files = files.to_vec();
-    if files.len() == 1 && is_ifml_file(&files[0]) {
-        let inputs = read_ifml_inputs(&files[0])?;
-        let sources = |compilation: &rex_ifml::IfmlCompilation| -> Vec<(String, String)> {
-            compilation
-                .index
-                .files
-                .iter()
-                .map(|file| (file.path.clone(), file.text.clone()))
-                .collect()
-        };
-        let compilation =
-            match rex_ifml::compile_ifml_str(&inputs.path, &inputs.source, &inputs.ifml_imports) {
-                Ok(compilation) => compilation,
-                Err(diagnostics) => {
-                    report_ifml_diagnostics(&inputs.sources, &diagnostics);
-                    return Ok(ExitCode::FAILURE);
-                }
-            };
-        let binding =
-            rex_ifml::check_ifml_with_actors(&compilation, inputs.domains.as_ref(), &inputs.actors);
-        report_ifml_diagnostics(&sources(&compilation), &binding);
-        Ok(check_exit(binding.is_empty(), &inputs.path))
-    } else if files.len() == 1 && is_ddd_file(&files[0]) {
-        let design = read_ddd_design(&files[0])?;
-        let compilation = compile_ddd_str(
-            &design.path,
-            &design.source,
-            &design.domains,
-            &design.imports(),
-        );
-        report_ddd_diagnostics(&design, &compilation);
-        Ok(check_exit(compilation.model.is_some(), &design.path))
-    } else if files.len() == 1 && is_actor_file(&files[0]) {
-        let pair = read_actor_pair(&files[0])?;
-        let compilation =
-            compile_actors_str(&pair.path, &pair.source, &pair.domains, &pair.imports());
-        report_actor_diagnostics(&pair, &compilation);
-        Ok(check_exit(compilation.model.is_some(), &pair.path))
-    } else if files.len() == 1 && is_evt_file(&files[0]) {
-        let pair = read_evt_pair(&files[0])?;
-        let compilation = compile_evt_str(&pair.path, &pair.source, &pair.domains, &pair.imports());
-        report_evt_diagnostics(&pair, &compilation);
-        Ok(check_exit(compilation.model.is_some(), &pair.path))
-    } else if files.len() == 1 && is_deploy_file(&files[0]) {
-        let pair = read_deploy_pair(&files[0])?;
-        let compilation = compile_deploy_str(&pair.path, &pair.source, &pair.designs, &pair.flows);
-        report_deploy_diagnostics(&pair, &compilation);
-        Ok(check_exit(compilation.model.is_some(), &pair.path))
-    } else if files.len() == 1 && is_uc_file(&files[0]) {
-        let pair = read_uc_pair(&files[0])?;
-        let compilation = compile_usecase_str(
-            &pair.pair.path,
-            &pair.pair.source,
-            &pair.pair.domains,
-            &pair.pair.imports(),
-            &pair.designs,
-            &pair.actors,
-            &pair.events,
-        );
-        report_usecase_diagnostics(&pair.pair, &compilation);
-        Ok(check_exit(compilation.model.is_some(), &pair.pair.path))
-    } else if files.len() == 1 && is_cmmn_file(&files[0]) {
-        let pair = read_cmmn_pair(&files[0])?;
-        let compilation = compile_cmmn_str(
-            &pair.pair.path,
-            &pair.pair.source,
-            &pair.pair.domains,
-            &pair.pair.imports(),
-            &pair.designs,
-            &pair.actors,
-            &pair.events,
-        );
-        report_cmmn_diagnostics(&pair.pair, &compilation);
-        Ok(check_exit(compilation.model.is_some(), &pair.pair.path))
-    } else {
-        let (sources, compilation) = compile_reported_sources(&files)?;
-        if compilation.model.is_some() {
-            for (path, _) in &sources {
-                println!("OK {path}");
-            }
-            Ok(ExitCode::SUCCESS)
-        } else {
-            Ok(ExitCode::FAILURE)
-        }
+/// The `check` tail over [`compile_surface`]: print `OK <path>` for every
+/// compiling source; a `None` outcome means the diagnostics were rendered.
+fn check_files(files: &[PathBuf], project: Option<&mut Project>) -> anyhow::Result<ExitCode> {
+    let Some(outcome) = compile_surface(files, project, false)? else {
+        return Ok(ExitCode::FAILURE);
+    };
+    for path in &outcome.ok {
+        println!("OK {path}");
     }
+    Ok(ExitCode::SUCCESS)
 }

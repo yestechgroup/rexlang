@@ -3,8 +3,10 @@
 //! `.ifml`/`.actor`/`.ddd`/`.evt`/`.uc`/`.cmmn`/`.deploy` readers — import
 //! gathering itself lives in [`rex_driver::project`], so each reader here
 //! only builds the disk fetch closure (the CLI's read-error policy is a
-//! closure side-channel) and compiles the gathered project. Plus the
-//! shared compile step over collected sources.
+//! closure side-channel) and compiles the gathered project. In project
+//! mode ([`crate::project::Project`]) the fetch closures are map-first,
+//! disk-second — the snapshot serves project files, the disk fallback
+//! fills it. Plus the shared compile step over collected sources.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -16,6 +18,7 @@ use rex_driver::{
 };
 
 use crate::imports::{collect_schema_imports, collect_sigil_imports, SigilSources};
+use crate::project::{Artifact, Project};
 
 fn read_source(file: &Path) -> anyhow::Result<(String, String)> {
     let source = std::fs::read_to_string(file)
@@ -250,14 +253,21 @@ pub(crate) struct IfmlInputs {
 /// shared host-side resolver. Import paths resolve relative to the importing
 /// file's own directory on disk, while the resolver keys each import by
 /// the importing file's identity and the import string **as written** (the
-/// resolver is filesystem-free and sees only the strings). The disk fetch
-/// closure keeps the CLI's read-error policy: the first unreadable import
-/// surfaces as an error after the walk, naming the resolved path. Imported
-/// `.mox` files are compiled to Core IR and unioned for typed expression
-/// binding; imported `.actor` files are compiled to actor models for
-/// authorization checking; a domain or actor model that fails to compile
-/// is a hard error.
-pub(crate) fn read_ifml_inputs(file: &Path) -> anyhow::Result<IfmlInputs> {
+/// resolver is filesystem-free and sees only the strings). The fetch is
+/// map-first within `project` (the snapshot serves project files; the
+/// CLI's open-documents-first analog), disk-second otherwise — and the
+/// disk fallback fills the map. The disk fetch keeps the CLI's read-error
+/// policy: the first unreadable import surfaces as an error after the
+/// walk, naming the resolved path. Imported `.mox` files are compiled to
+/// Core IR and unioned for typed expression binding; imported `.actor`
+/// files are compiled to actor models for authorization checking —
+/// lookup-before-compute within `project`, so a policy the batch already
+/// checked is reused, not recompiled — and a domain or actor model that
+/// fails to compile is a hard error.
+pub(crate) fn read_ifml_inputs(
+    file: &Path,
+    mut project: Option<&mut Project>,
+) -> anyhow::Result<IfmlInputs> {
     let source = std::fs::read_to_string(file)
         .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
     let path = file.display().to_string();
@@ -279,12 +289,12 @@ pub(crate) fn read_ifml_inputs(file: &Path) -> anyhow::Result<IfmlInputs> {
             dir_of(importer_disk).join(import)
         };
         let resolved_key = resolved.display().to_string();
-        match std::fs::read_to_string(&resolved) {
-            Ok(text) => {
-                disk_paths.insert(import.to_string(), resolved.clone());
-                disk_paths.insert(resolved_key.clone(), resolved);
-                Some((resolved_key, text))
-            }
+        let fetched = match project.as_deref_mut() {
+            Some(project) => project.fetch_path(&resolved_key, &resolved),
+            None => std::fs::read_to_string(&resolved),
+        };
+        let text = match fetched {
+            Ok(text) => text,
             Err(error) => {
                 if read_error.is_none() {
                     read_error = Some(anyhow::anyhow!(
@@ -293,26 +303,48 @@ pub(crate) fn read_ifml_inputs(file: &Path) -> anyhow::Result<IfmlInputs> {
                         importer
                     ));
                 }
-                None
+                return None;
             }
-        }
+        };
+        disk_paths.insert(import.to_string(), resolved.clone());
+        disk_paths.insert(resolved_key.clone(), resolved);
+        Some((resolved_key, text))
     };
-    let project = gather_ifml_project(&path, &source, &mut fetch);
+    let gathered = gather_ifml_project(&path, &source, &mut fetch);
     if let Some(error) = read_error {
         return Err(error);
     }
-    let actors =
-        compile_actor_imports(&project.actors).map_err(|message| anyhow::anyhow!(message))?;
-    let domains = if project.domains.is_empty() {
+    let mut actors = Vec::new();
+    for actor in &gathered.actors {
+        let model = match project.as_deref_mut() {
+            Some(project) => {
+                let artifact = project.artifact(&actor.key, || {
+                    compile_actor_imports(std::slice::from_ref(actor))
+                        .map(|mut models| models.pop().expect("one policy, one model"))
+                        .map_err(|message| anyhow::anyhow!(message))
+                        .map(Artifact::Actor)
+                })?;
+                match artifact {
+                    Artifact::Actor(model) => model,
+                    _ => unreachable!("actor cache slots only hold actor artifacts"),
+                }
+            }
+            None => compile_actor_imports(std::slice::from_ref(actor))
+                .map(|mut models| models.pop().expect("one policy, one model"))
+                .map_err(|message| anyhow::anyhow!(message))?,
+        };
+        actors.push(model);
+    }
+    let domains = if gathered.domains.is_empty() {
         None
     } else {
-        Some(compile_domain_union(&project.domains).map_err(|message| anyhow::anyhow!(message))?)
+        Some(compile_domain_union(&gathered.domains).map_err(|message| anyhow::anyhow!(message))?)
     };
     Ok(IfmlInputs {
         path,
         source,
-        ifml_imports: project.imports,
-        sources: project.sources,
+        ifml_imports: gathered.imports,
+        sources: gathered.sources,
         domains,
         actors,
     })
@@ -386,20 +418,27 @@ impl DomainPair {
 /// **resolved** path is passed to the driver (the driver matches imports
 /// by exact string or by lexical resolution, and the domain's driver path
 /// also locates its `vocab/` directory — with raw import strings that
-/// lookup would be relative to the process CWD). A missing import file is
-/// a clean error naming the resolved path: the gatherer itself skips
-/// misses silently (the LSP's discipline), so this reader captures the
-/// failure in its fetch closure and hard-errors after the call.
+/// lookup would be relative to the process CWD). The fetch is map-first
+/// within `project`, disk-second otherwise, and the disk fallback fills
+/// the map. A missing import file is a clean error naming the resolved
+/// path: the gatherer itself skips misses silently (the LSP's
+/// discipline), so this reader captures the failure in its fetch closure
+/// and hard-errors after the call.
 fn read_domain_pair(
     file: &Path,
     import_paths: impl Fn(&str) -> Vec<String>,
+    mut project: Option<&mut Project>,
 ) -> anyhow::Result<DomainPair> {
     let source = std::fs::read_to_string(file)
         .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
     let path = file.display().to_string();
     let mut read_error: Option<anyhow::Error> = None;
     let mut fetch = |resolved: &str| -> Option<String> {
-        match std::fs::read_to_string(resolved) {
+        let fetched = match project.as_deref_mut() {
+            Some(project) => project.fetch(resolved),
+            None => std::fs::read_to_string(resolved),
+        };
+        match fetched {
             Ok(text) => Some(text),
             Err(error) => {
                 if read_error.is_none() {
@@ -430,14 +469,29 @@ fn read_domain_pair(
 /// [`rex_driver::compile_actors_str`].
 pub(crate) type ActorPair = DomainPair;
 
-/// Reads an `.actor` file plus every domain it imports.
+/// Reads an `.actor` file plus every domain it imports, without a project
+/// context — gen's cedar/tools flows stay disk-only (gen is not part of
+/// the check/build project mode).
 pub(crate) fn read_actor_pair(file: &Path) -> anyhow::Result<ActorPair> {
-    read_domain_pair(file, |source| {
-        rex_syntax::parse_actors(source)
-            .ast
-            .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
-            .unwrap_or_default()
-    })
+    read_actor_pair_in(file, None)
+}
+
+/// [`read_actor_pair`] within a project context: the policy's domain
+/// imports fetch map-first from the snapshot.
+pub(crate) fn read_actor_pair_in(
+    file: &Path,
+    project: Option<&mut Project>,
+) -> anyhow::Result<ActorPair> {
+    read_domain_pair(
+        file,
+        |source| {
+            rex_syntax::parse_actors(source)
+                .ast
+                .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
+                .unwrap_or_default()
+        },
+        project,
+    )
 }
 
 /// A `.ddd` design file plus the domain sources it imports, ready for
@@ -445,13 +499,20 @@ pub(crate) fn read_actor_pair(file: &Path) -> anyhow::Result<ActorPair> {
 pub(crate) type DddDesignPair = DomainPair;
 
 /// Reads a `.ddd` file plus every domain it imports.
-pub(crate) fn read_ddd_design(file: &Path) -> anyhow::Result<DddDesignPair> {
-    read_domain_pair(file, |source| {
-        rex_syntax::parse_ddd(source)
-            .ast
-            .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
-            .unwrap_or_default()
-    })
+pub(crate) fn read_ddd_design(
+    file: &Path,
+    project: Option<&mut Project>,
+) -> anyhow::Result<DddDesignPair> {
+    read_domain_pair(
+        file,
+        |source| {
+            rex_syntax::parse_ddd(source)
+                .ast
+                .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
+                .unwrap_or_default()
+        },
+        project,
+    )
 }
 
 /// An `.evt` contract file plus the domain sources it imports, ready for
@@ -459,13 +520,17 @@ pub(crate) fn read_ddd_design(file: &Path) -> anyhow::Result<DddDesignPair> {
 pub(crate) type EvtPair = DomainPair;
 
 /// Reads an `.evt` file plus every domain it imports.
-pub(crate) fn read_evt_pair(file: &Path) -> anyhow::Result<EvtPair> {
-    read_domain_pair(file, |source| {
-        rex_syntax::parse_evt(source)
-            .ast
-            .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
-            .unwrap_or_default()
-    })
+pub(crate) fn read_evt_pair(file: &Path, project: Option<&mut Project>) -> anyhow::Result<EvtPair> {
+    read_domain_pair(
+        file,
+        |source| {
+            rex_syntax::parse_evt(source)
+                .ast
+                .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
+                .unwrap_or_default()
+        },
+        project,
+    )
 }
 
 /// The plain disk-read fetch the driver gatherers take: the gatherer
@@ -497,11 +562,14 @@ pub(crate) struct UcPair {
 /// [`gather_usecase_imports`]: import paths resolve relative to the use
 /// case file's own directory, bucketed by resolved extension (`.mox` raw,
 /// `.ddd`/`.actor`/`.evt` compiled), duplicates gathered once. The
-/// **resolved** path is passed to the driver. A missing import file is a
-/// clean error naming the resolved path (the driver's message).
-pub(crate) fn read_uc_pair(file: &Path) -> anyhow::Result<UcPair> {
+/// **resolved** path is passed to the driver. The fetch is map-first
+/// within `project`, disk-second otherwise, and the disk fallback fills
+/// the map. A missing import file is a clean error naming the resolved
+/// path (the driver's message).
+pub(crate) fn read_uc_pair(file: &Path, project: Option<&mut Project>) -> anyhow::Result<UcPair> {
     let source = std::fs::read_to_string(file)
         .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
+    let mut fetch = project_fetch(project);
     let buckets = gather_usecase_imports(
         &file.display().to_string(),
         &source,
@@ -511,7 +579,7 @@ pub(crate) fn read_uc_pair(file: &Path) -> anyhow::Result<UcPair> {
                 .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
                 .unwrap_or_default()
         },
-        &mut fetch_disk,
+        &mut fetch,
     )
     .map_err(|message| anyhow::anyhow!(message))?;
     let schemas = collect_schema_imports(&buckets.domains)?;
@@ -549,9 +617,13 @@ pub(crate) struct CmmnPair {
 /// the case file's directory, bucketed by resolved extension (`.mox` raw,
 /// `.ddd`/`.actor`/`.evt` compiled). Unknown extensions pass through so
 /// the driver reports them.
-pub(crate) fn read_cmmn_pair(file: &Path) -> anyhow::Result<CmmnPair> {
+pub(crate) fn read_cmmn_pair(
+    file: &Path,
+    project: Option<&mut Project>,
+) -> anyhow::Result<CmmnPair> {
     let source = std::fs::read_to_string(file)
         .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
+    let mut fetch = project_fetch(project);
     let buckets = gather_usecase_imports(
         &file.display().to_string(),
         &source,
@@ -561,7 +633,7 @@ pub(crate) fn read_cmmn_pair(file: &Path) -> anyhow::Result<CmmnPair> {
                 .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
                 .unwrap_or_default()
         },
-        &mut fetch_disk,
+        &mut fetch,
     )
     .map_err(|message| anyhow::anyhow!(message))?;
     let schemas = collect_schema_imports(&buckets.domains)?;
@@ -609,11 +681,16 @@ impl DeployPair {
 /// imports, each compiled to its artifact — gathered through
 /// [`gather_deploy_imports`]. Import paths resolve relative to the deploy
 /// file's own directory; the **resolved** path is passed to the driver.
-/// A missing or non-compiling import is a clean error; duplicate imports
-/// are gathered once.
-pub(crate) fn read_deploy_pair(file: &Path) -> anyhow::Result<DeployPair> {
+/// The fetch is map-first within `project`, disk-second otherwise, and
+/// the disk fallback fills the map. A missing or non-compiling import is
+/// a clean error; duplicate imports are gathered once.
+pub(crate) fn read_deploy_pair(
+    file: &Path,
+    project: Option<&mut Project>,
+) -> anyhow::Result<DeployPair> {
     let source = std::fs::read_to_string(file)
         .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
+    let mut fetch = project_fetch(project);
     let pairs = gather_deploy_imports(
         &file.display().to_string(),
         &source,
@@ -623,7 +700,7 @@ pub(crate) fn read_deploy_pair(file: &Path) -> anyhow::Result<DeployPair> {
                 .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
                 .unwrap_or_default()
         },
-        &mut fetch_disk,
+        &mut fetch,
     )
     .map_err(|message| anyhow::anyhow!(message))?;
     Ok(DeployPair {
@@ -632,4 +709,18 @@ pub(crate) fn read_deploy_pair(file: &Path) -> anyhow::Result<DeployPair> {
         designs: pairs.designs,
         flows: pairs.flows,
     })
+}
+
+/// The fetch closure the bucket gatherers take
+/// (`FnMut(&str) -> Option<String>`): map-first within `project` (the
+/// driver renders the pinned missing-import message itself, so a miss is
+/// simply `None` here — no io error to name), plain disk otherwise. The
+/// disk fallback fills the map.
+fn project_fetch(mut project: Option<&mut Project>) -> impl FnMut(&str) -> Option<String> + '_ {
+    move |resolved: &str| -> Option<String> {
+        match project.as_deref_mut() {
+            Some(project) => project.fetch(resolved).ok(),
+            None => fetch_disk(resolved),
+        }
+    }
 }

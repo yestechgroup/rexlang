@@ -5,14 +5,15 @@
 //! * `rexlang check <file>...` — compile and render diagnostics; exits `1`
 //!   on errors. Accepts `.mox` models, `.actor` policy files, `.ddd`
 //!   design files, `.evt` event-contract files, `.deploy` deployment
-//!   files, `.uc` use case files, and `.ifml` interaction flows (the
-//!   latter six compile against the domain models, `.ddd` designs,
-//!   `.actor` policies, and `.evt` contracts they import; `.ifml`
-//!   expressions are also type-checked against the imported domains). Each
-//!   input is a file or a directory —
-//!   a directory enters **batch mode**, checking every supported surface
-//!   under it independently (`.mox`, `.actor`, `.ddd`, `.evt`, `.uc`, `.cmmn`,
-//!   `.ifml`, `.deploy`); several `.mox` files passed explicitly compile as
+//!   files, `.uc` use case files, `.cmmn` case files, and `.ifml`
+//!   interaction flows (the latter compile against the domain models,
+//!   `.ddd` designs, `.actor` policies, and `.evt` contracts they import;
+//!   `.ifml` expressions are also type-checked against the imported
+//!   domains). Each input is a file or a directory —
+//!   a directory enters **project mode**: every supported surface under it
+//!   is gathered into one snapshot and checked independently, each file's
+//!   imports resolving map-first from the snapshot and sibling artifacts
+//!   reused compile-once; several `.mox` files passed explicitly compile as
 //!   one multi-package model.
 //! * `rexlang ir <file>... [-o <out>]` — compile and emit the Core IR JSON
 //!   to stdout or to a file; exits `1` on errors. On `.actor` files the
@@ -38,6 +39,7 @@ mod artifact_check;
 mod commands;
 mod imports;
 mod inputs;
+mod project;
 mod report;
 
 use std::path::PathBuf;
