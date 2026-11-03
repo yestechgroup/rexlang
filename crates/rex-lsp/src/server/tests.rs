@@ -1234,6 +1234,70 @@ async fn ifml_open_clean_document_publishes_no_diagnostics() {
 }
 
 #[tokio::test]
+async fn ifml_open_resolves_requires_and_roles_against_the_actor_import() {
+    let (mut service, mut socket) = initialized_service().await;
+    // The actor policy and its domain, opened (and drained) before the
+    // flow that imports them — open documents are the editor's truth.
+    open_at(&mut service, &ifml_uri("auth.mox"), SHOP_MOX).await;
+    drain_socket(&mut socket).await;
+    open_at(
+        &mut service,
+        &ifml_uri("auth.actor"),
+        r#"import "auth.mox"
+
+actors Auth {
+    actor admin
+
+    capability ManageCustomer on Product
+
+    grant admin {
+        permit ManageCustomer
+    }
+}
+"#,
+    )
+    .await;
+    drain_socket(&mut socket).await;
+    open_at(
+        &mut service,
+        &ifml_uri("gated.ifml"),
+        r#"import "auth.actor";
+
+view "Edit" {
+    requires: [ManageCustomer, Ghost];
+    roles: [admin, phantom];
+}
+"#,
+    )
+    .await;
+    let publish = next_publish(&mut socket, &ifml_uri("gated.ifml"))
+        .await
+        .expect("publishDiagnostics for the gated flow");
+    let codes: Vec<_> = publish
+        .diagnostics
+        .iter()
+        .filter_map(|diagnostic| match &diagnostic.code {
+            Some(NumberOrString::String(code)) => Some(code.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(codes.contains(&"E0107"), "{publish:?}");
+    assert!(codes.contains(&"E0108"), "{publish:?}");
+    assert!(
+        publish.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("capability 'Ghost' is not declared")),
+        "{publish:?}"
+    );
+    assert!(
+        publish.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("role 'phantom' is not declared")),
+        "{publish:?}"
+    );
+}
+
+#[tokio::test]
 async fn ddd_open_publishes_design_diagnostics() {
     let (mut service, mut socket) = initialized_service().await;
     // No imports are provided (the file:// workspace has no domains on
