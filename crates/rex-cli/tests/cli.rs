@@ -2583,6 +2583,141 @@ fn ir_expand_inlines_module_uses_for_ifml() {
     );
 }
 
+const AUTH_MOX: &str = r#"package rexlang.auth
+
+class Customer {
+    String name
+}
+"#;
+
+const AUTH_ACTOR: &str = r#"import "auth.mox"
+
+actors Auth {
+    actor admin
+    actor manager
+
+    capability ManageCustomer on Customer
+    capability ApproveCustomer on Customer
+
+    grant admin {
+        permit ManageCustomer
+        permit ApproveCustomer
+    }
+
+    grant manager {
+        permit ManageCustomer
+    }
+}
+"#;
+
+#[test]
+fn check_resolves_ifml_requires_and_roles_against_the_actor_import() {
+    let _ = write_source("auth.mox", AUTH_MOX);
+    let _ = write_source("auth.actor", AUTH_ACTOR);
+    let flow = write_source(
+        "gated.ifml",
+        r#"import "auth.actor";
+
+view "Edit" {
+    requires: [ManageCustomer];
+    roles: [admin, manager];
+}
+"#,
+    );
+    let output = rexlang()
+        .args(["check", flow.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("OK {}\n", flow.display())
+    );
+}
+
+#[test]
+fn check_reports_unknown_capabilities_and_roles_from_the_actor_import() {
+    let _ = write_source("auth.mox", AUTH_MOX);
+    let _ = write_source("auth.actor", AUTH_ACTOR);
+    let flow = write_source(
+        "gated.ifml",
+        r#"import "auth.actor";
+
+view "Edit" {
+    requires: [ManageCustomer, Ghost];
+    roles: [admin, phantom];
+}
+"#,
+    );
+    let output = rexlang()
+        .args(["check", flow.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E0107"), "stderr: {stderr}");
+    assert!(stderr.contains("E0108"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("capability 'Ghost' is not declared"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("role 'phantom' is not declared"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("gated.ifml"),
+        "the diagnostic names the flow file: {stderr}"
+    );
+}
+
+#[test]
+fn missing_ifml_actor_import_is_a_clean_error() {
+    let flow = write_source(
+        "dangling.ifml",
+        r#"import "ghost.actor";
+
+view "Home" {
+}
+"#,
+    );
+    let output = rexlang()
+        .args(["check", flow.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("error:"),
+        "a clean error, not a panic: {stderr}"
+    );
+    assert!(
+        stderr.contains("ghost.actor"),
+        "the error names the resolved path: {stderr}"
+    );
+}
+
+#[test]
+fn check_succeeds_on_the_ifml_conformance_fixture_with_its_actor_import() {
+    // app.ifml's `import "rexlang/auth.actor"` is load-bearing: the
+    // fixture's requires:/roles: sites resolve against the fixture
+    // policy's capabilities and actors.
+    let path = workspace_root().join("tests/conformance/ifml/app.ifml");
+    let output = rexlang()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn fmt_check_passes_on_formatted_ifml() {
     let flow = write_source("formatted.ifml", GOOD_IFML);

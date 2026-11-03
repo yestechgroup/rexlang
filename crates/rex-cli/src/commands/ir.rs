@@ -61,7 +61,8 @@ pub(crate) fn run(
                     return Ok(ExitCode::FAILURE);
                 }
             };
-        let binding = rex_ifml::check_ifml(&compilation, inputs.domains.as_ref());
+        let binding =
+            rex_ifml::check_ifml_with_actors(&compilation, inputs.domains.as_ref(), &inputs.actors);
         if !binding.is_empty() {
             let sources: Vec<(String, String)> = compilation
                 .index

@@ -68,7 +68,8 @@ fn check_one(files: &[PathBuf]) -> anyhow::Result<ExitCode> {
                     return Ok(ExitCode::FAILURE);
                 }
             };
-        let binding = rex_ifml::check_ifml(&compilation, inputs.domains.as_ref());
+        let binding =
+            rex_ifml::check_ifml_with_actors(&compilation, inputs.domains.as_ref(), &inputs.actors);
         report_ifml_diagnostics(&sources(&compilation), &binding);
         Ok(check_exit(binding.is_empty(), &inputs.path))
     } else if files.len() == 1 && is_ddd_file(&files[0]) {

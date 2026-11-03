@@ -231,17 +231,23 @@ pub(crate) struct IfmlInputs {
     /// `None` when the file imports no domains (binding checks are then
     /// skipped).
     pub(crate) domains: Option<rex_ir::Model>,
+    /// Every imported `.actor` policy, compiled — the authorization
+    /// dimension [`rex_ifml::check_ifml_with_actors`] resolves
+    /// `requires:`/`roles:` against. Empty when the file imports no actor
+    /// models (authorization checking is then skipped).
+    pub(crate) actors: Vec<rex_ir::ActorModel>,
 }
 
-/// Reads an `.ifml` file plus every `.ifml` and `.mox` file it imports,
-/// transitively. Import paths resolve relative to the importing file's own
-/// directory on disk, while the resolver keys each import by the importing
-/// file's identity and the import string **as written** (the resolver is
-/// filesystem-free and sees only the strings). Imports with other extensions
-/// (`.actor`) pass through untouched. Imported `.mox` files are compiled to
-/// Core IR and unioned for typed expression binding; a domain that fails to
-/// compile is a hard error. A missing import file is a clean error naming
-/// the resolved path.
+/// Reads an `.ifml` file plus every `.ifml`, `.mox`, and `.actor` file it
+/// imports, transitively. Import paths resolve relative to the importing
+/// file's own directory on disk, while the resolver keys each import by
+/// the importing file's identity and the import string **as written** (the
+/// resolver is filesystem-free and sees only the strings). Imported `.mox`
+/// files are compiled to Core IR and unioned for typed expression
+/// binding; imported `.actor` files are compiled to actor models for
+/// authorization checking; a domain or actor model that fails to compile
+/// is a hard error. A missing import file is a clean error naming the
+/// resolved path.
 pub(crate) fn read_ifml_inputs(file: &Path) -> anyhow::Result<IfmlInputs> {
     let source = std::fs::read_to_string(file)
         .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
@@ -252,8 +258,10 @@ pub(crate) fn read_ifml_inputs(file: &Path) -> anyhow::Result<IfmlInputs> {
         source,
         ifml_imports: rex_ifml::IfmlImports::default(),
         domains: None,
+        actors: Vec::new(),
     };
     let mut domain_sources: Vec<(String, String)> = Vec::new();
+    let mut actor_models: Vec<rex_ir::ActorModel> = Vec::new();
     collect_ifml_imports(
         &path,
         file,
@@ -261,7 +269,9 @@ pub(crate) fn read_ifml_inputs(file: &Path) -> anyhow::Result<IfmlInputs> {
         &mut inputs.ifml_imports,
         &mut inputs.sources,
         &mut domain_sources,
+        &mut actor_models,
     )?;
+    inputs.actors = actor_models;
     if domain_sources.is_empty() {
         return Ok(inputs);
     }
@@ -299,9 +309,10 @@ fn diagnostics_preview(path: &str, source: &str, compilation: &rex_driver::Compi
 /// relative to its importer's location on disk, provides `.ifml` content to
 /// the bundle under the walker's `(importer identity, import-as-written)`
 /// keys (the identities the resolver itself uses), and collects `.mox`
-/// domains (deduplicated by resolved path) as a side effect. The first
-/// unreadable import surfaces as an error after the walk. Disk paths are
-/// tracked per identity here — the walker only ever sees identities.
+/// domains (deduplicated by resolved path) plus compiled `.actor` models
+/// as a side effect. The first unreadable import surfaces as an error
+/// after the walk. Disk paths are tracked per identity here — the walker
+/// only ever sees identities.
 fn collect_ifml_imports(
     identity: &str,
     disk_path: &Path,
@@ -309,10 +320,12 @@ fn collect_ifml_imports(
     bundle: &mut rex_ifml::IfmlImports,
     sources: &mut Vec<(String, String)>,
     domains: &mut Vec<(String, String)>,
+    actors: &mut Vec<rex_ir::ActorModel>,
 ) -> anyhow::Result<()> {
     let mut disk_paths: BTreeMap<String, PathBuf> = BTreeMap::new();
     disk_paths.insert(identity.to_string(), disk_path.to_path_buf());
     let mut read_error: Option<anyhow::Error> = None;
+    let mut actor_paths: Vec<String> = Vec::new();
     let dir_of = |path: &Path| -> PathBuf {
         path.parent()
             .filter(|parent| !parent.as_os_str().is_empty())
@@ -322,6 +335,7 @@ fn collect_ifml_imports(
     let walk = rex_ifml::walk_ifml_imports(identity, source, &mut |importer, import| {
         let importer_disk = disk_paths.get(importer)?;
         let resolved = dir_of(importer_disk).join(import);
+        let resolved_path = resolved.display().to_string();
         if import.ends_with(".ifml") {
             match std::fs::read_to_string(&resolved) {
                 Ok(text) => {
@@ -341,7 +355,6 @@ fn collect_ifml_imports(
                 }
             }
         } else if import.ends_with(".mox") {
-            let resolved_path = resolved.display().to_string();
             if domains
                 .iter()
                 .any(|(existing, _)| *existing == resolved_path)
@@ -360,6 +373,26 @@ fn collect_ifml_imports(
                             resolved.display(),
                             importer
                         ));
+                    }
+                    None
+                }
+            }
+        } else if import.ends_with(".actor") {
+            if actor_paths
+                .iter()
+                .any(|existing| *existing == resolved_path)
+            {
+                return None;
+            }
+            match read_actor_model(&resolved) {
+                Ok(model) => {
+                    actor_paths.push(resolved_path);
+                    actors.push(model);
+                    None
+                }
+                Err(error) => {
+                    if read_error.is_none() {
+                        read_error = Some(error);
                     }
                     None
                 }
@@ -866,7 +899,10 @@ fn read_event_model(file: &Path) -> anyhow::Result<rex_ir::events::EventModel> {
 
 /// Reads and compiles one imported `.ifml` flow (its `.ifml` imports walk
 /// relative to it, exactly like `rexlang check` on the flow; domain typing
-/// is not needed for binding-name validation).
+/// is not needed for binding-name validation). The flow's `.actor`
+/// imports resolve the same way — a missing or non-compiling policy is
+/// the same clean error — but the deploy lowering consumes no actor
+/// models, so they are discarded here.
 fn read_flow_model(file: &Path) -> anyhow::Result<rex_ir::ifml::IfmlModel> {
     let source = std::fs::read_to_string(file)
         .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
@@ -874,6 +910,7 @@ fn read_flow_model(file: &Path) -> anyhow::Result<rex_ir::ifml::IfmlModel> {
     let mut imports = rex_ifml::IfmlImports::default();
     let mut sources = Vec::new();
     let mut domains = Vec::new();
+    let mut actors = Vec::new();
     collect_ifml_imports(
         &path,
         file,
@@ -881,6 +918,7 @@ fn read_flow_model(file: &Path) -> anyhow::Result<rex_ir::ifml::IfmlModel> {
         &mut imports,
         &mut sources,
         &mut domains,
+        &mut actors,
     )?;
     match rex_ifml::compile_ifml_str(&path, &source, &imports) {
         Ok(compilation) => Ok(compilation.model),
