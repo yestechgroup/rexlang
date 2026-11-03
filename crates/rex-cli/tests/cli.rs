@@ -2676,6 +2676,70 @@ view "Edit" {
 }
 
 #[test]
+fn check_resolves_transitive_ifml_actor_domain_across_nested_dirs() {
+    let root = scratch_dir().join(format!("nested-ifml-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("app/ifml")).expect("mkdir app/ifml");
+    std::fs::create_dir_all(root.join("app/policies")).expect("mkdir app/policies");
+    std::fs::create_dir_all(root.join("app/domains")).expect("mkdir app/domains");
+    std::fs::write(root.join("app/domains/auth.mox"), AUTH_MOX).expect("write domain");
+    std::fs::write(
+        root.join("app/policies/auth.actor"),
+        "import \"../domains/auth.mox\"\n\nactors Auth {\n    actor admin\n\n    capability ManageCustomer on Customer\n\n    grant admin {\n        permit ManageCustomer\n    }\n}\n",
+    )
+    .expect("write actor");
+    let flow = root.join("app/ifml/flow.ifml");
+    std::fs::write(
+        &flow,
+        "import \"../policies/auth.actor\";\n\nview \"Edit\" {\n    requires: [ManageCustomer];\n    roles: [admin];\n}\n",
+    )
+    .expect("write flow");
+    let output = rexlang()
+        .args(["check", flow.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("OK {}\n", flow.display())
+    );
+}
+
+#[test]
+fn check_dedupes_duplicate_actor_imports() {
+    let _ = write_source("auth.mox", AUTH_MOX);
+    let _ = write_source("auth.actor", AUTH_ACTOR);
+    let flow = write_source(
+        "twice.ifml",
+        r#"import "auth.actor";
+import "auth.actor";
+
+view "Edit" {
+    requires: [ManageCustomer];
+    roles: [admin];
+}
+"#,
+    );
+    let output = rexlang()
+        .args(["check", flow.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("OK {}\n", flow.display()),
+        "exactly one OK: the duplicate import gathers once"
+    );
+}
+
+#[test]
 fn missing_ifml_actor_import_is_a_clean_error() {
     let flow = write_source(
         "dangling.ifml",
@@ -2891,6 +2955,42 @@ fn write_deploy_fixtures() -> PathBuf {
 #[test]
 fn check_succeeds_on_deploy_pair() {
     let deploy = write_deploy_fixtures();
+    let output = rexlang()
+        .args(["check", deploy.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("OK {}\n", deploy.display())
+    );
+}
+
+/// The nested-flow guard for the driver's deploy gather: the deploy
+/// imports a flow whose own imports import a pattern module — depth-2
+/// flow nesting, resolved through the gatherer's identity→key map. Without
+/// that map a flow's nested imports resolve against the process CWD and
+/// the flow "does not compile".
+#[test]
+fn check_succeeds_on_a_deploy_with_a_nested_flow_import() {
+    write_source("deploy-domain.mox", DEPLOY_DOMAIN);
+    write_source("deploy-design.ddd", DEPLOY_DESIGN);
+    write_source(
+        "pattern.ifml",
+        "module \"Pager\" {\n    input { pageSize: Int = 25 }\n    output { total: Int }\n\n    component \"pager\" {\n        type: list;\n        data: Item;\n    }\n}\n",
+    );
+    write_source(
+        "flow.ifml",
+        "import \"pattern.ifml\";\n\nview \"Home\" {\n    use \"Pager\" as pager { pageSize: 10; };\n\n    component \"list\" {\n        type: list;\n        data: Book;\n    }\n}\n",
+    );
+    let deploy = write_source(
+        "nested.deploy",
+        "import \"deploy-design.ddd\"\nimport \"flow.ifml\"\n\napplication Svc {\n    component lending: api {\n        design \"deploy-design.ddd#media\"\n    }\n    component web: frontend {\n        flow \"flow.ifml\"\n    }\n    component db: database {\n        engine: postgres\n    }\n    connects web -> lending\n    connects lending -> db\n}\n\nprofile prod {\n    target: kubernetes\n    defaults {\n        lending.replicas: 2\n    }\n    require (lending.replicas >= 2)\n}\n\ndeployment dev for Svc {\n    use prod\n}\n",
+    );
     let output = rexlang()
         .args(["check", deploy.to_str().unwrap()])
         .output()

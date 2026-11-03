@@ -1297,6 +1297,120 @@ view "Edit" {
     );
 }
 
+const AUTH_ACTOR: &str = r#"import "auth.mox"
+
+actors Auth {
+    actor admin
+
+    capability ManageCustomer on Product
+
+    grant admin {
+        permit ManageCustomer
+    }
+}
+"#;
+
+/// The same policy with the `Ghost` capability the gated flow requires —
+/// the edit that must refresh the flow without the flow being touched.
+const AUTH_ACTOR_WITH_GHOST: &str = r#"import "auth.mox"
+
+actors Auth {
+    actor admin
+
+    capability ManageCustomer on Product
+    capability Ghost on Product
+
+    grant admin {
+        permit ManageCustomer
+        permit Ghost
+    }
+}
+"#;
+
+const GATED_IFML: &str = r#"import "auth.actor";
+
+view "Edit" {
+    requires: [ManageCustomer, Ghost];
+    roles: [admin, phantom];
+}
+"#;
+
+/// The string diagnostic codes of one publish, in order.
+fn diagnostic_codes(publish: &PublishDiagnosticsParams) -> Vec<&str> {
+    publish
+        .diagnostics
+        .iter()
+        .filter_map(|diagnostic| match &diagnostic.code {
+            Some(NumberOrString::String(code)) => Some(code.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn ifml_open_refreshes_when_an_open_actor_policy_changes() {
+    let (mut service, mut socket) = initialized_service().await;
+    // The domain and the policy are opened (and drained) before the flow
+    // that imports them — open documents are the editor's truth.
+    open_at(&mut service, &ifml_uri("auth.mox"), SHOP_MOX).await;
+    drain_socket(&mut socket).await;
+    open_at(&mut service, &ifml_uri("auth.actor"), AUTH_ACTOR).await;
+    drain_socket(&mut socket).await;
+    open_at(&mut service, &ifml_uri("gated.ifml"), GATED_IFML).await;
+    let initial = next_publish(&mut socket, &ifml_uri("gated.ifml"))
+        .await
+        .expect("initial publish for the gated flow");
+    let initial_codes = diagnostic_codes(&initial);
+    assert!(initial_codes.contains(&"E0107"), "{initial:?}");
+    assert!(initial_codes.contains(&"E0108"), "{initial:?}");
+
+    // Declare the missing capability in the OPEN policy: the gated flow
+    // must be re-published without being edited. The change produces two
+    // publishes (the policy, then its dependent) into a capacity-1
+    // socket, so the read runs concurrently with the change.
+    let gated_uri = ifml_uri("gated.ifml");
+    let change = jsonrpc::Request::build("textDocument/didChange")
+        .params(json!({
+            "textDocument": {"uri": ifml_uri("auth.actor").as_str(), "version": 2},
+            "contentChanges": [{"text": AUTH_ACTOR_WITH_GHOST}],
+        }))
+        .finish();
+    let ((), publish) = tokio::join!(
+        async {
+            // didChange is a notification: no response body.
+            service.ready().await.unwrap().call(change).await.unwrap();
+        },
+        next_publish(&mut socket, &gated_uri),
+    );
+    let publish = publish.expect("the gated flow must refresh when its policy changes");
+    let codes = diagnostic_codes(&publish);
+    assert!(
+        !codes.contains(&"E0107"),
+        "the declared capability must resolve: {publish:?}"
+    );
+    assert!(
+        codes.contains(&"E0108"),
+        "the authorization pass must still run (phantom is undeclared): {publish:?}"
+    );
+}
+
+#[tokio::test]
+async fn ifml_open_degrades_silently_when_the_actor_policy_is_missing() {
+    let (mut service, mut socket) = initialized_service().await;
+    // `ghost.actor` exists neither on disk nor as an open document: the
+    // gather misses silently, authorization is skipped, and the publish
+    // still succeeds.
+    open_at(&mut service, &ifml_uri("gated.ifml"), GATED_IFML).await;
+    let publish = next_publish(&mut socket, &ifml_uri("gated.ifml"))
+        .await
+        .expect("the publish must succeed despite the missing policy");
+    let codes = diagnostic_codes(&publish);
+    assert!(
+        !codes.contains(&"E0107") && !codes.contains(&"E0108"),
+        "no authorization pass without a policy: {publish:?}"
+    );
+}
+
 #[tokio::test]
 async fn ddd_open_publishes_design_diagnostics() {
     let (mut service, mut socket) = initialized_service().await;

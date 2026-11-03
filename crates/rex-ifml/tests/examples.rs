@@ -58,9 +58,10 @@ fn load(name: &str) -> Example {
                 let imported = fs::read_to_string(&resolved).unwrap_or_else(|error| {
                     panic!("read imported file {}: {error}", resolved.display())
                 });
+                let resolved_path = resolved.display().to_string();
                 disk_paths.insert(import.to_string(), resolved);
                 example.imports.provide(importer, import, imported.clone());
-                Some(imported)
+                Some((resolved_path, imported))
             } else if import.ends_with(".mox") {
                 let resolved_path = resolved.display().to_string();
                 if !example
