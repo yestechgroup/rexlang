@@ -2676,6 +2676,70 @@ view "Edit" {
 }
 
 #[test]
+fn check_resolves_transitive_ifml_actor_domain_across_nested_dirs() {
+    let root = scratch_dir().join(format!("nested-ifml-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("app/ifml")).expect("mkdir app/ifml");
+    std::fs::create_dir_all(root.join("app/policies")).expect("mkdir app/policies");
+    std::fs::create_dir_all(root.join("app/domains")).expect("mkdir app/domains");
+    std::fs::write(root.join("app/domains/auth.mox"), AUTH_MOX).expect("write domain");
+    std::fs::write(
+        root.join("app/policies/auth.actor"),
+        "import \"../domains/auth.mox\"\n\nactors Auth {\n    actor admin\n\n    capability ManageCustomer on Customer\n\n    grant admin {\n        permit ManageCustomer\n    }\n}\n",
+    )
+    .expect("write actor");
+    let flow = root.join("app/ifml/flow.ifml");
+    std::fs::write(
+        &flow,
+        "import \"../policies/auth.actor\";\n\nview \"Edit\" {\n    requires: [ManageCustomer];\n    roles: [admin];\n}\n",
+    )
+    .expect("write flow");
+    let output = rexlang()
+        .args(["check", flow.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("OK {}\n", flow.display())
+    );
+}
+
+#[test]
+fn check_dedupes_duplicate_actor_imports() {
+    let _ = write_source("auth.mox", AUTH_MOX);
+    let _ = write_source("auth.actor", AUTH_ACTOR);
+    let flow = write_source(
+        "twice.ifml",
+        r#"import "auth.actor";
+import "auth.actor";
+
+view "Edit" {
+    requires: [ManageCustomer];
+    roles: [admin];
+}
+"#,
+    );
+    let output = rexlang()
+        .args(["check", flow.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("OK {}\n", flow.display()),
+        "exactly one OK: the duplicate import gathers once"
+    );
+}
+
+#[test]
 fn missing_ifml_actor_import_is_a_clean_error() {
     let flow = write_source(
         "dangling.ifml",
