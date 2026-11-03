@@ -243,6 +243,14 @@ Diagnostics are ordered deterministically: parse diagnostics first, then
 the file's semantic diagnostics in declaration order (applications,
 profiles, deployments — each in source order).
 
+Components are also the anchor the `.evt` subscription layer resolves
+against: in a checked application (`rexlang check <dir>`, the union
+integrity pass `rex_driver::check_integrity`, register row **V12**) a
+subscription consumer must name a declared component — any application's
+— else the event contract's delivery is a dead inbox and the batch
+errors. The deploy file itself is never changed by that pass; checking a
+deployment alone stays per-surface and silent.
+
 ---
 
 ## Tooling

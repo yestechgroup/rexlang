@@ -27,7 +27,77 @@ use rex_ir::ActorModel;
 
 use crate::diagnostic::Diagnostic;
 
-/// The union referential-integrity pass (issue rexlang#114).
+/// The union referential-integrity pass (issue rexlang#114): a pure
+/// function over the pre-compiled artifact buckets a host gathered —
+/// path-tagged `(file, artifact)` pairs exactly as the `.uc` and `.deploy`
+/// one-shot entry points take them — returning error diagnostics tagged
+/// with the file that owns each dangling reference. It publishes no
+/// artifact of its own; per-file checks and artifact production are
+/// untouched.
+///
+/// # What is checked
+///
+/// The cross-layer references no per-surface compiler can see:
+///
+/// 1. **Capability existence** (the design engine's rule 10, generalized
+///    across the union): every `capability` clause on a service operation
+///    or a search must name a capability declared in some provided actor
+///    block — `unknown capability 'X' on operation 'O' of service 'S'` /
+///    `on search 'Z'`, help listing the declared names. Fires when any
+///    actor artifacts are provided.
+/// 2. **Capability coverage** (rule 10's reverse): every capability a
+///    grant — or a delegation — hands out must be carried by at least one
+///    operation or search across the designs, else it guards a transition
+///    that cannot happen: `capability 'X' is granted but no operation or
+///    search carries it`. Declared-but-ungranted capabilities are latent,
+///    not dead, and stay out of scope; a standalone `cedar { ... }` grant
+///    entry serializes with an empty capability name (verbatim policy, not
+///    a reference) and is never read as one. Fires when any design
+///    artifacts are provided.
+/// 3. **Action bindings**: every `.ifml` action declaration must bind to a
+///    service operation — ASCII-case-insensitive name equality, the two
+///    layers' naming conventions being PascalCase labels over camelCase
+///    verbs (`ApproveRefund` ↔ `approveRefund`): `action 'X' does not bind
+///    to any service operation`, help listing the declared operations.
+///    This closes the chain the `.ifml` checker opened — invocation →
+///    declaration resolves there (E0104); declaration → operation
+///    resolves here. Fires when any design artifacts are provided.
+/// 4. **Consumer resolution**: every `.evt` subscription's consumer must
+///    name a declared `.deploy` component (any application) — a consumer
+///    naming no component is a dead inbox: `subscription 'S' consumer 'C'
+///    does not resolve to a declared component`, help listing the declared
+///    components. Fires when any deploy artifacts are provided.
+/// 5. **Flow actor references**: `.ifml` `requires:` names resolve as a
+///    capability **or** an actor (the command surface's documented
+///    `requires: [Agent]` gates on an actor), on views, event handlers,
+///    and commands (recursing into subcommands) — `unknown capability or
+///    actor 'X' in requires of view/command 'V'`. `roles:` names are
+///    strictly actors — `unknown actor 'X' in roles of view 'V'`. Fires
+///    when any actor artifacts are provided.
+///
+/// # Opt-in in the house style
+///
+/// Each check fires only when the counterpart surface is present in the
+/// union: an application checked without its `.actor` layer cannot have
+/// its capability clauses judged, and a consumer without a `.deploy`
+/// cannot resolve. A host compiling a single surface (or a pair) never
+/// sees these diagnostics; the CLI's directory batch mode is the first
+/// host — it clusters the checked files into import-connected
+/// applications (two files share an application when an import of one
+/// resolves to the other, transitively through the `.mox` domains every
+/// surface names) and runs this pass per application, so unrelated
+/// applications in one checked tree never cross-check each other.
+///
+/// # Diagnostics
+///
+/// All diagnostics are error severity (the issue's contract: dangling
+/// wiring is a language error, not a lint) and carry no span — the wire
+/// artifacts are span-free by contract, so the pass runs at the artifact
+/// level where no source is attached. Each tags the owning file's path
+/// (the bucket entry's path) and names the offending element precisely,
+/// with help text listing the declared names to bind against. Block-local
+/// actor names pool union-wide: two blocks declaring the same capability
+/// name are one name for every check.
 pub fn check_integrity(
     _designs: &[(String, DddModel)],
     _actors: &[(String, ActorModel)],

@@ -31,7 +31,7 @@ cargo test -p rex-driver --test navigation      # one test suite
 cargo clippy --workspace --all-targets          # must be ZERO warnings
 cargo fmt --all                                 # rustfmt
 cargo run -p rex-cli -- fmt --check tests/conformance/models/*.mox tests/conformance/models/*.actor   # fixture format gate (.ddd gate: tests/conformance/ddd/*.ddd; sigil gate: tests/conformance/sigil/*.mox; .evt gate: tests/conformance/events/*.evt; .deploy gate: tests/conformance/deploy/*.deploy; .uc gate: tests/conformance/usecases/*.uc; .cmmn gate: tests/conformance/cmmn/*.cmmn; .ifml gates: tests/conformance/ifml/app.ifml, patterns/ifml/*.ifml, examples/*.ifml)
-cargo run -p rex-cli -- check tests/conformance/                            # directory batch mode: every supported surface under a dir checks independently (formatter-golden `X.fmt.<ext>` artifacts are skipped — they are outputs whose imports/vocab resolve next to their sources, not standalone models)
+cargo run -p rex-cli -- check tests/conformance/                            # directory batch mode: per-file checks run independently, then the union integrity pass cross-checks each import-connected application (formatter-golden `X.fmt.<ext>` artifacts are skipped — they are outputs whose imports/vocab resolve next to their sources, not standalone models)
 REX_UPDATE_FIXTURES=1 cargo test --workspace    # regenerate golden files
 ```
 
@@ -49,6 +49,7 @@ CI (`.github/workflows/ci.yml`) runs build, tests, `clippy -- -D warnings`, then
 
 ## Gotchas
 
+- `check_integrity` (rex-driver, issue #114, register row V12) is the union integrity pass: a pure function over path-tagged artifact buckets (`DddModel`/`ActorModel`/`EventModel`/`DeployModel`/`IfmlModel`). Diagnostics are span-less (artifacts are span-free by wire contract) and error severity. Every check is opt-in — it fires only when the counterpart surface is present. The CLI hosts it in directory batch mode ONLY: `check_one` retains each successful file's artifact, contributions cluster into import-connected applications via union-find over canonicalized import paths (`.mox` files are bridge nodes; deploy/uc/cmmn contribute no bucket), and unrelated applications in one checked tree never cross-check. `agent` is a keyword — never a bare `.ddd` param name; a standalone `cedar { ... }` grant entry serializes with an empty capability name (coverage skips it); action→op binding is ASCII-case-insensitive (`ApproveRefund` ↔ `approveRefund`).
 - `rex-syntax` permits `unsafe` (documented in its Cargo.toml): chumsky 0.10's `Input` trait requires `unsafe fn` implementations. Don't "fix" this; don't copy that custom `Input` impl elsewhere — `rex-expr` deliberately uses chumsky `Stream` + `.boxed()` levels instead (unboxed towers overflow the 2 MB test-thread stack).
 - Comments: `lex()` drops comments for the parser; `lex_with_comments()` is what `fmt` uses. Parser spans are **byte offsets**; LSP maps them to UTF-16 (`rex-lsp/src/position.rs`).
 - `id`/`readonly` are contextual identifiers, not keywords — they remain usable as feature names. Actor words (`actors actor agent capability grant permit forbid when obligation on never_both delegation purpose cedar import`) ARE real keywords, escapable with `^`. `schema`/`sigil` are contextual (only after `import`); `to` is contextual on delegation lines.
