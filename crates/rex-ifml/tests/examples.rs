@@ -179,6 +179,59 @@ fn every_example_type_checks_against_its_domain_union() {
     }
 }
 
+/// The example's control/route manifest must byte-match its committed
+/// golden artifact under `examples/artifacts/` (the `examples_artifacts`
+/// precedent for the driver surfaces) and round-trip through
+/// `from_json`. The manifest is derived the way `rexlang manifest` does:
+/// compile, check (clean), then export with the example's imports and
+/// its domain union.
+///
+/// Regenerate with `REX_UPDATE_FIXTURES=1 cargo test -p rex-ifml --test examples`.
+#[test]
+fn every_example_manifest_matches_its_golden_artifact() {
+    for name in &EXAMPLES {
+        let example = load(name);
+        let compilation = compile(name);
+        let binding = check_ifml(&compilation, Some(&domain_union(name)));
+        assert!(
+            binding.is_empty(),
+            "{name}.ifml must check clean before manifesting:\n{}",
+            render(&binding)
+        );
+        let union = domain_union(name);
+        let manifest = rex_ifml::manifest_ifml(&compilation, &example.imports, Some(&union));
+        let json = manifest.to_json_pretty().expect("serialize manifest");
+
+        let artifact = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/artifacts")
+            .join(format!("{name}.manifest.json"));
+        if std::env::var("REX_UPDATE_FIXTURES").is_ok() {
+            std::fs::create_dir_all(artifact.parent().unwrap()).unwrap();
+            std::fs::write(&artifact, &json).unwrap();
+            eprintln!("updated {}", artifact.display());
+            continue;
+        }
+        let expected = std::fs::read_to_string(&artifact).unwrap_or_else(|error| {
+            panic!(
+                "missing golden manifest {}; regenerate with REX_UPDATE_FIXTURES=1: {error}",
+                artifact.display()
+            )
+        });
+        assert_eq!(
+            json, expected,
+            "{name}.ifml's manifest drifted from the golden file"
+        );
+
+        let parsed = rex_ifml::IfmlManifest::from_json(&expected)
+            .unwrap_or_else(|error| panic!("golden manifest {name}: {error}"));
+        assert_eq!(
+            parsed.to_json_pretty().expect("re-serialize"),
+            expected,
+            "{name} manifest round trip must be stable"
+        );
+    }
+}
+
 #[test]
 fn every_example_is_fmt_canonical() {
     for name in &EXAMPLES {

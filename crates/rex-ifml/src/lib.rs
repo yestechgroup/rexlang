@@ -83,3 +83,4 @@ pub use resolve::{
     E_UNKNOWN_MODULE,
 };
 pub use rex_ir::ifml::*;
+pub use rex_ir::ifml_manifest::{IfmlManifest, IFML_MANIFEST_FORMAT_VERSION};
