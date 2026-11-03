@@ -756,7 +756,7 @@
           "key": "target",
           "value": {
             "type": "identifier",
-            "value": "Customer"
+            "value": "Person"
           }
         }
       ]

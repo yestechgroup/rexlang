@@ -35,6 +35,9 @@
           }
         }
       ],
+      "obligations": [
+        "audit"
+      ],
       "grants": [
         {
           "actor": "Finance",
@@ -67,7 +70,10 @@
           "entries": [
             {
               "effect": "permit",
-              "capability": "ReadTicket"
+              "capability": "ReadTicket",
+              "obligations": [
+                "audit"
+              ]
             }
           ]
         }
@@ -136,6 +142,10 @@
       ],
       "purposes": [
         "RefundTriage"
+      ],
+      "obligations": [
+        "audit",
+        "ack"
       ],
       "grants": [
         {
