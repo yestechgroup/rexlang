@@ -166,7 +166,7 @@ condition must be boolean, and the expression rules R1–R9 of
 
 ```sh
 rexlang fmt file.cmmn            # canonical layout (also --check)
-rexlang check tests/conformance/ # directory batch: every surface, independently
+rexlang check tests/conformance/ # directory batch: every surface, then the union integrity pass per application
 rexlang ir file.cmmn -o case.json        # the CmmnModel artifact
 rexlang artifact check case.json         # classifies + lint-checks the artifact
 ```
