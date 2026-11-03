@@ -320,6 +320,25 @@
           "description": "Keeps the member register current.",
           "operations": [
             {
+              "name": "updateCustomer",
+              "returnType": {
+                "type": "class",
+                "value": {
+                  "package": "nz.example.library",
+                  "name": "Person"
+                }
+              },
+              "params": [
+                {
+                  "name": "customerId",
+                  "type": {
+                    "type": "primitive",
+                    "value": "string"
+                  }
+                }
+              ]
+            },
+            {
               "name": "register",
               "delegation": {
                 "target": "PersonRepository",

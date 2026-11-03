@@ -70,6 +70,7 @@ application Library {
         /// Keeps the member register current.
         service PersonService {
             inject PersonRepository;
+            Person updateCustomer(String customerId);
             register => PersonRepository.save;
             findByName => PersonRepository.findByName;
         }

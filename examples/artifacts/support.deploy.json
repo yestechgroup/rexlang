@@ -53,6 +53,14 @@
               }
             }
           ]
+        },
+        {
+          "name": "refund_approval_service",
+          "kind": "api"
+        },
+        {
+          "name": "analytics_service",
+          "kind": "api"
         }
       ],
       "connections": [

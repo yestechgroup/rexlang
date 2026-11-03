@@ -157,6 +157,7 @@ fn check_capability_coverage(
                 grants.chain(delegations).flatten()
             })
             .map(|entry| entry.capability.clone())
+            .filter(|capability| !capability.is_empty())
             .collect();
         for capability in granted {
             if !carriers.contains(&capability) {
@@ -192,9 +193,13 @@ fn operation_names(designs: &[(String, DddModel)]) -> BTreeSet<String> {
 /// Every `.ifml` action declaration must bind to a service operation across
 /// the designs: the checker's invocation→declaration half already rejects a
 /// dangling `action("X")` reference (E0104); this closes the chain by
-/// rejecting a declaration whose name no operation carries. An unbound
-/// action is a button whose backend does not exist. With no design
-/// artifacts the check is silent.
+/// rejecting a declaration whose name no operation carries. Binding is
+/// ASCII-case-insensitive name equality — the two layers name the same verb
+/// in their own convention (IFML actions are user-facing PascalCase labels,
+/// service operations are camelCase; the pairing `ApproveRefund` ↔
+/// `approveRefund` is the docs' own example). An unbound action is a button
+/// whose backend does not exist. With no design artifacts the check is
+/// silent.
 fn check_action_bindings(
     designs: &[(String, DddModel)],
     flows: &[(String, IfmlModel)],
@@ -202,17 +207,21 @@ fn check_action_bindings(
     if designs.is_empty() {
         return Vec::new();
     }
-    let operations = operation_names(designs);
+    let declared = operation_names(designs);
+    let operations: BTreeSet<String> = declared
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect();
     let mut diagnostics = Vec::new();
     for (path, flow) in flows {
         for action in &flow.actions {
-            if !operations.contains(&action.name) {
-                let help = if operations.is_empty() {
+            if !operations.contains(&action.name.to_ascii_lowercase()) {
+                let help = if declared.is_empty() {
                     "no design in the union declares any service operation".to_string()
                 } else {
                     format!(
                         "the designs declare the operations: {}",
-                        operations.iter().cloned().collect::<Vec<_>>().join(", ")
+                        declared.iter().cloned().collect::<Vec<_>>().join(", ")
                     )
                 };
                 diagnostics.push((

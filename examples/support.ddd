@@ -14,6 +14,12 @@ application SupportDesk {
             inject TicketSearch;
             boolean raiseRefund(String ticketNo, int cents) capability RaiseRefund;
             boolean approveRefund(String ticketNo, int cents, User approver) capability ApproveRefund;
+            Ticket[] listTickets();
+            Ticket getTicket(String ticketNo);
+            boolean claimTicket(String ticketNo, User helper);
+            boolean refundTicket(String ticketNo, int cents);
+            boolean updateTicket(String ticketNo) capability UpdateTicket;
+            boolean resolveTicket(String ticketNo) capability ResolveTicket;
             protected close => TicketRepository.delete;
             findTickets => TicketSearch.search;
         }
@@ -53,6 +59,7 @@ application SupportDesk {
                 max 100
                 cursor
             }
+            capability ReadTicket
         }
     }
     module people {

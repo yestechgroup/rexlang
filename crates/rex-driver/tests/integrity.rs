@@ -18,7 +18,9 @@ use rex_ir::ddd::{DddModel, Module, Service, ServiceOperation};
 use rex_ir::deploy::{ComponentKind, DeployApplication, DeployComponent, DeployModel};
 use rex_ir::events::{EventModel, SubscriptionDef};
 use rex_ir::ifml::{ActionDeclaration, IfmlModel};
-use rex_ir::{ActorDef, ActorModel, ActorsDef, CapabilityDef, GrantDef, GrantEntry, TypeRef};
+use rex_ir::{
+    ActorDef, ActorModel, ActorsDef, CapabilityDef, GrantDef, GrantEffect, GrantEntry, TypeRef,
+};
 
 /// A class type reference for capability declarations.
 fn class_ref(package: &str, name: &str) -> TypeRef {
@@ -340,6 +342,36 @@ fn granted_capability_without_any_design_passes() {
     );
 }
 
+#[test]
+fn cedar_only_grant_entries_name_no_capability() {
+    // A standalone `cedar { ... }` entry inside a grant serializes with an
+    // empty capability name — it is verbatim policy, not a capability
+    // reference, and the coverage check must not read it as one.
+    let designs = vec![design_with_op(
+        "model/core.ddd",
+        "WorkerService",
+        "hire",
+        &[],
+    )];
+    let mut block = ActorsDef::new("Support").actor(ActorDef::new("Manager"));
+    let entry = GrantEntry::new(GrantEffect::Forbid, "")
+        .cedar("forbid(principal, action, resource);".to_string());
+    let grant = GrantDef::new("Manager").entry(entry);
+    block = block.grant(grant);
+    let actors = vec![(
+        "model/core.actor".to_string(),
+        ActorModel {
+            format_version: rex_ir::ACTOR_MODEL_FORMAT_VERSION,
+            blocks: vec![block],
+        },
+    )];
+    let diagnostics = check_integrity(&designs, &actors, &[], &[], &[]);
+    assert!(
+        diagnostics.is_empty(),
+        "a cedar-verbatim entry names no capability: {diagnostics:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Check 3 — every `.ifml` action declaration must bind to a service
 // operation across the designs (the invocation→declaration half already
@@ -427,6 +459,26 @@ fn action_can_bind_to_an_operation_of_any_design() {
     assert!(
         diagnostics.is_empty(),
         "action bindings pool across every provided design: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn action_binding_matches_case_insensitively() {
+    // The two layers name the same verb in their own convention: IFML
+    // actions are user-facing PascalCase labels, service operations are
+    // camelCase (`ApproveRefund` ↔ `approveRefund`, the support example's
+    // pairing). Binding is ASCII-case-insensitive name equality.
+    let designs = vec![design_with_op(
+        "model/support.ddd",
+        "TicketService",
+        "approveRefund",
+        &[],
+    )];
+    let flows = vec![flow_with_actions("model/support.ifml", &["ApproveRefund"])];
+    let diagnostics = check_integrity(&designs, &[], &[], &[], &flows);
+    assert!(
+        diagnostics.is_empty(),
+        "PascalCase action ↔ camelCase operation is one verb: {diagnostics:?}"
     );
 }
 

@@ -19,6 +19,8 @@ application SupportDesk {
     component db: database {
         storage: managed
     }
+    component refund_approval_service: api {}
+    component analytics_service: api {}
     connects web -> api
     connects api -> db
 }

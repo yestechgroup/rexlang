@@ -5,7 +5,7 @@ application Handover {
     module handover {
         service HandoverService {
             HandoverPrompt verifyRecipient();
-            DeliveryCode releaseParcel();
+            DeliveryCode releaseParcel() capability ReleaseParcel;
         }
     }
 }

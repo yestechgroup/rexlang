@@ -4,7 +4,7 @@ application Lending {
     base lending
     module lending {
         service CreditAssessmentService {
-            CreditAssessmentResult assess();
+            CreditAssessmentResult assess() capability AssessCredit;
         }
     }
 }
