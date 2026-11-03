@@ -1070,6 +1070,11 @@ pub struct ActorsDef {
     /// absent for blocks without purposes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub purposes: Vec<String>,
+    /// Declared obligations, in source order: the named follow-through
+    /// actions grant and delegation entries may attach. Additive (wire
+    /// contract rule 9): absent for blocks without obligations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub obligations: Vec<String>,
     /// Declared grants, in source order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub grants: Vec<GrantDef>,
@@ -1089,6 +1094,7 @@ impl ActorsDef {
             actors: Vec::new(),
             capabilities: Vec::new(),
             purposes: Vec::new(),
+            obligations: Vec::new(),
             grants: Vec::new(),
             delegations: Vec::new(),
             never_both: Vec::new(),
@@ -1110,6 +1116,12 @@ impl ActorsDef {
     /// Chainable setter appending a purpose name.
     pub fn purpose(mut self, name: impl Into<String>) -> Self {
         self.purposes.push(name.into());
+        self
+    }
+
+    /// Chainable setter appending an obligation name.
+    pub fn obligation(mut self, name: impl Into<String>) -> Self {
+        self.obligations.push(name.into());
         self
     }
 

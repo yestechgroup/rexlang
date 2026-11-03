@@ -133,10 +133,12 @@
 //! ```text
 //! actors_block    := "actors" name "{" actors_item* "}"
 //! actors_item     := actor_decl | capability_decl | purpose_decl
-//!                  | grant_decl | delegation_decl | never_both_decl
+//!                  | obligation_decl | grant_decl | delegation_decl
+//!                  | never_both_decl
 //! actor_decl      := ("actor" | "agent") name ("extends" name)?
 //! capability_decl := "capability" name "on" type_ref
 //! purpose_decl    := "purpose" name
+//! obligation_decl := "obligation" name
 //! grant_decl      := "grant" name "{" grant_entry* "}"
 //! grant_entry     := effect_entry | cedar_entry
 //! effect_entry    := ("permit" | "forbid") name ("when" raw_parens)?

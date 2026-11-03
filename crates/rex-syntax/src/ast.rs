@@ -399,6 +399,8 @@ pub struct ActorsDecl {
     pub capabilities: Vec<CapabilityDecl>,
     /// Declared purposes, in source order.
     pub purposes: Vec<PurposeDecl>,
+    /// Declared obligations, in source order.
+    pub obligations: Vec<ObligationDecl>,
     /// Declared grants, in source order.
     pub grants: Vec<GrantDecl>,
     /// Declared delegations, in source order.
@@ -452,6 +454,17 @@ pub struct PurposeDecl {
     /// The purpose name.
     pub name: Name,
     /// Span of the whole purpose declaration.
+    pub span: Span,
+}
+
+/// An `obligation <name>` member of an [`ActorsDecl`]: a named follow-through
+/// action grant and delegation entries may attach — a declared vocabulary
+/// the entries' obligation references resolve against.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObligationDecl {
+    /// The obligation name.
+    pub name: Name,
+    /// Span of the whole obligation declaration.
     pub span: Span,
 }
 

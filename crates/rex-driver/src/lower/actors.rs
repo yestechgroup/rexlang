@@ -32,6 +32,8 @@ pub(crate) fn lower_actors(
     let mut actor_kinds: Vec<(String, Option<ir::ActorKind>)> = Vec::new();
     let mut parents: Vec<(String, Option<String>)> = Vec::new();
     let mut purposes: Vec<(String, Span)> = Vec::new();
+    let mut obligations: Vec<(String, Span)> = Vec::new();
+    let mut obligation_refs: Vec<ObligationRef> = Vec::new();
     let mut forbids: Vec<(String, String, Span)> = Vec::new();
     let mut never_both: Vec<(Vec<String>, Span)> = Vec::new();
     let mut delegations: Vec<DelegationRecord> = Vec::new();
@@ -126,6 +128,18 @@ pub(crate) fn lower_actors(
         purposes.push((purpose.name.text.clone(), purpose.name.span));
     }
 
+    let mut seen_obligations = HashSet::new();
+    for obligation in &decl.obligations {
+        if !seen_obligations.insert(obligation.name.text.as_str()) {
+            diags.push(Diagnostic::error(
+                format!("duplicate obligation `{}`", obligation.name.text),
+                Some(obligation.name.span),
+            ));
+        }
+        def = def.obligation(&obligation.name.text);
+        obligations.push((obligation.name.text.clone(), obligation.name.span));
+    }
+
     for grant in &decl.grants {
         if !actor_names
             .iter()
@@ -172,6 +186,11 @@ pub(crate) fn lower_actors(
                     }
                     for obligation in &effect.obligations {
                         ir_entry = ir_entry.obligation(&obligation.text);
+                        obligation_refs.push(ObligationRef {
+                            context: format!("grant of actor `{}`", grant.actor.text),
+                            name: obligation.text.clone(),
+                            span: obligation.span,
+                        });
                     }
                     ir_grant = ir_grant.entry(ir_entry);
                 }
@@ -232,6 +251,11 @@ pub(crate) fn lower_actors(
             }
             for obligation in &entry.obligations {
                 ir_entry = ir_entry.obligation(&obligation.text);
+                obligation_refs.push(ObligationRef {
+                    context: format!("delegation `{}`", delegation.name.text),
+                    name: obligation.text.clone(),
+                    span: obligation.span,
+                });
             }
             if declared && ir_effect == ir::GrantEffect::Permit {
                 permits.push((entry.capability.text.clone(), entry.capability.span));
@@ -287,6 +311,8 @@ pub(crate) fn lower_actors(
             actor_kinds,
             parents,
             purposes,
+            obligations,
+            obligation_refs,
             forbids,
             never_both,
             delegations,
@@ -653,6 +679,45 @@ fn delegation_unbacked_permit(name: &str, capability: &str, actor: &str) -> Stri
 
 fn delegation_unknown_purpose(name: &str, purpose: &str) -> String {
     format!("delegation `{name}` names unknown purpose `{purpose}`")
+}
+
+/// Obligation references resolve against the union namespace of declared
+/// obligation names (the purpose discipline): every grant or delegation
+/// entry's `obligation` names a declaration of some block, else the entry
+/// attaches a follow-through that is never declared.
+pub(crate) fn validate_actor_obligations(
+    records: &[ActorsRecord],
+    diags: &mut Vec<(String, Diagnostic)>,
+) {
+    let declared: HashSet<&str> = records
+        .iter()
+        .flat_map(|record| record.obligations.iter().map(|(name, _)| name.as_str()))
+        .collect();
+    for record in records {
+        for reference in &record.obligation_refs {
+            if !declared.contains(reference.name.as_str()) {
+                let help = if declared.is_empty() {
+                    "no obligations are declared; declare `obligation <name>;` in an                      actors block"
+                        .to_string()
+                } else {
+                    let mut names: Vec<&str> = declared.iter().copied().collect();
+                    names.sort_unstable();
+                    format!("the actors blocks declare: {}", names.join(", "))
+                };
+                diags.push((
+                    record.file.clone(),
+                    Diagnostic::error(
+                        format!(
+                            "{} names unknown obligation `{}`",
+                            reference.context, reference.name
+                        ),
+                        Some(reference.span),
+                    )
+                    .with_help(help),
+                ));
+            }
+        }
+    }
 }
 
 /// The union namespace of declared purpose names across every block (purpose

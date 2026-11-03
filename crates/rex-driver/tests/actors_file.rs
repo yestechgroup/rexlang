@@ -45,6 +45,7 @@ actors Support {
 
     capability ReadTicket on Ticket
     capability RaiseRefund on rex.support.domain.Ticket
+    obligation audit
 
     grant Customer {
         permit ReadTicket

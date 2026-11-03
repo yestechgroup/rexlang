@@ -5,6 +5,7 @@ actors Escalation {
     agent Helper extends Finance
     capability EscalateTicket on Ticket
     capability ReadTicket on Ticket
+    obligation audit
 
     grant Finance {
         permit EscalateTicket when (amount > 0)
@@ -20,6 +21,6 @@ actors Escalation {
         from Finance
         to Agent
         purpose RefundTriage
-        permit ReadTicket
+        permit ReadTicket obligation audit
     }
 }
