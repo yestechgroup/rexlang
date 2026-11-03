@@ -27,6 +27,11 @@
 //!   output directory defaults to `target/rex`). Directories enter project
 //!   mode like `check`; exits `1` when any file fails, while compiling
 //!   files still emit their artifacts.
+//! * `rexlang manifest <file.ifml> [-o <out>]` — compile one `.ifml`
+//!   interaction flow, check it, and export its control/route manifest
+//!   (routes, controls, edges, actions, commands) as JSON to stdout or a
+//!   file; exits `1` on errors — a dangling reference never reaches a
+//!   manifest.
 //! * `rexlang artifact check <artifact.json>...` — validate wire-format
 //!   artifacts (Core IR, standalone actor policy, DDD design, canonical
 //!   instance) without the originating model; exits `1` on any violation.
@@ -106,6 +111,20 @@ enum Command {
         /// file).
         #[arg(short, long, value_name = "DIR", default_value = "target/rex")]
         out: PathBuf,
+    },
+    /// Export the declaration-backed control/route manifest of one `.ifml`
+    /// interaction flow as JSON: its routes/views, controls (expanded, with
+    /// resolved `data:` entities), interaction edges (navigate/refresh/
+    /// action invocations with triggers, guards, and bindings), actions
+    /// with their target entities, and CLI commands flattened to their
+    /// invocation paths. Compilation and checking gate emission — a
+    /// dangling reference is an error before any manifest exists.
+    Manifest {
+        /// The `.ifml` interaction-flow file.
+        file: PathBuf,
+        /// Write the JSON to this path instead of stdout.
+        #[arg(short, long, value_name = "FILE")]
+        out: Option<PathBuf>,
     },
     /// Code generation from compiled `.mox` files.
     Gen {
@@ -235,6 +254,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Check { files } => commands::check::run(files),
         Command::Ir { files, out, expand } => commands::ir::run(files, out, expand),
         Command::Build { files, out } => commands::build::run(files, out),
+        Command::Manifest { file, out } => commands::manifest::run(vec![file], out),
         Command::Gen { target } => commands::gen::run(target),
         Command::Fmt { check, files } => commands::fmt::run(check, files),
         Command::Artifact {
