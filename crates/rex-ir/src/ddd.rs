@@ -51,8 +51,10 @@
 //! package-qualified at this layer); resolution against the domain
 //! [`crate::Model`] is a driver/consumer concern, never a wire concern.
 //! Likewise [`ServiceOperation::capabilities`] loosely references actor
-//! capability names (the [`crate::ActorModel`] dimension); it is not
-//! validated at the wire layer.
+//! capability names (the [`crate::ActorModel`] dimension), and
+//! [`ServiceOperation::emits`] loosely references event names (the
+//! [`crate::events::EventModel`] dimension); neither is validated at the
+//! wire layer.
 //!
 //! A [`RepositoryOperation`] carries **exactly one** of a built-in op
 //! ([`RepositoryOperation::builtin`] — the consumer knows its signature) or
@@ -267,6 +269,11 @@ pub struct ServiceOperation {
     /// the wire layer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<String>,
+    /// Event names this operation emits (the `emits` clause; the
+    /// [`crate::events::EventModel`] dimension); loosely coupled, not
+    /// validated at the wire layer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub emits: Vec<String>,
     /// The `when (...)` guard condition's source text, verbatim between the
     /// parentheses (the `when`-condition rule); typing is a driver concern.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -274,8 +281,8 @@ pub struct ServiceOperation {
 }
 
 impl ServiceOperation {
-    /// Creates an operation with no return type, parameters, delegation, or
-    /// capabilities.
+    /// Creates an operation with no return type, parameters, delegation,
+    /// capabilities, or emitted events.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -285,6 +292,7 @@ impl ServiceOperation {
             delegation: None,
             is_protected: false,
             capabilities: Vec::new(),
+            emits: Vec::new(),
             condition: None,
         }
     }
@@ -298,6 +306,12 @@ impl ServiceOperation {
     /// Chainable setter marking the operation `protected`.
     pub fn with_protected(mut self, is_protected: bool) -> Self {
         self.is_protected = is_protected;
+        self
+    }
+
+    /// Chainable setter for the emitted event names.
+    pub fn with_emits(mut self, emits: Vec<String>) -> Self {
+        self.emits = emits;
         self
     }
 }
@@ -981,6 +995,7 @@ mod tests {
                             delegation: None,
                             is_protected: false,
                             capabilities: vec!["BorrowBooks".to_string()],
+                            emits: vec!["LoanStateChanged".to_string()],
                             condition: None,
                         },
                         ServiceOperation {
@@ -994,6 +1009,7 @@ mod tests {
                             }),
                             is_protected: false,
                             capabilities: Vec::new(),
+                            emits: Vec::new(),
                             condition: None,
                         },
                     ],
@@ -1323,6 +1339,37 @@ mod tests {
             serde_json::to_string(&RankingStrategy::Custom("x".to_string())).expect("serialize"),
             r#"{"type":"custom","value":"x"}"#
         );
+    }
+
+    #[test]
+    fn emits_are_omitted_when_empty_and_round_trip_when_set() {
+        // Additive rule 9: an operation with no `emits` clause serializes
+        // without the key (artifacts authored before the clause stay
+        // byte-identical), and a populated list round-trips.
+        let mut op = ServiceOperation::new("approve");
+        let json = serde_json::to_string(&op).expect("serialize");
+        assert!(!json.contains("emits"), "empty emits are omitted: {json}");
+        let parsed: ServiceOperation =
+            serde_json::from_str(&json).expect("deserialize without emits");
+        assert_eq!(parsed, op, "the default is the empty list");
+
+        op.emits = vec!["PayRunStateChanged".to_string()];
+        let json = serde_json::to_string(&op).expect("serialize");
+        assert_eq!(
+            json, r#"{"name":"approve","emits":["PayRunStateChanged"]}"#,
+            "camelCase key, in declaration order: {json}"
+        );
+        let parsed: ServiceOperation = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, op);
+        assert_eq!(
+            serde_json::to_string(&parsed).expect("re-serialize"),
+            json,
+            "re-serialization is byte-identical"
+        );
+
+        // The chainable setter.
+        let op = ServiceOperation::new("submit").with_emits(vec!["PayRunSubmitted".to_string()]);
+        assert_eq!(op.emits, vec!["PayRunSubmitted".to_string()]);
     }
 
     #[test]

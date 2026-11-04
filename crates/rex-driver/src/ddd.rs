@@ -645,6 +645,10 @@ fn lower_module_services<'a>(
                 .iter()
                 .map(|name| name.text.clone())
                 .collect();
+            // The emitted event names lower as authored (loosely coupled:
+            // the `.ddd` compile has no `.evt` bucket — existence/coverage
+            // resolve in the union integrity pass).
+            let emits: Vec<String> = op.emits.iter().map(|name| name.text.clone()).collect();
             for capability in &op.capabilities {
                 registries.capability_checks.push(CapabilityCheck {
                     context: format!(
@@ -670,6 +674,7 @@ fn lower_module_services<'a>(
                     }),
                     is_protected: op.is_protected,
                     capabilities,
+                    emits,
                     condition: op
                         .condition
                         .map(|span| condition_text(design_source, span).to_string()),
@@ -734,6 +739,7 @@ fn lower_module_services<'a>(
                     delegation: None,
                     is_protected: op.is_protected,
                     capabilities,
+                    emits,
                     condition: op
                         .condition
                         .map(|span| condition_text(design_source, span).to_string()),

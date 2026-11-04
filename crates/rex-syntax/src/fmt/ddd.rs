@@ -222,6 +222,7 @@ impl<'src> Formatter<'src> {
                     self.scan_ddd_params();
                 }
                 self.scan_ddd_capabilities();
+                self.scan_ddd_emits();
                 if self.take_if(|token| matches!(token, Token::When)) {
                     self.scan_raw_parens();
                 }
@@ -250,6 +251,23 @@ impl<'src> Formatter<'src> {
     /// operation's line.
     pub(crate) fn scan_ddd_capabilities(&mut self) {
         if !self.take_if(|token| matches!(token, Token::Capability)) {
+            return;
+        }
+        self.take_name();
+        while self.take_if(|token| matches!(token, Token::Comma)) {
+            self.take_name();
+        }
+    }
+
+    /// Consumes and emits an optional `emits A, B` clause, kept on the
+    /// operation's line: the canonical position between the `capability`
+    /// clause and the `when` guard (the parser enforces that order, so
+    /// re-emitting in scan order is the canonical order). `emits` is a
+    /// contextual word — an ordinary identifier everywhere else — so the
+    /// scan matches the [`ddd::EMITS`] identifier, not a keyword token.
+    /// Repository operations never take the clause.
+    pub(crate) fn scan_ddd_emits(&mut self) {
+        if !self.take_if(|token| matches!(token, Token::Ident(ddd::EMITS))) {
             return;
         }
         self.take_name();

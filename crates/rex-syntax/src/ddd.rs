@@ -26,8 +26,9 @@
 //!
 //! The remaining single words ([`APPLICATION`], [`BASE`], [`MODULE`],
 //! [`SERVICE`], [`SEARCH`], [`ABSTRACT`], [`REPOSITORY`], [`INJECT`],
-//! [`BOOST`], [`ANALYZER`], [`LIMIT`], [`MAX`], [`CURSOR`]) are matched on
-//! both sides at fixed grammar positions; they carry no canonical order.
+//! [`EMITS`], [`BOOST`], [`ANALYZER`], [`LIMIT`], [`MAX`], [`CURSOR`]) are
+//! matched on both sides at fixed grammar positions; they carry no
+//! canonical order.
 //! The `ranking` value words (`bm25`, `tfIdf`, `exact`, `custom`) are
 //! parser-only — the formatter re-emits whatever follows the `ranking`
 //! keyword — so they stay in the parser alone.
@@ -55,6 +56,15 @@ pub(crate) const ABSTRACT: &str = "abstract";
 pub(crate) const REPOSITORY: &str = "repository";
 /// The `inject <name>;` keyword of a service body.
 pub(crate) const INJECT: &str = "inject";
+/// The `emits <Event> (, <Event>)*` clause of a service operation: the
+/// events the operation produces (loosely coupled to the `.evt` layer —
+/// existence/coverage resolve in the union integrity pass, never at the
+/// wire layer). A contextual word like the rest: special only between a
+/// service operation's `capability` clause and its `when` guard, an
+/// ordinary identifier everywhere else. Repository operations take no
+/// `emits` clause (the wire artifact's repository operations carry none,
+/// so accepting one would silently drop data).
+pub(crate) const EMITS: &str = "emits";
 /// The optional `protected` visibility modifier of a service or repository
 /// operation (Sculptor's `protected` — the operation stays off the public
 /// interface). A contextual word like the rest: in leading position it is

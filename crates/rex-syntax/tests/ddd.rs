@@ -1261,6 +1261,185 @@ fn service_op_when_clause_parses() {
     );
 }
 
+/// A service operation carrying the `emits` clause: a comma list of event
+/// names, written between the `capability` clause and the `when` guard
+/// (the canonical clause order).
+const EMITS: &str = r#"
+import "payrun.mox"
+
+application Payroll {
+    base nz.example.payroll
+    module payroll {
+        service PayRunService {
+            boolean approve(String approver) capability ApprovePayRun emits PayRunStateChanged, PayRunSubmitted when (status == AwaitingApproval);
+            save => payRunRepository.save emits PayRunStateChanged;
+            void purge() emits PayRunPurged;
+            void replicate();
+        }
+    }
+}
+"#;
+
+#[test]
+fn service_op_emits_clause_parses() {
+    let result = parse_ddd(EMITS);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let service = &expect_module(&file, "payroll").services[0];
+    assert_eq!(service.operations.len(), 4);
+
+    // A declared op: emits names collected in source order, the whole-decl
+    // span covering the clause and the `;`.
+    let approve = &service.operations[0];
+    assert_eq!(approve.name.text, "approve");
+    assert_eq!(
+        approve
+            .capabilities
+            .iter()
+            .map(|name| name.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["ApprovePayRun"]
+    );
+    assert_eq!(
+        approve
+            .emits
+            .iter()
+            .map(|name| name.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["PayRunStateChanged", "PayRunSubmitted"]
+    );
+    assert_eq!(
+        span_text(EMITS, approve.condition.expect("condition")),
+        "(status == AwaitingApproval)"
+    );
+    assert_eq!(
+        span_text(EMITS, approve.span),
+        "boolean approve(String approver) capability ApprovePayRun emits PayRunStateChanged, \
+         PayRunSubmitted when (status == AwaitingApproval);"
+    );
+
+    // A delegated op carries the clause too (it is a service operation).
+    let delegated = &service.operations[1];
+    assert!(delegated.delegation.is_some());
+    assert_eq!(
+        delegated
+            .emits
+            .iter()
+            .map(|name| name.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["PayRunStateChanged"]
+    );
+
+    // An op with no clause emits nothing (the AST default).
+    let replicate = &service.operations[3];
+    assert_eq!(replicate.name.text, "replicate");
+    assert!(replicate.emits.is_empty());
+}
+
+#[test]
+fn emits_clause_requires_at_least_one_event_name() {
+    let result = parse_ddd("application A { module M { service S { boolean approve() emits; } } }");
+    assert!(
+        result.errors.iter().any(|error| error
+            .message
+            .contains("`emits` requires at least one event name")),
+        "expected the emits error, got {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn emits_formats_in_canonical_clause_order() {
+    // The source is already canonical (capability → emits → when); the
+    // formatter re-emits it byte-identically and is idempotent.
+    let formatted = fmt_ddd(EMITS);
+    assert_eq!(
+        formatted,
+        concat!(
+            "import \"payrun.mox\";\n",
+            "\n",
+            "application Payroll {\n",
+            "    base nz.example.payroll\n",
+            "    module payroll {\n",
+            "        service PayRunService {\n",
+            "            boolean approve(String approver) capability ApprovePayRun emits PayRunStateChanged, PayRunSubmitted when (status == AwaitingApproval);\n",
+            "            save => payRunRepository.save emits PayRunStateChanged;\n",
+            "            void purge() emits PayRunPurged;\n",
+            "            void replicate();\n",
+            "        }\n",
+            "    }\n",
+            "}\n",
+        ),
+        "canonical clause order capability → emits → when, got:\n{formatted}"
+    );
+    assert_eq!(
+        fmt_ddd(&formatted),
+        formatted,
+        "formatting must be idempotent"
+    );
+
+    // The formatted output parses cleanly.
+    let once = parse_ddd(&formatted);
+    assert!(
+        once.errors.is_empty(),
+        "formatted output must parse cleanly, got {:?}",
+        once.errors
+    );
+}
+
+#[test]
+fn emits_word_stays_contextual() {
+    // `emits` is special only between a service operation's capability and
+    // guard clauses; everywhere else it is an ordinary identifier: service
+    // name, inject target, op name, parameter type, parameter name,
+    // capability name, emit name, class name — and `^emits` escapes as any
+    // contextual word.
+    let source = concat!(
+        "application A { module m {\n",
+        "    service emits {\n",
+        "        inject emits;\n",
+        "        boolean emits(emits emits) capability emits;\n",
+        "        value => entity.emits emits emits;\n",
+        "    }\n",
+        "    entity emits\n",
+        "    entity ^emits\n",
+        "} }\n",
+    );
+    let result = parse_ddd(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let module = expect_module(&file, "m");
+    assert_eq!(module.designs[0].class.text, "emits");
+    assert_eq!(module.designs[1].class.text, "emits");
+    let service = &module.services[0];
+    assert_eq!(service.name.text, "emits");
+    assert_eq!(service.dependencies[0].text, "emits");
+    let declared = &service.operations[0];
+    assert_eq!(declared.name.text, "emits");
+    assert_eq!(
+        declared.return_type.as_ref().unwrap().name.full_name(),
+        "boolean"
+    );
+    assert_eq!(declared.params[0].type_ref.name.full_name(), "emits");
+    assert_eq!(declared.params[0].name.text, "emits");
+    assert_eq!(declared.capabilities[0].text, "emits");
+    // A delegated op named `value` targeting `entity.emits`, emitting the
+    // event `emits`: the keyword position is behind the delegation target.
+    let delegated = &service.operations[1];
+    let delegation = delegated.delegation.as_ref().unwrap();
+    assert_eq!(delegation.target.full_name(), "entity");
+    assert_eq!(delegation.operation.text, "emits");
+    assert_eq!(delegated.emits[0].text, "emits");
+}
+
 #[test]
 fn machine_words_stay_contextual() {
     // `machine`, `initial`, `terminal`, and `via` are ordinary identifiers in
