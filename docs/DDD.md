@@ -226,6 +226,15 @@ consumers resolve against the domain model.
     the layering heuristic under "Domain operations vs service
     operations"). Warning-severity: the artifact is unaffected, and the
     check runs only against a fully lowered union.
+16. **Typed status fields** — an entity design whose class carries a
+    feature named `status` or `state` typed as a bare `String` is an
+    error: a status-like field is a lifecycle, and the bare-`String`
+    shape is the silent no-machine case. Declare an enum in the domain
+    model and a `machine '<field>: <Enum>'` on the design. Value objects
+    and dtos are exempt (the check is entity semantics, the machine
+    rule's scope), and enum-typed fields stay legal — an enum without a
+    machine is a legitimate modeling choice (the canonical fixture's
+    `MediaStatus status` field is the shape).
 
 ## State machines
 
@@ -280,7 +289,10 @@ in `crates/rex-driver/src/ddd.rs`; behavior pinned by
   (breadth-first over the edges).
 - Edge guards and operation `when` conditions type-check through the shared
   expression language (rex-expr) with the designed class as the implicit
-  `self`.
+  `self` — and guard literals against the machine field must be machine
+  states: only the declared states bind as names, so a member of the bound
+  enum that the machine never declares is a type error (it can never hold
+  on this machine).
 
 **Condition binding.** Machine states bind as enum-typed *names* — guards
 read `status == AwaitingApproval`, never `status == "AwaitingApproval"`.
@@ -292,7 +304,12 @@ operation is not aggregate-scoped, so its condition requires the module to
 have **exactly one** machine-bearing design, and that design's class is the
 condition's `self` scope. Two machines in one module declaring the same
 state name is an ambiguous-binding error: the name stops binding, with one
-error saying so.
+error saying so. The same binding is the membership check on guard
+literals: an equality against the machine's field must name a declared
+state — an enum member the machine never declares is unbound (a type
+error), because a state this machine can never hold is a modeling defect,
+not a value. Comparisons against other features are not machine-checked:
+their name operands resolve as features.
 
 **Artifact shape.** The machine lowers to `machine` on the design (a
 `rex_ir::ddd::StateMachine`): the bound `field`, the enum `TypeRef`, the
@@ -501,7 +518,7 @@ application Library {
             inject PersonService;
             inject MediaSearch;
             boolean borrow(String mediaId, Person borrower) capability BorrowMedia;
-            PhysicalMedia registerMedia(String status);
+            PhysicalMedia registerMedia(MediaStatus status);
             protected save => PhysicalMediaRepository.save;
             registerBorrower => PersonService.register;
             findMedia => MediaSearch.search;
@@ -528,7 +545,7 @@ application Library {
             findAll;
             save;
             delete;
-            PhysicalMedia findByStatus(String status);
+            PhysicalMedia findByStatus(MediaStatus status);
         }
         /// Full-text search over the movie catalogue.
         search MediaSearch {
