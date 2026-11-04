@@ -842,6 +842,9 @@ fn lower_module_designs(
         // Rule 15 — the dto-with-ops warning.
         local.extend(rule_15_dto_ops_warnings(design, resolved.as_ref(), union));
 
+        // Rule 16 — status-like fields are typed lifecycles.
+        local.extend(rule_16_bare_string_status(design, resolved.as_ref(), union));
+
         // Rule 14 — scaffold declares the repository it scaffolds around.
         if let Some(diagnostic) = rule_14_scaffold_repository(design) {
             local.push(diagnostic);
@@ -980,6 +983,53 @@ fn rule_15_dto_ops_warnings(
                             "move the behavior to an aggregate-owned class `op`, or \
                              declare a service operation that delegates to it",
                         ),
+                    );
+                }
+            }
+        }
+    }
+    diagnostics
+}
+
+/// Rule 16 — a status-like field (`status` or `state`) typed as a bare
+/// `String` on a designed entity is a lifecycle the model can never state:
+/// with a machine declared, the enum-typed binding check already fires, so
+/// the bare-`String` shape is exactly the silent no-machine case. The
+/// check is entity semantics (the machine rule's scope): value objects and
+/// dtos are exempt, and enum-typed fields stay legal — an enum without a
+/// machine is a legitimate modeling choice. Feature-level checks run only
+/// against a fully lowered union (a failed domain may hide features; its
+/// diagnostics already block the artifact), one diagnostic per offending
+/// field.
+fn rule_16_bare_string_status(
+    design: &dsl::DddDesign,
+    resolved: Option<&(String, String)>,
+    union: Option<&rex_ir::Model>,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    if design.stereotype != dsl::DddStereotype::Entity {
+        return diagnostics;
+    }
+    if let (Some((package, class)), Some(union)) = (resolved, union) {
+        if let Some(features) = class_features(union, package, class) {
+            for feature in features {
+                if matches!(feature.name.as_str(), "status" | "state")
+                    && feature.type_ == rex_ir::TypeRef::Primitive(rex_ir::PrimitiveType::String)
+                {
+                    diagnostics.push(
+                        Diagnostic::error(
+                            format!(
+                                "entity '{}' field '{}' is a bare String; status-like \
+                                 fields carry a state machine",
+                                design.class.text, feature.name
+                            ),
+                            Some(design.class.span),
+                        )
+                        .with_help(format!(
+                            "declare an enum in the domain model and a machine \
+                             '{}: <Enum>' on the design",
+                            feature.name
+                        )),
                     );
                 }
             }
