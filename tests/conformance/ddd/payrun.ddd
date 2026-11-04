@@ -4,7 +4,7 @@ application Payroll {
     base nz.example.payroll
     module payroll {
         service PayRunService {
-            boolean approve() capability ApprovePayRun when (status == AwaitingApproval);
+            boolean approve() capability ApprovePayRun emits PayRunStateChanged when (status == AwaitingApproval);
         }
         entity PayRun repository PayRunRepository {
             findById;

@@ -52,7 +52,10 @@ docs):
   there is no parallel wire-level type shape.
 - Names are plain strings at this layer: `publishes` entries and
   `events` lists reference events *by name*; resolving them is a
-  driver/consumer concern, never a wire concern.
+  driver/consumer concern, never a wire concern. The production side is
+  the `.ddd` service operation's `emits` clause (`docs/DDD.md`): the union
+  integrity pass checks that emitted events are declared here and that
+  declared events are emitted somewhere.
 - Unknown fields are ignored on deserialize; every field added after v1
   must keep the `#[serde(default)]` + skip discipline (the optional
   `version` is omitted when absent).

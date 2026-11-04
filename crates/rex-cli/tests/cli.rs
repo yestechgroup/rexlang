@@ -3741,13 +3741,18 @@ fn fmt_uc_files_rewrites_in_place_and_check_then_passes() {
 /// The shared domain: one class the capabilities hang on.
 const UNION_MOX: &str = "package demo\n\nclass Ticket { String title }\n";
 
-/// A design whose only operation carries `capabilities`.
+/// A design whose only operation carries `capabilities` and emits the
+/// event the cluster's `.evt` contract declares — the union pass's
+/// emission checks (issue rexlang#114) require a declared event to be
+/// produced, so a *fully wired* fixture has to emit it (the flag-tests
+/// below break exactly one other wire each; none of their pinned
+/// diagnostics involve emissions).
 fn union_ddd(capability: Option<&str>) -> String {
     let clause = capability
         .map(|c| format!(" capability {c}"))
         .unwrap_or_default();
     format!(
-        "import \"app.mox\";\n\napplication App {{\n    module desk {{\n        service TicketService {{\n            Ticket hire(){clause};\n        }}\n    }}\n}}\n"
+        "import \"app.mox\";\n\napplication App {{\n    module desk {{\n        service TicketService {{\n            Ticket hire(){clause} emits OrderPlaced;\n        }}\n    }}\n}}\n"
     )
 }
 

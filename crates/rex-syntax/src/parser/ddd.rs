@@ -57,6 +57,37 @@ pub(crate) fn ddd_capabilities<'src>(
         })
 }
 
+/// The `emits <Event> (, <Event>)*` clause of a service operation: the
+/// events the operation produces. The `emits` keyword is contextual (the
+/// [`ddd::EMITS`] identifier, not a lexer token), so an operation may be
+/// named `emits` and an emitted event may be named `emits` — the keyword
+/// position is unambiguous. The clause is committed once the keyword
+/// matched: a missing name list is a syntax error (with recovery), not a
+/// failed alternative. Names are loosely coupled: the `.ddd` compile has
+/// no `.evt` bucket, so existence/coverage resolve in the union integrity
+/// pass.
+pub(crate) fn ddd_emits<'src>() -> impl Parser<'src, Tokens<'src>, Vec<Name>, MoxExtra<'src>> + Clone
+{
+    ddd_keyword(ddd::EMITS)
+        .ignore_then(name().or_not())
+        .then(
+            kw(Token::Comma)
+                .ignore_then(name())
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .map_with(|(first, rest), e| (first, rest, e.span()))
+        .validate(|(first, rest, span), _e, emitter| {
+            if first.is_none() {
+                emitter.emit(Rich::custom(
+                    span,
+                    "`emits` requires at least one event name",
+                ));
+            }
+            first.into_iter().chain(rest).collect::<Vec<_>>()
+        })
+}
+
 /// A `type_ref multiplicity? name "(" params? ")"` operation signature,
 /// shared verbatim by service and repository operations.
 pub(crate) fn ddd_signature<'src>() -> impl Parser<
@@ -132,38 +163,47 @@ pub(crate) fn ddd_delegation<'src>(
 
 /// One operation of a `service` body: an optional `protected` modifier, then
 /// a declared signature
-/// (`type_ref multiplicity? name "(" params? ")" capability*? ";"`) or a
-/// delegation (`name "=>" target.operation capability*? ";"`). The two
-/// alternatives are distinguished by the `=>` after the leading name;
+/// (`type_ref multiplicity? name "(" params? ")" capability*? emits? ";"`)
+/// or a delegation (`name "=>" target.operation capability*? emits? ";"`).
+/// The two alternatives are distinguished by the `=>` after the leading name;
 /// chumsky backtracks, so a delegated op may be named `save` and a declared
-/// op's type may be any contextual keyword.
+/// op's type may be any contextual keyword. Both forms carry the clause
+/// sequence `capability? emits? when?` (the canonical clause order the
+/// formatter emits); repository operations take none of the `capability`/
+/// `emits` clauses — the wire artifact's repository operations carry
+/// neither, so accepting one would silently drop data.
 pub(crate) fn ddd_service_op<'src>(
 ) -> impl Parser<'src, Tokens<'src>, DddServiceOp, MoxExtra<'src>> + Clone {
     let declared = ddd_signature()
         .then(ddd_capabilities().or_not())
+        .then(ddd_emits().or_not())
         .then(ddd_guard_clause().or_not())
         .then_ignore(kw(Token::Other(';')))
         .map_with(
-            |(((type_ref, multiplicity, name, params), capabilities), condition), e| DddServiceOp {
-                name,
-                return_type: Some(type_ref),
-                multiplicity,
-                params,
-                delegation: None,
-                is_protected: false,
-                capabilities: capabilities.unwrap_or_default(),
-                condition,
-                span: e.span(),
+            |((((type_ref, multiplicity, name, params), capabilities), emits), condition), e| {
+                DddServiceOp {
+                    name,
+                    return_type: Some(type_ref),
+                    multiplicity,
+                    params,
+                    delegation: None,
+                    is_protected: false,
+                    capabilities: capabilities.unwrap_or_default(),
+                    emits: emits.unwrap_or_default(),
+                    condition,
+                    span: e.span(),
+                }
             },
         );
     let delegated = name()
         .then_ignore(kw(Token::FatArrow))
         .then(ddd_delegation())
         .then(ddd_capabilities().or_not())
+        .then(ddd_emits().or_not())
         .then(ddd_guard_clause().or_not())
         .then_ignore(kw(Token::Other(';')))
         .map_with(
-            |(((name, delegation), capabilities), condition), e| DddServiceOp {
+            |((((name, delegation), capabilities), emits), condition), e| DddServiceOp {
                 name,
                 return_type: None,
                 multiplicity: None,
@@ -171,6 +211,7 @@ pub(crate) fn ddd_service_op<'src>(
                 delegation: Some(delegation),
                 is_protected: false,
                 capabilities: capabilities.unwrap_or_default(),
+                emits: emits.unwrap_or_default(),
                 condition,
                 span: e.span(),
             },
