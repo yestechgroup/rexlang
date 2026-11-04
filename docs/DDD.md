@@ -275,6 +275,14 @@ in `crates/rex-driver/src/ddd.rs`; behavior pinned by
 - The machine's type must resolve to an **enum**, and the bound feature
   (`<field>`) must exist on the designed class and carry exactly that enum
   type.
+- **Closed over the enum** — every state name (the `initial`, a `terminal`,
+  and every transition endpoint) must be a literal of that enum: a typo'd
+  endpoint is an error naming the enum and its declared literals, never a
+  new state. The enum's literal list is the single vocabulary of the
+  lifecycle.
+- Guards are predicates: a `when` condition on a transition — and on any
+  service or repository operation — must type as `boolean` (the actor,
+  deploy, and cmmn conditions' rule).
 - Exactly one `initial` state. Duplicate terminal declarations and
   duplicate identical edges are rejected.
 - **Determinism** — one trigger name may leave a state for at most one

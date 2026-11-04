@@ -11,6 +11,8 @@ actors Support {
     capability ResolveTicket on Ticket
     capability RaiseRefund on Ticket
     capability ApproveRefund on Ticket
+    obligation audit
+    obligation notifyCustomer
 
     grant Customer {
         permit ReadTicket when (!internal)

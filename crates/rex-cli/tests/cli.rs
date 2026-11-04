@@ -2086,7 +2086,10 @@ fn gen_tools_actor_file_prints_every_agent_manifest() {
           "purpose": "RefundTriage",
           "entries": [
             {
-              "capability": "ReadTicket"
+              "capability": "ReadTicket",
+              "obligations": [
+                "audit"
+              ]
             }
           ]
         },

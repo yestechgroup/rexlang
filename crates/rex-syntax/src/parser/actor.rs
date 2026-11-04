@@ -12,6 +12,7 @@ pub(crate) enum ActorsItem {
     Actor(ActorDecl),
     Capability(CapabilityDecl),
     Purpose(PurposeDecl),
+    Obligation(ObligationDecl),
     Grant(GrantDecl),
     Delegation(DelegationDecl),
     NeverBoth(NeverBothDecl),
@@ -59,6 +60,12 @@ pub(crate) fn actors_block<'src>(
     let purpose_decl = kw(Token::Purpose)
         .ignore_then(name())
         .map_with(|name, e| PurposeDecl {
+            name,
+            span: e.span(),
+        });
+    let obligation_decl = kw(Token::Obligation)
+        .ignore_then(name())
+        .map_with(|name, e| ObligationDecl {
             name,
             span: e.span(),
         });
@@ -164,6 +171,7 @@ pub(crate) fn actors_block<'src>(
         agent_decl.map(ActorsItem::Actor),
         capability_decl.map(ActorsItem::Capability),
         purpose_decl.map(ActorsItem::Purpose),
+        obligation_decl.map(ActorsItem::Obligation),
         grant_decl.map(ActorsItem::Grant),
         delegation_decl.map(ActorsItem::Delegation),
         never_both_decl.map(ActorsItem::NeverBoth),
@@ -177,6 +185,7 @@ pub(crate) fn actors_block<'src>(
             let mut actors = Vec::new();
             let mut capabilities = Vec::new();
             let mut purposes = Vec::new();
+            let mut obligations = Vec::new();
             let mut grants = Vec::new();
             let mut delegations = Vec::new();
             let mut never_both = Vec::new();
@@ -185,6 +194,7 @@ pub(crate) fn actors_block<'src>(
                     ActorsItem::Actor(decl) => actors.push(decl),
                     ActorsItem::Capability(decl) => capabilities.push(decl),
                     ActorsItem::Purpose(decl) => purposes.push(decl),
+                    ActorsItem::Obligation(decl) => obligations.push(decl),
                     ActorsItem::Grant(decl) => grants.push(decl),
                     ActorsItem::Delegation(decl) => delegations.push(decl),
                     ActorsItem::NeverBoth(decl) => never_both.push(decl),
@@ -195,6 +205,7 @@ pub(crate) fn actors_block<'src>(
                 actors,
                 capabilities,
                 purposes,
+                obligations,
                 grants,
                 delegations,
                 never_both,

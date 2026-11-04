@@ -2233,6 +2233,30 @@ fn lower_design_machine(
         }
         states
     };
+
+    // Machines are closed over their enum: every state name — the initial,
+    // a terminal, and every transition endpoint — must be a literal of the
+    // machine's enum type. A typo'd endpoint is an error, never a new
+    // state.
+    if let Some(literals) = enum_literals(union, &enum_type) {
+        for state in &states {
+            if !literals.contains(state) {
+                local.push(
+                    Diagnostic::error(
+                        format!(
+                            "state '{state}' of machine '{}' is not a literal of enum '{}'",
+                            machine.field.text,
+                            machine.type_.name.full_name()
+                        ),
+                        Some(machine.span),
+                    )
+                    .with_help(format!("the enum declares: {}", literals.join(", "))),
+                );
+                ok = false;
+            }
+        }
+    }
+
     if let Some(initial) = &initial {
         let mut reachable = vec![initial.clone()];
         let mut frontier = vec![initial.clone()];
@@ -2438,18 +2462,58 @@ fn check_condition(
             checker = checker.with_binding(state.clone(), binding.clone());
         }
     }
-    if let Err(errors) = checker.type_of(&ast) {
-        for error in errors {
-            let start = inner_start.saturating_add(error.span.start).min(span.end);
-            let end = inner_start
-                .saturating_add(error.span.end)
-                .clamp(start, span.end);
+    match checker.type_of(&ast) {
+        Err(errors) => {
+            for error in errors {
+                let start = inner_start.saturating_add(error.span.start).min(span.end);
+                let end = inner_start
+                    .saturating_add(error.span.end)
+                    .clamp(start, span.end);
+                local.push(Diagnostic::error(
+                    format!("invalid condition in {context_label}: {}", error.message),
+                    Some((start..end).into()),
+                ));
+            }
+        }
+        // A guard is a predicate: anything that types but is not boolean is
+        // a mistake the actor/deploy/cmmn conditions already refuse.
+        Ok(ty) if ty != rex_expr::Ty::boolean() => {
             local.push(Diagnostic::error(
-                format!("invalid condition in {context_label}: {}", error.message),
-                Some((start..end).into()),
+                format!(
+                    "invalid condition in {context_label}: condition must be boolean, \
+                     found {ty}"
+                ),
+                Some((inner_start..span.end).into()),
             ));
         }
+        Ok(_) => {}
     }
+}
+
+/// The literal names of the referenced enum, in declaration order, when the
+/// type resolves to an enum of the domain union.
+fn enum_literals(
+    union: Option<&rex_ir::Model>,
+    enum_type: &rex_ir::TypeRef,
+) -> Option<Vec<String>> {
+    let rex_ir::TypeRef::Enum { package, name } = enum_type else {
+        return None;
+    };
+    let package = union?
+        .packages
+        .iter()
+        .find(|candidate| &candidate.name == package)?;
+    let enum_def = package
+        .enums
+        .iter()
+        .find(|candidate| &candidate.name == name)?;
+    Some(
+        enum_def
+            .literals
+            .iter()
+            .map(|literal| literal.name.clone())
+            .collect(),
+    )
 }
 
 /// The features of a class including everything inherited through its

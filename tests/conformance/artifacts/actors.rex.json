@@ -214,6 +214,10 @@
           "purposes": [
             "RefundTriage"
           ],
+          "obligations": [
+            "audit",
+            "ack"
+          ],
           "grants": [
             {
               "actor": "Customer",

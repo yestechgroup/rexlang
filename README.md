@@ -179,6 +179,7 @@ actors Support {
 
     capability RaiseRefund on Ticket
     capability ApproveRefund on Ticket
+    obligation audit
 
     grant Agent {
         permit RaiseRefund when (refundCents > 0 && refundCents <= 5000)

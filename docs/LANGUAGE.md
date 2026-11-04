@@ -462,6 +462,13 @@ human principal. Both take the same optional `extends` clause, and a
 declared kind is inherited: an actor that declares no kind takes the
 nearest ancestor's declared kind, defaulting to human.
 
+Blocks declare obligations with `obligation <name>` lines — the named
+follow-through actions entries attach — under the same discipline as
+purposes: several per block, duplicates within a block are errors, and the
+declared set pools union-wide across blocks. Grant and delegation entries
+may only name declared obligations; an undeclared name is a compile error
+naming the grant (by actor) or delegation and the obligation.
+
 A `delegation` is a named transfer of authority from one actor to another:
 `from` and `to` are required, in that order, and the body holds only effect
 entries (`cedar { ... }` is rejected inside a delegation; an empty body is

@@ -335,6 +335,12 @@ pub(crate) struct ActorsRecord {
     /// Declared purposes with their declaration-name spans, in declaration
     /// order.
     purposes: Vec<(String, Span)>,
+    /// Declared obligations with their declaration-name spans, in
+    /// declaration order.
+    obligations: Vec<(String, Span)>,
+    /// Obligation references from grant and delegation entries:
+    /// (host context, name, name span), in source order.
+    obligation_refs: Vec<ObligationRef>,
     /// `never_both` constraints: capability names plus the decl span.
     never_both: Vec<(Vec<String>, Span)>,
     /// `forbid` entries: (actor, capability, capability-name span).
@@ -357,6 +363,14 @@ pub(crate) struct DelegationRecord {
     /// `permit` entries whose capability is declared: (capability,
     /// capability-name span).
     permits: Vec<(String, Span)>,
+}
+
+/// One obligation reference of a grant or delegation entry: the host
+/// context the diagnostics name, the obligation name, and its span.
+pub(crate) struct ObligationRef {
+    context: String,
+    name: String,
+    span: Span,
 }
 
 /// A `when` condition awaiting type checking once the class universe is

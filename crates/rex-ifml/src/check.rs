@@ -55,6 +55,7 @@
 //! | `E0106` | A `refresh("X")` target that is not a declared component (`refresh target 'X' is not a declared component`). |
 //! | `E0107` | A `requires:` capability name no provided actor model declares (`capability 'X' is not declared — add "capability X on <Class>;" to an actors block`). |
 //! | `E0108` | A `roles:` name no provided actor model declares as an actor (`role 'X' is not declared — add "actor X;" to an actors block`). |
+//! | `E0109` | An action declaration's `target:` entity does not resolve to exactly one class in the domain model (`unknown target entity 'X'`, or `ambiguous target entity 'X'` when several packages declare the name) — the `data:` discipline applied to the lowering's payload. |
 //!
 //! # Interaction references
 //!
@@ -87,6 +88,13 @@
 //! properties, `event_requires` prefixes) — so the index and the IR can
 //! never disagree about what is an authorization site. Diagnostics land
 //! with the interaction references, before the expression diagnostics.
+//!
+//! Declarations resolve one step further when a domain model is available:
+//! an action declaration's `target:` entity must name exactly one class of
+//! the domain model (`E0109`, the `data:` discipline — the target is the
+//! payload the lowering needs, so an unresolvable one is a dangling
+//! backend), and the declaration's own event handlers are expression-walked
+//! like a view's (`action 'X'` site context, no params of their own).
 //!
 //! # Bare calls
 //!
@@ -163,6 +171,9 @@ pub const E_UNKNOWN_ACTION: &str = "E0104";
 pub const E_UNKNOWN_VIEW: &str = "E0105";
 /// A `refresh("X")` target that is not a declared component.
 pub const E_UNKNOWN_COMPONENT: &str = "E0106";
+/// An action declaration's `target:` entity does not resolve to exactly
+/// one class in the domain model.
+pub const E_UNKNOWN_ACTION_TARGET: &str = "E0109";
 /// A `requires:` capability name that no provided actor model declares.
 pub const E_UNKNOWN_CAPABILITY: &str = "E0107";
 /// A `roles:` name that no provided actor model declares as an actor.
@@ -712,6 +723,67 @@ impl<'a> Checker<'a> {
         }
         for command in &model.commands {
             self.check_command(command, &[]);
+        }
+        for action in &model.actions {
+            // An action declaration's own event handlers carry the same
+            // guard/binding shapes a view's do — checked identically, with
+            // no params of their own.
+            let context = vec![format!("action '{}'", action.name)];
+            self.check_body(&[], &context, &[], &[], &action.events, &[], None);
+            // The `target:` entity is the lowering's payload — it must name
+            // a declared class of the domain model.
+            self.check_action_target(action, &context);
+        }
+    }
+
+    /// One action declaration's `target:` property: the bare entity name
+    /// must resolve to exactly one class of the domain model (the `data:`
+    /// discipline). Shapes that name no entity (free properties, string
+    /// payloads other than plain names) are not resolved.
+    fn check_action_target(
+        &mut self,
+        action: &rex_ir::ifml::ActionDeclaration,
+        context: &[String],
+    ) {
+        let Some(property) = action
+            .properties
+            .iter()
+            .find(|property| property.key == "target")
+        else {
+            return;
+        };
+        let name = match &property.value {
+            ValueExpression::Identifier(name) => name.clone(),
+            ValueExpression::String(name) => name.clone(),
+            _ => return,
+        };
+        let span = property.span.unwrap_or((0, 0));
+        match self.domains.resolve_class(&name) {
+            Ok(_) => {}
+            Err(EntityError::Unknown) => {
+                let site = Site {
+                    context: context.to_vec(),
+                    span,
+                    source: name.clone(),
+                };
+                self.push(
+                    E_UNKNOWN_ACTION_TARGET,
+                    &site,
+                    format!("unknown target entity '{name}'"),
+                );
+            }
+            Err(EntityError::Ambiguous) => {
+                let site = Site {
+                    context: context.to_vec(),
+                    span,
+                    source: name.clone(),
+                };
+                self.push(
+                    E_UNKNOWN_ACTION_TARGET,
+                    &site,
+                    format!("ambiguous target entity '{name}'"),
+                );
+            }
         }
     }
 
@@ -2310,6 +2382,97 @@ view "Catalog" {
             crate::compile_ifml_str("app.ifml", source, &crate::IfmlImports::default())
                 .expect("source must parse and resolve");
         assert!(check_ifml(&compilation, None).is_empty());
+    }
+
+    #[test]
+    fn action_target_must_resolve_to_a_declared_entity() {
+        let source = r#"
+action "ListWidgets" {
+    target: Widget;
+}
+"#;
+        let diags = diags(source, &shop_model());
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].code, E_UNKNOWN_ACTION_TARGET);
+        assert_eq!(
+            diags[0].message,
+            "action 'ListWidgets': unknown target entity 'Widget'"
+        );
+        let (start, end) = diags[0].span;
+        assert!(source[start..end].starts_with("target: Widget"));
+    }
+
+    #[test]
+    fn action_target_resolves_against_the_domain() {
+        let source = r#"
+action "ListProducts" {
+    target: Product;
+}
+"#;
+        assert!(diags(source, &shop_model()).is_empty());
+    }
+
+    #[test]
+    fn ambiguous_action_target_is_reported() {
+        let mut model = Model::new();
+        let mut first = Package::new("shop.a");
+        first.classes.push(ClassDef::new("Product", vec![], vec![]));
+        let mut second = Package::new("shop.b");
+        second
+            .classes
+            .push(ClassDef::new("Product", vec![], vec![]));
+        model.packages.push(first);
+        model.packages.push(second);
+
+        let source = r#"
+action "ListProducts" {
+    target: Product;
+}
+"#;
+        let diags = diags(source, &model);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].code, E_UNKNOWN_ACTION_TARGET);
+        assert!(
+            diags[0]
+                .message
+                .contains("ambiguous target entity 'Product'"),
+            "{}",
+            diags[0].message
+        );
+    }
+
+    #[test]
+    fn action_targets_are_skipped_without_domains() {
+        let source = r#"
+action "ListWidgets" {
+    target: Widget;
+}
+"#;
+        let compilation =
+            crate::compile_ifml_str("app.ifml", source, &crate::IfmlImports::default())
+                .expect("source must parse and resolve");
+        assert!(check_ifml(&compilation, None).is_empty());
+    }
+
+    #[test]
+    fn action_declaration_handlers_are_checked() {
+        let source = r#"
+action "Archive" {
+    on save(values) if nonsense -> stay;
+}
+"#;
+        let diags = diags(source, &shop_model());
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(
+            diags[0].message.contains("action 'Archive'"),
+            "{}",
+            diags[0].message
+        );
+        assert!(
+            diags[0].message.contains("unknown name 'nonsense'"),
+            "{}",
+            diags[0].message
+        );
     }
 
     #[test]

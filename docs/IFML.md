@@ -541,6 +541,7 @@ model is available:
 | `action("X")` | an `action "X" { target: …; }` declaration | `E0104` — `action 'X' is not declared — add action "X" { target: <Entity>; }` |
 | `navigate("X")` | a `view "X"` **or container** declaration | `E0105` — `navigate target 'X' is not a declared view or container` |
 | `refresh("X")` | a component declaration (any body, imported files included) | `E0106` — `refresh target 'X' is not a declared component` |
+| a declaration's `target:` | exactly one class of the domain model (`E0109` — `unknown target entity 'X'` / `ambiguous target entity 'X'`; skipped when no domain model is available) |
 
 Action invocations cannot be inferred from their references: declarations
 carry the `target` the lowering needs, so a dangling `action("X")` would

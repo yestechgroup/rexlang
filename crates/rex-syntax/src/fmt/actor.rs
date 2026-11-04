@@ -41,6 +41,10 @@ impl<'src> Formatter<'src> {
                 self.advance();
                 self.take_name();
             }
+            Some(Token::Obligation) => {
+                self.advance();
+                self.take_name();
+            }
             Some(Token::Grant) => {
                 self.advance();
                 self.take_name();

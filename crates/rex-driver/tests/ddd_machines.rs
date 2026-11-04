@@ -404,6 +404,132 @@ fn service_conditions_scope_to_the_module_machine() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Guards are predicates: a `when` condition — on a machine transition, a
+// service operation, or a repository operation — must type as boolean, the
+// way the actor, deploy, and cmmn conditions already must.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_transition_guard_must_be_boolean() {
+    assert_error(
+        &design(
+            r#"
+        entity PayRun repository PayRunRepository {
+            findById;
+        }
+        machine status: PayRunStatus {
+            initial Draft;
+            Draft -> Calculating via Calculate when (total);
+            Calculating -> AwaitingApproval via Submit;
+            terminal AwaitingApproval;
+        }
+"#,
+        ),
+        "condition must be boolean, found int",
+    );
+}
+
+#[test]
+fn a_service_operation_condition_must_be_boolean() {
+    assert_error(
+        &design(
+            r#"
+        entity PayRun repository PayRunRepository {
+            findById;
+        }
+        machine status: PayRunStatus {
+            initial Draft;
+            Draft -> Calculating via Calculate;
+            terminal Calculating;
+        }
+        service PayRunService {
+            void schedule() when (total);
+        }
+"#,
+        ),
+        "condition must be boolean, found int",
+    );
+}
+
+#[test]
+fn a_repository_operation_condition_must_be_boolean() {
+    assert_error(
+        &design(
+            r#"
+        entity PayRun repository PayRunRepository {
+            PayRun[] findByTotal(int total) when (total);
+        }
+        machine status: PayRunStatus {
+            initial Draft;
+            Draft -> Calculating via Calculate;
+            terminal Calculating;
+        }
+"#,
+        ),
+        "condition must be boolean, found int",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Machines are closed over their enum: every state name — the initial, a
+// terminal, and every transition endpoint — must be a literal of the
+// machine's enum type. A typo'd endpoint is an error, never a new state.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_transition_endpoint_that_is_no_enum_literal_errors() {
+    assert_error(
+        &design(
+            r#"
+        entity PayRun repository PayRunRepository {
+            findById;
+        }
+        machine status: PayRunStatus {
+            initial Draft;
+            Draft -> Calulating via Calculate;
+            terminal Calulating;
+        }
+"#,
+        ),
+        "state 'Calulating' of machine 'status' is not a literal of enum 'PayRunStatus'",
+    );
+}
+
+#[test]
+fn the_initial_and_terminals_must_be_enum_literals() {
+    assert_error(
+        &design(
+            r#"
+        entity PayRun repository PayRunRepository {
+            findById;
+        }
+        machine status: PayRunStatus {
+            initial Bogus;
+            Bogus -> Draft;
+            terminal Draft;
+        }
+"#,
+        ),
+        "state 'Bogus' of machine 'status' is not a literal of enum 'PayRunStatus'",
+    );
+    assert_error(
+        &design(
+            r#"
+        entity PayRun repository PayRunRepository {
+            findById;
+        }
+        machine status: PayRunStatus {
+            initial Draft;
+            Draft -> Posted;
+            terminal Bogus;
+        }
+"#,
+        ),
+        "state 'Bogus' of machine 'status' is not a literal of enum 'PayRunStatus'",
+    );
+}
+
 /// A domain exercising the typed-lifecycle rule's scope: the same
 /// status-like field across the stereotype and type matrix — a bare
 /// `String` on entity-designed classes is the defect; the integer-typed,
@@ -556,6 +682,28 @@ fn a_guard_literal_that_is_not_a_machine_state_is_rejected() {
         EXTRA_STATE_DOMAIN,
         "unknown name `Pended`",
     );
+}
+
+#[test]
+fn every_literal_of_the_enum_is_a_legal_state() {
+    assert_clean(&design(
+        r#"
+        entity PayRun repository PayRunRepository {
+            findById;
+        }
+        machine status: PayRunStatus {
+            initial Draft;
+            Draft -> Calculating via Calculate;
+            Calculating -> AwaitingApproval via Submit;
+            AwaitingApproval -> Approved via Approve;
+            Approved -> Processing via Schedule;
+            Processing -> Posted via Post;
+            Draft -> Reversed;
+            terminal Posted;
+            terminal Reversed;
+        }
+"#,
+    ));
 }
 
 #[test]

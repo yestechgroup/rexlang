@@ -17,7 +17,7 @@ use crate::pipeline;
 use super::actors::{
     detect_actor_cycles, lower_actors, validate_actor_delegations,
     validate_actor_delegations_union, validate_actor_never_both, validate_actor_never_both_union,
-    validate_actor_self_narrowing, validate_actor_self_narrowing_union,
+    validate_actor_obligations, validate_actor_self_narrowing, validate_actor_self_narrowing_union,
 };
 use super::classes::{
     detect_inheritance_cycles, lower_class, lower_datatype, lower_enum, lower_interface,
@@ -371,6 +371,7 @@ pub(crate) fn compile_multi(
         validate_actor_never_both_union(&actors, &mut tagged);
         validate_actor_self_narrowing_union(&actors, &mut tagged);
         validate_actor_delegations_union(&actors, &mut tagged);
+        validate_actor_obligations(&actors, &mut tagged);
     }
 
     let mut model = ir::Model::new();
@@ -785,6 +786,7 @@ pub(crate) fn compile_union_per_file(
         validate_actor_never_both_union(&actors, &mut tagged);
         validate_actor_self_narrowing_union(&actors, &mut tagged);
         validate_actor_delegations_union(&actors, &mut tagged);
+        validate_actor_obligations(&actors, &mut tagged);
     }
     let mut file_by_path: HashMap<&str, usize> = HashMap::new();
     for (index, file) in files.iter().enumerate() {
@@ -1118,6 +1120,7 @@ pub(crate) fn compile(
         validate_actor_never_both(&actors, &mut tagged);
         validate_actor_self_narrowing(&actors, &mut tagged);
         validate_actor_delegations(&actors, &mut tagged);
+        validate_actor_obligations(&actors, &mut tagged);
     }
     diags.extend(tagged.into_iter().map(|(_, diagnostic)| diagnostic));
 
@@ -1268,6 +1271,7 @@ pub(crate) fn compile_actor_file(
         validate_actor_never_both_union(&records, &mut diags);
         validate_actor_self_narrowing_union(&records, &mut diags);
         validate_actor_delegations_union(&records, &mut diags);
+        validate_actor_obligations(&records, &mut diags);
     }
 
     // Condition typing over the combined class universe.
