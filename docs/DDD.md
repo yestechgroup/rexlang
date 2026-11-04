@@ -104,9 +104,14 @@ Lexical and structural rules:
 - Delegated operations (`name => target.operation`) copy the target's
   signature conceptually and declare none of their own; a delegated op may
   be named `save` (contextual keywords). Declared service operations may
-  carry a `capability a, b` clause; declared repository operations take
-  none (the wire artifact's repository operations carry no capabilities, so
-  accepting one would silently drop data).
+  carry a `capability a, b` clause and an `emits A, B` clause; delegated
+  service operations may carry both clauses too (they are service
+  operations), while declared repository operations take neither (the wire
+  artifact's repository operations carry no capabilities or emissions, so
+  accepting one would silently drop data). A service operation's clauses
+  are fixed in the canonical order `capability? emits? when?` — the order
+  the formatter emits, so a source writing `when` before `emits` is a
+  syntax error, not a formatting opportunity.
 - A service or repository operation may carry a leading `protected`
   modifier (Sculptor's visibility): the operation stays off the public
   interface. `protected` is contextual — in leading position it is the
@@ -396,6 +401,43 @@ names nothing declared (rule 10, generalized across every actor model) or
 when a granted capability is carried by no operation or search — a grant
 guarding a transition that cannot happen. Checking a design alone stays
 per-surface and silent.
+
+## Events and the event-contract dimension
+
+A service operation's `emits` clause names the events the operation
+produces — the production-side counterpart of the `.evt` layer's
+contracts, channels, and subscriptions (a fragment, in the position the
+grammar fixes for it — after the `capability` clause, before the `when`
+guard):
+
+```
+service PayRunService {
+    boolean approve() capability ApprovePayRun emits PayRunStateChanged when (status == AwaitingApproval);
+}
+```
+
+Like `capability` names, emitted event names are **loosely coupled**: the
+names lower into the artifact exactly as authored, and a plain
+`compile_ddd_str` never validates them — the `.ddd` compile has no `.evt`
+bucket. Both directions of the design↔event wiring are enforced by the
+union integrity pass (`rex_driver::check_integrity`, register row
+**V12**):
+
+- **Emission existence** — every emitted event name on every service
+  operation must name an event declared in some provided `.evt` contract:
+  `operation 'approve' of service 'PayRunService' emits unknown event
+  'PayRunStateChanged'`, help listing the declared event names.
+- **Emission coverage** — every declared event must be emitted by at
+  least one service operation across the designs: `event 'E' is declared
+  but no operation emits it`. Channel `publishes` entries and
+  subscription `events [...]` lists are **consumption-side** wiring — they
+  route events to consumers and never satisfy production.
+
+Checking a design alone (or a contract alone) stays per-surface and
+silent: an `emits` clause in a cluster without `.evt` artifacts is not an
+error, and a contract in a cluster without designs is not either — the
+checks fire only when the counterpart surface is present in the checked
+union (`rexlang check <dir>`).
 
 ---
 

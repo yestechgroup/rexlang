@@ -20,6 +20,9 @@
               "capabilities": [
                 "ApprovePayRun"
               ],
+              "emits": [
+                "PayRunStateChanged"
+              ],
               "condition": "status == AwaitingApproval"
             }
           ]

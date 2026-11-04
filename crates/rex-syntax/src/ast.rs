@@ -993,6 +993,9 @@ pub struct DddServiceOp {
     pub is_protected: bool,
     /// Actor capability names from the `capability` clause, in source order.
     pub capabilities: Vec<Name>,
+    /// Event names from the `emits` clause, in source order — the events
+    /// the operation produces (loosely coupled to the `.evt` layer).
+    pub emits: Vec<Name>,
     /// The `when ( ... )` guard condition: a `raw_parens` span (parens
     /// included, expression inside deliberately unparsed — slicing and
     /// type-checking it is the driver's job).

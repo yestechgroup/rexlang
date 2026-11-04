@@ -74,6 +74,19 @@ use crate::diagnostic::Diagnostic;
 ///    actor 'X' in requires of view/command 'V'`. `roles:` names are
 ///    strictly actors — `unknown actor 'X' in roles of view 'V'`. Fires
 ///    when any actor artifacts are provided.
+/// 6. **Emission existence**: every event name on a service operation's
+///    `emits` clause must name an event declared in some provided `.evt`
+///    contract — `operation 'approve' of service 'PayRunService' emits
+///    unknown event 'X'`, help listing the declared event names. The
+///    clause is loosely coupled by design (the design compile has no
+///    event bucket), so this is where the names resolve. Fires when any
+///    event artifacts are provided.
+/// 7. **Emission coverage** (the reverse): every declared event must be
+///    emitted by at least one service operation across the designs —
+///    `event 'E' is declared but no operation emits it`, help naming the
+///    remedy. Channel `publishes` entries and subscription `events [...]`
+///    lists are consumption-side wiring; they do not satisfy production.
+///    Fires when any design artifacts are provided.
 ///
 /// # Opt-in in the house style
 ///
@@ -108,6 +121,8 @@ pub fn check_integrity(
     let mut diagnostics: Vec<(String, Diagnostic)> = Vec::new();
     diagnostics.extend(check_capability_existence(_designs, _actors));
     diagnostics.extend(check_capability_coverage(_designs, _actors));
+    diagnostics.extend(check_emission_existence(_designs, _events));
+    diagnostics.extend(check_emission_coverage(_designs, _events));
     diagnostics.extend(check_action_bindings(_designs, _flows));
     diagnostics.extend(check_subscription_consumers(_events, _deploys));
     diagnostics.extend(check_flow_actor_references(_actors, _flows));
@@ -237,6 +252,106 @@ fn check_capability_coverage(
                         format!(
                             "capability '{capability}' is granted but no operation or \
                              search carries it"
+                        ),
+                        None,
+                    )
+                    .with_help(help),
+                ));
+            }
+        }
+    }
+    diagnostics
+}
+
+/// Emission existence (rule 6): every event name on a service operation's
+/// `emits` clause must be declared in some provided event contract. The
+/// clause is loosely coupled by design — the `.ddd` compile has no event
+/// bucket — so the union pass is where the names resolve, the way rule 10
+/// resolves capability names against the actor layer. With no event
+/// artifacts the check is silent. An operation listing the same event
+/// twice is one emission (one diagnostic, not two).
+fn check_emission_existence(
+    designs: &[(String, DddModel)],
+    events: &[(String, EventModel)],
+) -> Vec<(String, Diagnostic)> {
+    if events.is_empty() {
+        return Vec::new();
+    }
+    let declared: BTreeSet<String> = events
+        .iter()
+        .flat_map(|(_, model)| model.events.iter().map(|event| event.name.clone()))
+        .collect();
+    let help = if declared.is_empty() {
+        "the event contracts declare no events".to_string()
+    } else {
+        format!(
+            "the event contracts declare: {}",
+            declared.iter().cloned().collect::<Vec<_>>().join(", ")
+        )
+    };
+    let mut diagnostics = Vec::new();
+    for (path, design) in designs {
+        for module in &design.modules {
+            for service in &module.services {
+                for operation in &service.operations {
+                    // Block-local dedup: a repeated name is one emission.
+                    for event in operation.emits.iter().collect::<BTreeSet<_>>() {
+                        if !declared.contains(event) {
+                            diagnostics.push((
+                                path.clone(),
+                                Diagnostic::error(
+                                    format!(
+                                        "operation '{}' of service '{}' emits unknown \
+                                         event '{event}'",
+                                        operation.name, service.name
+                                    ),
+                                    None,
+                                )
+                                .with_help(help.clone()),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    diagnostics
+}
+
+/// Emission coverage (rule 7), the reverse of
+/// [`check_emission_existence`]: every declared event must be emitted by
+/// at least one service operation across the provided designs — an event
+/// nothing produces is declared dead weight. Channel `publishes` entries
+/// and subscription `events [...]` lists are consumption-side wiring and
+/// do not satisfy production. With no design artifacts the check is
+/// silent.
+fn check_emission_coverage(
+    designs: &[(String, DddModel)],
+    events: &[(String, EventModel)],
+) -> Vec<(String, Diagnostic)> {
+    if designs.is_empty() {
+        return Vec::new();
+    }
+    let emitted: BTreeSet<String> = designs
+        .iter()
+        .flat_map(|(_, design)| design.modules.iter())
+        .flat_map(|module| module.services.iter())
+        .flat_map(|service| service.operations.iter())
+        .flat_map(|operation| operation.emits.iter())
+        .cloned()
+        .collect();
+    let help = "emit the event from a service operation's `emits` clause, \
+                or drop the declaration";
+    let mut diagnostics = Vec::new();
+    for (path, model) in events {
+        for event in &model.events {
+            if !emitted.contains(&event.name) {
+                diagnostics.push((
+                    path.clone(),
+                    Diagnostic::error(
+                        format!(
+                            "event '{}' is declared but no operation emits it",
+                            event.name
                         ),
                         None,
                     )
