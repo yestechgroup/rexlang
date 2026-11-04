@@ -51,24 +51,47 @@
 //! | `E0102` | Unknown feature or operation on a navigation path (rex-expr's `unknown feature ...` / `unknown operation ...`), or an unknown/ambiguous bare package-function call (`unknown function ...` / `ambiguous function ...`), prefixed with site context (`view 'Dashboard' component 'orders': ...`). |
 //! | `E0103` | Unknown variable: a name that is not a view/container/module parameter, not a `data:` feature, and not an event parameter (`unknown name 'x'`), prefixed with site context. |
 //! | `E0104` | An `action("X")` invocation whose name resolves to no `action "X" { target: ...; }` declaration (`action 'X' is not declared — add action "X" { target: <Entity>; }`). |
-//! | `E0105` | A `navigate("X")` target that is not a declared view (`navigate target 'X' is not a declared view`). |
+//! | `E0105` | A `navigate("X")` target that is neither a declared view nor a declared container (`navigate target 'X' is not a declared view or container`). |
 //! | `E0106` | A `refresh("X")` target that is not a declared component (`refresh target 'X' is not a declared component`). |
-//! | `E0107` | An action declaration's `target:` entity does not resolve to exactly one class in the domain model (`unknown target entity 'X'`, or `ambiguous target entity 'X'` when several packages declare the name) — the `data:` discipline applied to the lowering's payload. |
+//! | `E0107` | A `requires:` capability name no provided actor model declares (`capability 'X' is not declared — add "capability X on <Class>;" to an actors block`). |
+//! | `E0108` | A `roles:` name no provided actor model declares as an actor (`role 'X' is not declared — add "actor X;" to an actors block`). |
+//! | `E0109` | An action declaration's `target:` entity does not resolve to exactly one class in the domain model (`unknown target entity 'X'`, or `ambiguous target entity 'X'` when several packages declare the name) — the `data:` discipline applied to the lowering's payload. |
 //!
 //! # Interaction references
 //!
 //! The cross-reference pass resolves every `action(...)`/`navigate(...)`/
-//! `refresh(...)` string in the main file against the declarations of the
-//! whole compilation (main file plus imports, name-union-wide — the same
+//! `refresh(...)` string against the declarations of the whole
+//! compilation (main file plus imports, name-union-wide — the same
 //! scope `data:` entities resolve in). It needs no domain model and runs
-//! even when `domains: None`; only main-file sites are diagnosed, an
-//! imported file's dangling reference belongs to that file's own
-//! compilation's report. Spans point at the referenced string token, and
-//! diagnostics land before the expression diagnostics (source order).
+//! even when `domains: None`. Sites on **instantiated** files are
+//! diagnosed: the entry file instantiates a module by `use`-ing it, and
+//! instantiation is transitive through module composition — a used
+//! module's body references are the app's surface (the
+//! silently-missing-control class), so their dangling names are errors
+//! with spans in the imported file. An import whose modules are never
+//! used keeps its references to its own compilation's report. Spans
+//! point at the referenced string token, and diagnostics land before the
+//! expression diagnostics (source order).
+//!
+//! # Authorization references
+//!
+//! [`check_ifml_with_actors`] additionally resolves every `requires:` /
+//! `roles:` name in the main file — view-level properties and event-level
+//! `requires:` prefixes — against the actor models the host provides:
+//! `requires:` against declared capability names, `roles:` against
+//! declared actor names, bare-name union-wide across all blocks. An empty
+//! actor slice skips the pass entirely (the same contract as
+//! `domains: None` for expressions): hosts gather `.actor` imports when
+//! they exist, and a flow whose actor layer is absent keeps its current
+//! behavior. Sites and spans come from the index's `auth_sites` — exactly
+//! the shapes the lowering extracts (view-body `roles:`/`requires:`
+//! properties, `event_requires` prefixes) — so the index and the IR can
+//! never disagree about what is an authorization site. Diagnostics land
+//! with the interaction references, before the expression diagnostics.
 //!
 //! Declarations resolve one step further when a domain model is available:
 //! an action declaration's `target:` entity must name exactly one class of
-//! the domain model (`E0107`, the `data:` discipline — the target is the
+//! the domain model (`E0109`, the `data:` discipline — the target is the
 //! payload the lowering needs, so an unresolvable one is a dangling
 //! backend), and the declaration's own event handlers are expression-walked
 //! like a view's (`action 'X'` site context, no params of their own).
@@ -125,10 +148,9 @@ use rex_ir::ifml::{
     EventAction, EventHandler, Expression, IfmlModel, ModuleUse, ParameterDecl, PromptKind,
     UnaryOp as IfmlUnaryOp, ValueExpression,
 };
-use rex_ir::Model;
-use rex_ir::PrimitiveType;
+use rex_ir::{ActorModel, Model, PrimitiveType};
 
-use crate::index::{IfmlIndex, LiteralKind};
+use crate::index::{AuthKind, IfmlIndex, LiteralKind, ModuleDeclSite};
 use crate::resolve::{IfmlCompilation, IfmlDiagnostic};
 
 /// A component's `data:` entity does not resolve to exactly one class in
@@ -144,13 +166,18 @@ pub const E_UNKNOWN_VARIABLE: &str = "E0103";
 /// An `action("X")` invocation whose name resolves to no
 /// `action "X" { ... }` declaration.
 pub const E_UNKNOWN_ACTION: &str = "E0104";
-/// A `navigate("X")` target that is not a declared view.
+/// A `navigate("X")` target that is neither a declared view nor a
+/// declared container.
 pub const E_UNKNOWN_VIEW: &str = "E0105";
 /// A `refresh("X")` target that is not a declared component.
 pub const E_UNKNOWN_COMPONENT: &str = "E0106";
 /// An action declaration's `target:` entity does not resolve to exactly
 /// one class in the domain model.
-pub const E_UNKNOWN_ACTION_TARGET: &str = "E0107";
+pub const E_UNKNOWN_ACTION_TARGET: &str = "E0109";
+/// A `requires:` capability name that no provided actor model declares.
+pub const E_UNKNOWN_CAPABILITY: &str = "E0107";
+/// A `roles:` name that no provided actor model declares as an actor.
+pub const E_UNKNOWN_ROLE: &str = "E0108";
 
 /// Checks a compiled IFML model: the interaction cross-reference pass
 /// (every `action(...)`/`navigate(...)`/`refresh(...)` reference resolves
@@ -180,7 +207,24 @@ pub const E_UNKNOWN_ACTION_TARGET: &str = "E0107";
 /// assert!(check_ifml(&compilation, None).is_empty());
 /// ```
 pub fn check_ifml(compilation: &IfmlCompilation, domains: Option<&Model>) -> Vec<IfmlDiagnostic> {
+    check_ifml_with_actors(compilation, domains, &[])
+}
+
+/// [`check_ifml`] plus the authorization dimension: every
+/// `requires:`/`roles:` name on an instantiated file's sites resolves
+/// against the union of the provided actor models' capability and actor
+/// names (bare names, the same discipline as `data:` entities; the
+/// instantiation reachability rule of the interaction pass). An empty
+/// slice provides no actor dimension and skips the pass entirely — the
+/// same "checking off"
+/// contract `domains: None` gives the expression checks.
+pub fn check_ifml_with_actors(
+    compilation: &IfmlCompilation,
+    domains: Option<&Model>,
+    actors: &[ActorModel],
+) -> Vec<IfmlDiagnostic> {
     let mut diags = check_references(compilation);
+    diags.extend(check_authorization(compilation, actors));
     let Some(domains) = domains else {
         return diags;
     };
@@ -204,23 +248,156 @@ pub fn check_ifml(compilation: &IfmlCompilation, domains: Option<&Model>) -> Vec
     diags
 }
 
+/// The authorization pass: every `requires:`/`roles:` name on an
+/// **instantiated** site resolves union-wide across all provided actor
+/// models' blocks — `requires:` against declared capability names
+/// (`E0107`), `roles:` against declared actor names (`E0108`). Spans
+/// come from the index's [`AuthSite`](crate::index::AuthSite)s (the name
+/// token itself — editor squiggles land on the name). A module an app
+/// instantiates via `use` contributes its sites to the app's surface
+/// (the reachability rule of [`instantiated_modules`]); an uninstantiated
+/// module keeps its names to its own compilation's report.
+fn check_authorization(
+    compilation: &IfmlCompilation,
+    actors: &[ActorModel],
+) -> Vec<IfmlDiagnostic> {
+    if actors.is_empty() {
+        return Vec::new();
+    }
+    let capabilities: BTreeSet<&str> = actors
+        .iter()
+        .flat_map(|model| model.blocks.iter())
+        .flat_map(|block| block.capabilities.iter())
+        .map(|capability| capability.name.as_str())
+        .collect();
+    let roles: BTreeSet<&str> = actors
+        .iter()
+        .flat_map(|model| model.blocks.iter())
+        .flat_map(|block| block.actors.iter())
+        .map(|actor| actor.name.as_str())
+        .collect();
+    let index = &compilation.index;
+    let reached = instantiated_modules(index);
+    let mut diags = Vec::new();
+    for site in &index.auth_sites {
+        if !site_is_instantiated(&reached, site.file, site.name_span) {
+            continue;
+        }
+        let (code, message) = match site.kind {
+            AuthKind::Capability => {
+                if capabilities.contains(site.name.as_str()) {
+                    continue;
+                }
+                (
+                    E_UNKNOWN_CAPABILITY,
+                    format!(
+                        "capability '{}' is not declared — add \"capability {} on <Class>;\" to an actors block",
+                        site.name, site.name
+                    ),
+                )
+            }
+            AuthKind::Role => {
+                if roles.contains(site.name.as_str()) {
+                    continue;
+                }
+                (
+                    E_UNKNOWN_ROLE,
+                    format!(
+                        "role '{}' is not declared — add \"actor {};\" to an actors block",
+                        site.name, site.name
+                    ),
+                )
+            }
+        };
+        diags.push(IfmlDiagnostic {
+            code,
+            message,
+            span: site.name_span,
+            file: index.files[site.file].path.clone(),
+        });
+    }
+    diags
+}
+
+/// The module bodies the entry file instantiates: seeded by the entry
+/// file's own `use` sites and closed over module composition — a reached
+/// module's body `use` statements (those textually contained in its
+/// declaration span) reach their targets. Identity is the module
+/// declaration site itself, so sibling modules of the same imported file
+/// stay inert: instantiating `Inbox` does not instantiate `Checkout`.
+fn instantiated_modules(index: &IfmlIndex) -> Vec<&ModuleDeclSite> {
+    let mut reached: Vec<&ModuleDeclSite> = Vec::new();
+    let mut queue: Vec<&ModuleDeclSite> = Vec::new();
+    for site in &index.module_uses {
+        if site.file != 0 {
+            continue;
+        }
+        if let Some(reference) = site.resolved_module {
+            let decl = index
+                .module_decl(reference)
+                .expect("resolved module exists");
+            if !reached.contains(&decl) {
+                reached.push(decl);
+                queue.push(decl);
+            }
+        }
+    }
+    while let Some(decl) = queue.pop() {
+        for site in &index.module_uses {
+            if site.file != decl.file {
+                continue;
+            }
+            let contained = decl.span.0 <= site.span.0 && site.span.1 <= decl.span.1;
+            if !contained {
+                continue;
+            }
+            if let Some(reference) = site.resolved_module {
+                let target = index
+                    .module_decl(reference)
+                    .expect("resolved module exists");
+                if !reached.contains(&target) {
+                    reached.push(target);
+                    queue.push(target);
+                }
+            }
+        }
+    }
+    reached
+}
+
+/// Whether a site belongs to the app's surface: the entry file itself, or
+/// a reached module body (its span textually inside the module's
+/// declaration).
+fn site_is_instantiated(reached: &[&ModuleDeclSite], file: usize, span: (usize, usize)) -> bool {
+    if file == 0 {
+        return true;
+    }
+    reached
+        .iter()
+        .any(|decl| decl.file == file && decl.span.0 <= span.0 && span.1 <= decl.span.1)
+}
+
 /// The interaction cross-reference pass: every navigation/action string
-/// reference in the **main file** resolves to a declaration, union-wide
-/// across the whole compilation (the main file plus its imports) —
+/// reference on an **instantiated** site resolves to a declaration,
+/// union-wide across the whole compilation (the entry file plus its
+/// imports) —
 ///
 /// - `action("X")` → an `action "X" { target: ...; }` declaration
 ///   (`E0104`, with the add-it message: declarations carry the `target`
 ///   the lowering needs, so an implicit declaration from a reference
 ///   would have nothing to bind to);
-/// - `navigate("X")` → a `view "X"` declaration (`E0105`);
+/// - `navigate("X")` → a `view "X"` **or container** declaration
+///   (`E0105` — wizard steps navigate between containers);
 /// - `refresh("X")` → a component declaration (`E0106`).
 ///
 /// Spans come from the index's
 /// [`TargetSite`](crate::index::TargetSite)s (the referenced string
-/// token itself — editor squiggles land on the name), and only main-file
-/// sites are diagnosed: an imported file's dangling reference is that
-/// file's own compilation's report, the resolver's rule for unknown
-/// module uses.
+/// token itself — editor squiggles land on the name). A module an app
+/// instantiates via `use` contributes its body's references to the
+/// app's surface — the reachability rule of [`instantiated_modules`]
+/// closes the silently-missing-control class for pattern compositions.
+/// An uninstantiated module keeps its references to its own
+/// compilation's report.
 fn check_references(compilation: &IfmlCompilation) -> Vec<IfmlDiagnostic> {
     let index = &compilation.index;
     let actions: BTreeSet<&str> = index
@@ -229,20 +406,29 @@ fn check_references(compilation: &IfmlCompilation) -> Vec<IfmlDiagnostic> {
         .map(|site| site.name.as_str())
         .collect();
     let views: BTreeSet<&str> = index.views.iter().map(|site| site.name.as_str()).collect();
+    let containers: BTreeSet<&str> = index
+        .containers
+        .iter()
+        .map(|site| site.name.as_str())
+        .collect();
     let components: BTreeSet<&str> = index
         .components
         .iter()
         .map(|site| site.name.as_str())
         .collect();
+    let reached = instantiated_modules(index);
     let mut diags = Vec::new();
     for site in &index.action_targets {
-        if site.file != 0 {
+        if !site_is_instantiated(&reached, site.file, site.name_span) {
             continue;
         }
         let (code, message) = match site.action.as_str() {
             "navigate" => (
                 E_UNKNOWN_VIEW,
-                format!("navigate target '{}' is not a declared view", site.target),
+                format!(
+                    "navigate target '{}' is not a declared view or container",
+                    site.target
+                ),
             ),
             "refresh" => (
                 E_UNKNOWN_COMPONENT,
@@ -260,7 +446,9 @@ fn check_references(compilation: &IfmlCompilation) -> Vec<IfmlDiagnostic> {
             ),
         };
         let known = match site.action.as_str() {
-            "navigate" => views.contains(site.target.as_str()),
+            "navigate" => {
+                views.contains(site.target.as_str()) || containers.contains(site.target.as_str())
+            }
             "refresh" => components.contains(site.target.as_str()),
             _ => actions.contains(site.target.as_str()),
         };
@@ -271,12 +459,11 @@ fn check_references(compilation: &IfmlCompilation) -> Vec<IfmlDiagnostic> {
             code,
             message,
             span: site.name_span,
-            file: index.files[0].path.clone(),
+            file: index.files[site.file].path.clone(),
         });
     }
     diags
 }
-
 /// Why a bare entity name does not resolve to exactly one class.
 enum EntityError {
     Unknown,
@@ -1318,8 +1505,8 @@ mod tests {
     use super::*;
 
     use rex_ir::{
-        ClassDef, Feature, FeatureKind, Multiplicity, Operation, OperationParam, Package,
-        PrimitiveType, TypeRef,
+        ActorDef, ActorModel, ActorsDef, CapabilityDef, ClassDef, Feature, FeatureKind,
+        Multiplicity, Operation, OperationParam, Package, PrimitiveType, TypeRef,
     };
 
     const PKG: &str = "nz.example.shop";
@@ -1412,6 +1599,164 @@ mod tests {
             crate::compile_ifml_str("app.ifml", source, &crate::IfmlImports::default())
                 .expect("source must parse and resolve");
         check_ifml(&compilation, Some(model))
+    }
+
+    /// An actors layer declaring what app-style flows require: two
+    /// capabilities on `Customer` and two roles.
+    fn auth_model() -> ActorModel {
+        ActorModel::new().block(
+            ActorsDef::new("Auth")
+                .actor(ActorDef::new("admin"))
+                .actor(ActorDef::new("manager"))
+                .capability(CapabilityDef::new("ManageCustomer", class_ref("Customer")))
+                .capability(CapabilityDef::new("ApproveCustomer", class_ref("Customer"))),
+        )
+    }
+
+    fn diags_with_actors(
+        source: &str,
+        model: &Model,
+        actors: &[ActorModel],
+    ) -> Vec<IfmlDiagnostic> {
+        let compilation =
+            crate::compile_ifml_str("app.ifml", source, &crate::IfmlImports::default())
+                .expect("source must parse and resolve");
+        check_ifml_with_actors(&compilation, Some(model), actors)
+    }
+
+    #[test]
+    fn unknown_capability_reports_e0107_on_the_requires_site() {
+        let source = r#"
+view "Edit" {
+    requires: [ManageCustomer, Ghost];
+}
+"#;
+        let diags = diags_with_actors(source, &shop_model(), &[auth_model()]);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].code, E_UNKNOWN_CAPABILITY);
+        assert_eq!(
+            diags[0].message,
+            "capability 'Ghost' is not declared — add \"capability Ghost on <Class>;\" to an actors block"
+        );
+        let (start, end) = diags[0].span;
+        assert_eq!(&source[start..end], "Ghost");
+    }
+
+    #[test]
+    fn unknown_role_reports_e0108_on_the_roles_site() {
+        let source = r#"
+view "List" {
+    roles: [admin, ghost];
+}
+"#;
+        let diags = diags_with_actors(source, &shop_model(), &[auth_model()]);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].code, E_UNKNOWN_ROLE);
+        assert_eq!(
+            diags[0].message,
+            "role 'ghost' is not declared — add \"actor ghost;\" to an actors block"
+        );
+        let (start, end) = diags[0].span;
+        assert_eq!(&source[start..end], "ghost");
+    }
+
+    #[test]
+    fn known_capabilities_and_roles_produce_no_diagnostics() {
+        let source = r#"
+view "Edit" {
+    requires: [ManageCustomer, ApproveCustomer];
+    roles: [admin, manager];
+
+    component "form" {
+        on save(v) requires: [ManageCustomer] -> stay;
+    }
+}
+"#;
+        assert!(diags_with_actors(source, &shop_model(), &[auth_model()]).is_empty());
+    }
+
+    #[test]
+    fn actor_tables_union_across_models_and_blocks() {
+        let billing = ActorModel::new().block(
+            ActorsDef::new("Billing")
+                .actor(ActorDef::new("auditor"))
+                .capability(CapabilityDef::new("RunBilling", class_ref("Order"))),
+        );
+        let source = r#"
+view "Ledger" {
+    requires: [ManageCustomer, RunBilling];
+    roles: [manager, auditor];
+}
+"#;
+        let diags = diags_with_actors(source, &shop_model(), &[auth_model(), billing]);
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn empty_actor_models_skip_authorization_checking() {
+        // The compatibility contract: without an actor dimension no
+        // authorization diagnostic is ever produced.
+        let source = r#"
+view "Edit" {
+    requires: [Ghost];
+    roles: [ghost];
+}
+"#;
+        let compilation =
+            crate::compile_ifml_str("app.ifml", source, &crate::IfmlImports::default())
+                .expect("source must parse and resolve");
+        assert!(check_ifml(&compilation, Some(&shop_model())).is_empty());
+        assert!(check_ifml_with_actors(&compilation, Some(&shop_model()), &[]).is_empty());
+        assert!(check_ifml_with_actors(&compilation, None, &[]).is_empty());
+    }
+
+    #[test]
+    fn imported_files_authorization_sites_are_that_files_own_report() {
+        // Main-file-only discipline, same as the interaction
+        // cross-reference: the imported file's dangling `requires` is
+        // diagnosed when that file is compiled as the main file, not in
+        // the importer's report.
+        let main = r#"import "part.ifml";
+
+view "Home" {
+    roles: [admin];
+}
+"#;
+        let part = r#"view "Sub" {
+    requires: [Ghost];
+    roles: [admin];
+}
+"#;
+        let mut imports = crate::IfmlImports::default();
+        imports.provide("app.ifml", "part.ifml", part.to_string());
+        let compilation =
+            crate::compile_ifml_str("app.ifml", main, &imports).expect("main compiles");
+        let diags = check_ifml_with_actors(&compilation, Some(&shop_model()), &[auth_model()]);
+        assert!(diags.is_empty(), "{diags:?}");
+
+        let own = crate::compile_ifml_str("part.ifml", part, &crate::IfmlImports::default())
+            .expect("part compiles");
+        let diags = check_ifml_with_actors(&own, Some(&shop_model()), &[auth_model()]);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].code, E_UNKNOWN_CAPABILITY);
+    }
+
+    #[test]
+    fn authorization_and_expression_checks_compose() {
+        let source = r#"
+view "Edit" {
+    requires: [Ghost];
+
+    component "grid" {
+        type: list;
+        data: Widget;
+    }
+}
+"#;
+        let diags = diags_with_actors(source, &shop_model(), &[auth_model()]);
+        let codes: Vec<&str> = diags.iter().map(|diagnostic| diagnostic.code).collect();
+        assert!(codes.contains(&E_UNKNOWN_CAPABILITY), "{diags:?}");
+        assert!(codes.contains(&E_UNKNOWN_ENTITY), "{diags:?}");
     }
 
     #[test]
@@ -2378,7 +2723,7 @@ view "Detail" {
         assert_eq!(diags[0].code, E_UNKNOWN_VIEW);
         assert_eq!(
             diags[0].message,
-            "navigate target 'Missing' is not a declared view"
+            "navigate target 'Missing' is not a declared view or container"
         );
         let (start, end) = diags[0].span;
         assert_eq!(&dangling[start..end], "\"Missing\"");
@@ -2435,6 +2780,352 @@ command "customers" {
             diags[0].message.contains("'Missing'"),
             "{}",
             diags[0].message
+        );
+    }
+
+    // --- instantiated-module references (issue #114, interaction layer) -
+
+    /// Compiles `source` as `app.ifml` with `imports` provided, then
+    /// checks against `model` (no actor layer).
+    fn diags_with_import(
+        source: &str,
+        imports: &crate::IfmlImports,
+        model: &Model,
+    ) -> Vec<IfmlDiagnostic> {
+        let compilation = crate::compile_ifml_str("app.ifml", source, imports)
+            .expect("source must parse and resolve");
+        check_ifml(&compilation, Some(model))
+    }
+
+    #[test]
+    fn navigate_target_may_be_a_declared_container() {
+        let source = r#"
+view "Wizard" {
+    container "stepOne" {
+        component "entry" {
+            type: form;
+
+            on next(values) -> navigate("stepTwo");
+        }
+    }
+    container "stepTwo" {
+        component "review" {
+            type: details;
+
+            on previous -> navigate("stepOne");
+        }
+    }
+}
+
+module "Pager" {
+    input { page: Int = 1 }
+    output { n: Int }
+
+    container "page" {
+        component "pager" {
+            type: list;
+
+            on first -> navigate("page");
+        }
+    }
+}
+"#;
+        assert!(
+            diags(source, &shop_model()).is_empty(),
+            "container targets resolve — wizard steps and module pages"
+        );
+
+        let dangling = source.replace("navigate(\"stepTwo\")", "navigate(\"Missing\")");
+        let diags = diags(&dangling, &shop_model());
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].code, E_UNKNOWN_VIEW);
+        assert_eq!(
+            diags[0].message,
+            "navigate target 'Missing' is not a declared view or container"
+        );
+    }
+
+    #[test]
+    fn instantiated_module_dangling_references_are_diagnosed() {
+        // A `use` instantiates the module: its body's references are the
+        // app's surface now — a dangling navigate is the missing-button
+        // class, diagnosed at the referenced token with the imported
+        // file's path.
+        let source = r#"
+import "lib.ifml";
+
+view "Queue" {
+    use "Inbox" as inbox;
+}
+"#;
+        let mut imports = crate::IfmlImports::default();
+        imports.provide(
+            "app.ifml",
+            "lib.ifml",
+            r#"module "Inbox" {
+    input { page: Int = 1 }
+    output { n: Int }
+
+    component "list" {
+        type: list;
+
+        on select(row) -> navigate("Folder", { id: row.id });
+        on markRead -> action("MarkRead");
+        on reload -> refresh("nope");
+    }
+}"#,
+        );
+        let mut diags = diags_with_import(source, &imports, &shop_model());
+        diags.sort_by(|a, b| a.code.cmp(b.code).then(a.message.cmp(&b.message)));
+        assert_eq!(diags.len(), 3, "{diags:?}");
+        assert_eq!(diags[0].code, E_UNKNOWN_ACTION);
+        assert!(
+            diags[0].message.contains("'MarkRead'"),
+            "{}",
+            diags[0].message
+        );
+        assert_eq!(diags[1].code, E_UNKNOWN_VIEW);
+        assert_eq!(diags[2].code, E_UNKNOWN_COMPONENT);
+        for diag in &diags {
+            assert_eq!(diag.file, "lib.ifml", "{diag:?}");
+            let (start, end) = diag.span;
+            assert!(start < end, "the span is the referenced token");
+        }
+    }
+
+    #[test]
+    fn instantiated_module_references_resolve_when_declared() {
+        // Union-wide resolution: the module's references may terminate at
+        // the app's own declarations.
+        let source = r#"
+import "lib.ifml";
+
+view "Queue" {
+    use "Inbox" as inbox;
+}
+
+view "Folder" {
+    component "rows" { type: list; }
+}
+
+action "MarkRead" {
+    target: Customer;
+}
+"#;
+        let mut imports = crate::IfmlImports::default();
+        imports.provide(
+            "app.ifml",
+            "lib.ifml",
+            r#"module "Inbox" {
+    input { page: Int = 1 }
+    output { n: Int }
+
+    component "list" {
+        type: list;
+
+        on select(row) -> navigate("Folder", { id: row.id });
+        on markRead -> action("MarkRead");
+        on reload -> refresh("list");
+    }
+}"#,
+        );
+        assert!(diags_with_import(source, &imports, &shop_model()).is_empty());
+    }
+
+    #[test]
+    fn composition_reaches_transitive_modules() {
+        // M1 composes M2: instantiating M1 instantiates M2 — M2's dangling
+        // reference is diagnosed too.
+        let source = r#"
+import "lib.ifml";
+
+view "Queue" {
+    use "Outer" as outer;
+}
+"#;
+        let mut imports = crate::IfmlImports::default();
+        imports.provide(
+            "app.ifml",
+            "lib.ifml",
+            r#"module "Outer" {
+    input { page: Int = 1 }
+    output { n: Int }
+
+    use "Inner" as inner;
+
+    component "shell" { type: list; }
+}
+
+module "Inner" {
+    input { page: Int = 1 }
+    output { n: Int }
+
+    component "list" {
+        type: list;
+
+        on select(row) -> navigate("Nowhere");
+    }
+}"#,
+        );
+        let diags = diags_with_import(source, &imports, &shop_model());
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].code, E_UNKNOWN_VIEW);
+        assert_eq!(diags[0].file, "lib.ifml");
+    }
+
+    #[test]
+    fn same_file_unused_modules_stay_undiagnosed() {
+        // Granularity is the module body, not the file: instantiating
+        // `Inbox` does not instantiate its sibling `Unused` — that
+        // module's dangling reference stays its own compilation's report.
+        let source = r#"
+import "lib.ifml";
+
+view "Queue" {
+    use "Inbox" as inbox;
+}
+
+view "Folder" {
+    component "rows" { type: list; }
+}
+
+action "MarkRead" {
+    target: Customer;
+}
+"#;
+        let mut imports = crate::IfmlImports::default();
+        imports.provide(
+            "app.ifml",
+            "lib.ifml",
+            r#"module "Inbox" {
+    input { page: Int = 1 }
+    output { n: Int }
+
+    component "list" {
+        type: list;
+
+        on select(row) -> navigate("Folder", { id: row.id });
+        on markRead -> action("MarkRead");
+        on reload -> refresh("list");
+    }
+}
+
+module "Unused" {
+    input { page: Int = 1 }
+    output { n: Int }
+
+    component "lost" {
+        type: list;
+
+        on select(row) -> navigate("Nowhere");
+    }
+}"#,
+        );
+        assert!(diags_with_import(source, &imports, &shop_model()).is_empty());
+    }
+
+    #[test]
+    fn uninstantiated_import_sites_stay_undiagnosed() {
+        // The narrowed own-report rule: an imported file whose modules the
+        // app never instantiates keeps its references to itself — a
+        // pattern-library file unused by this app is not this app's error.
+        let source = r#"
+import "lib.ifml";
+
+view "Queue" {
+    component "intake" {
+        type: form;
+
+        on raise(values) -> stay;
+    }
+}
+"#;
+        let mut imports = crate::IfmlImports::default();
+        imports.provide(
+            "app.ifml",
+            "lib.ifml",
+            "module \"Unused\" { input { page: Int = 1 } output { n: Int } component \"c\" { type: list; on select(row) -> action(\"Missing\"); } }",
+        );
+        assert!(diags_with_import(source, &imports, &shop_model()).is_empty());
+    }
+
+    #[test]
+    fn instantiated_module_auth_names_are_diagnosed() {
+        // The authorization pass runs on instantiated-module sites under
+        // the same reachability rule.
+        let source = r#"
+import "lib.ifml";
+
+view "Queue" {
+    use "Inbox" as inbox;
+}
+"#;
+        let mut imports = crate::IfmlImports::default();
+        imports.provide(
+            "app.ifml",
+            "lib.ifml",
+            r#"module "Inbox" {
+    input { page: Int = 1 }
+    output { n: Int }
+
+    component "list" {
+        type: list;
+
+        on select(row) requires: [Missing] -> navigate("Folder");
+        on reset -> stay;
+    }
+}"#,
+        );
+        let compilation = crate::compile_ifml_str("app.ifml", source, &imports)
+            .expect("source must parse and resolve");
+        let diags = check_ifml_with_actors(&compilation, Some(&shop_model()), &[auth_model()]);
+        assert_eq!(diags.len(), 2, "{diags:?}");
+        let unknown_view = diags.iter().find(|d| d.code == E_UNKNOWN_VIEW);
+        let unknown_capability = diags.iter().find(|d| d.code == E_UNKNOWN_CAPABILITY);
+        let capability = unknown_capability.expect("the capability site is diagnosed");
+        assert!(
+            capability.message.contains("'Missing'"),
+            "{}",
+            capability.message
+        );
+        assert_eq!(capability.file, "lib.ifml");
+        let view = unknown_view.expect("the navigate site is diagnosed");
+        assert_eq!(view.file, "lib.ifml");
+    }
+
+    #[test]
+    fn instantiated_module_auth_names_resolve_against_the_actor_layer() {
+        let source = r#"
+import "lib.ifml";
+
+view "Queue" {
+    use "Inbox" as inbox;
+}
+
+view "Folder" {
+    component "rows" { type: list; }
+}
+"#;
+        let mut imports = crate::IfmlImports::default();
+        imports.provide(
+            "app.ifml",
+            "lib.ifml",
+            r#"module "Inbox" {
+    input { page: Int = 1 }
+    output { n: Int }
+
+    component "list" {
+        type: list;
+
+        on select(row) requires: [ManageCustomer] -> navigate("Folder");
+        on reset -> stay;
+    }
+}"#,
+        );
+        let compilation = crate::compile_ifml_str("app.ifml", source, &imports)
+            .expect("source must parse and resolve");
+        assert!(
+            check_ifml_with_actors(&compilation, Some(&shop_model()), &[auth_model()]).is_empty()
         );
     }
 }

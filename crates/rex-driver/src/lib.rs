@@ -37,6 +37,7 @@ pub mod machines;
 pub mod manifest;
 pub mod navigation;
 pub(crate) mod pipeline;
+pub mod project;
 pub(crate) mod sigil;
 pub(crate) mod usecases;
 pub mod workspace_imports;
@@ -45,6 +46,10 @@ pub use diagnostic::{render, Diagnostic, DiagnosticCode, Severity};
 pub use integrity::check_integrity;
 pub use navigation::{
     DefId, Definition, FeatureSymbolKind, Lookup, NavigationIndex, Reference, SymbolKind,
+};
+pub use project::{
+    compile_actor_imports, compile_domain_union, gather_deploy_imports, gather_domain_sources,
+    gather_ifml_project, gather_usecase_imports, ActorImport, DeployPairs, IfmlProject, UcBuckets,
 };
 
 /// Byte-offset span into the source text.

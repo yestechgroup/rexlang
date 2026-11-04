@@ -168,9 +168,10 @@ fn support_ifml_model() -> rex_ir::ifml::IfmlModel {
         let resolved = importer_disk.parent().unwrap().join(import);
         if import.ends_with(".ifml") {
             let imported = read(&resolved);
+            let resolved_path = resolved.display().to_string();
             disk_paths.insert(import.to_string(), resolved);
             imports.provide(importer, import, imported.clone());
-            Some(imported)
+            Some((resolved_path, imported))
         } else {
             None
         }

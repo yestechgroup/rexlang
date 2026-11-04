@@ -5,14 +5,15 @@
 //! * `rexlang check <file>...` — compile and render diagnostics; exits `1`
 //!   on errors. Accepts `.mox` models, `.actor` policy files, `.ddd`
 //!   design files, `.evt` event-contract files, `.deploy` deployment
-//!   files, `.uc` use case files, and `.ifml` interaction flows (the
-//!   latter six compile against the domain models, `.ddd` designs,
-//!   `.actor` policies, and `.evt` contracts they import; `.ifml`
-//!   expressions are also type-checked against the imported domains). Each
-//!   input is a file or a directory —
-//!   a directory enters **batch mode**, checking every supported surface
-//!   under it independently (`.mox`, `.actor`, `.ddd`, `.evt`, `.uc`, `.cmmn`,
-//!   `.ifml`, `.deploy`); several `.mox` files passed explicitly compile as
+//!   files, `.uc` use case files, `.cmmn` case files, and `.ifml`
+//!   interaction flows (the latter compile against the domain models,
+//!   `.ddd` designs, `.actor` policies, and `.evt` contracts they import;
+//!   `.ifml` expressions are also type-checked against the imported
+//!   domains). Each input is a file or a directory —
+//!   a directory enters **project mode**: every supported surface under it
+//!   is gathered into one snapshot and checked independently, each file's
+//!   imports resolving map-first from the snapshot and sibling artifacts
+//!   reused compile-once; several `.mox` files passed explicitly compile as
 //!   one multi-package model.
 //! * `rexlang ir <file>... [-o <out>]` — compile and emit the Core IR JSON
 //!   to stdout or to a file; exits `1` on errors. On `.actor` files the
@@ -21,6 +22,16 @@
 //!   EventModel artifact; on `.deploy` files the standalone DeployModel
 //!   artifact; on `.uc` files the standalone UseCaseModel artifact, on `.cmmn` files the standalone CmmnModel artifact; on
 //!   `.ifml` files the standalone IfmlModel artifact.
+//! * `rexlang build <paths>... [-o <dir>]` — compile every input and write
+//!   each file's `ir` artifact JSON to `<dir>/<input path>.json` (the
+//!   output directory defaults to `target/rex`). Directories enter project
+//!   mode like `check`; exits `1` when any file fails, while compiling
+//!   files still emit their artifacts.
+//! * `rexlang manifest <file.ifml> [-o <out>]` — compile one `.ifml`
+//!   interaction flow, check it, and export its control/route manifest
+//!   (routes, controls, edges, actions, commands) as JSON to stdout or a
+//!   file; exits `1` on errors — a dangling reference never reaches a
+//!   manifest.
 //! * `rexlang artifact check <artifact.json>...` — validate wire-format
 //!   artifacts (Core IR, standalone actor policy, DDD design, canonical
 //!   instance) without the originating model; exits `1` on any violation.
@@ -38,6 +49,7 @@ mod artifact_check;
 mod commands;
 mod imports;
 mod inputs;
+mod project;
 mod report;
 
 use std::path::PathBuf;
@@ -81,6 +93,38 @@ enum Command {
         /// contents (overrides applied) before emitting.
         #[arg(long)]
         expand: bool,
+    },
+    /// Compile every input file and write each artifact JSON into the
+    /// output directory (default `target/rex`): `.mox` files emit the Core
+    /// IR, `.actor` files the ActorModel artifact, `.ddd` files the DDD
+    /// design artifact, `.evt` files the EventModel artifact, `.deploy`
+    /// files the DeployModel artifact, `.uc` files the UseCaseModel
+    /// artifact, `.cmmn` files the CmmnModel artifact, and `.ifml` files
+    /// the IfmlModel artifact — one artifact per file at
+    /// `<out>/<input path>.json`. Directories enter project mode like
+    /// `check`: every supported surface under them emits its own artifact.
+    /// Exits `1` when any file fails; compiling files still emit.
+    Build {
+        /// Files or directories to compile.
+        files: Vec<PathBuf>,
+        /// Directory to write the artifacts into (`<input path>.json` per
+        /// file).
+        #[arg(short, long, value_name = "DIR", default_value = "target/rex")]
+        out: PathBuf,
+    },
+    /// Export the declaration-backed control/route manifest of one `.ifml`
+    /// interaction flow as JSON: its routes/views, controls (expanded, with
+    /// resolved `data:` entities), interaction edges (navigate/refresh/
+    /// action invocations with triggers, guards, and bindings), actions
+    /// with their target entities, and CLI commands flattened to their
+    /// invocation paths. Compilation and checking gate emission — a
+    /// dangling reference is an error before any manifest exists.
+    Manifest {
+        /// The `.ifml` interaction-flow file.
+        file: PathBuf,
+        /// Write the JSON to this path instead of stdout.
+        #[arg(short, long, value_name = "FILE")]
+        out: Option<PathBuf>,
     },
     /// Code generation from compiled `.mox` files.
     Gen {
@@ -209,6 +253,8 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     match cli.command {
         Command::Check { files } => commands::check::run(files),
         Command::Ir { files, out, expand } => commands::ir::run(files, out, expand),
+        Command::Build { files, out } => commands::build::run(files, out),
+        Command::Manifest { file, out } => commands::manifest::run(vec![file], out),
         Command::Gen { target } => commands::gen::run(target),
         Command::Fmt { check, files } => commands::fmt::run(check, files),
         Command::Artifact {

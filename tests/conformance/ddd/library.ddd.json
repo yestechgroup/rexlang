@@ -336,6 +336,28 @@
                     "value": "string"
                   }
                 }
+              ],
+              "capabilities": [
+                "ManageCustomer"
+              ]
+            },
+            {
+              "name": "approveCustomer",
+              "returnType": {
+                "type": "primitive",
+                "value": "boolean"
+              },
+              "params": [
+                {
+                  "name": "customerId",
+                  "type": {
+                    "type": "primitive",
+                    "value": "string"
+                  }
+                }
+              ],
+              "capabilities": [
+                "ApproveCustomer"
               ]
             },
             {

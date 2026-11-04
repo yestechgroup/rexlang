@@ -75,3 +75,31 @@ view "Checkout" {
 
     use "Checkout" as wizard { cart: order; customer: customer; };
 }
+
+// Targets the instantiated patterns navigate to and the actions their
+// controls invoke — declared where they are backed, per the
+// reference-resolution rule (E0104–E0106).
+
+view "Category" {
+    params { id: Uuid };
+}
+
+view "ItemDetail" {
+    params { id: Uuid };
+}
+
+action "AddToCart" {
+    target: Product;
+}
+
+action "PlaceOrder" {
+    target: Order;
+}
+
+action "Save" {
+    target: Customer;
+}
+
+action "CompleteWizard" {
+    target: Order;
+}

@@ -164,21 +164,35 @@ pub struct IfmlImportWalk {
 /// the shared traversal behind every host that gathers `.ifml` sources
 /// (the CLI's disk reader, test harnesses, the LSP). `fetch` is called for
 /// **every** `import "..."` statement with the importing file's identity
-/// and the import string as written; returning `Some` text recurses into
-/// it as an `.ifml` file, returning `None` skips it (non-`.ifml` imports
-/// and unreadable files are host concerns — collect `.mox` domains through
-/// the same callback's side effects). The walk is depth-first in source
-/// order; an identity already fully processed is skipped and an identity
-/// re-entering the active path is a cycle the resolver will diagnose —
-/// both mirror [`compile_ifml_str`]'s semantics, so bundle keys built from
-/// this walk always match what the resolver looks up.
+/// and the import string as written; returning `Some((key, text))`
+/// recurses into it as an `.ifml` file, returning `None` skips it
+/// (non-`.ifml` imports and unreadable files are host concerns — collect
+/// `.mox` domains through the same callback's side effects). The walk is
+/// depth-first in source order; an identity already fully processed is
+/// skipped and an identity re-entering the active path is a cycle the
+/// resolver will diagnose — both mirror [`compile_ifml_str`]'s semantics,
+/// so bundle keys built from this walk always match what the resolver
+/// looks up.
+///
+/// The fetch returns the **host-resolved key** alongside the text — the
+/// identity the host actually resolved the import under (a disk path, a
+/// document URI). The walker itself only uses the text for recursion and
+/// [`IfmlImportWalk::sources`]; importer identities stay the as-written
+/// import strings, so bundle keys are unchanged. But hosts must uphold one
+/// obligation for every resolved key they hand out: **a later fetch call
+/// may use that resolved key as the importer identity** — nested gathering
+/// (an imported `.actor` policy's own `.mox` imports, a deploy flow's
+/// bridged walk) resolves relative to what the host handed back, so hosts
+/// must map every key they hand out the same way they map the entry
+/// identity. A host that cannot resolve an importer identity returns
+/// `None`, and the gathering layer records the import as unresolved.
 ///
 /// ```
 /// use rex_ifml::walk_ifml_imports;
 ///
 /// let walk = walk_ifml_imports("app.ifml", "import \"pager.ifml\";", &mut |importer, import| {
 ///     if importer == "app.ifml" && import == "pager.ifml" {
-///         Some("view \"Pager\" {}".to_string())
+///         Some(("pager.ifml".to_string(), "view \"Pager\" {}".to_string()))
 ///     } else {
 ///         None
 ///     }
@@ -187,10 +201,11 @@ pub struct IfmlImportWalk {
 /// assert_eq!(walk.sources[0].0, "app.ifml");
 /// assert_eq!(walk.sources[1].0, "pager.ifml");
 /// ```
+#[allow(clippy::type_complexity)]
 pub fn walk_ifml_imports(
     entry_identity: &str,
     entry_source: &str,
-    fetch: &mut dyn FnMut(&str, &str) -> Option<String>,
+    fetch: &mut dyn FnMut(&str, &str) -> Option<(String, String)>,
 ) -> IfmlImportWalk {
     let mut walk = IfmlImportWalk::default();
     let mut visited: BTreeSet<String> = BTreeSet::new();
@@ -206,10 +221,11 @@ pub fn walk_ifml_imports(
     walk
 }
 
+#[allow(clippy::type_complexity)]
 fn walk_file(
     identity: &str,
     source: &str,
-    fetch: &mut dyn FnMut(&str, &str) -> Option<String>,
+    fetch: &mut dyn FnMut(&str, &str) -> Option<(String, String)>,
     walk: &mut IfmlImportWalk,
     visited: &mut BTreeSet<String>,
     active: &mut Vec<String>,
@@ -225,7 +241,10 @@ fn walk_file(
         .map(|model| model.imports)
         .unwrap_or_default();
     for import in imports {
-        if let Some(text) = fetch(identity, &import) {
+        // The host-resolved key is information for the gathering layer
+        // (dedup, nested resolution); the walker itself needs only the
+        // text, and identities stay the as-written import strings.
+        if let Some((_resolved_key, text)) = fetch(identity, &import) {
             walk_file(&import, &text, fetch, walk, visited, active);
         }
     }
@@ -574,9 +593,11 @@ mod tests {
             "app.ifml",
             "import \"a.ifml\";\nimport \"b.ifml\";",
             &mut |importer, import| match (importer, import) {
-                ("app.ifml", "a.ifml") => Some("import \"c.ifml\";".to_string()),
-                ("a.ifml", "c.ifml") => Some("view \"C\" {}".to_string()),
-                ("app.ifml", "b.ifml") => Some("view \"B\" {}".to_string()),
+                ("app.ifml", "a.ifml") => {
+                    Some(("a.ifml".to_string(), "import \"c.ifml\";".to_string()))
+                }
+                ("a.ifml", "c.ifml") => Some(("c.ifml".to_string(), "view \"C\" {}".to_string())),
+                ("app.ifml", "b.ifml") => Some(("b.ifml".to_string(), "view \"B\" {}".to_string())),
                 _ => None,
             },
         );
@@ -590,11 +611,12 @@ mod tests {
             "app.ifml",
             "import \"a.ifml\";\nimport \"b.ifml\";",
             &mut |importer, import| match (importer, import) {
-                ("app.ifml", "a.ifml") | ("app.ifml", "b.ifml") => {
-                    Some("import \"shared.ifml\";".to_string())
-                }
+                ("app.ifml", "a.ifml") | ("app.ifml", "b.ifml") => Some((
+                    "shared.ifml".to_string(),
+                    "import \"shared.ifml\";".to_string(),
+                )),
                 ("a.ifml", "shared.ifml") | ("b.ifml", "shared.ifml") => {
-                    Some("view \"S\" {}".to_string())
+                    Some(("shared.ifml".to_string(), "view \"S\" {}".to_string()))
                 }
                 _ => None,
             },
@@ -612,7 +634,9 @@ mod tests {
             "app.ifml",
             "import \"loop.ifml\";",
             &mut |importer, import| match (importer, import) {
-                ("app.ifml", "loop.ifml") => Some("import \"app.ifml\";".to_string()),
+                ("app.ifml", "loop.ifml") => {
+                    Some(("loop.ifml".to_string(), "import \"app.ifml\";".to_string()))
+                }
                 _ => None,
             },
         );

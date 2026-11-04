@@ -195,6 +195,104 @@ fn ir_fails_on_invalid_source() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("has class type"));
 }
 
+/// The workspace-root-relative fixture path for the manifest tests.
+fn conformance_fixture(relative: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../")
+        .join(relative)
+}
+
+#[test]
+fn manifest_prints_the_golden_manifest_to_stdout() {
+    let path = conformance_fixture("tests/conformance/ifml/app.ifml");
+    let golden = std::fs::read_to_string(conformance_fixture(
+        "tests/conformance/ifml/app.manifest.json",
+    ))
+    .expect("read app manifest golden");
+    let output = rexlang()
+        .args(["manifest", path.to_str().unwrap()])
+        .output()
+        .expect("run rexlang manifest");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("{golden}\n"),
+        "the CLI manifest must byte-match the committed golden"
+    );
+}
+
+#[test]
+fn manifest_writes_the_golden_manifest_to_an_output_file() {
+    let path = conformance_fixture("tests/conformance/ifml/cli.ifml");
+    let golden = std::fs::read_to_string(conformance_fixture(
+        "tests/conformance/ifml/cli.manifest.json",
+    ))
+    .expect("read cli manifest golden");
+    let out = scratch_dir().join("cli.manifest.json");
+    let output = rexlang()
+        .args([
+            "manifest",
+            path.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run rexlang manifest");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).is_empty());
+    let json = std::fs::read_to_string(&out).expect("read manifest output");
+    assert_eq!(json, golden, "the file manifest must byte-match the golden");
+    let manifest = rex_ir::ifml_manifest::IfmlManifest::from_json(&json)
+        .expect("the output is a versioned manifest");
+    assert!(!manifest.commands.is_empty());
+}
+
+#[test]
+fn manifest_fails_on_a_dangling_reference() {
+    // The declaration-backed guarantee at the CLI boundary: the checker
+    // gates emission, so the missing-button class never reaches a
+    // manifest.
+    let path = write_source(
+        "dangling.ifml",
+        r#"view "List" {
+    component "grid" {
+        type: list;
+
+        on select(row) -> action("Missing");
+    }
+}
+"#,
+    );
+    let output = rexlang()
+        .args(["manifest", path.to_str().unwrap()])
+        .output()
+        .expect("run rexlang manifest");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E0104"), "{stderr}");
+    assert!(stderr.contains("'Missing'"), "{stderr}");
+}
+
+#[test]
+fn manifest_requires_an_ifml_file() {
+    let path = write_source("not_a_flow.mox", GOOD);
+    let output = rexlang()
+        .args(["manifest", path.to_str().unwrap()])
+        .output()
+        .expect("run rexlang manifest");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains(".ifml"), "{stderr}");
+}
+
 #[test]
 fn missing_file_is_a_clean_error() {
     let missing = scratch_dir().join("does-not-exist.mox");
@@ -2586,6 +2684,205 @@ fn ir_expand_inlines_module_uses_for_ifml() {
     );
 }
 
+const AUTH_MOX: &str = r#"package rexlang.auth
+
+class Customer {
+    String name
+}
+"#;
+
+const AUTH_ACTOR: &str = r#"import "auth.mox"
+
+actors Auth {
+    actor admin
+    actor manager
+
+    capability ManageCustomer on Customer
+    capability ApproveCustomer on Customer
+
+    grant admin {
+        permit ManageCustomer
+        permit ApproveCustomer
+    }
+
+    grant manager {
+        permit ManageCustomer
+    }
+}
+"#;
+
+#[test]
+fn check_resolves_ifml_requires_and_roles_against_the_actor_import() {
+    let _ = write_source("auth.mox", AUTH_MOX);
+    let _ = write_source("auth.actor", AUTH_ACTOR);
+    let flow = write_source(
+        "gated.ifml",
+        r#"import "auth.actor";
+
+view "Edit" {
+    requires: [ManageCustomer];
+    roles: [admin, manager];
+}
+"#,
+    );
+    let output = rexlang()
+        .args(["check", flow.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("OK {}\n", flow.display())
+    );
+}
+
+#[test]
+fn check_reports_unknown_capabilities_and_roles_from_the_actor_import() {
+    let _ = write_source("auth.mox", AUTH_MOX);
+    let _ = write_source("auth.actor", AUTH_ACTOR);
+    let flow = write_source(
+        "gated.ifml",
+        r#"import "auth.actor";
+
+view "Edit" {
+    requires: [ManageCustomer, Ghost];
+    roles: [admin, phantom];
+}
+"#,
+    );
+    let output = rexlang()
+        .args(["check", flow.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E0107"), "stderr: {stderr}");
+    assert!(stderr.contains("E0108"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("capability 'Ghost' is not declared"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("role 'phantom' is not declared"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("gated.ifml"),
+        "the diagnostic names the flow file: {stderr}"
+    );
+}
+
+#[test]
+fn check_resolves_transitive_ifml_actor_domain_across_nested_dirs() {
+    let root = scratch_dir().join(format!("nested-ifml-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("app/ifml")).expect("mkdir app/ifml");
+    std::fs::create_dir_all(root.join("app/policies")).expect("mkdir app/policies");
+    std::fs::create_dir_all(root.join("app/domains")).expect("mkdir app/domains");
+    std::fs::write(root.join("app/domains/auth.mox"), AUTH_MOX).expect("write domain");
+    std::fs::write(
+        root.join("app/policies/auth.actor"),
+        "import \"../domains/auth.mox\"\n\nactors Auth {\n    actor admin\n\n    capability ManageCustomer on Customer\n\n    grant admin {\n        permit ManageCustomer\n    }\n}\n",
+    )
+    .expect("write actor");
+    let flow = root.join("app/ifml/flow.ifml");
+    std::fs::write(
+        &flow,
+        "import \"../policies/auth.actor\";\n\nview \"Edit\" {\n    requires: [ManageCustomer];\n    roles: [admin];\n}\n",
+    )
+    .expect("write flow");
+    let output = rexlang()
+        .args(["check", flow.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("OK {}\n", flow.display())
+    );
+}
+
+#[test]
+fn check_dedupes_duplicate_actor_imports() {
+    let _ = write_source("auth.mox", AUTH_MOX);
+    let _ = write_source("auth.actor", AUTH_ACTOR);
+    let flow = write_source(
+        "twice.ifml",
+        r#"import "auth.actor";
+import "auth.actor";
+
+view "Edit" {
+    requires: [ManageCustomer];
+    roles: [admin];
+}
+"#,
+    );
+    let output = rexlang()
+        .args(["check", flow.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("OK {}\n", flow.display()),
+        "exactly one OK: the duplicate import gathers once"
+    );
+}
+
+#[test]
+fn missing_ifml_actor_import_is_a_clean_error() {
+    let flow = write_source(
+        "dangling.ifml",
+        r#"import "ghost.actor";
+
+view "Home" {
+}
+"#,
+    );
+    let output = rexlang()
+        .args(["check", flow.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("error:"),
+        "a clean error, not a panic: {stderr}"
+    );
+    assert!(
+        stderr.contains("ghost.actor"),
+        "the error names the resolved path: {stderr}"
+    );
+}
+
+#[test]
+fn check_succeeds_on_the_ifml_conformance_fixture_with_its_actor_import() {
+    // app.ifml's `import "rexlang/auth.actor"` is load-bearing: the
+    // fixture's requires:/roles: sites resolve against the fixture
+    // policy's capabilities and actors.
+    let path = workspace_root().join("tests/conformance/ifml/app.ifml");
+    let output = rexlang()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn fmt_check_passes_on_formatted_ifml() {
     let flow = write_source("formatted.ifml", GOOD_IFML);
@@ -2696,6 +2993,244 @@ fn check_directory_batch_skips_formatter_goldens() {
     assert!(stdout.contains("good.mox"), "{stdout}");
 }
 
+// --- project mode (`rexlang check <dir>`) and `rexlang build` -------------------
+
+/// The cross-surface project fixture: five files, every seam exercised —
+/// the policy imports the domain, the flow imports the policy, the design
+/// imports the domain, and the deployment imports design + flow.
+const PROJECT_MOX: &str = "package auth\n\nclass Customer {\n    String name\n}\n";
+
+const PROJECT_ACTOR: &str = r#"import "auth.mox"
+
+actors Auth {
+    actor admin
+
+    capability ManageCustomer on Customer
+
+    grant admin {
+        permit ManageCustomer
+    }
+}
+"#;
+
+const PROJECT_DDD: &str = r#"import "auth.mox"
+
+application App {
+    module core {
+        service CustomerService {
+            inject CustomerRepository;
+            register => CustomerRepository.save;
+        }
+        entity Customer repository CustomerRepository {
+            findById;
+            save;
+        }
+    }
+}
+"#;
+
+const PROJECT_FLOW_GOOD: &str = r#"import "auth.actor";
+
+view "Edit" {
+    requires: [ManageCustomer];
+    roles: [admin];
+}
+"#;
+
+const PROJECT_FLOW_BAD: &str = r#"import "auth.actor";
+
+view "Edit" {
+    requires: [ManageCustomer, Ghost];
+}
+"#;
+
+const PROJECT_DEPLOY: &str = r#"import "design.ddd"
+import "flow.ifml"
+
+application Svc {
+    component core: api {
+        design "design.ddd#core"
+    }
+    component web: frontend {
+        flow "flow.ifml"
+    }
+    connects web -> core
+}
+
+profile prod {
+    target: kubernetes
+}
+
+deployment dev for Svc {
+    use prod
+}
+"#;
+
+/// Writes the five-file project fixture into `dir`.
+fn write_project_fixture(dir: &Path, flow: &str) {
+    std::fs::create_dir_all(dir).expect("mkdir project dir");
+    std::fs::write(dir.join("auth.mox"), PROJECT_MOX).expect("write mox");
+    std::fs::write(dir.join("auth.actor"), PROJECT_ACTOR).expect("write actor");
+    std::fs::write(dir.join("design.ddd"), PROJECT_DDD).expect("write design");
+    std::fs::write(dir.join("flow.ifml"), flow).expect("write flow");
+    std::fs::write(dir.join("svc.deploy"), PROJECT_DEPLOY).expect("write deploy");
+}
+
+#[test]
+fn check_project_directory_reports_cross_surface_diagnostics_per_file() {
+    let dir = scratch_dir().join(format!("project-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    write_project_fixture(&dir, PROJECT_FLOW_BAD);
+
+    let output = rexlang()
+        .args(["check", dir.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check on a project directory");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("E0107"),
+        "the authorization diagnostic: {stderr}"
+    );
+    assert!(
+        stderr.contains("capability 'Ghost' is not declared"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("flow.ifml"),
+        "the diagnostic is grouped under the flow file: {stderr}"
+    );
+    assert!(
+        stderr.contains("1 of 5 files failed"),
+        "the summary counts exactly one failing file: {stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.matches("OK").count(),
+        4,
+        "the other four surfaces pass: {stdout}"
+    );
+}
+
+#[test]
+fn build_emits_all_artifacts_for_a_project_directory() {
+    let root = scratch_dir().join(format!("build-project-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    write_project_fixture(&root.join("proj"), PROJECT_FLOW_GOOD);
+    let out = root.join("out");
+
+    let output = rexlang()
+        .current_dir(&root)
+        .args(["build", "proj", "-o", out.to_str().unwrap()])
+        .output()
+        .expect("run rexlang build on a project directory");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    for (name, marker) in [
+        ("auth.mox", "Customer"),
+        ("auth.actor", "ManageCustomer"),
+        ("design.ddd", "CustomerRepository"),
+        ("flow.ifml", "Edit"),
+        ("svc.deploy", "Svc"),
+    ] {
+        let path = out.join(format!("proj/{name}.json"));
+        let json = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("artifact for {name}: {error}"));
+        let artifact: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert_eq!(artifact["formatVersion"], serde_json::json!(1), "{name}");
+        assert!(
+            json.contains(marker),
+            "{name} artifact carries its declaration: {json}"
+        );
+    }
+}
+
+#[test]
+fn build_still_emits_compiling_files_when_a_sibling_fails() {
+    let dir = scratch_dir().join(format!("build-partial-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    std::fs::write(dir.join("auth.mox"), PROJECT_MOX).expect("write mox");
+    // Capability granted on a class the imported domain does not declare.
+    std::fs::write(
+        dir.join("broken.actor"),
+        "import \"auth.mox\"\n\nactors Auth {\n    actor admin\n\n    capability ManageCustomer on Ghost\n}\n",
+    )
+    .expect("write broken actor");
+    std::fs::write(dir.join("flow.ifml"), "view \"Home\" {\n}\n").expect("write flow");
+    let out = scratch_dir().join(format!("build-partial-out-{}", std::process::id()));
+
+    let output = rexlang()
+        .args(["build", dir.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .expect("run rexlang build with a broken sibling");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("broken.actor"),
+        "the failure is named: {stderr}"
+    );
+    assert!(
+        stderr.contains("1 of 3 files failed"),
+        "the summary counts one failing file: {stderr}"
+    );
+    // The input path as given is absolute, so its artifact mirrors that
+    // absolute path *inside* the out dir (never `Path::join` an absolute
+    // string — it would swallow the base).
+    let artifact = |name: &str| {
+        PathBuf::from(format!(
+            "{}/{}.json",
+            out.display(),
+            dir.join(name).display()
+        ))
+    };
+    assert!(
+        artifact("auth.mox").is_file(),
+        "the compiling mox still emits its artifact"
+    );
+    assert!(
+        artifact("flow.ifml").is_file(),
+        "the compiling flow still emits its artifact"
+    );
+    assert!(
+        !artifact("broken.actor").exists(),
+        "the broken actor emits no artifact"
+    );
+}
+
+#[test]
+fn build_out_defaults_to_target_rex_relative_to_the_working_directory() {
+    // The subprocess inherits this process's CWD, so the default out dir is
+    // pinned against a scratch CWD instead of the repository's own target/.
+    let root = scratch_dir().join(format!("build-default-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("proj")).expect("mkdir proj");
+    std::fs::write(root.join("proj/good.mox"), GOOD).expect("write mox");
+
+    let output = rexlang()
+        .current_dir(&root)
+        .args(["build", "proj"])
+        .output()
+        .expect("run rexlang build without -o");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let artifact = root.join("target/rex/proj/good.mox.json");
+    assert!(
+        artifact.is_file(),
+        "the default output directory is ./target/rex"
+    );
+    let model = rex_ir::Model::from_json(&std::fs::read_to_string(&artifact).expect("artifact"))
+        .expect("Core IR artifact");
+    assert_eq!(model.packages[0].name, "demo");
+}
+
 // --- `.deploy` deployment files ------------------------------------------------
 
 const DEPLOY_DOMAIN: &str = "package demo\n\nclass Book { String title }\n";
@@ -2759,6 +3294,42 @@ fn write_deploy_fixtures() -> PathBuf {
 #[test]
 fn check_succeeds_on_deploy_pair() {
     let deploy = write_deploy_fixtures();
+    let output = rexlang()
+        .args(["check", deploy.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("OK {}\n", deploy.display())
+    );
+}
+
+/// The nested-flow guard for the driver's deploy gather: the deploy
+/// imports a flow whose own imports import a pattern module — depth-2
+/// flow nesting, resolved through the gatherer's identity→key map. Without
+/// that map a flow's nested imports resolve against the process CWD and
+/// the flow "does not compile".
+#[test]
+fn check_succeeds_on_a_deploy_with_a_nested_flow_import() {
+    write_source("deploy-domain.mox", DEPLOY_DOMAIN);
+    write_source("deploy-design.ddd", DEPLOY_DESIGN);
+    write_source(
+        "pattern.ifml",
+        "module \"Pager\" {\n    input { pageSize: Int = 25 }\n    output { total: Int }\n\n    component \"pager\" {\n        type: list;\n        data: Item;\n    }\n}\n",
+    );
+    write_source(
+        "flow.ifml",
+        "import \"pattern.ifml\";\n\nview \"Home\" {\n    use \"Pager\" as pager { pageSize: 10; };\n\n    component \"list\" {\n        type: list;\n        data: Book;\n    }\n}\n",
+    );
+    let deploy = write_source(
+        "nested.deploy",
+        "import \"deploy-design.ddd\"\nimport \"flow.ifml\"\n\napplication Svc {\n    component lending: api {\n        design \"deploy-design.ddd#media\"\n    }\n    component web: frontend {\n        flow \"flow.ifml\"\n    }\n    component db: database {\n        engine: postgres\n    }\n    connects web -> lending\n    connects lending -> db\n}\n\nprofile prod {\n    target: kubernetes\n    defaults {\n        lending.replicas: 2\n    }\n    require (lending.replicas >= 2)\n}\n\ndeployment dev for Svc {\n    use prod\n}\n",
+    );
     let output = rexlang()
         .args(["check", deploy.to_str().unwrap()])
         .output()

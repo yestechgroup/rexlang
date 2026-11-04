@@ -1,0 +1,18 @@
+import "auth.mox"
+
+actors Auth {
+    actor admin
+    actor manager
+
+    capability ManageCustomer on Customer
+    capability ApproveCustomer on Customer
+
+    grant admin {
+        permit ManageCustomer
+        permit ApproveCustomer
+    }
+
+    grant manager {
+        permit ManageCustomer
+    }
+}

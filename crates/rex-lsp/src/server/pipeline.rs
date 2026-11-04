@@ -18,6 +18,9 @@ pub(super) struct IfmlImportClosure {
     pub(super) bundle: rex_ifml::IfmlImports,
     /// Imported `.mox` domain sources, deduplicated by resolved path.
     pub(super) domains: Vec<(String, String)>,
+    /// Imported `.actor` policies, compiled — the authorization dimension
+    /// `check_ifml_with_actors` resolves `requires:`/`roles:` against.
+    pub(super) actors: Vec<rex_ir::ActorModel>,
     /// Resolved disk path per import identity (the main file included).
     disk_paths: std::collections::BTreeMap<String, std::path::PathBuf>,
     /// URL (or identity string) of every fetched import — the transitive
@@ -113,12 +116,14 @@ impl RexBackend {
             .await;
     }
 
-    /// Compiles one open `.ifml` document: its import tree is fetched
-    /// through [`rex_ifml::walk_ifml_imports`] — open documents first, then
+    /// Compiles one open `.ifml` document: its import tree is gathered
+    /// through [`RexBackend::import_closure`] — open documents first, then
     /// disk relative to the importing file — the imported `.mox` files are
-    /// compiled and unioned into the typed-binding domain, and the file is
-    /// compiled and checked in one pass. Diagnostics referencing other
-    /// files are dropped here (they surface when that file is opened).
+    /// compiled and unioned into the typed-binding domain, the imported
+    /// `.actor` files are compiled into the authorization dimension, and
+    /// the file is compiled and checked in one pass. Diagnostics
+    /// referencing other files are dropped here (they surface when that
+    /// file is opened).
     pub(super) fn compile_ifml(
         &self,
         uri: &Url,
@@ -132,7 +137,8 @@ impl RexBackend {
         let (compilation, mut diagnostics) =
             rex_ifml::compile_ifml_lenient(&main_path, text, &closure.bundle);
         let domain_union = domain_union(&closure.domains);
-        let binding = rex_ifml::check_ifml(&compilation, domain_union.as_ref());
+        let binding =
+            rex_ifml::check_ifml_with_actors(&compilation, domain_union.as_ref(), &closure.actors);
         diagnostics.extend(binding);
         // Resolved URI per indexed file (same order as `index.files`), so
         // cross-file navigation can produce `Location`s. Unresolved
@@ -160,9 +166,10 @@ impl RexBackend {
 
     /// The imported domain sources of one open `.ddd` document, plus the
     /// import bundle their `import schema`/`import sigil` declarations
-    /// need. Import paths resolve relative to the design file's directory
-    /// (the CLI's `read_ddd_design` semantics), and an open `.mox` document
-    /// at the resolved path is preferred over its disk copy — editing an
+    /// need, gathered through [`rex_driver::project::gather_domain_sources`].
+    /// Import paths resolve relative to the design file's directory (the
+    /// CLI's `read_ddd_design` semantics), and an open `.mox` document at
+    /// the resolved path is preferred over its disk copy — editing an
     /// imported domain refreshes the design without a save. A missing
     /// import file is skipped here: the driver reports the unprovided
     /// import as a diagnostic.
@@ -172,34 +179,33 @@ impl RexBackend {
         text: &str,
     ) -> (Vec<(String, String)>, rex_driver::DomainImports) {
         let mut domains: Vec<(String, String)> = Vec::new();
-        let dir = uri
-            .to_file_path()
-            .ok()
-            .and_then(|path| path.parent().map(std::path::Path::to_path_buf));
-        if let Some(dir) = dir {
-            if let Some(ast) = &rex_syntax::parse_ddd(text).ast {
-                for import in &ast.imports {
-                    if domains.iter().any(|(existing, _)| *existing == import.path) {
-                        continue;
-                    }
-                    let resolved = dir.join(&import.path);
-                    let open = {
-                        let documents = self.documents.lock().unwrap();
-                        documents.iter().find_map(|(open_uri, document)| {
-                            if document.surface != Surface::Mox {
-                                return None;
-                            }
-                            let open_path = open_uri.to_file_path().ok()?;
-                            (open_path == resolved).then(|| document.text.clone())
-                        })
-                    };
-                    let Some(source) = open.or_else(|| std::fs::read_to_string(&resolved).ok())
-                    else {
-                        continue;
-                    };
-                    domains.push((resolved.display().to_string(), source));
-                }
-            }
+        if let Ok(path) = uri.to_file_path() {
+            let path_key = path.display().to_string();
+            let mut fetch = |resolved: &str| -> Option<String> {
+                let resolved = std::path::PathBuf::from(resolved);
+                let open = {
+                    let documents = self.documents.lock().unwrap();
+                    documents.iter().find_map(|(open_uri, document)| {
+                        if document.surface != Surface::Mox {
+                            return None;
+                        }
+                        let open_path = open_uri.to_file_path().ok()?;
+                        (open_path == resolved).then(|| document.text.clone())
+                    })
+                };
+                open.or_else(|| std::fs::read_to_string(&resolved).ok())
+            };
+            domains = rex_driver::project::gather_domain_sources(
+                &path_key,
+                text,
+                |source| {
+                    rex_syntax::parse_ddd(source)
+                        .ast
+                        .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
+                        .unwrap_or_default()
+                },
+                &mut fetch,
+            );
         }
         // The domains' own `import schema`/`import sigil` content resolves
         // from disk relative to each domain file (the domains' driver paths
@@ -214,11 +220,19 @@ impl RexBackend {
         (domains, imports)
     }
 
-    /// The import closure of one `.ifml` document: the resolver bundle, the
-    /// imported `.mox` domain sources, every resolved disk path (identity →
-    /// path), and the URLs of all fetched imports — the transitive import
-    /// set that reverse-dependency lookups match against. Open documents
-    /// win over disk (the editor's buffer is the truth).
+    /// The import closure of one `.ifml` document, gathered through
+    /// [`rex_driver::project::gather_ifml_project`]: the resolver bundle,
+    /// the imported `.mox` domain sources, the imported `.actor` policies
+    /// (compiled by [`rex_driver::project::compile_actor_imports`]), every
+    /// resolved disk path (identity → path), and the URLs of all fetched
+    /// imports — the transitive import set that reverse-dependency lookups
+    /// match against. Open documents win over disk (the editor's buffer is
+    /// the truth). Anything unresolvable or non-compiling degrades
+    /// silently: `.ifml` misses surface as resolver diagnostics, missing
+    /// `.mox`/`.actor` imports shrink the typed/authorization dimensions
+    /// (an empty actors slice skips the authorization pass) — the editor
+    /// must stay usable in incomplete workspaces; the CLI's hard error is
+    /// the authoring gate.
     pub(super) fn import_closure(&self, uri: &Url, text: &str) -> IfmlImportClosure {
         let main_path = uri.to_string();
         let mut closure = IfmlImportClosure::default();
@@ -232,7 +246,7 @@ impl RexBackend {
                 .to_path_buf()
         };
         let documents = self.documents.lock().unwrap();
-        let _walk = rex_ifml::walk_ifml_imports(&main_path, text, &mut |importer, import| {
+        let mut fetch = |importer: &str, import: &str| -> Option<(String, String)> {
             let importer_disk = closure.disk_paths.get(importer)?;
             let resolved = dir_of(importer_disk).join(import);
             let fetched = (|| {
@@ -247,24 +261,29 @@ impl RexBackend {
                 .map(|url| url.to_string())
                 .unwrap_or_else(|_| resolved.display().to_string());
             closure.import_urls.push(url);
-            let resolved_path = resolved.display().to_string();
-            closure.disk_paths.insert(import.to_string(), resolved);
-            if import.ends_with(".mox") {
-                if !closure
-                    .domains
-                    .iter()
-                    .any(|(existing, _)| existing == &resolved_path)
-                {
-                    closure.domains.push((resolved_path, fetched));
-                }
-                return None;
-            }
-            if import.ends_with(".ifml") {
-                closure.bundle.provide(importer, import, fetched.clone());
-                return Some(fetched);
-            }
-            None
-        });
+            let key = resolved.display().to_string();
+            // Both identities must resolve (the walker contract's host
+            // obligation): the as-written import string (what the
+            // resolver's index and nested `.ifml` walks use) and the
+            // resolved key (what nested gathering hands back as an
+            // importer identity — an `.actor` policy's own domain
+            // imports).
+            closure
+                .disk_paths
+                .insert(import.to_string(), resolved.clone());
+            closure.disk_paths.insert(key.clone(), resolved);
+            Some((key, fetched))
+        };
+        let project = rex_driver::project::gather_ifml_project(&main_path, text, &mut fetch);
+        // The walk is done: release the document lock before compiling.
+        drop(documents);
+        closure.bundle = project.imports;
+        closure.domains = project.domains;
+        // A policy that fails to compile degrades to no authorization
+        // checking rather than errors against a partial dimension,
+        // mirroring `domain_union`.
+        closure.actors =
+            rex_driver::project::compile_actor_imports(&project.actors).unwrap_or_default();
         closure
     }
 
@@ -417,34 +436,18 @@ pub(super) fn to_ifml_diagnostic(
     }
 }
 
-/// Unions every imported `.mox` domain into one model for typed binding.
-/// `None` when there are no domains — or any fails to compile, in which
-/// case the LSP degrades to structural checks rather than reporting
-/// binding errors against a partial union.
+/// Unions every imported `.mox` domain into one model for typed binding,
+/// through [`rex_driver::project::compile_domain_union`]. `None` when
+/// there are no domains — or any fails to compile, in which case the LSP
+/// degrades to structural checks rather than reporting binding errors
+/// against a partial union.
 pub(super) fn domain_union(domains: &[(String, String)]) -> Option<rex_ir::Model> {
     if domains.is_empty() {
         return None;
     }
-    // The domains' own `import schema`/`import sigil` declarations resolve
-    // from disk, exactly like the CLI's; a collection failure degrades to
-    // no typed checking rather than errors against a partial union.
-    let imports = rex_driver::workspace_imports::collect_schema_imports(domains)
-        .ok()
-        .zip(rex_driver::workspace_imports::collect_sigil_imports(domains).ok())
-        .map(|(schemas, sigil)| rex_driver::DomainImports {
-            schemas,
-            sigil: sigil.imports,
-        })
-        .unwrap_or_default();
-    let mut union = rex_ir::Model::new();
-    for (path, source) in domains {
-        let compilation = rex_driver::compile_str(path, source, &imports);
-        if !compilation.diagnostics.is_empty() {
-            return None;
-        }
-        union.packages.extend(compilation.model?.packages);
-    }
-    Some(union)
+    // Any gather/compile failure inside the driver degrades to no typed
+    // checking rather than errors against a partial union.
+    rex_driver::project::compile_domain_union(domains).ok()
 }
 
 impl RexBackend {}
