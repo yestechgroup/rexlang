@@ -363,6 +363,15 @@ loose-mapping contract. Nothing in the design artifact constructs policy:
 authorization remains the `.actor` dimension's job (see the actor-policy
 section of the language reference).
 
+Both directions of the design↔actor wiring are enforced across the whole
+application by the union integrity pass (`rex_driver::check_integrity`,
+register row **V12**): `rexlang check <dir>` clusters the checked files
+into import-connected applications and errors when a capability clause
+names nothing declared (rule 10, generalized across every actor model) or
+when a granted capability is carried by no operation or search — a grant
+guarding a transition that cannot happen. Checking a design alone stays
+per-surface and silent.
+
 ---
 
 ## CLI usage

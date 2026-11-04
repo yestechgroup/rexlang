@@ -75,6 +75,126 @@
               ]
             },
             {
+              "name": "listTickets",
+              "returnType": {
+                "type": "class",
+                "value": {
+                  "package": "nz.example.support",
+                  "name": "Ticket"
+                }
+              },
+              "returnMultiplicity": {
+                "lower": 0,
+                "upper": "unbounded"
+              }
+            },
+            {
+              "name": "getTicket",
+              "returnType": {
+                "type": "class",
+                "value": {
+                  "package": "nz.example.support",
+                  "name": "Ticket"
+                }
+              },
+              "params": [
+                {
+                  "name": "ticketNo",
+                  "type": {
+                    "type": "primitive",
+                    "value": "string"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "claimTicket",
+              "returnType": {
+                "type": "primitive",
+                "value": "boolean"
+              },
+              "params": [
+                {
+                  "name": "ticketNo",
+                  "type": {
+                    "type": "primitive",
+                    "value": "string"
+                  }
+                },
+                {
+                  "name": "helper",
+                  "type": {
+                    "type": "class",
+                    "value": {
+                      "package": "nz.example.support",
+                      "name": "User"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "name": "refundTicket",
+              "returnType": {
+                "type": "primitive",
+                "value": "boolean"
+              },
+              "params": [
+                {
+                  "name": "ticketNo",
+                  "type": {
+                    "type": "primitive",
+                    "value": "string"
+                  }
+                },
+                {
+                  "name": "cents",
+                  "type": {
+                    "type": "primitive",
+                    "value": "int"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "updateTicket",
+              "returnType": {
+                "type": "primitive",
+                "value": "boolean"
+              },
+              "params": [
+                {
+                  "name": "ticketNo",
+                  "type": {
+                    "type": "primitive",
+                    "value": "string"
+                  }
+                }
+              ],
+              "capabilities": [
+                "UpdateTicket"
+              ]
+            },
+            {
+              "name": "resolveTicket",
+              "returnType": {
+                "type": "primitive",
+                "value": "boolean"
+              },
+              "params": [
+                {
+                  "name": "ticketNo",
+                  "type": {
+                    "type": "primitive",
+                    "value": "string"
+                  }
+                }
+              ],
+              "capabilities": [
+                "ResolveTicket"
+              ]
+            },
+            {
               "name": "close",
               "delegation": {
                 "target": "TicketRepository",
@@ -206,7 +326,10 @@
             "limit": 20,
             "maxLimit": 100,
             "cursor": true
-          }
+          },
+          "capabilities": [
+            "ReadTicket"
+          ]
         }
       ]
     },

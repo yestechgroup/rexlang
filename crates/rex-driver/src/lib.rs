@@ -31,6 +31,7 @@ mod ddd;
 pub(crate) mod deploy;
 pub mod diagnostic;
 pub(crate) mod events;
+pub(crate) mod integrity;
 pub(crate) mod lower;
 pub mod machines;
 pub mod manifest;
@@ -42,6 +43,7 @@ pub(crate) mod usecases;
 pub mod workspace_imports;
 
 pub use diagnostic::{render, Diagnostic, DiagnosticCode, Severity};
+pub use integrity::check_integrity;
 pub use navigation::{
     DefId, Definition, FeatureSymbolKind, Lookup, NavigationIndex, Reference, SymbolKind,
 };

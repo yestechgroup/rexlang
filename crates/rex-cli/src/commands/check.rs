@@ -1,4 +1,12 @@
 //! `rexlang check`: compile inputs and render diagnostics grouped per file.
+//!
+//! Directory batch mode runs two phases: the per-file project pipeline
+//! (every file checked independently with its imports resolving map-first
+//! from the snapshot), then the union integrity pass (rexlang#114) — the
+//! standalone-compiled artifacts of every successful check are gathered
+//! into import-connected applications and [`rex_driver::check_integrity`]
+//! diagnoses the dangling cross-layer wiring each. Single-file mode has no
+//! union context and stays per-surface.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -29,8 +37,22 @@ pub(crate) fn run(files: Vec<PathBuf>) -> anyhow::Result<ExitCode> {
                 }
             }
         }
+        // Second phase — the union integrity pass (rexlang#114): the
+        // standalone-compiled artifacts cluster into import-connected
+        // applications and the cross-layer wiring is diagnosed per
+        // application. Quiet in the common case; error-severity findings
+        // fail the batch.
+        let integrity_errors = super::integrity::run_union_pass(&expanded)?;
         if failed > 0 {
             eprintln!("{failed} of {} files failed", expanded.len());
+        }
+        if integrity_errors > 0 {
+            eprintln!(
+                "{integrity_errors} cross-surface integrity errors in the checked applications"
+            );
+            return Ok(ExitCode::FAILURE);
+        }
+        if failed > 0 {
             return Ok(ExitCode::FAILURE);
         }
         return Ok(ExitCode::SUCCESS);

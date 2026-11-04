@@ -70,6 +70,8 @@ application Library {
         /// Keeps the member register current.
         service PersonService {
             inject PersonRepository;
+            Person updateCustomer(String customerId) capability ManageCustomer;
+            boolean approveCustomer(String customerId) capability ApproveCustomer;
             register => PersonRepository.save;
             findByName => PersonRepository.findByName;
         }

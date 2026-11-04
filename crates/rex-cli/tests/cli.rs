@@ -3731,3 +3731,219 @@ fn fmt_uc_files_rewrites_in_place_and_check_then_passes() {
     );
     assert_eq!(std::fs::read_to_string(&path).unwrap(), formatted);
 }
+
+// ---------------------------------------------------------------------------
+// Cross-surface integrity (issue #114): directory batch mode runs the union
+// resolver pass over every import-connected application in the checked set;
+// dangling lifecycle wiring is an error, single-file checks stay per-surface.
+// ---------------------------------------------------------------------------
+
+/// The shared domain: one class the capabilities hang on.
+const UNION_MOX: &str = "package demo\n\nclass Ticket { String title }\n";
+
+/// A design whose only operation carries `capabilities`.
+fn union_ddd(capability: Option<&str>) -> String {
+    let clause = capability
+        .map(|c| format!(" capability {c}"))
+        .unwrap_or_default();
+    format!(
+        "import \"app.mox\";\n\napplication App {{\n    module desk {{\n        service TicketService {{\n            Ticket hire(){clause};\n        }}\n    }}\n}}\n"
+    )
+}
+
+/// An actor block granting `TerminateWorker` to Agent.
+const UNION_ACTOR: &str = "import \"app.mox\"\n\nactors Support {\n    actor Agent\n    capability TerminateWorker on Ticket\n    grant Agent {\n        permit TerminateWorker\n    }\n}\n";
+
+/// An event contract whose subscription's consumer is `consumer`.
+fn union_evt(consumer: &str) -> String {
+    format!(
+        "import \"app.mox\"\n\nevent OrderPlaced {{\n    orderId: String;\n}}\n\nsubscription ops {{\n    events [ OrderPlaced ]\n    consumer {consumer}\n}}\n"
+    )
+}
+
+/// A deploy application with one component named `component`.
+fn union_deploy(component: &str) -> String {
+    format!(
+        "import \"desk.ddd\"\n\napplication App {{\n    component {component}: worker {{ }}\n}}\n"
+    )
+}
+
+/// An interaction file: a view gated on `requires` and an action bound to
+/// `action`.
+fn union_ifml(action: Option<&str>, requires: Option<&str>) -> String {
+    let action_block = action
+        .map(|name| format!("\naction \"{name}\" {{\n}}\n"))
+        .unwrap_or_default();
+    let requires_clause = requires
+        .map(|names| format!("    requires: [{names}];\n"))
+        .unwrap_or_default();
+    format!("import \"app.mox\";\n\nview \"Desk\" {{\n{requires_clause}}}\n{action_block}")
+}
+
+/// Writes a five-file application into the test's scratch directory and
+/// returns the directory path.
+fn write_union_app(
+    ddd: &str,
+    actor: Option<&str>,
+    evt: Option<&str>,
+    deploy: Option<&str>,
+    ifml: Option<&str>,
+) -> PathBuf {
+    let dir = scratch_dir();
+    std::fs::write(dir.join("app.mox"), UNION_MOX).expect("write mox");
+    std::fs::write(dir.join("desk.ddd"), ddd).expect("write ddd");
+    if let Some(actor) = actor {
+        std::fs::write(dir.join("desk.actor"), actor).expect("write actor");
+    }
+    if let Some(evt) = evt {
+        std::fs::write(dir.join("orders.evt"), evt).expect("write evt");
+    }
+    if let Some(deploy) = deploy {
+        std::fs::write(dir.join("app.deploy"), deploy).expect("write deploy");
+    }
+    if let Some(ifml) = ifml {
+        std::fs::write(dir.join("screen.ifml"), ifml).expect("write ifml");
+    }
+    dir
+}
+
+#[test]
+fn directory_check_flags_a_granted_capability_no_op_carries() {
+    let dir = write_union_app(&union_ddd(None), Some(UNION_ACTOR), None, None, None);
+    let output = rexlang()
+        .arg("check")
+        .arg(&dir)
+        .output()
+        .expect("run rexlang check");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "dangling grant must fail the batch"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "capability 'TerminateWorker' is granted but no operation or search carries it"
+        ),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn directory_check_flags_a_consumer_no_component_satisfies() {
+    let dir = write_union_app(
+        &union_ddd(Some("TerminateWorker")),
+        Some(UNION_ACTOR),
+        Some(&union_evt("fulfillment_service")),
+        Some(&union_deploy("api")),
+        None,
+    );
+    let output = rexlang()
+        .arg("check")
+        .arg(&dir)
+        .output()
+        .expect("run rexlang check");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "dead inbox must fail the batch"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("subscription 'ops' consumer 'fulfillment_service' does not resolve to a declared component"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn directory_check_flags_an_action_no_op_backs() {
+    let dir = write_union_app(
+        &union_ddd(None),
+        None,
+        None,
+        None,
+        Some(&union_ifml(Some("HireWorker"), None)),
+    );
+    let output = rexlang()
+        .arg("check")
+        .arg(&dir)
+        .output()
+        .expect("run rexlang check");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "unbound action must fail the batch"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("action 'HireWorker' does not bind to any service operation"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn directory_check_flags_a_requires_name_no_actor_layer_declares() {
+    let dir = write_union_app(
+        &union_ddd(None),
+        Some(UNION_ACTOR),
+        None,
+        None,
+        Some(&union_ifml(None, Some("Ghost"))),
+    );
+    let output = rexlang()
+        .arg("check")
+        .arg(&dir)
+        .output()
+        .expect("run rexlang check");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "dangling requires must fail the batch"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown capability or actor 'Ghost' in requires of view 'Desk'"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn directory_check_passes_a_fully_wired_application() {
+    let dir = write_union_app(
+        &union_ddd(Some("TerminateWorker")),
+        Some(UNION_ACTOR),
+        Some(&union_evt("fulfillment_service")),
+        Some(&union_deploy("fulfillment_service")),
+        Some(&union_ifml(Some("hire"), Some("Agent"))),
+    );
+    let output = rexlang()
+        .arg("check")
+        .arg(&dir)
+        .output()
+        .expect("run rexlang check");
+    assert!(
+        output.status.success(),
+        "a wired application passes: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).is_empty());
+}
+
+#[test]
+fn single_file_check_stays_per_surface() {
+    // The dangling grant of `directory_check_flags_a_granted_capability_no_op_carries`
+    // is invisible when the design is checked alone: single-file mode has
+    // no union context, and cross-surface checks fire only in directory
+    // batch mode where the counterpart surfaces are in hand.
+    let dir = write_union_app(&union_ddd(None), Some(UNION_ACTOR), None, None, None);
+    let output = rexlang()
+        .arg("check")
+        .arg(dir.join("desk.ddd"))
+        .output()
+        .expect("run rexlang check");
+    assert!(
+        output.status.success(),
+        "single-file mode must stay per-surface: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

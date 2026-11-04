@@ -632,6 +632,15 @@ semantic product: `tests/conformance/ifml/{app,cli}.manifest.json` and
 `examples/artifacts/{cli,ecommerce,support}.manifest.json` (the
 `examples_artifacts` precedent).
 
+Declarations resolve one step further, across surfaces: `rexlang check
+<dir>` runs the union integrity pass (`rex_driver::check_integrity`,
+register row **V12**) over the import-connected application and errors
+when a declared action's name binds to no service operation
+(ASCII-case-insensitive verb equality — `ApproveRefund` ↔
+`approveRefund`), or when a `requires:` name is neither a declared
+capability nor a declared actor, or a `roles:` name is not a declared
+actor. Checking a flow alone stays per-surface and silent.
+
 ### Reference Pattern Library
 
 `patterns/ifml/` ships a domain-agnostic library of 39 reusable modules —

@@ -5,6 +5,7 @@ pub(crate) mod build;
 pub(crate) mod check;
 pub(crate) mod fmt;
 pub(crate) mod gen;
+pub(crate) mod integrity;
 pub(crate) mod ir;
 pub(crate) mod lsp;
 pub(crate) mod manifest;

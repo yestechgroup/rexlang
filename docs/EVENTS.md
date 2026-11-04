@@ -41,6 +41,12 @@ docs):
   `events`, `channels`, `subscriptions`). There
   are no tagged enums in this artifact: a publication is exactly
   `{"event": "<name>"}`, and a subscription's consumer is a bare string.
+  In a checked application the name must resolve: `rexlang check <dir>`
+  runs the union integrity pass (`rex_driver::check_integrity`, register
+  row **V12**) over the import-connected application and errors when a
+  consumer names no declared `.deploy` component — a dead inbox, not a
+  valid contract. Checking the contract alone stays per-surface and
+  silent.
 - Payload fields reuse the domain IR's `TypeRef` (adjacent tagging:
   `{"type": "class", "value": {...}}`), serialized under the `"type"` key —
   there is no parallel wire-level type shape.

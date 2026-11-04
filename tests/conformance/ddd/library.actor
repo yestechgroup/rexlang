@@ -1,0 +1,8 @@
+import "library.mox"
+
+actors Library {
+    actor librarian
+
+    capability BorrowMedia on Media
+    capability SearchMedia on Movie
+}
