@@ -889,3 +889,270 @@ fn requires_and_roles_without_any_actors_pass() {
         "without actors there is nothing to resolve requires/roles against: {diagnostics:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Check 6 — emission existence: every event a service operation's `emits`
+// clause names must be declared in some provided `.evt` contract. Names are
+// loosely coupled by design; the union pass is where they resolve.
+// ---------------------------------------------------------------------------
+
+/// One design artifact: `path` → a single module holding one service with
+/// one operation emitting `emits`.
+fn design_with_emitting_op(
+    path: &str,
+    service: &str,
+    op: &str,
+    emits: &[&str],
+) -> (String, DddModel) {
+    let mut operation = ServiceOperation::new(op);
+    operation.emits = emits.iter().map(|e| e.to_string()).collect();
+    let mut service = Service::new(service);
+    service.operations.push(operation);
+    let mut module = Module::new("core");
+    module.services.push(service);
+    (path.to_string(), DddModel::new().module(module))
+}
+
+/// One event artifact: `path` → a model declaring `events` by name (the
+/// declared set pools across every provided contract, like the actor
+/// layer's block-local names).
+fn events_model(path: &str, events: &[&str]) -> (String, EventModel) {
+    let mut model = EventModel::new();
+    for event in events {
+        model.events.push(rex_ir::events::EventDef::new(*event));
+    }
+    (path.to_string(), model)
+}
+
+#[test]
+fn emitted_event_declared_in_an_event_contract_passes() {
+    let designs = vec![design_with_emitting_op(
+        "model/payrun.ddd",
+        "PayRunService",
+        "approve",
+        &["PayRunStateChanged"],
+    )];
+    let events = vec![events_model("model/payrun.evt", &["PayRunStateChanged"])];
+    let diagnostics = check_integrity(&designs, &[], &events, &[], &[]);
+    assert!(
+        diagnostics.is_empty(),
+        "the emitted event is declared: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn unknown_emitted_event_errors_on_the_design() {
+    let designs = vec![design_with_emitting_op(
+        "model/payrun.ddd",
+        "PayRunService",
+        "approve",
+        &["PayRunStateChanged", "Ghost"],
+    )];
+    let events = vec![events_model("model/payrun.evt", &["PayRunStateChanged"])];
+    let diagnostics = check_integrity(&designs, &[], &events, &[], &[]);
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "exactly the dangling emission: {diagnostics:?}"
+    );
+    let (path, diagnostic) = &diagnostics[0];
+    assert_eq!(path, "model/payrun.ddd");
+    assert_eq!(diagnostic.severity, Severity::Error);
+    assert_eq!(
+        diagnostic.message,
+        "operation 'approve' of service 'PayRunService' emits unknown event 'Ghost'"
+    );
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("the event contracts declare: PayRunStateChanged"),
+    );
+}
+
+#[test]
+fn emitted_event_declared_by_a_second_contract_passes() {
+    // Declared event names pool across every provided event contract, the
+    // way capability names pool across actor blocks.
+    let designs = vec![design_with_emitting_op(
+        "model/payrun.ddd",
+        "PayRunService",
+        "approve",
+        &["PayRunStateChanged"],
+    )];
+    let events = vec![
+        events_model("model/empty.evt", &[]),
+        events_model("model/payrun.evt", &["PayRunStateChanged"]),
+    ];
+    let diagnostics = check_integrity(&designs, &[], &events, &[], &[]);
+    assert!(
+        diagnostics.is_empty(),
+        "the declared set pools across every provided contract: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn duplicate_emission_is_one_emission() {
+    // An operation listing the same event twice is one emission: exactly
+    // one diagnostic for a repeated unknown name, none for a repeated
+    // declared one. (The declared event is also listed so the coverage
+    // check stays out of the way.)
+    let designs = vec![design_with_emitting_op(
+        "model/payrun.ddd",
+        "PayRunService",
+        "approve",
+        &["PayRunStateChanged", "Ghost", "Ghost"],
+    )];
+    let events = vec![events_model("model/payrun.evt", &["PayRunStateChanged"])];
+    let diagnostics = check_integrity(&designs, &[], &events, &[], &[]);
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "the duplicate emission deduplicates: {diagnostics:?}"
+    );
+    assert_eq!(
+        diagnostics[0].1.message,
+        "operation 'approve' of service 'PayRunService' emits unknown event 'Ghost'"
+    );
+
+    let designs = vec![design_with_emitting_op(
+        "model/payrun.ddd",
+        "PayRunService",
+        "approve",
+        &["PayRunStateChanged", "PayRunStateChanged"],
+    )];
+    let diagnostics = check_integrity(&designs, &[], &events, &[], &[]);
+    assert!(
+        diagnostics.is_empty(),
+        "a repeated declared emission passes once: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn emitted_event_without_any_event_contract_passes() {
+    // No event artifacts in the union: the event dimension is absent, so
+    // the checker cannot judge — it stays silent (the house opt-in rule).
+    let designs = vec![design_with_emitting_op(
+        "model/payrun.ddd",
+        "PayRunService",
+        "approve",
+        &["PayRunStateChanged"],
+    )];
+    let diagnostics = check_integrity(&designs, &[], &[], &[], &[]);
+    assert!(
+        diagnostics.is_empty(),
+        "without event contracts there is nothing to resolve against: {diagnostics:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Check 7 — emission coverage: every declared event must be emitted by at
+// least one service operation across the designs. Channel membership and
+// subscriptions are consumption-side; they do not satisfy production.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn declared_event_emitted_by_an_operation_passes() {
+    let designs = vec![design_with_emitting_op(
+        "model/payrun.ddd",
+        "PayRunService",
+        "approve",
+        &["PayRunStateChanged"],
+    )];
+    let events = vec![events_model("model/payrun.evt", &["PayRunStateChanged"])];
+    let diagnostics = check_integrity(&designs, &[], &events, &[], &[]);
+    assert!(
+        diagnostics.is_empty(),
+        "an operation emits the declared event: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn orphan_declared_event_errors_on_the_event_file() {
+    let designs = vec![design_with_emitting_op(
+        "model/payrun.ddd",
+        "PayRunService",
+        "approve",
+        &["PayRunStateChanged"],
+    )];
+    let events = vec![events_model(
+        "model/payrun.evt",
+        &["PayRunStateChanged", "Orphan"],
+    )];
+    let diagnostics = check_integrity(&designs, &[], &events, &[], &[]);
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "exactly the orphaned declaration: {diagnostics:?}"
+    );
+    let (path, diagnostic) = &diagnostics[0];
+    assert_eq!(path, "model/payrun.evt");
+    assert_eq!(diagnostic.severity, Severity::Error);
+    assert_eq!(
+        diagnostic.message,
+        "event 'Orphan' is declared but no operation emits it"
+    );
+    assert!(diagnostic.help.is_some());
+}
+
+#[test]
+fn event_emitted_by_several_operations_passes_once() {
+    // Emissions pool across every design (and every operation): a declared
+    // event with several emitters passes coverage once.
+    let mut module = Module::new("core");
+    for (service, op) in [("AService", "approve"), ("BService", "post")] {
+        let mut operation = ServiceOperation::new(op);
+        operation.emits = vec!["PayRunStateChanged".to_string()];
+        let mut service = Service::new(service);
+        service.operations.push(operation);
+        module.services.push(service);
+    }
+    let designs = vec![(
+        "model/payrun.ddd".to_string(),
+        DddModel::new().module(module),
+    )];
+    let events = vec![events_model("model/payrun.evt", &["PayRunStateChanged"])];
+    let diagnostics = check_integrity(&designs, &[], &events, &[], &[]);
+    assert!(
+        diagnostics.is_empty(),
+        "any emitter satisfies coverage once: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn channel_membership_does_not_satisfy_production() {
+    // A channel `publishes` entry is consumption-side wiring, not
+    // production: a declared event every channel publishes but no
+    // operation emits is still orphaned.
+    let mut model = events_model("model/payrun.evt", &["PayRunStateChanged"]).1;
+    let channel =
+        rex_ir::events::ChannelDef::new("payrun").publishes("PayRunStateChanged".to_string());
+    model.channels.push(channel);
+    let events = vec![("model/payrun.evt".to_string(), model)];
+    let designs = vec![design_with_emitting_op(
+        "model/payrun.ddd",
+        "PayRunService",
+        "approve",
+        &[],
+    )];
+    let diagnostics = check_integrity(&designs, &[], &events, &[], &[]);
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "channel membership is not production: {diagnostics:?}"
+    );
+    assert_eq!(
+        diagnostics[0].1.message,
+        "event 'PayRunStateChanged' is declared but no operation emits it"
+    );
+}
+
+#[test]
+fn declared_event_without_any_design_passes() {
+    // No design artifacts: there is no op surface to emit anything, so the
+    // checker cannot judge — silent.
+    let events = vec![events_model("model/payrun.evt", &["PayRunStateChanged"])];
+    let diagnostics = check_integrity(&[], &[], &events, &[], &[]);
+    assert!(
+        diagnostics.is_empty(),
+        "without designs there is nothing to emit events: {diagnostics:?}"
+    );
+}
