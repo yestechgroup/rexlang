@@ -3,16 +3,20 @@
 //!
 //! Phase 1 (the project pipeline in `check`) checks every file
 //! independently with its imports resolving map-first from the snapshot.
-//! Phase 2 re-compiles each file standalone (no project context — the
-//! semantics the integrity contract is specified at) and gathers the
-//! compiled artifacts of every successful check into import-connected
-//! applications; [`rex_driver::check_integrity`] then diagnoses the
-//! dangling cross-layer wiring each. Per-file diagnostics are re-reported
-//! here only when the standalone compile disagrees with phase 1 (or a
-//! file was skipped there), so the union pass stays quiet in the common
-//! case.
+//! Since rexlang#128 it also owns the capability joins (existence and
+//! coverage) as spanned compile-time errors. Phase 2 re-compiles each file
+//! standalone (no project context — the semantics the integrity contract
+//! is specified at) and gathers the compiled artifacts of every successful
+//! check into import-connected applications;
+//! [`rex_driver::check_integrity`] then diagnoses the dangling cross-layer
+//! wiring each: errors for the joins the compiler does not yet own, and
+//! the capability findings only as the lint channel — suppressed for files
+//! phase 1 already failed (their spanned compiler error rendered there).
+//! Per-file diagnostics are re-reported here only when the standalone
+//! compile disagrees with phase 1 (or a file was skipped there), so the
+//! union pass stays quiet in the common case.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use rex_driver::{
@@ -40,12 +44,18 @@ use super::pipeline::compile_reported_sources;
 
 /// Runs the pass over the expanded directory inputs; returns the number of
 /// error-severity integrity diagnostics (file failures already reported).
-pub(crate) fn run_union_pass(expanded: &[PathBuf]) -> anyhow::Result<usize> {
+/// `checked_clean` carries the driver paths phase 1 compiled: a file that
+/// failed there already owns its spanned compiler diagnostics, so the
+/// pass's lint-channel warnings for it stay unprinted (rexlang#128).
+pub(crate) fn run_union_pass(
+    expanded: &[PathBuf],
+    checked_clean: &BTreeSet<String>,
+) -> anyhow::Result<usize> {
     let mut contributions: Vec<Contribution> = Vec::new();
     for file in expanded {
         contributions.extend(check_contribution(std::slice::from_ref(file))?);
     }
-    Ok(report_union_integrity(&contributions))
+    Ok(report_union_integrity(&contributions, checked_clean))
 }
 
 /// The compiled artifact a successful standalone check contributes to the
@@ -270,6 +280,9 @@ fn check_contribution(files: &[PathBuf]) -> anyhow::Result<Vec<Contribution>> {
 /// Clusters the contributions into import-connected applications and runs
 /// [`check_integrity`] per application, rendering its diagnostics against
 /// the owning files. Returns the number of error-severity diagnostics.
+/// Warnings (the rexlang#128 lint channel for the capability joins) render
+/// only for files phase 1 checked clean — a failed file's compiler error
+/// is the report of record.
 ///
 /// Two files share an application when an import of one resolves to the
 /// other (transitively, through the `.mox` domains every surface names) —
@@ -277,7 +290,7 @@ fn check_contribution(files: &[PathBuf]) -> anyhow::Result<Vec<Contribution>> {
 /// already resolve. Unrelated applications in one checked tree never
 /// cross-check each other, and an import that leaves the checked set (or
 /// misses the disk) contributes no edge.
-fn report_union_integrity(contributions: &[Contribution]) -> usize {
+fn report_union_integrity(contributions: &[Contribution], checked_clean: &BTreeSet<String>) -> usize {
     let mut nodes = Nodes::default();
     // Contribution index → node index.
     let mut owner: Vec<Option<usize>> = Vec::with_capacity(contributions.len());
@@ -335,7 +348,7 @@ fn report_union_integrity(contributions: &[Contribution]) -> usize {
         .iter()
         .map(|contribution| (contribution.path.as_str(), contribution.source.as_str()))
         .collect();
-    let mut errors = 0usize;
+    let mut total_errors = 0usize;
     for members in &ordered {
         let mut designs = Vec::new();
         let mut actors = Vec::new();
@@ -379,14 +392,18 @@ fn report_union_integrity(contributions: &[Contribution]) -> usize {
             let Some(source) = sources.get(path.as_str()) else {
                 continue;
             };
-            errors += group
-                .iter()
-                .filter(|diagnostic| diagnostic.is_error())
-                .count();
+            let errors = group.iter().filter(|diagnostic| diagnostic.is_error()).count();
+            // rexlang#128: a lint-channel-only group for a file whose
+            // phase-1 check already failed stays unprinted — the
+            // compiler's spanned error rendered there.
+            if errors == 0 && !checked_clean.contains(path.as_str()) {
+                continue;
+            }
+            total_errors += errors;
             eprint!("{}", rex_driver::render(&path, source, &group));
         }
     }
-    errors
+    total_errors
 }
 
 /// The canonical node table of the import graph: checked files keyed by

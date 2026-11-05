@@ -27,9 +27,12 @@ pub(crate) fn run(files: Vec<PathBuf>) -> anyhow::Result<ExitCode> {
         let expanded = expand_check_inputs(&files)?;
         let mut project = Project::gather(&expanded);
         let mut failed = 0usize;
+        let mut checked_clean: std::collections::BTreeSet<String> = Default::default();
         for file in &expanded {
             match check_files(std::slice::from_ref(file), Some(&mut project)) {
-                Ok(ExitCode::SUCCESS) => {}
+                Ok((ExitCode::SUCCESS, ok)) => {
+                    checked_clean.extend(ok);
+                }
                 Ok(_) => failed += 1,
                 Err(error) => {
                     eprintln!("Error: {error:#}");
@@ -40,9 +43,12 @@ pub(crate) fn run(files: Vec<PathBuf>) -> anyhow::Result<ExitCode> {
         // Second phase — the union integrity pass (rexlang#114): the
         // standalone-compiled artifacts cluster into import-connected
         // applications and the cross-layer wiring is diagnosed per
-        // application. Quiet in the common case; error-severity findings
-        // fail the batch.
-        let integrity_errors = super::integrity::run_union_pass(&expanded)?;
+        // application. The capability joins are the compiler's since
+        // rexlang#128 (phase 1, spanned errors), so the pass's capability
+        // findings survive only as the lint channel (warnings), and a
+        // file phase 1 already failed stays quiet there. Quiet in the
+        // common case; error-severity findings fail the batch.
+        let integrity_errors = super::integrity::run_union_pass(&expanded, &checked_clean)?;
         if failed > 0 {
             eprintln!("{failed} of {} files failed", expanded.len());
         }
@@ -57,17 +63,22 @@ pub(crate) fn run(files: Vec<PathBuf>) -> anyhow::Result<ExitCode> {
         }
         return Ok(ExitCode::SUCCESS);
     }
-    check_files(&expand_inputs(&files)?, None)
+    check_files(&expand_inputs(&files)?, None).map(|(code, _)| code)
 }
 
 /// The `check` tail over [`compile_surface`]: print `OK <path>` for every
-/// compiling source; a `None` outcome means the diagnostics were rendered.
-fn check_files(files: &[PathBuf], project: Option<&mut Project>) -> anyhow::Result<ExitCode> {
+/// compiling source and return the driver paths that compiled (the union
+/// pass lint-channel suppression key); a `None` outcome means the
+/// diagnostics were rendered.
+fn check_files(
+    files: &[PathBuf],
+    project: Option<&mut Project>,
+) -> anyhow::Result<(ExitCode, Vec<String>)> {
     let Some(outcome) = compile_surface(files, project, false)? else {
-        return Ok(ExitCode::FAILURE);
+        return Ok((ExitCode::FAILURE, Vec::new()));
     };
     for path in &outcome.ok {
         println!("OK {path}");
     }
-    Ok(ExitCode::SUCCESS)
+    Ok((ExitCode::SUCCESS, outcome.ok))
 }
