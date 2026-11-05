@@ -5,7 +5,8 @@
 use std::path::{Path, PathBuf};
 
 use rex_driver::{
-    compile_actors_str, compile_cmmn_str, compile_ddd_str, compile_deploy_str, compile_evt_str,
+    compile_actors_str, compile_actors_str_with_designs, compile_cmmn_str,
+    compile_ddd_str, compile_ddd_str_with_actors, compile_deploy_str, compile_evt_str,
     compile_usecase_str,
 };
 
@@ -60,6 +61,75 @@ pub(crate) struct SurfaceOutcome {
     pub(crate) json: String,
 }
 
+/// The compiled `.actor` artifacts of the project snapshot (excluding the
+/// file being checked): the capability pool the design engine's rule 10
+/// resolves against at compile time (rexlang#128's J3). Siblings compile
+/// lookup-before-compute through the project's own readers (their imports
+/// resolve map-first from the snapshot); a sibling that fails to compile
+/// contributes nothing — parity with the union pass, which keeps only the
+/// successful artifacts.
+fn gather_sibling_actors(except: &Path, project: &mut Project) -> Vec<rex_ir::ActorModel> {
+    let mut models = Vec::new();
+    for key in project.keys_with_extension(".actor") {
+        if Path::new(&key) == except {
+            continue;
+        }
+        match project.peek(&key) {
+            Some(Artifact::Actor(model)) => models.push(model),
+            Some(_) => {}
+            None => {
+                let Ok(pair) = read_actor_pair_in(Path::new(&key), Some(project)) else {
+                    continue;
+                };
+                let compilation = compile_actors_str(
+                    &pair.path,
+                    &pair.source,
+                    &pair.domains,
+                    &pair.imports(),
+                );
+                if let Some(model) = compilation.model {
+                    project.store(&key, &Artifact::Actor(model.clone()));
+                    models.push(model);
+                }
+            }
+        }
+    }
+    models
+}
+
+/// The compiled `.ddd` artifacts of the project snapshot (excluding the
+/// file being checked): the carrier set grant coverage resolves against at
+/// compile time (rexlang#128's J4). Gathered exactly like
+/// [`gather_sibling_actors`].
+fn gather_sibling_designs(except: &Path, project: &mut Project) -> Vec<rex_ir::ddd::DddModel> {
+    let mut models = Vec::new();
+    for key in project.keys_with_extension(".ddd") {
+        if Path::new(&key) == except {
+            continue;
+        }
+        match project.peek(&key) {
+            Some(Artifact::Design(model)) => models.push(model),
+            Some(_) => {}
+            None => {
+                let Ok(design) = read_ddd_design(Path::new(&key), Some(project)) else {
+                    continue;
+                };
+                let compilation = compile_ddd_str(
+                    &design.path,
+                    &design.source,
+                    &design.domains,
+                    &design.imports(),
+                );
+                if let Some(model) = compilation.model {
+                    project.store(&key, &Artifact::Design(model.clone()));
+                    models.push(model);
+                }
+            }
+        }
+    }
+    models
+}
+
 /// The per-surface pipeline behind `check`, `ir`, and `build`: read the
 /// file within its project context (or the explicit argument list as its
 /// own model), compile, and render diagnostics. `Ok(None)` means the file
@@ -70,7 +140,10 @@ pub(crate) struct SurfaceOutcome {
 /// Within a project, the file's compiled artifact lands in the snapshot's
 /// cache ([`Project::store`]) so sibling consumers reuse it
 /// lookup-before-compute; without one this is exactly the per-file
-/// pipeline `check`/`ir` always ran.
+/// pipeline `check`/`ir` always ran. Within a project the `.ddd` and
+/// `.actor` pipelines additionally resolve the capability joins at compile
+/// time (rexlang#128) against the sibling `.actor`/`.ddd` artifacts of the
+/// snapshot; without one those joins stay silent (opt-in house style).
 pub(crate) fn compile_surface(
     files: &[PathBuf],
     mut project: Option<&mut Project>,
@@ -116,11 +189,19 @@ pub(crate) fn compile_surface(
     }
     if files.len() == 1 && is_ddd_file(&files[0]) {
         let design = read_ddd_design(&files[0], project.as_deref_mut())?;
-        let compilation = compile_ddd_str(
+        // rexlang#128 (J3 at compile time): the capability clauses resolve
+        // against every `.actor` artifact of the project snapshot — the
+        // empty slice is the exact `compile_ddd_str` behavior.
+        let sibling_actors = match project.as_deref_mut() {
+            Some(project) => gather_sibling_actors(&files[0], project),
+            None => Vec::new(),
+        };
+        let compilation = compile_ddd_str_with_actors(
             &design.path,
             &design.source,
             &design.domains,
             &design.imports(),
+            &sibling_actors,
         );
         report_ddd_diagnostics(&design, &compilation);
         let Some(design_model) = compilation.model else {
@@ -137,8 +218,20 @@ pub(crate) fn compile_surface(
     }
     if files.len() == 1 && is_actor_file(&files[0]) {
         let pair = read_actor_pair_in(&files[0], project.as_deref_mut())?;
-        let compilation =
-            compile_actors_str(&pair.path, &pair.source, &pair.domains, &pair.imports());
+        // rexlang#128 (J4 at compile time): grant coverage resolves against
+        // every `.ddd` artifact of the project snapshot — the empty slice
+        // is the exact `compile_actors_str` behavior.
+        let sibling_designs = match project.as_deref_mut() {
+            Some(project) => gather_sibling_designs(&files[0], project),
+            None => Vec::new(),
+        };
+        let compilation = compile_actors_str_with_designs(
+            &pair.path,
+            &pair.source,
+            &pair.domains,
+            &pair.imports(),
+            &sibling_designs,
+        );
         report_actor_diagnostics(&pair, &compilation);
         let Some(actor_model) = compilation.model else {
             return Ok(None);

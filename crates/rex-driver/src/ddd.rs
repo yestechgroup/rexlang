@@ -554,6 +554,12 @@ fn rule_10_validate_capabilities(
 ) -> Vec<Diagnostic> {
     let mut local: Vec<Diagnostic> = Vec::new();
     if let Some(actors) = actors {
+        // An empty slice means no actor artifacts were provided at all —
+        // the plain compiles' behavior exactly. A *non-empty* slice whose
+        // models declare nothing still validates (everything is unknown).
+        if actors.is_empty() {
+            return local;
+        }
         let declared: BTreeSet<String> = actors
             .iter()
             .flat_map(|model| model.blocks.iter())
