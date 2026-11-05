@@ -27,13 +27,16 @@ const SOURCE_NAME: &str = "rexlang";
 /// Which surface an open document belongs to, decided by URI extension at
 /// open time. `.mox` drives the salsa session; `.ifml` gets the rex-ifml
 /// one-shot compile; `.ddd` gets the one-shot design compile (diagnostics
-/// only — no navigation yet); anything else publishes no diagnostics (an
-/// unknown file kind must never produce bogus `.mox` errors).
+/// only — no navigation yet); `.actor` gets the policy compile with grant
+/// coverage against the directory's designs (rexlang#128); anything else
+/// publishes no diagnostics (an unknown file kind must never produce
+/// bogus `.mox` errors).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Surface {
     Mox,
     Ifml,
     Ddd,
+    Actor,
     Other,
 }
 
@@ -42,6 +45,7 @@ fn surface_for(uri: &Url) -> Surface {
         Some("mox") => Surface::Mox,
         Some("ifml") => Surface::Ifml,
         Some("ddd") => Surface::Ddd,
+        Some("actor") => Surface::Actor,
         _ => Surface::Other,
     }
 }
@@ -120,7 +124,7 @@ impl LanguageServer for RexBackend {
                     text_document.text.clone(),
                 ))
             }
-            Surface::Ifml | Surface::Ddd | Surface::Other => None,
+            Surface::Ifml | Surface::Ddd | Surface::Actor | Surface::Other => None,
         };
         self.documents.lock().unwrap().insert(
             uri.clone(),
