@@ -18,6 +18,7 @@ use super::actors::{
     detect_actor_cycles, lower_actors, validate_actor_delegations,
     validate_actor_delegations_union, validate_actor_never_both, validate_actor_never_both_union,
     validate_actor_obligations, validate_actor_self_narrowing, validate_actor_self_narrowing_union,
+    validate_capability_coverage,
 };
 use super::classes::{
     detect_inheritance_cycles, lower_class, lower_datatype, lower_enum, lower_interface,
@@ -1195,6 +1196,7 @@ pub(crate) fn compile_actor_file(
     actor_ast: Option<&mox::ActorFile>,
     actor_diagnostics: &[Diagnostic],
     domains: &[DomainUnit],
+    designs: &[ir::ddd::DddModel],
 ) -> (Option<ir::ActorModel>, Vec<(String, Diagnostic)>) {
     // Import resolution: each import must name one of the provided domains.
     let imports = actor_ast
@@ -1273,6 +1275,9 @@ pub(crate) fn compile_actor_file(
         validate_actor_delegations_union(&records, &mut diags);
         validate_actor_obligations(&records, &mut diags);
     }
+    // Capability coverage (rexlang#128): independent of acyclicity, it
+    // resolves names, not lineages.
+    validate_capability_coverage(&records, designs, &mut diags);
 
     // Condition typing over the combined class universe.
     let mut context_model = ir::Model::new();

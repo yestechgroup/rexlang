@@ -166,7 +166,7 @@ fn compile_with_actors(actors: &ActorModel) -> DddCompilation {
         DESIGN,
         &[("order.mox".to_string(), DOMAIN.to_string())],
         &rex_driver::DomainImports::default(),
-        actors,
+        std::slice::from_ref(actors),
     )
 }
 

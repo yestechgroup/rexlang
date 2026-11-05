@@ -345,6 +345,12 @@ pub(crate) struct ActorsRecord {
     never_both: Vec<(Vec<String>, Span)>,
     /// `forbid` entries: (actor, capability, capability-name span).
     forbids: Vec<(String, String, Span)>,
+    /// Capability references the block hands out — every `permit`/`forbid`
+    /// grant entry plus every delegation entry's capability name, with the
+    /// reference span, in source order. Cedar entries carry no rexlang
+    /// capability name and never join. The coverage pass
+    /// ([`validate_capability_coverage`]) consumes these.
+    granted_refs: Vec<(String, Span)>,
     /// Delegations, in declaration order.
     delegations: Vec<DelegationRecord>,
 }

@@ -9,7 +9,7 @@ use rex_ir as ir;
 use rex_syntax::ast as mox;
 use rex_syntax::Span;
 
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, DiagnosticCode};
 
 use super::*;
 /// Lowers an `actors` declaration: duplicate actor/capability checks,
@@ -35,6 +35,7 @@ pub(crate) fn lower_actors(
     let mut obligations: Vec<(String, Span)> = Vec::new();
     let mut obligation_refs: Vec<ObligationRef> = Vec::new();
     let mut forbids: Vec<(String, String, Span)> = Vec::new();
+    let mut granted_refs: Vec<(String, Span)> = Vec::new();
     let mut never_both: Vec<(Vec<String>, Span)> = Vec::new();
     let mut delegations: Vec<DelegationRecord> = Vec::new();
 
@@ -163,6 +164,10 @@ pub(crate) fn lower_actors(
                             Some(effect.capability.span),
                         ));
                     }
+                    granted_refs.push((
+                        effect.capability.text.clone(),
+                        effect.capability.span,
+                    ));
                     if effect.effect == mox::Effect::Forbid {
                         forbids.push((
                             grant.actor.text.clone(),
@@ -235,6 +240,7 @@ pub(crate) fn lower_actors(
                     Some(entry.capability.span),
                 ));
             }
+            granted_refs.push((entry.capability.text.clone(), entry.capability.span));
             let ir_effect = match entry.effect {
                 mox::Effect::Permit => ir::GrantEffect::Permit,
                 mox::Effect::Forbid => ir::GrantEffect::Forbid,
@@ -314,6 +320,7 @@ pub(crate) fn lower_actors(
             obligations,
             obligation_refs,
             forbids,
+            granted_refs,
             never_both,
             delegations,
         },
@@ -714,6 +721,71 @@ pub(crate) fn validate_actor_obligations(
                         Some(reference.span),
                     )
                     .with_help(help),
+                ));
+            }
+        }
+    }
+}
+
+/// Capability coverage (rexlang#114 check 2, promoted to compile time by
+/// rexlang#128): every capability the block hands out — through a grant
+/// entry or a delegated entry — must be carried by at least one operation
+/// or search across the provided designs; a granted capability nothing
+/// carries guards a transition that cannot happen. Declared-but-ungranted
+/// capabilities are latent, not dead, and stay out of scope. Cedar entries
+/// carry no rexlang capability name (verbatim policy) and never join. With
+/// no designs the check is silent (opt-in house style). One diagnostic per
+/// (block, capability), deduplicated across grants and delegations, spanned
+/// on the first reference.
+pub(crate) fn validate_capability_coverage(
+    records: &[ActorsRecord],
+    designs: &[ir::ddd::DddModel],
+    diags: &mut Vec<(String, Diagnostic)>,
+) {
+    if designs.is_empty() {
+        return;
+    }
+    let carriers: HashSet<&str> = designs
+        .iter()
+        .flat_map(|design| design.modules.iter())
+        .flat_map(|module| {
+            module
+                .services
+                .iter()
+                .flat_map(|service| service.operations.iter().map(|op| &op.capabilities))
+                .chain(module.searches.iter().map(|search| &search.capabilities))
+        })
+        .flatten()
+        .map(String::as_str)
+        .collect();
+    for record in records {
+        // One diagnostic per capability: first reference wins the span.
+        let mut granted: Vec<(&str, Span)> = Vec::new();
+        for (capability, span) in &record.granted_refs {
+            if granted.iter().any(|(name, _)| *name == capability.as_str()) {
+                continue;
+            }
+            granted.push((capability.as_str(), *span));
+        }
+        for (capability, span) in granted {
+            if !carriers.contains(capability) {
+                diags.push((
+                    record.file.clone(),
+                    Diagnostic::error(
+                        format!(
+                            "capability '{capability}' is granted but no operation or \
+                             search carries it"
+                        ),
+                        Some(span),
+                    )
+                    .with_help(
+                        "declare the capability on an operation or search of a design, \
+                         or drop the grant",
+                    )
+                    .with_code(DiagnosticCode::GrantedCapabilityUncarried {
+                        capability: capability.to_string(),
+                        span,
+                    }),
                 ));
             }
         }
