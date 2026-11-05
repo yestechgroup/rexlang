@@ -5,9 +5,8 @@
 use std::path::{Path, PathBuf};
 
 use rex_driver::{
-    compile_actors_str, compile_actors_str_with_designs, compile_cmmn_str,
-    compile_ddd_str, compile_ddd_str_with_actors, compile_deploy_str, compile_evt_str,
-    compile_usecase_str,
+    compile_actors_str, compile_actors_str_with_designs, compile_cmmn_str, compile_ddd_str,
+    compile_ddd_str_with_actors, compile_deploy_str, compile_evt_str, compile_usecase_str,
 };
 
 use crate::inputs::{
@@ -81,12 +80,8 @@ fn gather_sibling_actors(except: &Path, project: &mut Project) -> Vec<rex_ir::Ac
                 let Ok(pair) = read_actor_pair_in(Path::new(&key), Some(project)) else {
                     continue;
                 };
-                let compilation = compile_actors_str(
-                    &pair.path,
-                    &pair.source,
-                    &pair.domains,
-                    &pair.imports(),
-                );
+                let compilation =
+                    compile_actors_str(&pair.path, &pair.source, &pair.domains, &pair.imports());
                 if let Some(model) = compilation.model {
                     project.store(&key, &Artifact::Actor(model.clone()));
                     models.push(model);

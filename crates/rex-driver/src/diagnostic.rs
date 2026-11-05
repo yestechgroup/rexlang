@@ -99,7 +99,7 @@ pub(crate) fn did_you_mean(name: &str, declared: &BTreeSet<String>) -> Option<St
     let mut best: Option<(usize, &String)> = None;
     for candidate in declared {
         let distance = levenshtein(name, candidate);
-        if distance <= budget && best.map_or(true, |(best, _)| distance < best) {
+        if distance <= budget && best.is_none_or(|(best, _)| distance < best) {
             best = Some((distance, candidate));
         }
     }
@@ -318,7 +318,10 @@ mod tests {
     #[test]
     fn case_variant_match_wins() {
         assert_eq!(
-            did_you_mean("approvepayrun", &declared(&["TerminateWorker", "ApprovePayRun"])),
+            did_you_mean(
+                "approvepayrun",
+                &declared(&["TerminateWorker", "ApprovePayRun"])
+            ),
             Some("ApprovePayRun".to_string())
         );
         assert_eq!(
@@ -330,7 +333,10 @@ mod tests {
     #[test]
     fn close_typo_suggests_the_nearest_declared_name() {
         assert_eq!(
-            did_you_mean("ApprovePayRunn", &declared(&["TerminateWorker", "ApprovePayRun"])),
+            did_you_mean(
+                "ApprovePayRunn",
+                &declared(&["TerminateWorker", "ApprovePayRun"])
+            ),
             Some("ApprovePayRun".to_string())
         );
     }

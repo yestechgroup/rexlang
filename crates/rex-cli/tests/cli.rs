@@ -4013,6 +4013,38 @@ fn directory_check_passes_a_fully_wired_application() {
 }
 
 #[test]
+fn check_design_renders_its_imported_domain_diagnostics() {
+    // A domain's own diagnostics reach the report under the import string
+    // the design names it by (the driver's DomainUnit path) — the reader
+    // keeps both keys renderable, or the diagnostic silently vanishes.
+    let dir = scratch_dir().join("design-domain-diags");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let domain = dir.join("broken.mox");
+    std::fs::write(&domain, "package broken\n\nclass X { String oops oops }\n").expect("write mox");
+    let design = dir.join("design.ddd");
+    std::fs::write(
+        &design,
+        "import \"broken.mox\"\n\napplication A {\n    module m {\n        value X\n    }\n}\n",
+    )
+    .expect("write ddd");
+
+    let output = rexlang()
+        .arg("check")
+        .arg(&design)
+        .output()
+        .expect("run rexlang check");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("expected a feature declaration"),
+        "the imported domain's parse diagnostic renders: {stderr}"
+    );
+    assert!(
+        stderr.contains("broken.mox"),
+        "the diagnostic renders against the domain file: {stderr}"
+    );
+}
+
+#[test]
 fn single_file_check_stays_per_surface() {
     // The dangling grant of `directory_check_flags_a_granted_capability_no_op_carries`
     // is invisible when the design is checked alone: single-file mode has

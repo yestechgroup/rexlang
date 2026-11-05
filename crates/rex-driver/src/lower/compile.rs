@@ -1185,7 +1185,12 @@ pub(crate) fn compile(
 /// 4. cycles, separation of duty, and self-narrowing are validated over the
 ///    union, and every `when` condition is type-checked against the resolved
 ///    capability class;
-/// 5. any error (in any file) blocks the artifact.
+/// 5. capability coverage (rexlang#128's J4 at compile time): with
+///    `designs` provided, every capability a grant or delegation hands out
+///    must be carried by an operation or search of some design, else the
+///    grant entry's diagnostic names the dangling capability spanned on its
+///    reference (`grantedCapabilityUncarried`); an empty slice is silent;
+/// 6. any error (in any file) blocks the artifact.
 ///
 /// Returns the actor model (or `None`) plus diagnostics from every file,
 /// each tagged with its path. Duplicate diagnostics (a domain already

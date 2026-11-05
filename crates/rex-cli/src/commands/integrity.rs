@@ -290,7 +290,10 @@ fn check_contribution(files: &[PathBuf]) -> anyhow::Result<Vec<Contribution>> {
 /// already resolve. Unrelated applications in one checked tree never
 /// cross-check each other, and an import that leaves the checked set (or
 /// misses the disk) contributes no edge.
-fn report_union_integrity(contributions: &[Contribution], checked_clean: &BTreeSet<String>) -> usize {
+fn report_union_integrity(
+    contributions: &[Contribution],
+    checked_clean: &BTreeSet<String>,
+) -> usize {
     let mut nodes = Nodes::default();
     // Contribution index → node index.
     let mut owner: Vec<Option<usize>> = Vec::with_capacity(contributions.len());
@@ -392,7 +395,10 @@ fn report_union_integrity(contributions: &[Contribution], checked_clean: &BTreeS
             let Some(source) = sources.get(path.as_str()) else {
                 continue;
             };
-            let errors = group.iter().filter(|diagnostic| diagnostic.is_error()).count();
+            let errors = group
+                .iter()
+                .filter(|diagnostic| diagnostic.is_error())
+                .count();
             // rexlang#128: a lint-channel-only group for a file whose
             // phase-1 check already failed stays unprinted — the
             // compiler's spanned error rendered there.

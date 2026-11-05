@@ -164,10 +164,7 @@ pub(crate) fn lower_actors(
                             Some(effect.capability.span),
                         ));
                     }
-                    granted_refs.push((
-                        effect.capability.text.clone(),
-                        effect.capability.span,
-                    ));
+                    granted_refs.push((effect.capability.text.clone(), effect.capability.span));
                     if effect.effect == mox::Effect::Forbid {
                         forbids.push((
                             grant.actor.text.clone(),

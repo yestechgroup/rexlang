@@ -227,9 +227,8 @@ impl RexBackend {
         let mut domains: Vec<(String, String)> = Vec::new();
         if let Ok(path) = uri.to_file_path() {
             let path_key = path.display().to_string();
-            let mut fetch = |resolved: &str| -> Option<String> {
-                self.fetch_open_or_disk(resolved)
-            };
+            let mut fetch =
+                |resolved: &str| -> Option<String> { self.fetch_open_or_disk(resolved) };
             domains = rex_driver::project::gather_domain_sources(
                 &path_key,
                 text,
@@ -256,9 +255,8 @@ impl RexBackend {
         let mut domains: Vec<(String, String)> = Vec::new();
         if let Ok(path) = uri.to_file_path() {
             let path_key = path.display().to_string();
-            let mut fetch = |resolved: &str| -> Option<String> {
-                self.fetch_open_or_disk(resolved)
-            };
+            let mut fetch =
+                |resolved: &str| -> Option<String> { self.fetch_open_or_disk(resolved) };
             domains = rex_driver::project::gather_domain_sources(
                 &path_key,
                 text,
@@ -345,9 +343,8 @@ impl RexBackend {
         let mut models = Vec::new();
         for (sibling, text) in self.sibling_sources(&path, "actor") {
             let key = sibling.display().to_string();
-            let mut fetch = |resolved: &str| -> Option<String> {
-                self.fetch_open_or_disk(resolved)
-            };
+            let mut fetch =
+                |resolved: &str| -> Option<String> { self.fetch_open_or_disk(resolved) };
             let domains = rex_driver::project::gather_domain_sources(
                 &key,
                 &text,
@@ -385,9 +382,8 @@ impl RexBackend {
         let mut models = Vec::new();
         for (sibling, text) in self.sibling_sources(&path, "ddd") {
             let key = sibling.display().to_string();
-            let mut fetch = |resolved: &str| -> Option<String> {
-                self.fetch_open_or_disk(resolved)
-            };
+            let mut fetch =
+                |resolved: &str| -> Option<String> { self.fetch_open_or_disk(resolved) };
             let domains = rex_driver::project::gather_domain_sources(
                 &key,
                 &text,
@@ -399,12 +395,8 @@ impl RexBackend {
                 },
                 &mut fetch,
             );
-            let compilation = rex_driver::compile_ddd_str(
-                &key,
-                &text,
-                &domains,
-                &domain_import_bundle(&domains),
-            );
+            let compilation =
+                rex_driver::compile_ddd_str(&key, &text, &domains, &domain_import_bundle(&domains));
             if let Some(model) = compilation.model {
                 models.push(model);
             }

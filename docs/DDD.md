@@ -387,19 +387,30 @@ body-less `op` stays the abstract hook implemented by hand in target code
 
 A service operation's `capability` clause names actor capabilities. Only
 the library entry point `compile_ddd_str_with_actors` validates the names
-against a caller-provided `ActorModel`; the CLI compiles with the plain
-`compile_ddd_str`, which records them unvalidated — the documented
-loose-mapping contract. Nothing in the design artifact constructs policy:
+against a caller-provided actor-model **slice**; capability names pool
+across every model, so a host passes all of the application's `.actor`
+artifacts. An empty slice is the plain `compile_ddd_str` behavior (the
+records-unvalidated loose-mapping contract). Since rexlang#128 the CLI
+project pipeline and the LSP pass the sibling artifacts, so the check is a
+compile-time language error — spanned on the capability clause, with the
+`unknownCapability` code carrying the did-you-mean closest declared name
+(a case-variant match wins outright; otherwise the nearest name within an
+edit budget). Nothing in the design artifact constructs policy:
 authorization remains the `.actor` dimension's job (see the actor-policy
 section of the language reference).
 
-Both directions of the design↔actor wiring are enforced across the whole
-application by the union integrity pass (`rex_driver::check_integrity`,
-register row **V12**): `rexlang check <dir>` clusters the checked files
-into import-connected applications and errors when a capability clause
-names nothing declared (rule 10, generalized across every actor model) or
-when a granted capability is carried by no operation or search — a grant
-guarding a transition that cannot happen. Checking a design alone stays
+Both directions of the design↔actor wiring resolve at **compile time**
+(rexlang#128): the CLI project pipeline and the LSP resolve every
+capability clause against the pooled actor artifacts (existence, rule 10
+above) and every grant against the pooled design artifacts (coverage —
+`compile_actors_str_with_designs`, the actor engine's coverage pass
+diagnosing `capability 'X' is granted but no operation or search carries
+it` spanned on the grant entry, code `grantedCapabilityUncarried`). The
+union integrity pass (`rex_driver::check_integrity`, register row
+**V12**) keeps both findings as its **lint channel** (warning severity)
+for hosts that gather artifacts without compiling — the compiler's
+diagnostics are the errors; `rexlang check <dir>` prints the lint only
+for files phase 1 checked clean. Checking a design or policy alone stays
 per-surface and silent.
 
 ## Events and the event-contract dimension

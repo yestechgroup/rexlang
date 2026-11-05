@@ -2,7 +2,9 @@
 //! salsa-tracked compilation of an actor file against one or more imported
 //! domain models, producing the standalone `rex_ir::ActorModel`.
 
-use rex_driver::{compile_actors_str, compile_actors_str_with_designs, ActorCompilation, Diagnostic, Severity};
+use rex_driver::{
+    compile_actors_str, compile_actors_str_with_designs, ActorCompilation, Diagnostic, Severity,
+};
 use rex_ir::{GrantEffect, TypeRef, ACTOR_MODEL_FORMAT_VERSION};
 
 /// A support-style domain: classes to resolve capabilities and conditions
@@ -1460,7 +1462,10 @@ fn granted_capability_uncarried_errors_on_the_grant_entry() {
     );
     // The desk design carries only AutoAssign — ReadTicket dangles.
     let compilation = compile_with_designs(source, &[("domain.mox", DOMAIN)], &[DESK_DESIGN]);
-    let (path, diagnostic) = single(&compilation, "is granted but no operation or search carries it");
+    let (path, diagnostic) = single(
+        &compilation,
+        "is granted but no operation or search carries it",
+    );
     assert_eq!(path, "support.actor");
     assert!(
         diagnostic.message.contains("capability 'ReadTicket'"),

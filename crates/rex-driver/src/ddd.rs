@@ -567,8 +567,7 @@ fn rule_10_validate_capabilities(
             .collect();
         for check in capability_checks {
             if !declared.contains(&check.capability.text) {
-                let suggestion =
-                    crate::diagnostic::did_you_mean(&check.capability.text, &declared);
+                let suggestion = crate::diagnostic::did_you_mean(&check.capability.text, &declared);
                 let help = match &suggestion {
                     Some(suggestion) => format!("did you mean '{suggestion}'?"),
                     None if declared.is_empty() => {

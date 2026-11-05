@@ -373,6 +373,10 @@ pub(crate) struct DomainPair {
     /// paths keep vocabulary snapshots anchored to the declaring file no
     /// matter where the process runs from.
     pub(crate) domains: Vec<(String, String)>,
+    /// Each imported domain as `(import string as written, source)` — the
+    /// driver tags a domain's diagnostics with its `DomainUnit` path (the
+    /// import string), so rendering needs both keys.
+    import_keys: Vec<(String, String)>,
     /// The domains' `import schema` content, keyed by domain path.
     schemas: SchemaImports,
     /// The domains' `import sigil` content, plus the rosetta sources for
@@ -390,7 +394,9 @@ impl DomainPair {
     }
 
     /// The source text of the file with the given driver path, if it is
-    /// the surface file, an imported domain, or a rosetta source.
+    /// the surface file, an imported domain (by resolved path or by the
+    /// import string the surface names it with — the driver tags a
+    /// domain's diagnostics with the latter), or a rosetta source.
     pub(crate) fn source_of(&self, path: &str) -> Option<&str> {
         if path == self.path {
             return Some(&self.source);
@@ -399,6 +405,12 @@ impl DomainPair {
             .iter()
             .find(|(name, _)| name == path)
             .map(|(_, source)| source.as_str())
+            .or_else(|| {
+                self.import_keys
+                    .iter()
+                    .find(|(name, _)| name == path)
+                    .map(|(_, source)| source.as_str())
+            })
             .or_else(|| {
                 self.sigil
                     .sources
@@ -450,6 +462,7 @@ fn read_domain_pair(
             }
         }
     };
+    let import_strings = import_paths(&source);
     let domains = gather_domain_sources(&path, &source, import_paths, &mut fetch);
     if let Some(error) = read_error {
         return Err(error);
@@ -459,10 +472,33 @@ fn read_domain_pair(
     Ok(DomainPair {
         path,
         source,
+        import_keys: render_keys(file, &import_strings, &domains),
         domains,
         schemas,
         sigil,
     })
+}
+
+/// The render keys for a gathered domain set: each import string the
+/// surface writes, mapped to the text its resolved gather fetched — the
+/// driver tags a domain's diagnostics with the import string (its
+/// `DomainUnit` path), and the reporter resolves sources through the pair.
+fn render_keys(
+    file: &Path,
+    imports: &[String],
+    domains: &[(String, String)],
+) -> Vec<(String, String)> {
+    let dir = dir_of(file);
+    imports
+        .iter()
+        .filter_map(|import| {
+            let key = dir.join(import).display().to_string();
+            domains
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, text)| (import.clone(), text.clone()))
+        })
+        .collect()
 }
 
 /// An `.actor` file plus the domain sources it imports, ready for
@@ -569,6 +605,15 @@ pub(crate) struct UcPair {
 pub(crate) fn read_uc_pair(file: &Path, project: Option<&mut Project>) -> anyhow::Result<UcPair> {
     let source = std::fs::read_to_string(file)
         .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
+    let import_strings = rex_syntax::parse_usecases(&source)
+        .ast
+        .map(|ast| {
+            ast.imports
+                .into_iter()
+                .map(|import| import.path)
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default();
     let mut fetch = project_fetch(project);
     let buckets = gather_usecase_imports(
         &file.display().to_string(),
@@ -587,6 +632,7 @@ pub(crate) fn read_uc_pair(file: &Path, project: Option<&mut Project>) -> anyhow
     Ok(UcPair {
         pair: DomainPair {
             path: file.display().to_string(),
+            import_keys: render_keys(file, &import_strings, &buckets.domains),
             source,
             domains: buckets.domains,
             schemas,
@@ -623,6 +669,15 @@ pub(crate) fn read_cmmn_pair(
 ) -> anyhow::Result<CmmnPair> {
     let source = std::fs::read_to_string(file)
         .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
+    let import_strings = rex_syntax::parse_cmmn(&source)
+        .ast
+        .map(|ast| {
+            ast.imports
+                .into_iter()
+                .map(|import| import.path)
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default();
     let mut fetch = project_fetch(project);
     let buckets = gather_usecase_imports(
         &file.display().to_string(),
@@ -641,6 +696,7 @@ pub(crate) fn read_cmmn_pair(
     Ok(CmmnPair {
         pair: DomainPair {
             path: file.display().to_string(),
+            import_keys: render_keys(file, &import_strings, &buckets.domains),
             source,
             domains: buckets.domains,
             schemas,

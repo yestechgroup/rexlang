@@ -2180,10 +2180,7 @@ async fn ifml_prepare_rename_rejects_junk_names_early() {
 /// siblings from the open document's directory (open documents win over
 /// disk), so these tests need real files.
 fn scratch_dir(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "rex-lsp-128-tests-{}-{tag}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("rex-lsp-128-tests-{}-{tag}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create scratch dir");
     dir
@@ -2243,7 +2240,10 @@ async fn ddd_open_resolves_capabilities_against_sibling_actor_files() {
         diagnostic.code,
         Some(NumberOrString::String("unknownCapability".to_string()))
     );
-    let data = diagnostic.data.as_ref().expect("the code payload rides along");
+    let data = diagnostic
+        .data
+        .as_ref()
+        .expect("the code payload rides along");
     assert_eq!(data["unknownCapability"]["suggestion"], "ApproveTicket");
 }
 
@@ -2280,9 +2280,9 @@ async fn actor_open_publishes_grant_coverage_diagnostics() {
         .diagnostics
         .iter()
         .find(|diagnostic| {
-            diagnostic
-                .message
-                .contains("capability 'ApproveTicket' is granted but no operation or search carries it")
+            diagnostic.message.contains(
+                "capability 'ApproveTicket' is granted but no operation or search carries it",
+            )
         })
         .expect("the dangling grant publishes");
     assert_eq!(
@@ -2366,14 +2366,11 @@ async fn code_action_on_an_unknown_capability_offers_the_rename() {
     assert_eq!(actions.len(), 1, "one rename fix: {actions:?}");
     assert_eq!(actions[0].title, "Rename to `ApproveTicket`");
     assert_eq!(actions[0].kind, Some(CodeActionKind::QUICKFIX));
-    let changes = actions[0]
-        .edit
-        .as_ref()
-        .unwrap()
-        .changes
-        .as_ref()
-        .unwrap();
+    let changes = actions[0].edit.as_ref().unwrap().changes.as_ref().unwrap();
     let edit = &changes.get(&design_uri).expect("edits for the design")[0];
     assert_eq!(edit.new_text, "ApproveTicket");
-    assert_eq!(edit.range, diagnostic.range, "the edit covers the reference");
+    assert_eq!(
+        edit.range, diagnostic.range,
+        "the edit covers the reference"
+    );
 }
