@@ -95,7 +95,10 @@ fn op_capability_declared_in_an_actor_model_passes() {
 }
 
 #[test]
-fn unknown_op_capability_errors_on_the_design() {
+fn unknown_op_capability_warns_on_the_design() {
+    // rexlang#128: the compiler owns the join (rule 10 fires at compile
+    // time with a span); the union pass keeps the finding as the lint
+    // channel for hosts that gather artifacts without compiling.
     let designs = vec![design_with_op(
         "model/time.ddd",
         "TimeService",
@@ -115,7 +118,7 @@ fn unknown_op_capability_errors_on_the_design() {
     );
     let (path, diagnostic) = &diagnostics[0];
     assert_eq!(path, "model/time.ddd");
-    assert_eq!(diagnostic.severity, Severity::Error);
+    assert_eq!(diagnostic.severity, Severity::Warning);
     assert_eq!(
         diagnostic.message,
         "unknown capability 'Bogus' on operation 'AddTimecardItem' of service 'TimeService'"
@@ -243,7 +246,10 @@ fn granted_capability_carried_by_another_design_passes() {
 }
 
 #[test]
-fn granted_capability_with_no_carrier_errors_on_the_actor_file() {
+fn granted_capability_with_no_carrier_warns_on_the_actor_file() {
+    // rexlang#128: the compiler owns the join (grant coverage fires at
+    // compile time with a span); the union pass keeps the finding as the
+    // lint channel for hosts that gather artifacts without compiling.
     let designs = vec![design_with_op(
         "model/core.ddd",
         "WorkerService",
@@ -263,7 +269,7 @@ fn granted_capability_with_no_carrier_errors_on_the_actor_file() {
     );
     let (path, diagnostic) = &diagnostics[0];
     assert_eq!(path, "model/core.actor");
-    assert_eq!(diagnostic.severity, Severity::Error);
+    assert_eq!(diagnostic.severity, Severity::Warning);
     assert_eq!(
         diagnostic.message,
         "capability 'TerminateWorker' is granted but no operation or search carries it"
@@ -272,7 +278,7 @@ fn granted_capability_with_no_carrier_errors_on_the_actor_file() {
 }
 
 #[test]
-fn delegated_capability_with_no_carrier_errors_like_a_grant() {
+fn delegated_capability_with_no_carrier_warns_like_a_grant() {
     let designs = vec![design_with_op(
         "model/core.ddd",
         "WorkerService",

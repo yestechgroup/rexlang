@@ -26,7 +26,7 @@ use rex_ir::ddd::{
 use rex_syntax::ast as dsl;
 use rex_syntax::Span;
 
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, DiagnosticCode};
 use crate::lower::{self, DomainPackage, DomainUnit};
 use crate::pipeline;
 
@@ -141,7 +141,7 @@ pub(crate) fn compile_ddd_file(
     ast: Option<&dsl::DddFile>,
     parse_diagnostics: &[Diagnostic],
     domains: &[DomainUnit],
-    actors: Option<&rex_ir::ActorModel>,
+    actors: Option<&[rex_ir::ActorModel]>,
 ) -> (Option<DddModel>, Vec<(String, Diagnostic)>) {
     // Stage 1 — the prologue: import-bucket checks feed the shared engine
     // diagnostic block (parse diagnostics, then import diagnostics, then
@@ -541,29 +541,42 @@ fn rule_8_resolve_delegations(
     local
 }
 
-/// Rule 10 — capability names must exist in the actor model. Only the
+/// Rule 10 — capability names must exist in the actor models. Only the
 /// `_with_actors` entry points validate; plain compiles record the names
-/// unvalidated.
+/// unvalidated. Capabilities pool across every provided model (a host
+/// passes all of the application's `.actor` artifacts). A name that is a
+/// plausible typo of a declared one gets a did-you-mean help line and the
+/// `unknownCapability` code carrying the suggestion (rexlang#128's J3 at
+/// compile time); a name nothing explains keeps the exhaustive list.
 fn rule_10_validate_capabilities(
     capability_checks: &[CapabilityCheck<'_>],
-    actors: Option<&rex_ir::ActorModel>,
+    actors: Option<&[rex_ir::ActorModel]>,
 ) -> Vec<Diagnostic> {
     let mut local: Vec<Diagnostic> = Vec::new();
     if let Some(actors) = actors {
+        // An empty slice means no actor artifacts were provided at all —
+        // the plain compiles' behavior exactly. A *non-empty* slice whose
+        // models declare nothing still validates (everything is unknown).
+        if actors.is_empty() {
+            return local;
+        }
         let declared: BTreeSet<String> = actors
-            .blocks
             .iter()
+            .flat_map(|model| model.blocks.iter())
             .flat_map(|block| block.capabilities.iter().map(|c| c.name.clone()))
             .collect();
         for check in capability_checks {
             if !declared.contains(&check.capability.text) {
-                let help = if declared.is_empty() {
-                    "the actor model declares no capabilities".to_string()
-                } else {
-                    format!(
+                let suggestion = crate::diagnostic::did_you_mean(&check.capability.text, &declared);
+                let help = match &suggestion {
+                    Some(suggestion) => format!("did you mean '{suggestion}'?"),
+                    None if declared.is_empty() => {
+                        "the actor model declares no capabilities".to_string()
+                    }
+                    None => format!(
                         "the actor model declares: {}",
                         declared.iter().cloned().collect::<Vec<_>>().join(", ")
-                    )
+                    ),
                 };
                 local.push(
                     Diagnostic::error(
@@ -573,7 +586,12 @@ fn rule_10_validate_capabilities(
                         ),
                         Some(check.capability.span),
                     )
-                    .with_help(help),
+                    .with_help(help)
+                    .with_code(DiagnosticCode::UnknownCapability {
+                        capability: check.capability.text.clone(),
+                        suggestion,
+                        span: check.capability.span,
+                    }),
                 );
             }
         }

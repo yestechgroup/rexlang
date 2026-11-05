@@ -127,10 +127,27 @@ impl Project {
         self.fetch_path(key, Path::new(key))
     }
 
+    /// The cached artifact for `key`, if any — lookup without compute (the
+    /// sibling gathers check the cache before re-reading and compiling).
+    pub(crate) fn peek(&self, key: &str) -> Option<Artifact> {
+        self.artifacts.get(key).cloned()
+    }
+
     /// Records a freshly compiled artifact under `key`.
     pub(crate) fn store(&mut self, key: &str, artifact: &Artifact) {
         self.computes += 1;
         self.artifacts.insert(key.to_string(), artifact.clone());
+    }
+
+    /// The snapshot's keys ending in `extension` (with the leading dot),
+    /// sorted — the sibling enumeration the compile-time cross-surface
+    /// gathers (rexlang#128's capability joins) iterate.
+    pub(crate) fn keys_with_extension(&self, extension: &str) -> Vec<String> {
+        self.sources
+            .keys()
+            .filter(|key| key.ends_with(extension))
+            .cloned()
+            .collect()
     }
 
     /// Lookup-before-compute: the cached artifact for `key`, or

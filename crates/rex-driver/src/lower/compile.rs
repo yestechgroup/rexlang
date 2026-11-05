@@ -18,6 +18,7 @@ use super::actors::{
     detect_actor_cycles, lower_actors, validate_actor_delegations,
     validate_actor_delegations_union, validate_actor_never_both, validate_actor_never_both_union,
     validate_actor_obligations, validate_actor_self_narrowing, validate_actor_self_narrowing_union,
+    validate_capability_coverage,
 };
 use super::classes::{
     detect_inheritance_cycles, lower_class, lower_datatype, lower_enum, lower_interface,
@@ -1184,7 +1185,12 @@ pub(crate) fn compile(
 /// 4. cycles, separation of duty, and self-narrowing are validated over the
 ///    union, and every `when` condition is type-checked against the resolved
 ///    capability class;
-/// 5. any error (in any file) blocks the artifact.
+/// 5. capability coverage (rexlang#128's J4 at compile time): with
+///    `designs` provided, every capability a grant or delegation hands out
+///    must be carried by an operation or search of some design, else the
+///    grant entry's diagnostic names the dangling capability spanned on its
+///    reference (`grantedCapabilityUncarried`); an empty slice is silent;
+/// 6. any error (in any file) blocks the artifact.
 ///
 /// Returns the actor model (or `None`) plus diagnostics from every file,
 /// each tagged with its path. Duplicate diagnostics (a domain already
@@ -1195,6 +1201,7 @@ pub(crate) fn compile_actor_file(
     actor_ast: Option<&mox::ActorFile>,
     actor_diagnostics: &[Diagnostic],
     domains: &[DomainUnit],
+    designs: &[ir::ddd::DddModel],
 ) -> (Option<ir::ActorModel>, Vec<(String, Diagnostic)>) {
     // Import resolution: each import must name one of the provided domains.
     let imports = actor_ast
@@ -1273,6 +1280,9 @@ pub(crate) fn compile_actor_file(
         validate_actor_delegations_union(&records, &mut diags);
         validate_actor_obligations(&records, &mut diags);
     }
+    // Capability coverage (rexlang#128): independent of acyclicity, it
+    // resolves names, not lineages.
+    validate_capability_coverage(&records, designs, &mut diags);
 
     // Condition typing over the combined class universe.
     let mut context_model = ir::Model::new();

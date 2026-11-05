@@ -101,13 +101,59 @@ impl RexBackend {
                     .collect()
             }
             Surface::Ddd => {
+                // The driver keys by the disk path when the document lives
+                // on disk — the CLI's semantics, where imports resolve
+                // lexically against the real path and sibling artifacts
+                // share one key space. The URI string stays the fallback
+                // for documents that have none (and remains the publish
+                // filter). Before rexlang#128 this compiled under the URI
+                // string, which silently broke import resolution.
+                let driver_path = uri
+                    .to_file_path()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|_| uri.as_str().to_string());
                 let (domains, imports) = self.domain_sources_for_ddd(uri, &text);
-                rex_driver::compile_ddd_str(uri.as_str(), &text, &domains, &imports)
-                    .diagnostics
-                    .iter()
-                    .filter(|(file, _)| file == uri.as_str())
-                    .map(|(_, diagnostic)| to_lsp_diagnostic(diagnostic, &map))
-                    .collect()
+                // rexlang#128 (J3 at compile time): the capability clauses
+                // resolve against every `.actor` artifact of the open
+                // design's directory — the empty slice is the exact
+                // `compile_ddd_str` behavior.
+                let actors = self.sibling_actor_models(uri);
+                rex_driver::compile_ddd_str_with_actors(
+                    &driver_path,
+                    &text,
+                    &domains,
+                    &imports,
+                    &actors,
+                )
+                .diagnostics
+                .iter()
+                .filter(|(file, _)| file == &driver_path)
+                .map(|(_, diagnostic)| to_lsp_diagnostic(diagnostic, &map))
+                .collect()
+            }
+            Surface::Actor => {
+                let driver_path = uri
+                    .to_file_path()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|_| uri.as_str().to_string());
+                let (domains, imports) = self.actor_sources_for(uri, &text);
+                // rexlang#128 (J4 at compile time): grant coverage resolves
+                // against every `.ddd` artifact of the open policy's
+                // directory — the empty slice is the exact
+                // `compile_actors_str` behavior.
+                let designs = self.sibling_design_models(uri);
+                rex_driver::compile_actors_str_with_designs(
+                    &driver_path,
+                    &text,
+                    &domains,
+                    &imports,
+                    &designs,
+                )
+                .diagnostics
+                .iter()
+                .filter(|(file, _)| file == &driver_path)
+                .map(|(_, diagnostic)| to_lsp_diagnostic(diagnostic, &map))
+                .collect()
             }
             Surface::Other => Vec::new(),
         };
@@ -181,20 +227,8 @@ impl RexBackend {
         let mut domains: Vec<(String, String)> = Vec::new();
         if let Ok(path) = uri.to_file_path() {
             let path_key = path.display().to_string();
-            let mut fetch = |resolved: &str| -> Option<String> {
-                let resolved = std::path::PathBuf::from(resolved);
-                let open = {
-                    let documents = self.documents.lock().unwrap();
-                    documents.iter().find_map(|(open_uri, document)| {
-                        if document.surface != Surface::Mox {
-                            return None;
-                        }
-                        let open_path = open_uri.to_file_path().ok()?;
-                        (open_path == resolved).then(|| document.text.clone())
-                    })
-                };
-                open.or_else(|| std::fs::read_to_string(&resolved).ok())
-            };
+            let mut fetch =
+                |resolved: &str| -> Option<String> { self.fetch_open_or_disk(resolved) };
             domains = rex_driver::project::gather_domain_sources(
                 &path_key,
                 text,
@@ -207,17 +241,167 @@ impl RexBackend {
                 &mut fetch,
             );
         }
-        // The domains' own `import schema`/`import sigil` content resolves
-        // from disk relative to each domain file (the domains' driver paths
-        // are disk paths, so no re-keying is needed).
-        let schemas =
-            rex_driver::workspace_imports::collect_schema_imports(&domains).unwrap_or_default();
-        let sigil = rex_driver::workspace_imports::collect_sigil_imports(&domains).ok();
-        let imports = rex_driver::DomainImports {
-            schemas,
-            sigil: sigil.map(|sigil| sigil.imports).unwrap_or_default(),
-        };
+        let imports = domain_import_bundle(&domains);
         (domains, imports)
+    }
+
+    /// The `.mox` domains one open `.actor` policy imports (open documents
+    /// win over disk), plus the import bundle its compile resolves against.
+    pub(super) fn actor_sources_for(
+        &self,
+        uri: &Url,
+        text: &str,
+    ) -> (Vec<(String, String)>, rex_driver::DomainImports) {
+        let mut domains: Vec<(String, String)> = Vec::new();
+        if let Ok(path) = uri.to_file_path() {
+            let path_key = path.display().to_string();
+            let mut fetch =
+                |resolved: &str| -> Option<String> { self.fetch_open_or_disk(resolved) };
+            domains = rex_driver::project::gather_domain_sources(
+                &path_key,
+                text,
+                |source| {
+                    rex_syntax::parse_actors(source)
+                        .ast
+                        .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
+                        .unwrap_or_default()
+                },
+                &mut fetch,
+            );
+        }
+        let imports = domain_import_bundle(&domains);
+        (domains, imports)
+    }
+
+    /// The text for a resolved path — the open document that lives there
+    /// wins over disk (the editor's buffer is the truth).
+    fn fetch_open_or_disk(&self, resolved: &str) -> Option<String> {
+        let resolved = std::path::PathBuf::from(resolved);
+        let open = {
+            let documents = self.documents.lock().unwrap();
+            documents.iter().find_map(|(open_uri, document)| {
+                if document.surface != Surface::Mox {
+                    return None;
+                }
+                let open_path = open_uri.to_file_path().ok()?;
+                (open_path == resolved).then(|| document.text.clone())
+            })
+        };
+        open.or_else(|| std::fs::read_to_string(&resolved).ok())
+    }
+
+    /// The `(path, text)` pairs of one open document's directory siblings
+    /// with `extension`, sorted, excluding `except` — the sibling
+    /// enumeration the compile-time capability joins gather from. An open
+    /// document wins over its on-disk text (the editor's buffer is the
+    /// truth); files that cannot be read contribute nothing.
+    fn sibling_sources(
+        &self,
+        except: &std::path::Path,
+        extension: &str,
+    ) -> Vec<(std::path::PathBuf, String)> {
+        let Some(dir) = except.parent() else {
+            return Vec::new();
+        };
+        let mut paths: Vec<std::path::PathBuf> = match std::fs::read_dir(dir) {
+            Ok(entries) => entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.extension().and_then(|ext| ext.to_str()) == Some(extension)
+                        && path != except
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        paths.sort();
+        paths
+            .into_iter()
+            .filter_map(|path| {
+                let open = {
+                    let documents = self.documents.lock().unwrap();
+                    documents.iter().find_map(|(open_uri, document)| {
+                        let open_path = open_uri.to_file_path().ok()?;
+                        (open_path == path).then(|| document.text.clone())
+                    })
+                };
+                open.or_else(|| std::fs::read_to_string(&path).ok())
+                    .map(|text| (path, text))
+            })
+            .collect()
+    }
+
+    /// The pooled `.actor` artifacts of the open design's directory (open
+    /// documents win over disk): the capability table rule 10 resolves
+    /// against at compile time (rexlang#128's J3). A sibling that fails to
+    /// compile contributes nothing — its own open editor shows its
+    /// diagnostics.
+    fn sibling_actor_models(&self, except: &Url) -> Vec<rex_ir::ActorModel> {
+        let Ok(path) = except.to_file_path() else {
+            return Vec::new();
+        };
+        let mut models = Vec::new();
+        for (sibling, text) in self.sibling_sources(&path, "actor") {
+            let key = sibling.display().to_string();
+            let mut fetch =
+                |resolved: &str| -> Option<String> { self.fetch_open_or_disk(resolved) };
+            let domains = rex_driver::project::gather_domain_sources(
+                &key,
+                &text,
+                |source| {
+                    rex_syntax::parse_actors(source)
+                        .ast
+                        .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
+                        .unwrap_or_default()
+                },
+                &mut fetch,
+            );
+            let actor = rex_driver::project::ActorImport {
+                key: key.clone(),
+                source: text.clone(),
+                domains,
+            };
+            if let Ok(compiled) =
+                rex_driver::project::compile_actor_imports(std::slice::from_ref(&actor))
+            {
+                models.extend(compiled);
+            }
+        }
+        models
+    }
+
+    /// The compiled `.ddd` artifacts of the open policy's directory (open
+    /// documents win over disk): the carrier set grant coverage resolves
+    /// against at compile time (rexlang#128's J4). Gathered exactly like
+    /// [`RexBackend::sibling_actor_models`]; a sibling that fails to
+    /// compile contributes nothing.
+    fn sibling_design_models(&self, except: &Url) -> Vec<rex_ir::ddd::DddModel> {
+        let Ok(path) = except.to_file_path() else {
+            return Vec::new();
+        };
+        let mut models = Vec::new();
+        for (sibling, text) in self.sibling_sources(&path, "ddd") {
+            let key = sibling.display().to_string();
+            let mut fetch =
+                |resolved: &str| -> Option<String> { self.fetch_open_or_disk(resolved) };
+            let domains = rex_driver::project::gather_domain_sources(
+                &key,
+                &text,
+                |source| {
+                    rex_syntax::parse_ddd(source)
+                        .ast
+                        .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
+                        .unwrap_or_default()
+                },
+                &mut fetch,
+            );
+            let compilation =
+                rex_driver::compile_ddd_str(&key, &text, &domains, &domain_import_bundle(&domains));
+            if let Some(model) = compilation.model {
+                models.push(model);
+            }
+        }
+        models
     }
 
     /// The import closure of one `.ifml` document, gathered through
@@ -413,6 +597,20 @@ pub(super) fn to_lsp_diagnostic(
         related_information: None,
         tags: None,
         data,
+    }
+}
+
+/// The import bundle for gathered domain sources: the domains' own
+/// `import schema`/`import sigil` content resolves from disk relative to
+/// each domain file (the domains' driver paths are disk paths, so no
+/// re-keying is needed).
+fn domain_import_bundle(domains: &[(String, String)]) -> rex_driver::DomainImports {
+    let schemas =
+        rex_driver::workspace_imports::collect_schema_imports(domains).unwrap_or_default();
+    let sigil = rex_driver::workspace_imports::collect_sigil_imports(domains).ok();
+    rex_driver::DomainImports {
+        schemas,
+        sigil: sigil.map(|sigil| sigil.imports).unwrap_or_default(),
     }
 }
 

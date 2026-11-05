@@ -5,7 +5,7 @@
 //! nothing validates the *wiring between* the artifact surfaces. This
 //! module is the union pass: a pure function over the pre-compiled
 //! artifacts a host gathered, diagnosing dangling cross-layer references
-//! as error diagnostics tagged with the file that owns them. The normative
+//! as diagnostics tagged with the file that owns them. The normative
 //! contract is documented on [`check_integrity`].
 //!
 //! Every check is **opt-in in the house style**: it fires only when the
@@ -16,6 +16,13 @@
 //! the owning file's path and name the offending element precisely. The
 //! CLI's directory batch mode is the first host: it retains each file's
 //! compiled artifact and runs this pass over the gathered union.
+//!
+//! Since rexlang#128 the capability joins (checks 1 and 2) resolve at
+//! **compile time** with spans — rule 10 over every provided actor model,
+//! grant coverage in the actor engine — so this pass's capability findings
+//! are the **lint channel** (warning severity): they remain available to
+//! hosts that gather artifacts without compiling (codegraph's doctor),
+//! while the compiler's diagnostics are the language errors.
 
 use std::collections::BTreeSet;
 
@@ -30,7 +37,7 @@ use crate::diagnostic::Diagnostic;
 /// The union referential-integrity pass (issue rexlang#114): a pure
 /// function over the pre-compiled artifact buckets a host gathered —
 /// path-tagged `(file, artifact)` pairs exactly as the `.uc` and `.deploy`
-/// one-shot entry points take them — returning error diagnostics tagged
+/// one-shot entry points take them — returning diagnostics tagged
 /// with the file that owns each dangling reference. It publishes no
 /// artifact of its own; per-file checks and artifact production are
 /// untouched.
@@ -40,17 +47,20 @@ use crate::diagnostic::Diagnostic;
 /// The cross-layer references no per-surface compiler can see:
 ///
 /// 1. **Capability existence** (the design engine's rule 10, generalized
-///    across the union): every `capability` clause on a service operation
-///    or a search must name a capability declared in some provided actor
-///    block — `unknown capability 'X' on operation 'O' of service 'S'` /
-///    `on search 'Z'`, help listing the declared names. Fires when any
-///    actor artifacts are provided.
-/// 2. **Capability coverage** (rule 10's reverse): every capability a
-///    grant — or a delegation — hands out must be carried by at least one
-///    operation or search across the designs, else it guards a transition
-///    that cannot happen: `capability 'X' is granted but no operation or
-///    search carries it`. Declared-but-ungranted capabilities are latent,
-///    not dead, and stay out of scope; a standalone `cedar { ... }` grant
+///    across the union; the union pass's *lint channel* since rexlang#128
+///    promoted the join into the compiler — warning severity): every
+///    `capability` clause on a service operation or a search must name a
+///    capability declared in some provided actor block — `unknown
+///    capability 'X' on operation 'O' of service 'S'` / `on search 'Z'`,
+///    help listing the declared names. Fires when any actor artifacts are
+///    provided.
+/// 2. **Capability coverage** (rule 10's reverse; the lint channel since
+///    rexlang#128 — warning severity): every capability a grant — or a
+///    delegation — hands out must be carried by at least one operation or
+///    search across the designs, else it guards a transition that cannot
+///    happen: `capability 'X' is granted but no operation or search
+///    carries it`. Declared-but-ungranted capabilities are latent, not
+///    dead, and stay out of scope; a standalone `cedar { ... }` grant
 ///    entry serializes with an empty capability name (verbatim policy, not
 ///    a reference) and is never read as one. Fires when any design
 ///    artifacts are provided.
@@ -103,14 +113,18 @@ use crate::diagnostic::Diagnostic;
 ///
 /// # Diagnostics
 ///
-/// All diagnostics are error severity (the issue's contract: dangling
-/// wiring is a language error, not a lint) and carry no span — the wire
-/// artifacts are span-free by contract, so the pass runs at the artifact
-/// level where no source is attached. Each tags the owning file's path
-/// (the bucket entry's path) and names the offending element precisely,
-/// with help text listing the declared names to bind against. Block-local
-/// actor names pool union-wide: two blocks declaring the same capability
-/// name are one name for every check.
+/// The action, consumer, flow-actor, and emission checks are error
+/// severity (the issue's contract: dangling wiring is a language error,
+/// not a lint). The two capability checks are warning severity since
+/// rexlang#128: their joins resolve at compile time with spans, so these
+/// findings are the lint channel for hosts that gather artifacts without
+/// compiling. All carry no span — the wire artifacts are span-free by
+/// contract, so the pass runs at the artifact level where no source is
+/// attached. Each tags the owning file's path (the bucket entry's path)
+/// and names the offending element precisely, with help text listing the
+/// declared names to bind against. Block-local actor names pool
+/// union-wide: two blocks declaring the same capability name are one name
+/// for every check.
 pub fn check_integrity(
     _designs: &[(String, DddModel)],
     _actors: &[(String, ActorModel)],
@@ -161,7 +175,7 @@ fn check_capability_existence(
                         if !declared.contains(capability) {
                             diagnostics.push((
                                 path.clone(),
-                                Diagnostic::error(
+                                Diagnostic::warning(
                                     format!(
                                         "unknown capability '{capability}' on operation '{}' \
                                          of service '{}'",
@@ -180,7 +194,7 @@ fn check_capability_existence(
                     if !declared.contains(capability) {
                         diagnostics.push((
                             path.clone(),
-                            Diagnostic::error(
+                            Diagnostic::warning(
                                 format!(
                                     "unknown capability '{capability}' on search '{}'",
                                     search.name
@@ -248,7 +262,7 @@ fn check_capability_coverage(
             if !carriers.contains(&capability) {
                 diagnostics.push((
                     path.clone(),
-                    Diagnostic::error(
+                    Diagnostic::warning(
                         format!(
                             "capability '{capability}' is granted but no operation or \
                              search carries it"

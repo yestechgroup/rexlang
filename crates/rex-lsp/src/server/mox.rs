@@ -68,10 +68,26 @@ struct QuickFixPayload {
     type_span: [usize; 2],
 }
 
-/// The quick-fix edits for one `attributeWithClassType` diagnostic: change
-/// the class-typed attribute into a `contains` or a `refers`. The edit
-/// lands at the byte offset carried in the diagnostic's `data.typeSpan`,
-/// mapped through `map`.
+/// The `data` payload of an `unknownCapability` diagnostic:
+/// `{"unknownCapability": {…}}`.
+#[derive(Debug, serde::Deserialize)]
+struct UnknownCapabilityData {
+    #[serde(rename = "unknownCapability")]
+    code: UnknownCapabilityPayload,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UnknownCapabilityPayload {
+    #[allow(dead_code)]
+    capability: String,
+    suggestion: Option<String>,
+    span: [usize; 2],
+}
+
+/// The quick-fix edits for one diagnostic. `attributeWithClassType` offers
+/// the `contains`/`refers` rewrites; `unknownCapability` (rexlang#128)
+/// offers the rename to the suggested declared capability when one exists.
 pub(super) fn quick_fix_actions(
     uri: &Url,
     map: &PositionMap,
@@ -80,9 +96,17 @@ pub(super) fn quick_fix_actions(
     let Some(NumberOrString::String(code)) = &diagnostic.code else {
         return vec![];
     };
-    if code != "attributeWithClassType" {
-        return vec![];
+    match code.as_str() {
+        "attributeWithClassType" => contains_refers_fixes(uri, map, diagnostic),
+        "unknownCapability" => rename_fix(uri, map, diagnostic),
+        _ => vec![],
     }
+}
+
+/// The `attributeWithClassType` fixes: change the class-typed attribute
+/// into a `contains` or a `refers`. The edit lands at the byte offset
+/// carried in the diagnostic's `data.typeSpan`, mapped through `map`.
+fn contains_refers_fixes(uri: &Url, map: &PositionMap, diagnostic: &Diagnostic) -> Vec<CodeAction> {
     let Some(data) = &diagnostic.data else {
         return vec![];
     };
@@ -124,6 +148,46 @@ pub(super) fn quick_fix_actions(
             is_preferred: None,
         })
         .collect()
+}
+
+/// The `unknownCapability` fix: rename the reference to the suggested
+/// declared capability (rexlang#128). No suggestion — no fix; the edit
+/// covers exactly the span the diagnostic carries.
+fn rename_fix(uri: &Url, map: &PositionMap, diagnostic: &Diagnostic) -> Vec<CodeAction> {
+    let Some(data) = &diagnostic.data else {
+        return vec![];
+    };
+    let Ok(parsed) = serde_json::from_value::<UnknownCapabilityData>(data.clone()) else {
+        return vec![];
+    };
+    let Some(suggestion) = parsed.code.suggestion else {
+        return vec![];
+    };
+    let range = map.range_for((parsed.code.span[0]..parsed.code.span[1]).into());
+    vec![CodeAction {
+        title: format!("Rename to `{suggestion}`"),
+        kind: Some(CodeActionKind::QUICKFIX),
+        diagnostics: Some(vec![diagnostic.clone()]),
+        edit: Some(WorkspaceEdit {
+            changes: Some(
+                [(
+                    uri.clone(),
+                    vec![TextEdit {
+                        range,
+                        new_text: suggestion,
+                    }],
+                )]
+                .into_iter()
+                .collect(),
+            ),
+            document_changes: None,
+            change_annotations: None,
+        }),
+        command: None,
+        data: None,
+        disabled: None,
+        is_preferred: None,
+    }]
 }
 
 /// The built-in primitive type names, in completion order.

@@ -231,7 +231,7 @@ fn support_ddd_capabilities_validate_against_the_actor_model() {
         &source,
         &[(domain_path, domain)],
         &rex_driver::DomainImports::default(),
-        &actors,
+        std::slice::from_ref(&actors),
     );
     assert_clean("support.ddd (with actors)", &compilation.diagnostics);
     assert!(

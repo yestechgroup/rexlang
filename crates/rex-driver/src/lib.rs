@@ -548,7 +548,7 @@ pub fn compile_actors(
     actor: SourceFile,
     domains: Vec<SourceFile>,
 ) -> ActorCompilation {
-    compile_actors_with(db, actor, domains, &DomainImports::default())
+    compile_actors_with(db, actor, domains, &DomainImports::default(), &[])
 }
 
 /// The domain lowering shared by the `.actor` and `.ddd` pipelines: resolve
@@ -664,12 +664,15 @@ fn lower_domains(
 }
 
 /// The body of [`compile_actors`], parameterized over the provided
-/// import content for the domain files (see [`compile_file`] for the shape).
+/// import content for the domain files (see [`compile_file`] for the shape)
+/// and the designs [`compile_actors_str_with_designs`] validates grant
+/// coverage against.
 fn compile_actors_with(
     db: &dyn Db,
     actor: SourceFile,
     domains: Vec<SourceFile>,
     imports: &DomainImports,
+    designs: &[rex_ir::ddd::DddModel],
 ) -> ActorCompilation {
     let actor_path = actor.path(db);
     let actor_source = actor.text(db);
@@ -692,6 +695,7 @@ fn compile_actors_with(
         parsed.ast.as_ref(),
         &parsed.diagnostics,
         &domains.domain_units,
+        designs,
     );
     let mut diagnostics = diagnostics;
     diagnostics.extend(domains.sigil_diagnostics);
@@ -1011,10 +1015,29 @@ pub fn compile_actors_str(
     domains: &[(String, String)],
     imports: &DomainImports,
 ) -> ActorCompilation {
+    compile_actors_str_with_designs(actor_path, actor_source, domains, imports, &[])
+}
+
+/// Like [`compile_actors_str`], but every capability a grant — or a
+/// delegation — hands out must be carried by at least one operation or
+/// search across `designs`, else the grant entry's diagnostic names the
+/// dangling capability with the span of its reference (capability coverage,
+/// issue rexlang#128's J4 at compile time). Each design is a pre-compiled
+/// [`rex_ir::ddd::DddModel`]; capability names pool across all of them. An
+/// empty slice keeps [`compile_actors_str`]'s behavior exactly — the check
+/// is opt-in, so a host compiling a policy without its application's
+/// designs never sees coverage diagnostics.
+pub fn compile_actors_str_with_designs(
+    actor_path: &str,
+    actor_source: &str,
+    domains: &[(String, String)],
+    imports: &DomainImports,
+    designs: &[rex_ir::ddd::DddModel],
+) -> ActorCompilation {
     let db = Database::new();
     let actor = SourceFile::new(&db, actor_path.to_string(), actor_source.to_string());
     let files = domain_files(&db, domains);
-    compile_actors_with(&db, actor, files, imports)
+    compile_actors_with(&db, actor, files, imports, designs)
 }
 
 /// Compiles a `.ddd` design file against its imported domain models to the
@@ -1029,7 +1052,7 @@ pub fn compile_ddd(db: &dyn Db, design: SourceFile, domains: Vec<SourceFile>) ->
     compile_ddd_with(db, design, domains, None, &DomainImports::default())
 }
 
-/// The body of [`compile_ddd`], parameterized over the actor model the
+/// The body of [`compile_ddd`], parameterized over the actor models the
 /// `_with_actors` entry point validates capabilities against and the
 /// provided import content for the domain files (see [`compile_file`] for
 /// the import shape).
@@ -1037,7 +1060,7 @@ fn compile_ddd_with(
     db: &dyn Db,
     design: SourceFile,
     domains: Vec<SourceFile>,
-    actors: Option<&rex_ir::ActorModel>,
+    actors: Option<&[rex_ir::ActorModel]>,
     imports: &DomainImports,
 ) -> DddCompilation {
     let design_path = design.path(db);
@@ -1298,16 +1321,20 @@ pub fn compile_ddd_str(
 
 /// Like [`compile_ddd_str`], but the capabilities declared on service
 /// operations are validated against `actors`: every name must exist in the
-/// union of the actor model's blocks' capabilities, else the operation's
+/// union of the actor models' blocks' capabilities, else the operation's
 /// error names the operation, its service, and the unknown capability
-/// (rule 10). The plain [`compile_ddd_str`] records capabilities
+/// (rule 10) — with the [`did_you_mean`](crate::diagnostic) closest
+/// declared name when one is a plausible typo, and the `unknownCapability`
+/// code carrying it for quick fixes. Capabilities pool across every
+/// provided model, so a host passes all of the application's `.actor`
+/// artifacts. The plain [`compile_ddd_str`] records capabilities
 /// unvalidated.
 pub fn compile_ddd_str_with_actors(
     path: &str,
     source: &str,
     domains: &[(String, String)],
     imports: &DomainImports,
-    actors: &rex_ir::ActorModel,
+    actors: &[rex_ir::ActorModel],
 ) -> DddCompilation {
     compile_ddd_str_inner(path, source, domains, Some(actors), imports)
 }
@@ -1317,7 +1344,7 @@ fn compile_ddd_str_inner(
     path: &str,
     source: &str,
     domains: &[(String, String)],
-    actors: Option<&rex_ir::ActorModel>,
+    actors: Option<&[rex_ir::ActorModel]>,
     imports: &DomainImports,
 ) -> DddCompilation {
     let db = Database::new();

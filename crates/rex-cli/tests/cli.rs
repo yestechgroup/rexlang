@@ -3019,7 +3019,7 @@ application App {
     module core {
         service CustomerService {
             inject CustomerRepository;
-            register => CustomerRepository.save;
+            register => CustomerRepository.save capability ManageCustomer;
         }
         entity Customer repository CustomerRepository {
             findById;
@@ -3835,6 +3835,81 @@ fn directory_check_flags_a_granted_capability_no_op_carries() {
         ),
         "stderr: {stderr}"
     );
+    // rexlang#128: coverage resolves at compile time — the failure is the
+    // per-file project pipeline's (the `N of M files failed` tail), with
+    // the diagnostic spanned into the actor file, not a phase-2 union
+    // finding.
+    assert!(
+        stderr.contains("files failed"),
+        "the dangling grant fails phase 1: {stderr}"
+    );
+    assert!(
+        stderr.contains("permit TerminateWorker"),
+        "the rendered diagnostic points at the grant entry: {stderr}"
+    );
+}
+
+#[test]
+fn directory_check_flags_an_unknown_operation_capability() {
+    let dir = write_union_app(
+        &union_ddd(Some("GhostCapability")),
+        Some(UNION_ACTOR),
+        None,
+        None,
+        None,
+    );
+    let output = rexlang()
+        .arg("check")
+        .arg(&dir)
+        .output()
+        .expect("run rexlang check");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "unknown capability must fail the batch"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "unknown capability 'GhostCapability' on operation 'hire' of service 'TicketService'"
+        ),
+        "stderr: {stderr}"
+    );
+    // rexlang#128: existence resolves at compile time (the design engine's
+    // rule 10 over the project's actor artifacts) — phase 1 owns the
+    // failure, and the diagnostic renders spanned against the design.
+    assert!(
+        stderr.contains("files failed"),
+        "the unknown capability fails phase 1: {stderr}"
+    );
+    assert!(
+        stderr.contains("GhostCapability"),
+        "the rendered diagnostic points at the capability clause: {stderr}"
+    );
+}
+
+#[test]
+fn directory_check_flags_an_unknown_capability_near_a_declared_name() {
+    // One letter off a declared capability: the compile-time diagnostic
+    // carries the did-you-mean help (the union pass listed every name).
+    let dir = write_union_app(
+        &union_ddd(Some("TerminateWorkerX")),
+        Some(UNION_ACTOR),
+        None,
+        None,
+        None,
+    );
+    let output = rexlang()
+        .arg("check")
+        .arg(&dir)
+        .output()
+        .expect("run rexlang check");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("did you mean 'TerminateWorker'?"),
+        "a near-miss names its intended capability: {stderr}"
+    );
 }
 
 #[test]
@@ -3935,6 +4010,38 @@ fn directory_check_passes_a_fully_wired_application() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(String::from_utf8_lossy(&output.stderr).is_empty());
+}
+
+#[test]
+fn check_design_renders_its_imported_domain_diagnostics() {
+    // A domain's own diagnostics reach the report under the import string
+    // the design names it by (the driver's DomainUnit path) — the reader
+    // keeps both keys renderable, or the diagnostic silently vanishes.
+    let dir = scratch_dir().join("design-domain-diags");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let domain = dir.join("broken.mox");
+    std::fs::write(&domain, "package broken\n\nclass X { String oops oops }\n").expect("write mox");
+    let design = dir.join("design.ddd");
+    std::fs::write(
+        &design,
+        "import \"broken.mox\"\n\napplication A {\n    module m {\n        value X\n    }\n}\n",
+    )
+    .expect("write ddd");
+
+    let output = rexlang()
+        .arg("check")
+        .arg(&design)
+        .output()
+        .expect("run rexlang check");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("expected a feature declaration"),
+        "the imported domain's parse diagnostic renders: {stderr}"
+    );
+    assert!(
+        stderr.contains("broken.mox"),
+        "the diagnostic renders against the domain file: {stderr}"
+    );
 }
 
 #[test]
