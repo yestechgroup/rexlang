@@ -114,18 +114,56 @@ pub(crate) fn publishes_entry<'src>(
         })
 }
 
-/// A `channel <name> { publishes_entry* }` declaration.
+/// The contextual `of` word of a channel header: an ordinary identifier
+/// that is special only immediately after the channel's name (the
+/// delegation-`to` precedent). Escaped `^of` never matches.
+pub(crate) fn evt_of_keyword<'src>() -> impl Parser<'src, Tokens<'src>, Span, MoxExtra<'src>> + Clone
+{
+    select! { Token::Ident(text) = e if text == "of" => e.span() }
+}
+
+/// The contextual `scope` word of a subscription body (same discipline as
+/// [`evt_consumer_keyword`]).
+pub(crate) fn evt_scope_keyword<'src>(
+) -> impl Parser<'src, Tokens<'src>, Span, MoxExtra<'src>> + Clone {
+    select! { Token::Ident(text) = e if text == "scope" => e.span() }
+}
+
+/// A `channel <name> ("of" <scope>)? { publishes_entry* }` declaration. The
+/// `of` clause is committed once the contextual word matched: a missing
+/// scope name is a reported error and the channel still recovers. A stray
+/// name without the leading `of` is reported too (after the channel name
+/// only `of` or `{` is legal), so nothing is silently swallowed.
 pub(crate) fn channel_decl<'src>(
 ) -> impl Parser<'src, Tokens<'src>, ChannelDecl, MoxExtra<'src>> + Clone {
     kw(Token::Channel)
         .ignore_then(name())
+        .then(evt_of_keyword().or_not())
+        .then(name().or_not())
         .then_ignore(kw(Token::LBrace))
         .then(publishes_entry().repeated().collect::<Vec<_>>())
         .then_ignore(kw(Token::RBrace))
-        .map_with(|(name, publishes), e| ChannelDecl {
-            name,
-            publishes,
-            span: e.span(),
+        .map_with(|(((name, of_kw), scope), publishes), e| {
+            (name, of_kw, scope, publishes, e.span())
+        })
+        .validate(|(name, of_kw, scope, publishes, span), _e, emitter| {
+            if of_kw.is_some() && scope.is_none() {
+                emitter.emit(Rich::custom(span, "expected a scope name after `of`"));
+            }
+            if of_kw.is_none() {
+                if let Some(scope) = &scope {
+                    emitter.emit(Rich::custom(
+                        scope.span,
+                        "expected `of` or `{` after the channel name",
+                    ));
+                }
+            }
+            ChannelDecl {
+                name,
+                scope,
+                publishes,
+                span,
+            }
         })
 }
 
@@ -144,13 +182,14 @@ pub(crate) fn evt_consumer_keyword<'src>(
     select! { Token::Ident(text) = e if text == "consumer" => e.span() }
 }
 
-/// A `subscription <name> { events [ <event>* ] consumer <name> }`
-/// declaration. Once the body's `{` matched the declaration is committed:
-/// missing `events`, list brackets, `consumer`, or the consumer name are
-/// each reported errors and the subscription still recovers. Inside the
-/// `[...]` list the contextual `consumer` word ends the list (the word
-/// introducing the next clause), so a missing `]` never swallows the
-/// consumer line.
+/// A `subscription <name> { events [ <event>* ] consumer <name>
+/// ("scope" <name>)? }` declaration. Once the body's `{` matched the
+/// declaration is committed: missing `events`, list brackets, `consumer`,
+/// the consumer name, or the scope name are each reported errors and the
+/// subscription still recovers. Inside the `[...]` list the contextual
+/// `consumer` word ends the list (the word introducing the next clause), so
+/// a missing `]` never swallows the consumer line. A stray name after the
+/// consumer without the leading `scope` is reported too.
 pub(crate) fn subscription_decl<'src>(
 ) -> impl Parser<'src, Tokens<'src>, SubscriptionDecl, MoxExtra<'src>> + Clone {
     let event_name = select! {
@@ -178,12 +217,25 @@ pub(crate) fn subscription_decl<'src>(
         )
         .then(evt_consumer_keyword().or_not())
         .then(name().or_not())
+        .then(evt_scope_keyword().or_not())
+        .then(name().or_not())
         .then_ignore(kw(Token::RBrace).or_not())
-        .map_with(|((((name, events_kw), list), consumer_kw), consumer), e| {
-            (name, events_kw, list, consumer_kw, consumer, e.span())
-        })
+        .map_with(
+            |((((((name, events_kw), list), consumer_kw), consumer), scope_kw), scope), e| {
+                (
+                    name,
+                    events_kw,
+                    list,
+                    consumer_kw,
+                    consumer,
+                    scope_kw,
+                    scope,
+                    e.span(),
+                )
+            },
+        )
         .validate(
-            |(name, events_kw, list, consumer_kw, consumer, span), _e, emitter| {
+            |(name, events_kw, list, consumer_kw, consumer, scope_kw, scope, span), _e, emitter| {
                 if events_kw.is_none() {
                     emitter.emit(Rich::custom(span, "expected `events`"));
                 }
@@ -208,6 +260,17 @@ pub(crate) fn subscription_decl<'src>(
                         "expected a consumer name after `consumer`",
                     ));
                 }
+                if scope_kw.is_some() && scope.is_none() {
+                    emitter.emit(Rich::custom(span, "expected a scope name after `scope`"));
+                }
+                if scope_kw.is_none() {
+                    if let Some(scope) = &scope {
+                        emitter.emit(Rich::custom(
+                            scope.span,
+                            "expected `scope` or `}` after the consumer name",
+                        ));
+                    }
+                }
                 SubscriptionDecl {
                     name,
                     events,
@@ -216,6 +279,7 @@ pub(crate) fn subscription_decl<'src>(
                         span,
                         escaped: false,
                     }),
+                    scope,
                     span,
                 }
             },

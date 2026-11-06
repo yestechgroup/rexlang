@@ -38,7 +38,9 @@
 //! driver/consumer concern, never a wire concern. A publication is
 //! deliberately nothing more than a channel-membership entry in slice 1: no
 //! `when` filters, no delivery policy, no webhooks, no CloudEvents
-//! attributes.
+//! attributes. A channel may carry a `scope` (the `.evt` `of` clause) and a
+//! subscription a `scope` binding: opaque topic-template labels carried
+//! verbatim — interpretation is a consumer concern, never a wire concern.
 //!
 //! [rexlang]: https://github.com/anton-makes/rexlang
 
@@ -207,6 +209,13 @@ impl EventField {
 pub struct ChannelDef {
     /// Channel name, unique within its contract file (a driver concern).
     pub name: String,
+    /// The channel's scope (the source's `of <scope>` clause), when
+    /// declared: an opaque scoping-dimension label the channel's topics are
+    /// parameterized by (`/accounts/{id}/trades`). Interpreted by
+    /// consumers; never validated by the driver. Added after v1 under the
+    /// additive rules — omitted when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
     /// The published events (channel membership entries), in declaration
     /// order, referenced by event name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -218,8 +227,15 @@ impl ChannelDef {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            scope: None,
             publishes: Vec::new(),
         }
+    }
+
+    /// Chainable setter for the channel's scope label.
+    pub fn scope(mut self, scope: impl Into<String>) -> Self {
+        self.scope = Some(scope.into());
+        self
     }
 
     /// Chainable setter appending a `publishes` entry.
@@ -253,6 +269,12 @@ pub struct SubscriptionDef {
     pub events: Vec<String>,
     /// The consumer receiving the events.
     pub consumer: String,
+    /// The subscription's scope binding (the source's `scope <name>`
+    /// clause), when declared: the slice of a scoped channel's topic family
+    /// the consumer subscribes to. Opaque and carried verbatim; added after
+    /// v1 under the additive rules — omitted when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
 }
 
 impl SubscriptionDef {
@@ -262,6 +284,7 @@ impl SubscriptionDef {
             name: name.into(),
             events: Vec::new(),
             consumer: String::new(),
+            scope: None,
         }
     }
 
@@ -274,6 +297,12 @@ impl SubscriptionDef {
     /// Chainable setter for the consumer.
     pub fn consumer(mut self, consumer: impl Into<String>) -> Self {
         self.consumer = consumer.into();
+        self
+    }
+
+    /// Chainable setter for the subscription's scope binding.
+    pub fn scope(mut self, scope: impl Into<String>) -> Self {
+        self.scope = Some(scope.into());
         self
     }
 }

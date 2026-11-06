@@ -177,6 +177,34 @@ fn from_json_tolerates_unknown_fields_in_and_around_entries() {
     assert!(sparse.subscriptions.is_empty());
 }
 
+/// Scoped channels and subscriptions round-trip, and their wire shape is
+/// pinned: `scope` rides after `name` on a channel and after `consumer` on
+/// a subscription (declaration order is key order). The scope is the
+/// channel's topic-template dimension — an opaque label, carried verbatim.
+#[test]
+fn scoped_channels_and_subscriptions_round_trip_and_pin_their_wire_shape() {
+    let model = EventModel::new()
+        .channel(
+            ChannelDef::new("accountTrades")
+                .scope("accounts")
+                .publishes("Trade"),
+        )
+        .subscription(
+            SubscriptionDef::new("feed")
+                .event("Trade")
+                .consumer("web")
+                .scope("accounts"),
+        );
+
+    let expected = r#"{"formatVersion":1,"channels":[{"name":"accountTrades","scope":"accounts","publishes":[{"event":"Trade"}]}],"subscriptions":[{"name":"feed","events":["Trade"],"consumer":"web","scope":"accounts"}]}"#;
+
+    assert_eq!(model.to_json().expect("serialize"), expected);
+    let parsed = EventModel::from_json(expected).expect("deserialize");
+    assert_eq!(model, parsed);
+    assert_eq!(parsed.channels[0].scope.as_deref(), Some("accounts"));
+    assert_eq!(parsed.subscriptions[0].scope.as_deref(), Some("accounts"));
+}
+
 /// The artifact carries its own version marker: the constant is 1 and
 /// `from_json` accepts exactly that version.
 #[test]

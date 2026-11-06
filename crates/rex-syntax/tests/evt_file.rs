@@ -222,6 +222,119 @@ fn duplicate_imports_are_syntactically_legal() {
     assert!(file.events.is_empty());
 }
 
+#[test]
+fn channel_scope_clause_parses() {
+    // The `of <scope>` clause names the channel's scoping dimension (an
+    // opaque topic-template label; the driver stores it verbatim).
+    let source = "channel trades of accounts { publishes Trade; }";
+    let result = parse_evt(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let channel = expect_channel(&file, "trades");
+    let scope = channel.scope.as_ref().expect("expected a scope clause");
+    assert_eq!(scope.text, "accounts");
+    assert!(!scope.escaped);
+    assert_eq!(span_text(source, scope.span), "accounts");
+    assert_eq!(channel.publishes.len(), 1);
+}
+
+#[test]
+fn subscription_scope_clause_parses() {
+    // The `scope <name>` binding names the slice of the topic family the
+    // consumer subscribes to.
+    let source = "subscription watch { events [ Trade ] consumer web scope accounts }";
+    let result = parse_evt(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let subscription = expect_subscription(&file, "watch");
+    let scope = subscription
+        .scope
+        .as_ref()
+        .expect("expected a scope clause");
+    assert_eq!(scope.text, "accounts");
+    assert_eq!(subscription.consumer.text, "web");
+}
+
+#[test]
+fn declarations_without_scope_clauses_parse_to_none() {
+    let result = parse_evt(concat!(
+        "channel orders { publishes Ping; } ",
+        "subscription watch { events [ Ping ] consumer watcher }",
+    ));
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    assert!(expect_channel(&file, "orders").scope.is_none());
+    assert!(expect_subscription(&file, "watch").scope.is_none());
+}
+
+#[test]
+fn scope_clauses_are_contextual_words() {
+    // `of` and `scope` are ordinary identifiers outside their grammar
+    // positions: an event named `scope`, a channel named `of`, a publishes
+    // entry named `scope`, a subscription named `of`, an event named `of`
+    // in the list, and a consumer named `scope` all parse.
+    let result = parse_evt(concat!(
+        "event scope { } ",
+        "channel of { publishes scope; } ",
+        "subscription of { events [ scope of ] consumer scope }",
+    ));
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    assert_eq!(file.events[0].name.text, "scope");
+    assert_eq!(file.channels[0].name.text, "of");
+    assert_eq!(file.channels[0].publishes[0].event.text, "scope");
+    assert_eq!(file.subscriptions[0].name.text, "of");
+    assert_eq!(file.subscriptions[0].events[0].text, "scope");
+    assert_eq!(file.subscriptions[0].events[1].text, "of");
+    assert_eq!(file.subscriptions[0].consumer.text, "scope");
+    assert!(file.channels[0].scope.is_none());
+    assert!(file.subscriptions[0].scope.is_none());
+}
+
+#[test]
+fn escaped_scope_names_parse_as_names() {
+    // Escaped forms are never the contextual keyword, but they are legal
+    // names — including in the keyword positions themselves.
+    let result = parse_evt(concat!(
+        "channel ^of of ^scope { } ",
+        "subscription s { events [ ^scope ] consumer ^scope scope ^of }",
+    ));
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let channel = expect_channel(&file, "of");
+    let scope = channel.scope.as_ref().expect("expected a scope clause");
+    assert_eq!(scope.text, "scope");
+    assert!(scope.escaped);
+    let subscription = expect_subscription(&file, "s");
+    assert_eq!(subscription.consumer.text, "scope");
+    let scope = subscription
+        .scope
+        .as_ref()
+        .expect("expected a scope clause");
+    assert_eq!(scope.text, "of");
+    assert!(scope.escaped);
+}
+
 // --- error cases -------------------------------------------------------------
 
 #[test]
@@ -388,6 +501,60 @@ fn junk_regions_recover_to_the_next_declaration() {
 }
 
 #[test]
+fn scope_clause_errors_are_reported_and_recovered() {
+    // A committed `of` with a missing scope name.
+    let result = parse_evt("channel trades of { publishes Trade; }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "expected a scope name after `of`"),
+        "expected the missing-scope error, got {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected a recovered AST");
+    let channel = expect_channel(&file, "trades");
+    assert!(channel.scope.is_none());
+    assert_eq!(channel.publishes.len(), 1);
+
+    // A committed `scope` with a missing scope name.
+    let result = parse_evt("subscription watch { events [ Trade ] consumer web scope }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "expected a scope name after `scope`"),
+        "expected the missing-scope error, got {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected a recovered AST");
+    let subscription = expect_subscription(&file, "watch");
+    assert!(subscription.scope.is_none());
+    assert_eq!(subscription.consumer.text, "web");
+
+    // A stray name without the leading `of`/`scope` word is an error, not a
+    // silently swallowed token.
+    let result = parse_evt("channel trades accounts { }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "expected `of` or `{` after the channel name"),
+        "expected the stray-name error, got {:?}",
+        result.errors
+    );
+    let result = parse_evt("subscription s { events [ Trade ] consumer web accounts }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "expected `scope` or `}` after the consumer name"),
+        "expected the stray-name error, got {:?}",
+        result.errors
+    );
+}
+
+#[test]
 fn adversarial_inputs_do_not_panic() {
     let nasty = [
         "",
@@ -408,6 +575,10 @@ fn adversarial_inputs_do_not_panic() {
         "channel C {",
         "channel C { publishes",
         "channel C { publishes ; }",
+        "channel C of",
+        "channel C of {",
+        "channel C of accounts",
+        "channel C of accounts {",
         "subscription",
         "subscription S",
         "subscription S {",
@@ -415,6 +586,9 @@ fn adversarial_inputs_do_not_panic() {
         "subscription S { events [",
         "subscription S { events [ ]",
         "subscription S { events [ ] consumer",
+        "subscription S { events [ ] consumer C scope",
+        "subscription S { events [ ] consumer C scope }",
+        "subscription S { events [ A ] scope accounts }",
         "subscription S { consumer C events [ A ] }",
         "subscription S { events [ A ] consumer C extra",
         "subscription S { events [ A ] consumer C } } }",

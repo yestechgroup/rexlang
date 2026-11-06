@@ -76,8 +76,22 @@ fn conformance_evt_contract_matches_golden_artifact() {
         model.channels[0].name, "orders",
         "the channel publishes both events"
     );
+    assert_eq!(
+        model.channels[0].scope.as_deref(),
+        Some("account"),
+        "the channel's scope label passes through verbatim"
+    );
     assert_eq!(model.channels[0].publishes.len(), 2);
     assert_eq!(model.subscriptions.len(), 2);
+    assert_eq!(
+        model.subscriptions[0].scope.as_deref(),
+        Some("account"),
+        "the subscription's scope binding passes through verbatim"
+    );
+    assert_eq!(
+        model.subscriptions[1].scope, None,
+        "an undeclared scope stays absent in the artifact"
+    );
     // The pinned version and the resolved domain enum pass through.
     assert_eq!(model.events[0].version.as_deref(), Some("1.0.0"));
     assert_eq!(

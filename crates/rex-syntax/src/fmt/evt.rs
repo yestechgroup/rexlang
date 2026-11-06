@@ -116,13 +116,17 @@ impl<'src> Formatter<'src> {
     }
 
     /// One item of a subscription body: the `events [...]` list or the
-    /// `consumer <name>` line.
+    /// `consumer <name> ("scope" <name>)?` line. The optional scope binding
+    /// rides on the consumer line.
     pub(crate) fn scan_evt_subscription_item(&mut self) {
         match self.peek_tok() {
             Some(Token::Ident("events")) => self.scan_evt_events_clause(),
             Some(Token::Ident("consumer")) => {
                 self.advance();
                 self.take_name();
+                if self.take_if(|token| matches!(token, Token::Ident(text) if *text == "scope")) {
+                    self.take_name();
+                }
             }
             _ => {
                 if !matches!(self.peek_tok(), Some(Token::RBrace) | None) {
@@ -233,12 +237,16 @@ impl<'src> Formatter<'src> {
         self.scan_body(BodyKind::EvtEvent);
     }
 
-    /// Consumes and emits one `channel <name> { ... }` declaration of an
-    /// `.evt` file.
+    /// Consumes and emits one `channel <name> ("of" <scope>)? { ... }`
+    /// declaration of an `.evt` file. The `of` clause rides on the header
+    /// line (the `.deploy` `deployment ... for <app>` precedent).
     pub(crate) fn scan_evt_channel(&mut self) {
         self.begin_top_decl();
         self.advance();
         self.take_name();
+        if self.take_if(|token| matches!(token, Token::Ident(text) if *text == "of")) {
+            self.take_name();
+        }
         self.scan_body(BodyKind::EvtChannel);
     }
 
