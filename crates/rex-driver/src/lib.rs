@@ -2006,6 +2006,14 @@ pub struct DeployCompilation {
 ///    component of the deployed application; word values must be in their
 ///    list (`engine: sqlite|postgres|d1`, ...); integer and text settings
 ///    take the matching literal kind; a path is declared once per level.
+///    The vocabulary carries the operational settings (issue #135): `port`
+///    (integer) on every kind, `health` (text) on `api`/`worker`, and
+///    `cors` (text, comma-separated origins) on `api`/`frontend`. An
+///    `env { NAME = "value" ... }` block is *not* settings: its entries
+///    are opaque strings lowered verbatim, checked only for empty and
+///    duplicated names per component (`duplicate env 'NAME' on component
+///    'C'`), never joined into the effective settings, and never
+///    policy-addressable.
 /// 6. **Bindings** — a binding's path must match one of the file's
 ///    imports, and a `#<Module>` suffix must name a module of the imported
 ///    design/flow.
@@ -2033,7 +2041,9 @@ pub struct DeployCompilation {
 /// 13. **Policies** — every profile policy is parsed with rex-expr, typed
 ///     as `boolean` against the application's components (the synthetic
 ///     settings universe: one class per component holding its setting
-///     vocabulary, the application as the root), and evaluated against the
+///     vocabulary — the operational settings included — and the
+///     application as the root; env entries are not features, so
+///     `api.env.FOO` is a type error), and evaluated against the
 ///     deployment's effective settings with rules R1 (checked arithmetic)
 ///     and R4 (no zero divisor). A `require` condition that evaluates
 ///     false — including through a deployment's overrides — or a

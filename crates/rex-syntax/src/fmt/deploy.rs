@@ -67,7 +67,8 @@ impl<'src> Formatter<'src> {
     }
 
     /// One member of a component body: `requires a, b`, a
-    /// `design`/`flow` binding, or a `name: value` setting.
+    /// `design`/`flow` binding, an `env` block, or a `name: value`
+    /// setting.
     pub(crate) fn scan_deploy_component_item(&mut self) {
         match self.peek_tok() {
             Some(Token::Ident(text)) if text == deploy::REQUIRES => {
@@ -81,7 +82,44 @@ impl<'src> Formatter<'src> {
                 self.advance();
                 self.take_if(|token| matches!(token, Token::Str(_)));
             }
+            Some(Token::Ident(text)) if text == deploy::ENV => {
+                self.advance();
+                self.scan_body(BodyKind::DeployEnv);
+            }
             _ => self.scan_deploy_setting_item(),
+        }
+    }
+
+    /// One `NAME = "value"` entry of a component's `env` block. The name is
+    /// a bare word — keyword tokens included, the parser's qname-segment
+    /// rule — and the canonical `=` spacing is emitted whether or not the
+    /// source had the `=` at all.
+    pub(crate) fn scan_deploy_env_item(&mut self) {
+        match self.peek_tok() {
+            Some(token)
+                if matches!(token, Token::Ident(_) | Token::IdentEscaped(_))
+                    || token.keyword().is_some() =>
+            {
+                self.advance();
+                if matches!(self.peek_tok(), Some(Token::Eq)) {
+                    self.bump_token();
+                }
+                self.push_text("=", false);
+                if matches!(self.peek_tok(), Some(Token::Str(_))) {
+                    self.advance();
+                }
+            }
+            _ => {
+                if !matches!(self.peek_tok(), Some(Token::RBrace) | None) {
+                    self.advance();
+                    self.scan_junk_until(|token| {
+                        matches!(
+                            token,
+                            Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_)
+                        )
+                    });
+                }
+            }
         }
     }
 

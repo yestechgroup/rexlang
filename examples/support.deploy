@@ -11,6 +11,10 @@ application SupportDesk {
     component api: api {
         design "support.ddd#desk"
         scaling: autoscaled
+        port: 18082
+        env {
+            LOG_LEVEL = "info"
+        }
     }
     component web: frontend {
         flow "support.ifml"

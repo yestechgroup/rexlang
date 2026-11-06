@@ -25,8 +25,8 @@ use std::collections::BTreeMap;
 use rex_ir::ddd::DddModel;
 use rex_ir::deploy::{
     ComponentKind, DeployApplication, DeployComponent, DeployConnection, DeployDeployment,
-    DeployMapping, DeployModel, DeployPolicy, DeployProfile, DeploySetting, DeployTarget,
-    DeployValue,
+    DeployEnv, DeployMapping, DeployModel, DeployPolicy, DeployProfile, DeploySetting,
+    DeployTarget, DeployValue,
 };
 use rex_ir::ifml::IfmlModel;
 use rex_syntax::ast as dsl;
@@ -119,6 +119,13 @@ const FRONTEND_RUNTIMES: &[&str] = &["static", "worker", "container"];
 /// The setting vocabulary of one component kind: the closed semantic core.
 /// A setting path not listed here (for the component's kind) is an error,
 /// and a word value outside its list is an error.
+///
+/// The operational vocabulary (issue #135) rides the same tables: `port`
+/// (an integer listener port, every kind), `health` (a health-check path,
+/// the request-processing kinds `api`/`worker`), and `cors` (a
+/// comma-separated origin list, the browser-facing kinds `api`/
+/// `frontend`). Because the policy universe is built from these tables,
+/// typed policies over them (`require (api.port == 18082)`) come free.
 fn component_settings(kind: ComponentKind) -> Vec<(&'static str, SettingSpec)> {
     match kind {
         ComponentKind::Api => vec![
@@ -128,6 +135,9 @@ fn component_settings(kind: ComponentKind) -> Vec<(&'static str, SettingSpec)> {
             ),
             ("replicas", SettingSpec::Int),
             ("scaling", SettingSpec::Word(SCALINGS)),
+            ("port", SettingSpec::Int),
+            ("health", SettingSpec::Text),
+            ("cors", SettingSpec::Text),
         ],
         ComponentKind::Worker => vec![
             (
@@ -135,6 +145,8 @@ fn component_settings(kind: ComponentKind) -> Vec<(&'static str, SettingSpec)> {
                 SettingSpec::Word(CONTAINER_OR_EMBEDDED_OR_EXTERNAL),
             ),
             ("replicas", SettingSpec::Int),
+            ("port", SettingSpec::Int),
+            ("health", SettingSpec::Text),
         ],
         ComponentKind::Database => vec![
             ("engine", SettingSpec::Word(ENGINES)),
@@ -143,6 +155,7 @@ fn component_settings(kind: ComponentKind) -> Vec<(&'static str, SettingSpec)> {
                 "runtime",
                 SettingSpec::Word(CONTAINER_OR_EMBEDDED_OR_EXTERNAL),
             ),
+            ("port", SettingSpec::Int),
         ],
         ComponentKind::Queue => vec![
             (
@@ -150,11 +163,17 @@ fn component_settings(kind: ComponentKind) -> Vec<(&'static str, SettingSpec)> {
                 SettingSpec::Word(CONTAINER_OR_EMBEDDED_OR_EXTERNAL),
             ),
             ("replicas", SettingSpec::Int),
+            ("port", SettingSpec::Int),
         ],
-        ComponentKind::ObjectStore => vec![("storage", SettingSpec::Word(STORAGES))],
+        ComponentKind::ObjectStore => vec![
+            ("storage", SettingSpec::Word(STORAGES)),
+            ("port", SettingSpec::Int),
+        ],
         ComponentKind::Frontend => vec![
             ("runtime", SettingSpec::Word(FRONTEND_RUNTIMES)),
             ("entrypoint", SettingSpec::Text),
+            ("port", SettingSpec::Int),
+            ("cors", SettingSpec::Text),
         ],
     }
 }
@@ -337,6 +356,38 @@ pub(crate) fn compile_deploy_file(
                 });
             }
 
+            // Rule 5b — env entries are opaque strings lowered verbatim
+            // (author order kept). Env is deliberately not a setting: it
+            // never joins the effective-settings map and is never
+            // policy-addressable, so the only checks here are syntactic —
+            // an empty or duplicated name on one component.
+            let mut seen_env: Vec<&str> = Vec::new();
+            let mut env_out: Vec<DeployEnv> = Vec::new();
+            for entry in &component.env {
+                if entry.name.text.is_empty() {
+                    local.push(
+                        Diagnostic::error("env name must not be empty", Some(entry.name.span))
+                            .with_help("env entries are `NAME = \"value\"` pairs"),
+                    );
+                    continue;
+                }
+                if seen_env.contains(&entry.name.text.as_str()) {
+                    local.push(
+                        Diagnostic::error(
+                            format!(
+                                "duplicate env '{}' on component '{}'",
+                                entry.name.text, component.name.text
+                            ),
+                            Some(entry.name.span),
+                        )
+                        .with_help("an env name is declared once per component"),
+                    );
+                    continue;
+                }
+                seen_env.push(&entry.name.text);
+                env_out.push(DeployEnv::new(entry.name.text.clone(), entry.value.clone()));
+            }
+
             // Rule 6 — bindings must resolve against the provided
             // artifacts: the path (as written) must be an import of this
             // file, and a `#<Module>` suffix must name a module there.
@@ -366,6 +417,7 @@ pub(crate) fn compile_deploy_file(
                 .map(|capability| capability.text.clone())
                 .collect();
             component_out.settings = settings;
+            component_out.env = env_out;
             component_out.designs = designs_out;
             component_out.flows = flows_out;
             out.components.push(component_out);

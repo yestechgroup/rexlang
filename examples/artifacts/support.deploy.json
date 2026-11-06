@@ -14,12 +14,25 @@
                 "type": "word",
                 "value": "autoscaled"
               }
+            },
+            {
+              "path": "port",
+              "value": {
+                "type": "int",
+                "value": 18082
+              }
             }
           ],
           "designs": [
             {
               "source": "support.ddd",
               "module": "desk"
+            }
+          ],
+          "env": [
+            {
+              "name": "LOG_LEVEL",
+              "value": "info"
             }
           ]
         },

@@ -334,8 +334,11 @@ enum BodyKind {
     EvtSubscription,
     /// `component` blocks and `connects` lines of a `.deploy` application.
     DeployApplication,
-    /// `requires`/`design`/`flow`/setting members of a `.deploy` component.
+    /// `requires`/`design`/`flow`/`env`/setting members of a `.deploy`
+    /// component.
     DeployComponent,
+    /// `NAME = "value"` entries of a `.deploy` component's `env` block.
+    DeployEnv,
     /// `target`/`defaults`/`mappings`/policy members of a `.deploy` profile.
     DeployProfile,
     /// dotted `path: value` settings of a `.deploy` `defaults`/`configure`
@@ -1032,6 +1035,7 @@ impl<'src> Formatter<'src> {
                 BodyKind::EvtSubscription => self.scan_evt_subscription_item(),
                 BodyKind::DeployApplication => self.scan_deploy_application_item(),
                 BodyKind::DeployComponent => self.scan_deploy_component_item(),
+                BodyKind::DeployEnv => self.scan_deploy_env_item(),
                 BodyKind::DeployProfile => self.scan_deploy_profile_item(),
                 BodyKind::DeploySettings => self.scan_deploy_setting_item(),
                 BodyKind::DeployMappings => self.scan_deploy_mapping_item(),
