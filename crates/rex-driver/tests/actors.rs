@@ -65,12 +65,13 @@ fn conformance_actors_fixture_lowers_the_full_ir_shape() {
             .iter()
             .map(|actor| actor.name.as_str())
             .collect::<Vec<_>>(),
-        ["Customer", "Agent", "Manager", "Finance"]
+        ["Customer", "Agent", "Manager", "Finance", "Auditor"]
     );
     assert_eq!(actors.actors[0].extends, None);
     assert_eq!(actors.actors[1].extends.as_deref(), Some("Customer"));
     assert_eq!(actors.actors[2].extends.as_deref(), Some("Agent"));
     assert_eq!(actors.actors[3].extends, None);
+    assert_eq!(actors.actors[4].extends.as_deref(), Some("Finance"));
     assert_eq!(actors.actors[0].kind, None);
     assert_eq!(actors.actors[1].kind, Some(ActorKind::Agent));
     assert_eq!(
@@ -78,6 +79,7 @@ fn conformance_actors_fixture_lowers_the_full_ir_shape() {
         "kinds are never materialized on actors that do not declare one"
     );
     assert_eq!(actors.actors[3].kind, None);
+    assert_eq!(actors.actors[4].kind, Some(ActorKind::Agent));
 
     let capability_names: Vec<_> = actors
         .capabilities

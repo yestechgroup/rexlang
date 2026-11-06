@@ -46,6 +46,8 @@ actors Support {
         permit ApproveRefund
     }
 
+    agent Auditor extends Finance
+
     delegation RefundIntake {
         from Customer
         to Agent

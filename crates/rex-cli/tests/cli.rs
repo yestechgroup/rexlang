@@ -2137,6 +2137,14 @@ fn gen_tools_actor_file_prints_every_agent_manifest() {
         "RaiseRefund"
       ],
       "delegations": []
+    },
+    {
+      "agent": "Auditor",
+      "tools": [
+        "EscalateTicket",
+        "ApproveRefund"
+      ],
+      "delegations": []
     }
   ]
 }
