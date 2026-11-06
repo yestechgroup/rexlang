@@ -4,7 +4,8 @@
 //! [`Model`](rex_ir::Model).
 
 use rex_ir::events::{
-    ChannelDef, EventDef, EventField, EventModel, SubscriptionDef, EVENT_MODEL_FORMAT_VERSION,
+    ChannelDef, CloudEventsAttributes, DeliveryMode, DeliveryPolicy, EventDef, EventField,
+    EventModel, SubscriptionDef, EVENT_MODEL_FORMAT_VERSION,
 };
 use rex_ir::{IrError, PrimitiveType, TypeRef};
 
@@ -231,4 +232,136 @@ fn empty_sections_are_omitted() {
     let subscription = serde_json::to_string(&SubscriptionDef::new("watch").consumer("watcher"))
         .expect("serialize");
     assert_eq!(subscription, r#"{"name":"watch","consumer":"watcher"}"#);
+}
+
+// --- slice 2: delivery model & governance ------------------------------------
+
+/// CloudEvents attributes and governance metadata round-trip, and their wire
+/// shape is pinned: `owner`/`classification`/`retention` strings, `pii` as a
+/// string array, and the `cloudEvents` object with the `"type"` key (a Rust
+/// keyword, renamed for serde), `source`, and the optional `subject`.
+#[test]
+fn cloud_events_and_governance_round_trip_and_pin_their_wire_shape() {
+    let event = EventDef::new("OrderPlaced")
+        .version("1.0.0")
+        .field(EventField::new("orderId", primitive(PrimitiveType::String)))
+        .owner("order_team")
+        .classification("confidential")
+        .retention("7y")
+        .pii_field("orderId")
+        .cloud_events(CloudEventsAttributes {
+            r#type: "nz.example.orders.orderplaced.v1".to_string(),
+            source: "/orders".to_string(),
+            subject: Some("{orderId}".to_string()),
+        });
+
+    let expected = r#"{"name":"OrderPlaced","version":"1.0.0","fields":[{"name":"orderId","type":{"type":"primitive","value":"string"}}],"owner":"order_team","classification":"confidential","retention":"7y","pii":["orderId"],"cloudEvents":{"type":"nz.example.orders.orderplaced.v1","source":"/orders","subject":"{orderId}"}}"#;
+
+    assert_eq!(serde_json::to_string(&event).expect("serialize"), expected);
+    let parsed: EventDef = serde_json::from_str(expected).expect("deserialize");
+    assert_eq!(event, parsed);
+}
+
+/// A delivery policy round-trips, and its wire shape is pinned: the `mode`
+/// as a bare lowercase string, the three tuning knobs as camelCase numbers,
+/// and the dead-letter channel as a bare string. The subscription's `when`
+/// filter rides as a verbatim string.
+#[test]
+fn delivery_policy_and_when_round_trip_and_pin_their_wire_shape() {
+    let subscription = SubscriptionDef::new("billing")
+        .event("OrderPlaced")
+        .consumer("billing_service")
+        .when("orderId != \"\"")
+        .delivery(
+            DeliveryPolicy::new(DeliveryMode::AtLeastOnce)
+                .max_attempts(5)
+                .backoff_seconds(10)
+                .timeout_seconds(30)
+                .dead_letter("orders"),
+        );
+
+    let expected = r#"{"name":"billing","events":["OrderPlaced"],"consumer":"billing_service","when":"orderId != \"\"","delivery":{"mode":"at_least_once","maxAttempts":5,"backoffSeconds":10,"timeoutSeconds":30,"deadLetter":"orders"}}"#;
+
+    assert_eq!(
+        serde_json::to_string(&subscription).expect("serialize"),
+        expected
+    );
+    let parsed: SubscriptionDef = serde_json::from_str(expected).expect("deserialize");
+    assert_eq!(subscription, parsed);
+}
+
+/// The three delivery modes serialize as bare lowercase strings (no tagging
+/// — the artifact has no tagged enums).
+#[test]
+fn delivery_modes_serialize_as_bare_lowercase_strings() {
+    for (mode, text) in [
+        (DeliveryMode::AtMostOnce, "at_most_once"),
+        (DeliveryMode::AtLeastOnce, "at_least_once"),
+        (DeliveryMode::EffectivelyOnce, "effectively_once"),
+    ] {
+        assert_eq!(
+            serde_json::to_string(&mode).expect("serialize"),
+            format!("\"{text}\"")
+        );
+    }
+}
+
+/// Every slice-2 field follows the additive skip discipline: absent
+/// governance metadata and CloudEvents attributes omit their keys, an
+/// absent `subject` is omitted inside a present `cloudEvents` object, a
+/// mode-only delivery policy serializes as just the mode, and pre-slice-2
+/// shapes stay byte-identical.
+#[test]
+fn slice2_absent_fields_are_omitted() {
+    let event = serde_json::to_string(&EventDef::new("Ping")).expect("serialize");
+    assert_eq!(event, r#"{"name":"Ping"}"#);
+
+    let cloud_events = CloudEventsAttributes {
+        r#type: "com.example.ping".to_string(),
+        source: "/pings".to_string(),
+        subject: None,
+    };
+    let cloud = serde_json::to_string(&cloud_events).expect("serialize");
+    assert_eq!(
+        cloud, r#"{"type":"com.example.ping","source":"/pings"}"#,
+        "an absent subject must not appear"
+    );
+
+    let policy =
+        serde_json::to_string(&DeliveryPolicy::new(DeliveryMode::AtMostOnce)).expect("serialize");
+    assert_eq!(policy, r#"{"mode":"at_most_once"}"#);
+
+    let subscription = serde_json::to_string(&SubscriptionDef::new("watch").consumer("watcher"))
+        .expect("serialize");
+    assert_eq!(subscription, r#"{"name":"watch","consumer":"watcher"}"#);
+}
+
+/// A serialized slice-2 artifact reloads through the version-gated
+/// [`EventModel::from_json`] unchanged — the new fields are part of
+/// `formatVersion` 1, additive and backward compatible.
+#[test]
+fn slice2_artifact_round_trips_through_from_json() {
+    let model = EventModel::new()
+        .event(
+            EventDef::new("OrderPlaced")
+                .field(EventField::new("orderId", primitive(PrimitiveType::String)))
+                .owner("order_team")
+                .pii_field("orderId")
+                .cloud_events(CloudEventsAttributes {
+                    r#type: "com.example.orderplaced".to_string(),
+                    source: "/orders".to_string(),
+                    subject: None,
+                }),
+        )
+        .subscription(
+            SubscriptionDef::new("billing")
+                .event("OrderPlaced")
+                .consumer("billing_service")
+                .when("orderId != \"\"")
+                .delivery(DeliveryPolicy::new(DeliveryMode::EffectivelyOnce)),
+        );
+
+    let json = model.to_json().expect("serialize");
+    let parsed = EventModel::from_json(&json).expect("deserialize");
+    assert_eq!(model, parsed);
 }
