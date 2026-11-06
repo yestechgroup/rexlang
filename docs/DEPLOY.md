@@ -58,7 +58,12 @@ import "../tests/conformance/ddd/library.ddd"
 import "../tests/conformance/ifml/app.ifml"
 
 application Svc {
-    component api: api { scaling: autoscaled }
+    component api: api {
+        scaling: autoscaled
+        port: 18082
+        health: "/healthz"
+        env { LOG_LEVEL = "info" }
+    }
     component lending: api { design "../tests/conformance/ddd/library.ddd#media" }
     component web: frontend { flow "../tests/conformance/ifml/app.ifml#Pagination" }
     component search: worker { requires longRunningProcess }
@@ -72,6 +77,7 @@ profile production_k8s {
     defaults { api.runtime: container  api.replicas: 3 }
     mappings { api -> kubernetes.deployment  database -> external.postgres }
     require (api.replicas >= 3)
+    require (api.port == 18082)
     prohibit (db.storage == "local")
 }
 
@@ -101,6 +107,9 @@ module docs):
 - Setting values are adjacently tagged:
   `{"type": "int" | "text" | "word", "value": <primitive>}` — the
   wire-contract rule-2 shape.
+- Component `env` entries serialize as `{"name": ..., "value": ...}`
+  pairs in declaration order, values verbatim; the key is omitted when a
+  component declares none.
 - **Closed semantic core, extensible platform surface**: kinds and targets
   are the closed enums; capability names, setting paths, policy
   expressions, and mapping resources (`kubernetes.deployment`,
@@ -147,7 +156,8 @@ Language-level rules:
   -> b ... }`** — the logical architecture. Kinds are the closed
   vocabulary `api`, `worker`, `database`, `queue`, `objectStore`,
   `frontend`. A component body carries `name: value` baseline settings,
-  `requires <capability>, ...` clauses, and `design`/`flow` bindings.
+  `requires <capability>, ...` clauses, `env { NAME = "value" ... }`
+  blocks, and `design`/`flow` bindings.
 - **`profile <name> { target: <target> ... }`** — a reusable
   configuration. `defaults { component.setting: value }` apply to every
   deployment selecting the profile; `mappings { kind ->
@@ -166,7 +176,8 @@ Language-level rules:
   overrides) is a compile error. The expression rules R1 (checked
   arithmetic) and R4 (no zero divisor) apply. An unset setting referenced
   by a policy is an evaluation error: give the component a baseline or
-  the profile a default.
+  the profile a default. Env entries are **not** features of that
+  universe — `api.env.FOO` is a type error, by design.
 - **`design`/`flow` bindings** are `"<path>"` or `"<path>#<Module>"` —
   the path must match one of the file's imports *as written* and the
   module must exist in the imported design/flow.
@@ -174,7 +185,9 @@ Language-level rules:
   discipline): special only in its grammar position, an ordinary name
   everywhere else, escapable with `^`. The kind and target *vocabularies*
   are deliberately not syntax — the driver validates them, so a word like
-  `container` (a `.mox` keyword) works as a setting value.
+  `container` (a `.mox` keyword) works as a setting value. The same
+  tolerance applies to `env` entry names: a bare word, keyword tokens
+  included (`when = "always"` is an env entry).
 - **Imports come first**: `import "<path>"` (no trailing `;`, the
   `.actor` production) must precede the first declaration; a later
   `import` is a reported, recovered syntax error. Only `.ddd` and `.ifml`
@@ -186,6 +199,33 @@ Language-level rules:
 - The `->` arrow of `connects` and `mappings` is a real lexer token of
   the shared chumsky lexer; it never appears in a parsed grammar position
   of the other surfaces (raw bodies are span-sliced verbatim).
+
+### Operational vocabulary (issue #135)
+
+The per-kind setting tables carry the operational settings a deployment
+projection needs, typed and closed like every other setting:
+
+- **`port`** (integer) — the listener port, on every kind.
+- **`health`** (text) — the health-check path, on `api` and `worker`.
+- **`cors`** (text) — the comma-separated allowed-origin list, on the
+  browser-facing kinds `api` and `frontend` (v1 keeps the list opaque;
+  per-origin validation is a future concern).
+
+They participate in everything settings do: defaults, overrides,
+effective-settings resolution, and **policies for free** (`require
+(api.port == 18082)` type-checks because the policy universe is built
+from the same tables — `port` types as `int`, `health`/`cors` as
+`string`). Values beyond the type are platform concerns and carried as
+authored.
+
+**Env is the opaque twin.** An `env { NAME = "value" ... }` block
+declares string environment variables verbatim, on any component. Env
+entries are deliberately *not* settings: they never join the
+effective-settings map, are never policy-addressable, and are validated
+only for empty and duplicated names per component. Secrets and platform
+knobs (`LOG_LEVEL`, `DATABASE_URL`) belong here — author intent carried
+to the backend, semantics kept in the closed setting tables. Env values
+are quoted strings only.
 
 ---
 
@@ -212,7 +252,11 @@ warnings do not):
    two-segment `component.setting: value` lines naming a component of the
    deployed application; word values must be in their list; integer and
    text settings take the matching literal kind; a path is declared once
-   per level.
+   per level. An `env { NAME = "value" ... }` block is *not* settings:
+   entries are opaque strings lowered verbatim, checked only for empty
+   (`env name must not be empty`) and duplicated (`duplicate env 'NAME'
+   on component 'C'`) names; values pass through untouched and never join
+   the effective settings.
 5. **Bindings** — a binding's path must match an import, and a
    `#<Module>` suffix must name a module of the imported design/flow.
 6. **Targets** — a profile must carry a `target:` line naming a known
@@ -237,7 +281,8 @@ warnings do not):
    is never silently mapped onto D1.
 10. **Policies** — see above: parsed, typed boolean, evaluated against
     effective settings; violations are errors naming the deployment and
-    the policy.
+    the policy. The typed operational settings are addressable (`port`,
+    `health`, `cors`); env entries are not.
 
 Diagnostics are ordered deterministically: parse diagnostics first, then
 the file's semantic diagnostics in declaration order (applications,

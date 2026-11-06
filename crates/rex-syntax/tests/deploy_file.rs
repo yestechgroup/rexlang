@@ -296,6 +296,149 @@ fn missing_pieces_recover_with_errors() {
 }
 
 #[test]
+fn env_blocks_parse_multi_entry_with_keyword_names() {
+    let source = concat!(
+        "application Svc {\n",
+        "    component api: api {\n",
+        "        env {\n",
+        "            LOG_LEVEL = \"debug\"\n",
+        "            when = \"always\"\n",
+        "        }\n",
+        "        port: 8080\n",
+        "        health: \"/healthz\"\n",
+        "        cors: \"https://a.example,https://b.example\"\n",
+        "    }\n",
+        "}\n",
+    );
+    let result = parse_deploy(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let component = &result.ast.unwrap().applications[0].components[0];
+
+    assert_eq!(component.env.len(), 2);
+    assert_eq!(component.env[0].name.text, "LOG_LEVEL");
+    assert_eq!(component.env[0].value, "debug");
+    // A lexer keyword (`when`) is an ordinary word in env-name position —
+    // the qname-segment rule.
+    assert_eq!(component.env[1].name.text, "when");
+    assert_eq!(component.env[1].value, "always");
+    // The typed operational settings parse as ordinary setting lines (the
+    // per-kind vocabulary check is a driver concern).
+    assert_eq!(component.settings[0].path.full_name(), "port");
+    assert_eq!(component.settings[0].value, DeploySettingValue::Int(8080));
+    assert_eq!(component.settings[1].path.full_name(), "health");
+    assert_eq!(
+        component.settings[1].value,
+        DeploySettingValue::Str("/healthz".to_string())
+    );
+    assert_eq!(component.settings[2].path.full_name(), "cors");
+    assert_eq!(
+        component.settings[2].value,
+        DeploySettingValue::Str("https://a.example,https://b.example".to_string())
+    );
+}
+
+#[test]
+fn env_entry_missing_value_recovers_and_later_members_parse() {
+    let source = concat!(
+        "application Svc {\n",
+        "    component api: api {\n",
+        "        env {\n",
+        "            FOO =\n",
+        "        }\n",
+        "        replicas: 1\n",
+        "    }\n",
+        "}\n",
+    );
+    let result = parse_deploy(source);
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message.contains("string value")),
+        "a missing env value must be reported: {:?}",
+        result.errors
+    );
+    let component = &result.ast.unwrap().applications[0].components[0];
+    assert_eq!(component.env.len(), 1, "the broken entry still lowers");
+    assert_eq!(component.env[0].name.text, "FOO");
+    assert_eq!(
+        component.settings.len(),
+        1,
+        "later members still parse after the recovery"
+    );
+    assert_eq!(component.settings[0].path.full_name(), "replicas");
+}
+
+#[test]
+fn env_block_missing_closing_brace_is_reported_and_members_survive() {
+    // The component's own `}` closes over an `env` block that never got
+    // its own: the missing closer is reported, the block still lowers
+    // what it parsed, and the following member parses.
+    let source = concat!(
+        "application Svc {\n",
+        "    component api: api {\n",
+        "        env {\n",
+        "            FOO = \"x\"\n",
+        "        replicas: 2\n",
+        "    }\n",
+        "}\n",
+    );
+    let result = parse_deploy(source);
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message.contains("close the `env` block")),
+        "a missing closing brace must be reported: {:?}",
+        result.errors
+    );
+    let component = &result.ast.unwrap().applications[0].components[0];
+    assert_eq!(component.env.len(), 1, "the parsed entry still lowers");
+    assert_eq!(component.env[0].name.text, "FOO");
+    assert_eq!(component.env[0].value, "x");
+    assert_eq!(component.settings.len(), 1, "later members still parse");
+    assert_eq!(component.settings[0].path.full_name(), "replicas");
+}
+
+#[test]
+fn env_remains_usable_as_a_name_elsewhere() {
+    // `env` is contextual: it names a component, a connection endpoint, and
+    // — escaped — a setting, while the bare word inside a component body
+    // starts an env block.
+    let source = concat!(
+        "application Svc {\n",
+        "    component env: api {\n",
+        "        ^env: \"custom\"\n",
+        "    }\n",
+        "    component web: frontend {\n",
+        "        env {\n",
+        "            K = \"v\"\n",
+        "        }\n",
+        "    }\n",
+        "    connects env -> web\n",
+        "}\n",
+    );
+    let result = parse_deploy(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let application = &result.ast.unwrap().applications[0];
+    assert_eq!(application.components[0].name.text, "env");
+    assert_eq!(
+        application.components[0].settings[0].path.full_name(),
+        "env"
+    );
+    assert_eq!(application.components[1].env.len(), 1);
+    assert_eq!(application.connections[0].from.text, "env");
+}
+
+#[test]
 fn contextual_words_remain_usable_as_names() {
     // `use`, `for`, `target`, and `profile` are contextual: escaped forms
     // are never mistaken for the grammar words, and the words themselves
@@ -331,6 +474,12 @@ fn nasty_inputs_never_panic() {
         "application Svc { component api: api {",
         "application Svc { component api: api { requires }",
         "application Svc { component api: api { design } }",
+        "application Svc { component api: api { env { } } }",
+        "application Svc { component api: api { env } }",
+        "application Svc { component api: api { env { FOO } } }",
+        "application Svc { component api: api { env { FOO = } } }",
+        "application Svc { component api: api { env { FOO = \"x\" } } }",
+        "application Svc { component api: api { env { FOO = \"x\" }",
         "application Svc { connects }",
         "application Svc { connects a }",
         "application Svc { connects a -> }",
@@ -411,6 +560,28 @@ fn canonical_layout_sections_and_members() {
         "    use local\n",
         "    configure {\n",
         "        api.replicas: 4\n",
+        "    }\n",
+        "}\n",
+    );
+    assert_eq!(fmt_deploy(messy), canonical);
+    // Re-formatting the output is a fixpoint.
+    assert_eq!(fmt_deploy(canonical), canonical);
+}
+
+#[test]
+fn env_blocks_format_canonically_and_are_a_fixpoint() {
+    let messy = concat!(
+        "application Svc { component api : api { env { LOG_LEVEL=\"debug\"",
+        " when =  \"always\" } port : 8080 } }\n",
+    );
+    let canonical = concat!(
+        "application Svc {\n",
+        "    component api: api {\n",
+        "        env {\n",
+        "            LOG_LEVEL = \"debug\"\n",
+        "            when = \"always\"\n",
+        "        }\n",
+        "        port: 8080\n",
         "    }\n",
         "}\n",
     );

@@ -155,6 +155,278 @@ fn golden_artifact_round_trips_through_from_json() {
     assert_eq!(reserialized, expected, "artifact round trip must be stable");
 }
 
+// --- operational vocabulary (issue #135) ---------------------------------------
+
+#[test]
+fn typed_operational_settings_are_accepted_and_lowered() {
+    let source = concat!(
+        "application Svc {\n",
+        "    component api: api {\n",
+        "        port: 18082\n",
+        "        health: \"/healthz\"\n",
+        "        cors: \"https://a.example,https://b.example\"\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile_with(&[], source);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "typed operational settings must compile clean: {:?}",
+        compilation.diagnostics
+    );
+    let component = &compilation.model.expect("artifact").applications[0].components[0];
+    assert_eq!(
+        component.settings,
+        vec![
+            rex_ir::deploy::DeploySetting::new("port", rex_ir::deploy::DeployValue::Int(18082)),
+            rex_ir::deploy::DeploySetting::new(
+                "health",
+                rex_ir::deploy::DeployValue::Text("/healthz".into())
+            ),
+            rex_ir::deploy::DeploySetting::new(
+                "cors",
+                rex_ir::deploy::DeployValue::Text("https://a.example,https://b.example".into())
+            ),
+        ]
+    );
+}
+
+#[test]
+fn port_with_a_string_value_is_a_type_error() {
+    let source = concat!(
+        "application Svc {\n",
+        "    component api: api {\n",
+        "        port: \"x\"\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile_with(&[], source);
+    assert!(compilation.model.is_none());
+    let (_, diagnostic) = compilation
+        .diagnostics
+        .iter()
+        .find(|(_, diagnostic)| diagnostic.message.contains("port"))
+        .expect("a type diagnostic");
+    assert_eq!(diagnostic.message, "setting 'port' expects an integer");
+}
+
+#[test]
+fn cors_on_a_worker_is_an_unknown_setting_listing_the_vocabulary() {
+    let source = concat!(
+        "application Svc {\n",
+        "    component search: worker {\n",
+        "        cors: \"https://a.example\"\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile_with(&[], source);
+    assert!(compilation.model.is_none());
+    let (_, diagnostic) = compilation
+        .diagnostics
+        .iter()
+        .find(|(_, diagnostic)| diagnostic.message.contains("unknown setting"))
+        .expect("an unknown-setting diagnostic");
+    assert_eq!(
+        diagnostic.message,
+        "unknown setting 'cors' for kind 'worker'"
+    );
+    let help = diagnostic.help.as_deref().expect("a vocabulary help");
+    for word in ["runtime", "replicas", "port", "health"] {
+        assert!(
+            help.contains(word),
+            "worker's vocabulary must list '{word}': {help}"
+        );
+    }
+}
+
+#[test]
+fn policy_over_a_typed_setting_evaluates() {
+    let source = concat!(
+        "application Svc {\n",
+        "    component api: api {\n",
+        "        port: 18082\n",
+        "    }\n",
+        "}\n",
+        "\n",
+        "profile prod {\n",
+        "    target: standalone\n",
+        "    require (api.port == 18082)\n",
+        "    prohibit (api.port == 8080)\n",
+        "}\n",
+        "\n",
+        "deployment dev for Svc {\n",
+        "    use prod\n",
+        "}\n",
+    );
+    let compilation = compile_with(&[], source);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "a policy over a typed setting must compile clean: {:?}",
+        compilation.diagnostics
+    );
+}
+
+#[test]
+fn violated_prohibit_over_a_typed_setting_is_an_error() {
+    let source = concat!(
+        "application Svc {\n",
+        "    component api: api {\n",
+        "        port: 8080\n",
+        "    }\n",
+        "}\n",
+        "\n",
+        "profile prod {\n",
+        "    target: standalone\n",
+        "    prohibit (api.port == 8080)\n",
+        "}\n",
+        "\n",
+        "deployment dev for Svc {\n",
+        "    use prod\n",
+        "}\n",
+    );
+    let compilation = compile_with(&[], source);
+    assert!(compilation.model.is_none());
+    let (_, diagnostic) = compilation
+        .diagnostics
+        .iter()
+        .find(|(_, diagnostic)| diagnostic.message.contains("policy violated"))
+        .expect("a violation diagnostic");
+    assert_eq!(
+        diagnostic.message,
+        "policy violated in deployment 'dev': prohibit (api.port == 8080)"
+    );
+}
+
+#[test]
+fn env_lowers_into_the_artifact_verbatim() {
+    let source = concat!(
+        "application Svc {\n",
+        "    component api: api {\n",
+        "        env {\n",
+        "            LOG_LEVEL = \"debug\"\n",
+        "            PATH_EXTRA = \"/usr/local/bin\"\n",
+        "        }\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile_with(&[], source);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "env entries must compile clean: {:?}",
+        compilation.diagnostics
+    );
+    let component = &compilation.model.expect("artifact").applications[0].components[0];
+    assert_eq!(
+        component.env,
+        vec![
+            rex_ir::deploy::DeployEnv {
+                name: "LOG_LEVEL".into(),
+                value: "debug".into(),
+            },
+            rex_ir::deploy::DeployEnv {
+                name: "PATH_EXTRA".into(),
+                value: "/usr/local/bin".into(),
+            },
+        ],
+        "env entries lower verbatim, author order kept"
+    );
+}
+
+#[test]
+fn duplicate_env_name_is_an_error() {
+    let source = concat!(
+        "application Svc {\n",
+        "    component api: api {\n",
+        "        env {\n",
+        "            FOO = \"a\"\n",
+        "            FOO = \"b\"\n",
+        "        }\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile_with(&[], source);
+    assert!(compilation.model.is_none());
+    let (_, diagnostic) = compilation
+        .diagnostics
+        .iter()
+        .find(|(_, diagnostic)| diagnostic.message.contains("duplicate env"))
+        .expect("a duplicate-env diagnostic");
+    assert_eq!(diagnostic.message, "duplicate env 'FOO' on component 'api'");
+}
+
+#[test]
+fn env_is_not_policy_addressable() {
+    let source = concat!(
+        "application Svc {\n",
+        "    component api: api {\n",
+        "        env {\n",
+        "            FOO = \"x\"\n",
+        "        }\n",
+        "    }\n",
+        "}\n",
+        "\n",
+        "profile prod {\n",
+        "    target: standalone\n",
+        "    prohibit (api.env.FOO == \"x\")\n",
+        "}\n",
+        "\n",
+        "deployment dev for Svc {\n",
+        "    use prod\n",
+        "}\n",
+    );
+    let compilation = compile_with(&[], source);
+    assert!(compilation.model.is_none());
+    let (_, diagnostic) = compilation
+        .diagnostics
+        .iter()
+        .find(|(_, diagnostic)| diagnostic.message.contains("invalid policy condition"))
+        .expect("a type error");
+    assert_eq!(
+        diagnostic.message, "invalid policy condition: unknown feature `env` on class `api`",
+        "env is opaque: it is not a feature of the synthetic settings universe"
+    );
+}
+
+#[test]
+fn env_does_not_disturb_effective_settings() {
+    // Defaults and overrides keep resolving with env blocks present, and the
+    // policy sees the override (env is not a setting, so it never joins the
+    // effective map).
+    let source = concat!(
+        "application Svc {\n",
+        "    component api: api {\n",
+        "        env {\n",
+        "            LOG_LEVEL = \"debug\"\n",
+        "        }\n",
+        "    }\n",
+        "}\n",
+        "\n",
+        "profile prod {\n",
+        "    target: standalone\n",
+        "    defaults {\n",
+        "        api.replicas: 2\n",
+        "    }\n",
+        "    require (api.replicas >= 3)\n",
+        "}\n",
+        "\n",
+        "deployment dev for Svc {\n",
+        "    use prod\n",
+        "    configure {\n",
+        "        api.replicas: 4\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile_with(&[], source);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "the override (4) must satisfy the require (>= 3): {:?}",
+        compilation.diagnostics
+    );
+    let model = compilation.model.expect("artifact");
+    assert_eq!(model.applications[0].components[0].env.len(), 1);
+    assert_eq!(model.deployments[0].configure.len(), 1);
+}
+
 // --- negative cases ------------------------------------------------------------
 
 /// The imported design's IR, for the binding tests.

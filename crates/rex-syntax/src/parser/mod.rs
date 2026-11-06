@@ -330,10 +330,12 @@
 //! component_decl    := "component" name ":" name component_body?
 //! component_body    := "{" component_member* "}"
 //! component_member  := requires_clause | design_binding | flow_binding
-//!                    | setting_line
+//!                    | env_decl | setting_line
 //! requires_clause   := "requires" name ("," name)*
 //! design_binding    := "design" string
 //! flow_binding      := "flow" string
+//! env_decl          := "env" "{" env_entry* "}"
+//! env_entry         := name "=" string
 //! setting_line      := name ":" setting_value
 //! setting_value     := string | int | name
 //! connects_decl     := "connects" name "->" name
@@ -366,6 +368,10 @@
 //!   and evaluates the text with rex-expr.
 //! * A binding's string is `"<path>"` or `"<path>#<Module>"`, split at its
 //!   last `#`; the path must match one of the file's imports *as written*.
+//! * An `env` entry's name is a bare word — keyword tokens included (the
+//!   qname-segment rule) — and its value is a quoted string, kept verbatim.
+//!   The `env` word itself is contextual (the `crate::deploy` table), so
+//!   `^env` remains usable as a setting/component name.
 //! * Imports must precede the first declaration; a later `import` is an
 //!   error (recovered, and the misplaced import is dropped), mirroring the
 //!   `.actor`/`.evt` rule. Duplicate imports are a driver concern.
@@ -373,7 +379,8 @@
 //!   AST folds them into per-kind lists, and the formatter canonicalizes to
 //!   import → application → profile → deployment order.
 //! * Recovery: a component's kind or body, a `requires` clause's comma
-//!   list, a setting's `:`/value, a `connects` entry's halves, a profile's
+//!   list, a setting's `:`/value, an `env` entry's `=`/value, an `env`
+//!   block's closing `}`, a `connects` entry's halves, a profile's
 //!   `target` line, a policy's parens, a mapping entry, a deployment's
 //!   `for`/`use` halves, and a `configure` block are each committed once
 //!   their leading word matched — missing pieces are reported errors and
@@ -843,6 +850,7 @@ mod grammar_doc_tests {
             deploy::REQUIRES,
             deploy::DESIGN,
             deploy::FLOW,
+            deploy::ENV,
             deploy::USE,
             deploy::CONFIGURE,
             deploy::FOR,

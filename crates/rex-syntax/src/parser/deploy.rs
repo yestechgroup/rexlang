@@ -176,17 +176,73 @@ pub(crate) fn deploy_binding<'src>(
         })
 }
 
+/// One `NAME = "value"` entry of an `env` block. The name is a bare word —
+/// keyword tokens included (the qname-segment rule: keywords are names
+/// outside statement position) — and the value is a quoted string, kept
+/// verbatim. Committed once the `=` matched: a missing value is a reported
+/// error and the entry still recovers. A bare word with no `=` is *not* an
+/// entry: the entry loop ends there, so the enclosing component body
+/// re-reads the word as its next member (whose own scanners report the
+/// shape) — and a block whose `}` never came is reported by
+/// [`deploy_env_block`].
+pub(crate) fn deploy_env_entry<'src>(
+) -> impl Parser<'src, Tokens<'src>, DeployEnvEntry, MoxExtra<'src>> + Clone {
+    let word = name().or(
+        any().try_map(|token: Token<'src>, span| match token.keyword() {
+            Some(keyword) => Ok(Name {
+                text: keyword.to_string(),
+                span,
+                escaped: false,
+            }),
+            None => Err(Rich::custom(span, "expected an env name")),
+        }),
+    );
+    word.then(kw(Token::Eq).ignore_then(string_lit().or_not()))
+        .map_with(|(name, value), e| (name, value, e.span()))
+        .validate(|(name, value, span), _e, emitter| {
+            if value.is_none() {
+                emitter.emit(Rich::custom(span, "expected a string value"));
+            }
+            DeployEnvEntry {
+                name,
+                value: value.unwrap_or_default(),
+                span,
+            }
+        })
+}
+
+/// An `env { NAME = "value" ... }` block of a component body. Committed once
+/// the `env` word matched: a missing `{` lets the member choice fall through
+/// (the setting-line twin reports the shape), and a missing closing `}` is a
+/// reported error while the block still lowers what it parsed — later
+/// members keep parsing.
+pub(crate) fn deploy_env_block<'src>(
+) -> impl Parser<'src, Tokens<'src>, Vec<DeployEnvEntry>, MoxExtra<'src>> + Clone {
+    deploy_keyword(deploy::ENV)
+        .ignore_then(kw(Token::LBrace))
+        .ignore_then(deploy_env_entry().repeated().collect::<Vec<_>>())
+        .then(kw(Token::RBrace).or_not())
+        .map_with(|(entries, close), e| (entries, close, e.span()))
+        .validate(|(entries, close, span), _e, emitter| {
+            if close.is_none() {
+                emitter.emit(Rich::custom(span, "expected `}` to close the `env` block"));
+            }
+            entries
+        })
+}
+
 /// One member of a component body: a `requires` clause, a design/flow
-/// binding, or a setting line. The dedicated members are tried first, so
-/// their words (`requires`, `design`, `flow`) are never mistaken for
-/// setting names — escaping (`^requires`) is the way out, like every
-/// contextual word.
+/// binding, an `env` block, or a setting line. The dedicated members are
+/// tried first, so their words (`requires`, `design`, `flow`, `env`) are
+/// never mistaken for setting names — escaping (`^requires`) is the way
+/// out, like every contextual word.
 pub(crate) fn deploy_component_member<'src>(
 ) -> impl Parser<'src, Tokens<'src>, DeployComponentMember, MoxExtra<'src>> + Clone {
     choice((
         deploy_requires().map(DeployComponentMember::Requires),
         deploy_binding(true).map(DeployComponentMember::Design),
         deploy_binding(false).map(DeployComponentMember::Flow),
+        deploy_env_block().map(DeployComponentMember::Env),
         deploy_setting().map(DeployComponentMember::Setting),
     ))
 }
@@ -198,6 +254,7 @@ pub(crate) enum DeployComponentMember {
     Requires(Vec<Name>),
     Design(DeployBindingDecl),
     Flow(DeployBindingDecl),
+    Env(Vec<DeployEnvEntry>),
     Setting(DeploySettingDecl),
 }
 
@@ -246,6 +303,7 @@ pub(crate) fn deploy_component_decl<'src>(
                 settings: Vec::new(),
                 designs: Vec::new(),
                 flows: Vec::new(),
+                env: Vec::new(),
                 span,
             };
             for member in members {
@@ -253,6 +311,7 @@ pub(crate) fn deploy_component_decl<'src>(
                     DeployComponentMember::Requires(names) => component.requires.extend(names),
                     DeployComponentMember::Design(binding) => component.designs.push(binding),
                     DeployComponentMember::Flow(binding) => component.flows.push(binding),
+                    DeployComponentMember::Env(entries) => component.env.extend(entries),
                     DeployComponentMember::Setting(setting) => component.settings.push(setting),
                 }
             }

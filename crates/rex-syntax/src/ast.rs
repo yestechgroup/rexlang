@@ -1507,7 +1507,25 @@ pub struct DeployComponentDecl {
     pub designs: Vec<DeployBindingDecl>,
     /// `flow "<path>[#<Module>]"` bindings in source order.
     pub flows: Vec<DeployBindingDecl>,
+    /// `env { NAME = "value" ... }` entries in source order.
+    pub env: Vec<DeployEnvEntry>,
     /// Span of the whole declaration, `component` keyword included.
+    pub span: Span,
+}
+
+/// One `NAME = "value"` entry of a [`DeployComponentDecl`]'s `env { ... }`
+/// block: an opaque string environment variable. The name is a bare word —
+/// keyword tokens included (the qname-segment rule) — and the value is the
+/// unescaped string literal, carried verbatim. Env is deliberately *not* a
+/// setting: it is never policy-addressable and never validated against the
+/// kind's vocabulary (the closed setting-table discipline stays intact).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeployEnvEntry {
+    /// The env var name as written.
+    pub name: Name,
+    /// The env var's string value (escapes applied), verbatim.
+    pub value: String,
+    /// Span of the whole entry.
     pub span: Span,
 }
 

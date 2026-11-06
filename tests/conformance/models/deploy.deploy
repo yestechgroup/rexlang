@@ -6,7 +6,7 @@ import   "../ddd/library.ddd"
 import "../ifml/app.ifml"
 
 application  Svc {
-    component  api : api { replicas : 2 scaling: autoscaled }
+    component  api : api { replicas : 2 scaling: autoscaled port : 8080 health : "/healthz" env { LOG_LEVEL = "debug" when = "always" } }
     component web : frontend {
         flow  "../ifml/app.ifml#Pagination"
         entrypoint : "src/web.ts"
