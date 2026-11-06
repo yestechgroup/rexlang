@@ -392,7 +392,7 @@
 //! participant_body := "{" (occurrence_decl | perform_decl)* "}"
 //! occurrence_decl  := "occurrence" name ("." ("source" | "target"))? ";"
 //! perform_decl     := "perform" name (":" name)?
-//!                     ("requires" "[" name* "]")? ";"
+//!                     ("requires" "[" name* "]")? ("when" raw_parens)? ";"
 //! message_decl     := "message" name ("of" type_ref)? ("from" endpoint)?
 //!                     ("to" endpoint)? ";"
 //! endpoint         := name "." name
@@ -425,16 +425,22 @@
 //!   driver concern.
 //! * Doc comments (`///` runs) directly above a `usecase` declaration
 //!   become its description.
+//! * A perform step's `when (...)` guard (real lexer keyword, escapable
+//!   with `^`) is a [`raw_parens`] span, written last before `;` — the
+//!   driver slices the condition strictly inside the parens (the
+//!   `when`-condition convention) and types it against the subject's
+//!   resolved class. The guard's interior is never parsed here.
 //! * Recovery: an import's alias, a participant's `:`/type, an
 //!   occurrence's name/tail/`;`, a perform's `:`/operation/bracketed
-//!   list/`;`, a message's name/clauses/`;`, a succession's `then` half
-//!   and `;`, and a realizes binding's arity/`;` are each committed once
-//!   their leading word matched — missing pieces are reported errors and
-//!   the declaration still recovers. Inside a `requires [...]` list the
-//!   contextual `occurrence`/`perform` words end the list (the words
-//!   introducing the next member), so a missing `]` never swallows the
-//!   next line. A member that cannot start anything at all fails the whole
-//!   usecase into file-level junk (the `actors_block` coarseness).
+//!   list/`when` parens/`;`, a message's name/clauses/`;`, a succession's
+//!   `then` half and `;`, and a realizes binding's arity/`;` are each
+//!   committed once their leading word matched — missing pieces are
+//!   reported errors and the declaration still recovers. Inside a
+//!   `requires [...]` list the contextual `occurrence`/`perform` words end
+//!   the list (the words introducing the next member), so a missing `]`
+//!   never swallows the next line. A member that cannot start anything at
+//!   all fails the whole usecase into file-level junk (the `actors_block`
+//!   coarseness).
 //!
 //! ## `.cmmn` case management sources ([`parse_cmmn`])
 //!

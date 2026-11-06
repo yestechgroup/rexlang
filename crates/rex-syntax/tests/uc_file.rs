@@ -610,6 +610,11 @@ fn adversarial_inputs_do_not_panic() {
         "usecase U { actor A { perform x requires [",
         "usecase U { actor A { perform x requires [ A",
         "usecase U { actor A { perform x requires [ A perform y } }",
+        "usecase U { actor A { perform x when } }",
+        "usecase U { actor A { perform x when ( } }",
+        "usecase U { actor A { perform x when (a } }",
+        "usecase U { actor A { perform x when (a) } }",
+        "usecase U { actor A { perform x when (); } }",
         "usecase U { message",
         "usecase U { message m",
         "usecase U { message m of",
@@ -767,6 +772,121 @@ fn requires_list_and_perform_forms_render_canonically() {
     );
     assert_eq!(fmt_uc(escaped), canonical);
     assert_eq!(fmt_uc(canonical), canonical);
+}
+
+#[test]
+fn guard_clauses_render_canonically_and_round_trip() {
+    // The guard's paren interior is verbatim (ends trimmed), the
+    // `require (...)` policy rule — interior spacing is never normalized.
+    let messy = concat!(
+        "usecase U {\n",
+        "    subject A: T {\n",
+        "        perform x : auth requires[ C ] when( armed &&  ready ) perform bare\n",
+        "    }\n",
+        "}\n",
+    );
+    let canonical = concat!(
+        "usecase U {\n",
+        "    subject A: T {\n",
+        "        perform x: auth requires [ C ] when (armed &&  ready);\n",
+        "        perform bare;\n",
+        "    }\n",
+        "}\n",
+    );
+    assert_eq!(fmt_uc(messy), canonical);
+    assert_eq!(fmt_uc(canonical), canonical);
+    assert_round_trip(canonical);
+    // The bare step form takes a guard too.
+    assert_round_trip(
+        "usecase U {\n    subject A: T {\n        perform y when (done);\n    }\n}\n",
+    );
+}
+
+#[test]
+fn when_without_parens_is_reported_and_recovered() {
+    let source = concat!(
+        "usecase U {\n",
+        "    subject A: T {\n",
+        "        perform x when\n",
+        "        perform y;\n",
+        "    }\n",
+        "}\n",
+    );
+    let result = parse_usecases(source);
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "expected `(...)` after `when`"),
+        "expected the missing-parens error, got {:?}",
+        result.errors
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "expected `;` after the perform step"),
+        "expected the perform-`;` error, got {:?}",
+        result.errors
+    );
+    // Recovery: both steps still parse; the guard-less step keeps `None`.
+    let file = result.ast.expect("expected a recovered AST");
+    let steps = &file.use_cases[0].subject.as_ref().unwrap().steps;
+    assert_eq!(steps.len(), 2);
+    assert_eq!(steps[0].name, "x");
+    assert!(steps[0].when.is_none());
+    assert_eq!(steps[1].name, "y");
+    assert!(steps[1].when.is_none());
+}
+
+#[test]
+fn a_guard_clause_parses_after_requires() {
+    let source = concat!(
+        "usecase U {\n",
+        "    subject A: T {\n",
+        "        perform x: auth requires [ Cap ] when (armed && ready);\n",
+        "        perform y when (done);\n",
+        "        perform z: other;\n",
+        "    }\n",
+        "}\n",
+    );
+    let file = parse_ok(source);
+    let subject = file.use_cases[0].subject.as_ref().unwrap();
+    assert_eq!(subject.steps.len(), 3);
+    let guarded = &subject.steps[0];
+    assert_eq!(guarded.name, "x");
+    assert_eq!(guarded.operation, "auth");
+    assert_eq!(guarded.requires, ["Cap"]);
+    assert_eq!(
+        span_text(source, guarded.when.expect("guard span")),
+        "(armed && ready)",
+        "the span covers the raw parens, inclusive"
+    );
+    let bare = &subject.steps[1];
+    assert_eq!(bare.name, "y");
+    assert_eq!(bare.operation, "y", "the bare form names the op");
+    assert_eq!(
+        span_text(source, bare.when.expect("bare guard span")),
+        "(done)"
+    );
+    assert!(subject.steps[2].when.is_none());
+}
+
+#[test]
+fn escaped_when_remains_usable_as_a_step_name() {
+    // `when` is a real lexer keyword; the caret escape keeps it usable as
+    // a name like every other keyword.
+    let file = parse_ok(concat!(
+        "usecase U {\n",
+        "    subject A: T {\n",
+        "        perform ^when;\n",
+        "    }\n",
+        "}\n",
+    ));
+    let step = &file.use_cases[0].subject.as_ref().unwrap().steps[0];
+    assert_eq!(step.name, "when");
+    assert_eq!(step.operation, "when");
+    assert!(step.when.is_none());
 }
 
 #[test]

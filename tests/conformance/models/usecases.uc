@@ -36,10 +36,11 @@ usecase HandOverBook2b {
 }
 
 /// Iteration 3: a performed step anchored to a Library operation, ordered by
-/// successions over steps and message ends.
+/// successions over steps and message ends. The guard's paren interior is
+/// verbatim (ends trimmed), so its spacing is never normalized.
 usecase HandOverBook3 {
     subject lib:Library {
-        perform lookup : getBook ;
+        perform lookup : getBook when( books.size() >0 ) ;
         occurrence shelvingCompleted;
     }
     actor member : Writer {

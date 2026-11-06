@@ -1497,6 +1497,7 @@ fn compile_usecase_with(
     imports: &DomainImports,
 ) -> UseCaseCompilation {
     let path = file.path(db);
+    let source = file.text(db);
     let parsed = parse_usecase_query(db, file);
     // The `.uc` import declarations reuse the `.actor` shape plus an
     // optional alias; the domain pipeline consumes the shared `ImportDecl`
@@ -1518,6 +1519,7 @@ fn compile_usecase_with(
 
     let (model, mut diagnostics) = usecases::compile_usecase_file(
         &path,
+        &source,
         parsed.ast.as_ref(),
         &parsed.diagnostics,
         &domains.domain_units,
@@ -1634,6 +1636,17 @@ fn compile_usecase_with(
 ///    lowered package functions stay callable from expression positions
 ///    that share the domain's `DomainTypes` (`.cmmn` `when` guards, `.ddd`
 ///    document expressions, generated code) — steps never resolve them.
+///    A step may carry a `when (<expr>)` guard, written last before `;`:
+///    the guard's paren interior is parsed and typed with rex-expr against
+///    the union of the imported domains, with the subject's resolved class
+///    as `self` (the `.cmmn` criterion typing — no synthetic classes), and
+///    must be boolean. A parse failure, unknown name, or non-boolean type
+///    is an error naming the step (help `in the \`when\` of step ...`); the
+///    condition text still lowers into the artifact verbatim (trimmed
+///    paren interior), and any error drops the artifact per the general
+///    rule. Guards are a subject concern: a non-class-typed subject errors
+///    on the step itself, so sigil-typed subjects never reach the guard
+///    check.
 /// 4. **Placement** — steps are subject-only (a step on an actor errors);
 ///    occurrences are allowed on any participant.
 /// 5. **Message end binding** — for each message and each side, exactly one
@@ -1690,9 +1703,11 @@ fn compile_usecase_with(
 /// 13. **Order** — diagnostics appear in declaration order: the file's
 ///     parse diagnostics first, then the import errors, then each domain's
 ///     own diagnostics (import order), then, per use case (source order):
-///     uniqueness, participants (typing, occurrences, steps), messages
-///     (payload, then binding), successions (resolution, then the graph
-///     checks), `requires` coverage, `never_both`, `realizes`.
+///     uniqueness, participants (typing, occurrences, and — per step in
+///     source order — its operation check followed immediately by its
+///     guard check), messages (payload, then binding), successions
+///     (resolution, then the graph checks), `requires` coverage,
+///     `never_both`, `realizes`.
 pub fn compile_usecase_str(
     path: &str,
     source: &str,

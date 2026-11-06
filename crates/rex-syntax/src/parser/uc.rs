@@ -150,10 +150,12 @@ pub(crate) fn uc_req_name<'src>() -> impl Parser<'src, Tokens<'src>, String, Mox
     }
 }
 
-/// A `perform <name> [":" <op>] ["requires" "[" <name>* "]"] ";"` step of
-/// a participant body. The bare form names the operation after the step;
-/// the `:`/`requires` clauses are committed once their leading token
-/// matched (missing pieces are reported errors and the step recovers).
+/// A `perform <name> [":" <op>] ["requires" "[" <name>* "]"]
+/// ["when" raw_parens] ";"` step of a participant body. The bare form names
+/// the operation after the step; the `:`/`requires`/`when` clauses are
+/// committed once their leading token matched (missing pieces are reported
+/// errors and the step recovers). The guard is last before `;` and is a
+/// raw-parens span — the driver slices the condition text strictly inside.
 pub(crate) fn uc_perform_decl<'src>(
 ) -> impl Parser<'src, Tokens<'src>, UcStep, MoxExtra<'src>> + Clone {
     // The named form `: <op>` is committed once the colon matched; without
@@ -168,59 +170,75 @@ pub(crate) fn uc_perform_decl<'src>(
         .then(uc_req_name().repeated().collect::<Vec<_>>())
         .then(kw(Token::RBracket).or_not())
         .map_with(|((bracket, names), close), e| (bracket, names, close, e.span()));
+    // The `when (...)` guard (the `.cmmn` criterion pattern): committed
+    // once the keyword matched, so a missing paren pair is a reported error
+    // and the step still recovers.
+    let when = kw(Token::When)
+        .ignore_then(raw_parens().map(Some).or_not().map(Some))
+        .or_not();
     uc_keyword(usecases::PERFORM)
         .ignore_then(name().or_not())
         .then(operation)
         .then(requires.or_not())
+        .then(when)
         .then(kw(Token::Other(';')).or_not())
-        .map_with(|(((name, operation), requires), semi), e| {
-            (name, operation, requires, semi, e.span())
+        .map_with(|((((name, operation), requires), when), semi), e| {
+            (name, operation, requires, when, semi, e.span())
         })
-        .validate(|(name, operation, requires, semi, span), _e, emitter| {
-            let name = name.unwrap_or_else(|| Name {
-                text: String::new(),
-                span,
-                escaped: false,
-            });
-            if name.text.is_empty() {
-                emitter.emit(Rich::custom(span, "expected a step name after `perform`"));
-            }
-            if semi.is_none() {
-                emitter.emit(Rich::custom(span, "expected `;` after the perform step"));
-            }
-            let (op, colon_seen) = operation.unwrap_or((None, false));
-            if colon_seen && op.is_none() {
-                emitter.emit(Rich::custom(
-                    name.span,
-                    "expected an operation name after `:`",
-                ));
-            }
-            let mut requires_names = Vec::new();
-            if let Some((bracket, names, close, list_span)) = requires {
-                if bracket.is_none() {
-                    emitter.emit(Rich::custom(list_span, "expected `[` after `requires`"));
+        .validate(
+            |(name, operation, requires, when, semi, span), _e, emitter| {
+                let name = name.unwrap_or_else(|| Name {
+                    text: String::new(),
+                    span,
+                    escaped: false,
+                });
+                if name.text.is_empty() {
+                    emitter.emit(Rich::custom(span, "expected a step name after `perform`"));
                 }
-                if close.is_none() {
+                if semi.is_none() {
+                    emitter.emit(Rich::custom(span, "expected `;` after the perform step"));
+                }
+                let (op, colon_seen) = operation.unwrap_or((None, false));
+                if colon_seen && op.is_none() {
                     emitter.emit(Rich::custom(
-                        list_span,
-                        "expected `]` after the requires list",
+                        name.span,
+                        "expected an operation name after `:`",
                     ));
                 }
-                requires_names = names;
-            }
-            UcStep {
-                operation: if colon_seen {
-                    // Recovered with an empty name when `:` had none.
-                    op.map(|op| op.text).unwrap_or_default()
-                } else {
-                    // The bare form: the step names its own operation.
-                    name.text.clone()
-                },
-                name: name.text,
-                requires: requires_names,
-                span,
-            }
-        })
+                let mut requires_names = Vec::new();
+                if let Some((bracket, names, close, list_span)) = requires {
+                    if bracket.is_none() {
+                        emitter.emit(Rich::custom(list_span, "expected `[` after `requires`"));
+                    }
+                    if close.is_none() {
+                        emitter.emit(Rich::custom(
+                            list_span,
+                            "expected `]` after the requires list",
+                        ));
+                    }
+                    requires_names = names;
+                }
+                if matches!(&when, Some(Some(None))) {
+                    emitter.emit(Rich::custom(span, "expected `(...)` after `when`"));
+                }
+                UcStep {
+                    operation: if colon_seen {
+                        // Recovered with an empty name when `:` had none.
+                        op.map(|op| op.text).unwrap_or_default()
+                    } else {
+                        // The bare form: the step names its own operation.
+                        name.text.clone()
+                    },
+                    name: name.text,
+                    requires: requires_names,
+                    when: match when {
+                        Some(Some(Some(Some(parens)))) => Some(parens),
+                        _ => None,
+                    },
+                    span,
+                }
+            },
+        )
 }
 
 /// A `participant.anchor` endpoint pair of a message clause. Committed once

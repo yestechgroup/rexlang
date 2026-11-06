@@ -40,7 +40,7 @@ usecase HandOverParcel2b {
 usecase HandOverParcel3 {
     subject Drone: DeliveryDrone {
         perform verify: verifyRecipient;
-        perform release: releaseParcel requires [ ReleaseParcel ];
+        perform release: releaseParcel requires [ ReleaseParcel ] when (parcelSecured);
     }
     actor Courier {
         occurrence handoverRequested;

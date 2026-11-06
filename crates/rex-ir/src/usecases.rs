@@ -19,6 +19,10 @@
 //!   [`NodeRef`] are *adjacently* tagged like [`crate::TypeRef`] and
 //!   [`crate::DefaultValue`]: `{"type": "<variant>", "value": <payload>}`.
 //!   Unit variants carry no `"value"` key (`{"type": "start"}`).
+//! - **Verbatim conditions.** A step's [`Step::when`] guard carries the
+//!   source's trimmed paren-interior text as written — the driver parses,
+//!   type-checks (boolean, against the subject's class), and stores the
+//!   condition, but the wire never re-serializes a normalized form.
 //! - **Version gate.** [`UseCaseModel::from_json`] rejects any other
 //!   `formatVersion` (absent reports as 0) with
 //!   [`crate::IrError::UnsupportedFormatVersion`] rather than guessing.
@@ -217,8 +221,8 @@ pub enum MessageEndSide {
     Target,
 }
 
-/// A step a [`Participant`] performs: a named operation invocation, with the
-/// capabilities it requires.
+/// A step a [`Participant`] performs: a named operation invocation, with
+/// the capabilities it requires and an optional `when` guard condition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Step {
@@ -230,6 +234,16 @@ pub struct Step {
     /// names), in declaration order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires: Vec<String>,
+    /// The step's `when (...)` guard condition as the **verbatim trimmed
+    /// paren interior** text the source carried (the `when`-condition wire
+    /// rule): the driver slices the expression strictly inside the raw
+    /// parens and trims its ends — interior spacing is never normalized,
+    /// so the text round-trips through `rexlang fmt` byte-identically.
+    /// The driver type-checks the condition as boolean against the
+    /// subject's resolved class before the artifact lowers. `None` when the
+    /// step carries no guard.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<String>,
 }
 
 /// A declared message between two endpoints, with an optional payload.

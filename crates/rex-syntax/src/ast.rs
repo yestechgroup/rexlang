@@ -1722,9 +1722,9 @@ pub enum UcOccurrence {
 }
 
 /// One `perform` step of a [`UcParticipant`] body: a named behavior step,
-/// optionally bound to a named operation and carrying required capability
-/// names. The bare `perform <x>` form names the operation after the step
-/// itself.
+/// optionally bound to a named operation, carrying required capability
+/// names and an optional `when (...)` guard. The bare `perform <x>` form
+/// names the operation after the step itself.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UcStep {
     /// The step name.
@@ -1734,6 +1734,9 @@ pub struct UcStep {
     pub operation: String,
     /// Capability names from the `requires [...]` clause, in source order.
     pub requires: Vec<String>,
+    /// Span of the `when (...)` guard clause's raw parens, both parens
+    /// inclusive (the driver slices strictly inside), when written.
+    pub when: Option<Span>,
     /// Span of the whole step declaration, `;` included.
     pub span: Span,
 }
