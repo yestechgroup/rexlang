@@ -1450,6 +1450,27 @@ fn artifact_check_passes_on_the_ddd_golden_artifact() {
     );
 }
 
+#[test]
+fn artifact_check_passes_on_the_ifml_golden_artifact() {
+    // The `rexlang ir` output for the canonical interaction flow: a
+    // view-and-module IFML model — the classifier's IFML rule must claim
+    // it before the DDD `modules` shape.
+    let path = workspace_root().join("tests/conformance/ifml/app.ifml.json");
+    let output = rexlang()
+        .args(["artifact", "check", path.to_str().unwrap()])
+        .output()
+        .expect("run rexlang artifact check");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("OK {}\n", path.display())
+    );
+}
+
 // --- `.evt` event-contract files -----------------------------------------------
 
 const EVT_DOMAIN: &str = r#"package demo

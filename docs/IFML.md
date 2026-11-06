@@ -19,6 +19,16 @@ The IFML DSL lives alongside the `.mox` domain model as a *complementary* input:
 
 Minimal artifact: an empty model serializes as exactly `{"formatVersion":1}` — every struct `Vec` field is `#[serde(default, skip_serializing_if = "Vec::is_empty")]` (the `ActorModel`/`DddModel` discipline), so empty vecs are omitted on write and absent vecs read back as empty.
 
+`rexlang artifact check` classifies a non-empty IFML artifact by its
+`views`/`domains`/`actions`/`commands`/`imports` keys (rule 3 of the
+classifier's precedence list — ahead of the DDD `modules` shape, so a
+view-and-module model classifies as an IfmlModel). Two shape-sniffing
+limitations are documented and pinned: the **empty** IFML model
+serializes as exactly `{"formatVersion":1}` and classifies as an
+ActorModel, and a **module-only** model (no other IFML key) shape-matches
+the DDD design keys and classifies as a DddModel (see the classification
+rules in the CLI's `artifact_check` module).
+
 ```rust
 let model = rex_ifml::parse_ifml(source)?;
 let json = model.to_json_pretty()?;      // versioned artifact
@@ -506,13 +516,24 @@ What is checked, and with which bindings:
 |---|---|
 | View/container `if` conditions | the view's `params` |
 | Component `filter:` / condition properties | view params + the `data:` entity's features (`with_self`) |
-| Table `column "L" -> expr …` | same as its component |
+| Table `column "L" -> expr …` | same as its component; deferred when the table declares no `data:` (no row type to bind — the explicit `Class.feature` column spelling is a generation-time shape) |
 | Event guards | same, minus event parameters (untyped — expressions naming them are skipped) |
 | Navigation binding pairs | same |
 | `use` override expressions | the enclosing view's params; expected type from the module input's `type_ref` |
 
+Every body that declares parameters binds them two ways: as bare idents
+(`customerId`) and through the **`params` record** (`params.customerId`) —
+the docs-promoted spelling (`navigate("CustomerEdit", { customerId:
+params.customerId })`) type-checks: the record is a synthetic class whose
+features are the body's typed params (a checking device, not a domain
+type; the next parameterized body overwrites it). A param whose type maps
+to nothing gets no feature (`params.<field>` defers like the bare ident),
+and a param literally named `params` shadows the record — the bare
+binding wins. The record exists for view/container/module bodies; command
+expressions bind their arguments and options as bare names.
+
 `type_ref` mapping for checking (one shared alias table in
-`crates/rex-ifml/src/check.rs`, used by both the checker and the
+`crates/rex-ifml/src/check/domains.rs`, used by both the checker and the
 resolver's override check): `String`/`Uuid` → string, `Int` → int,
 `Float` → float, `Boolean` → boolean, `DateTime` → the expression
 language's calendar `date` (a checking alias — no time-of-day

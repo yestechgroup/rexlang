@@ -268,11 +268,11 @@ cargo run -p rex-cli -- ir tests/conformance/events/orders.evt -o orders.evt.jso
   every other surface: each contract in the directory compiles
   independently, imports resolved relative to it.
 - `rexlang artifact check` classifies a non-empty event artifact by its
-  `events`/`channels`/`subscriptions` keys (rule 4 of 6). The **empty**
-  event artifact serializes as exactly `{"formatVersion":1}` and therefore
-  classifies as an ActorModel — a documented shape-sniffing limitation the
-  empty IFML model shares (see the classification rules in the CLI's
-  `artifact_check` module).
+  `events`/`channels`/`subscriptions` keys (rule 5 of the classifier's
+  precedence list). The **empty** event artifact serializes as exactly
+  `{"formatVersion":1}` and therefore classifies as an ActorModel — a
+  documented shape-sniffing limitation the empty IFML model shares (see
+  the classification rules in the CLI's `artifact_check` module).
 
 ---
 
