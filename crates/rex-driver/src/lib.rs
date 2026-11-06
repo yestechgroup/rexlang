@@ -1439,6 +1439,12 @@ fn compile_ddd_str_inner(
 ///    only reachable through parser recovery, whose syntax error fires
 ///    alongside).
 ///
+/// Scope labels are **never** validated: a channel's `of <scope>` clause
+/// and a subscription's `scope <name>` binding are opaque topic-template
+/// labels carried verbatim into the artifact (`ChannelDef::scope` /
+/// `SubscriptionDef::scope`) — no resolution, no uniqueness, no
+/// cross-checks; interpretation is a consumer concern.
+///
 /// Diagnostics are ordered deterministically: the contract file's parse
 /// diagnostics first, then the import errors, then each domain's own
 /// diagnostics (import order), then the contract's semantic diagnostics

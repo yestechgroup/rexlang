@@ -280,10 +280,10 @@
 //! evt_import        := "import" string
 //! event_decl        := "event" name ("version" string)? "{" field* "}"
 //! field             := name ":" type_ref ";"
-//! channel_decl      := "channel" name "{" publishes_entry* "}"
+//! channel_decl      := "channel" name ("of" name)? "{" publishes_entry* "}"
 //! publishes_entry   := "publishes" name ";"
 //! subscription_decl := "subscription" name "{" "events" "[" name* "]"
-//!                      "consumer" name "}"
+//!                      "consumer" name ("scope" name)? "}"
 //! ```
 //!
 //! * `evt_import` is the `.actor` import production verbatim (no trailing
@@ -296,23 +296,28 @@
 //!   AST folds them into per-kind lists (the `actors_block` precedent), and
 //!   the formatter canonicalizes to import → event → channel →
 //!   subscription order.
-//! * `events` and `consumer` are **contextual** words: ordinary identifiers
-//!   special only inside a subscription body (the delegation-`to`
-//!   precedent; escapable forms `^events`/`^consumer` never match). All of
-//!   `event`, `channel`, `publishes`, `subscription` are real keywords,
-//!   escapable with `^` like every keyword.
+//! * `events`, `consumer`, `of`, and `scope` are **contextual** words:
+//!   ordinary identifiers special only in their grammar positions —
+//!   `events`/`consumer`/`scope` inside a subscription body, `of` in a
+//!   channel header (the delegation-`to` precedent; escapable forms
+//!   `^events`/`^consumer`/`^of`/`^scope` never match). All of `event`,
+//!   `channel`, `publishes`, `subscription` are real keywords, escapable
+//!   with `^` like every keyword.
 //! * Slice-1 exclusions are deliberate: no `when` filters, no delivery
 //!   policy, no webhooks, no CloudEvents attributes; event fields are plain
 //!   typed fields (no constraints, facets, `readonly`/`id`, or
 //!   multiplicities).
 //! * Recovery: an event's `version` clause, a field's `:`/type/`;`, a
-//!   `publishes` entry's name/`;`, and a subscription's `events [...]` /
-//!   `consumer` halves are each committed once their leading word matched —
-//!   missing pieces are reported errors and the declaration still recovers.
-//!   Inside the `events [...]` list the contextual `consumer` word ends the
-//!   list, so a missing `]` never swallows the consumer line. A body item
-//!   that cannot start a field/entry at all fails the whole declaration
-//!   into file-level junk (the `actors_block` coarseness).
+//!   `publishes` entry's name/`;`, a channel's `of` clause, and a
+//!   subscription's `events [...]` / `consumer` / `scope` halves are each
+//!   committed once their leading word matched — missing pieces are
+//!   reported errors and the declaration still recovers. A stray name in a
+//!   clause position without its leading word (`channel c x {`,
+//!   `consumer c x }`) is reported too. Inside the `events [...]` list the
+//!   contextual `consumer` word ends the list, so a missing `]` never
+//!   swallows the consumer line. A body item that cannot start a field/
+//!   entry at all fails the whole declaration into file-level junk (the
+//!   `actors_block` coarseness).
 //!
 //! ## `.deploy` deployment sources ([`parse_deploy`])
 //!
@@ -723,11 +728,11 @@ mod grammar_doc_tests {
     /// Contextual words the grammar quotes that are *not* lexer keywords and
     /// not covered by a table below: feature modifiers, the import sigils,
     /// the delegation `to`, the datatype block words, `unique`, the `.evt`
-    /// subscription words, and the parser-only `ranking` values
+    /// subscription/channel words, and the parser-only `ranking` values
     /// (`crate::ddd` documents them as parser-only).
-    const CONTEXTUAL_WORDS: [&str; 17] = [
+    const CONTEXTUAL_WORDS: [&str; 19] = [
         "id", "readonly", "schema", "sigil", "to", "create", "convert", "format", "unique", "bm25",
-        "tfIdf", "exact", "custom", "entity", "value", "events", "consumer",
+        "tfIdf", "exact", "custom", "entity", "value", "events", "consumer", "of", "scope",
     ];
 
     /// Every keyword of the lexer. Each entry is checked against the lexer

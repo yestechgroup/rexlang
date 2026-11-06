@@ -4,14 +4,27 @@ subscription billing {
   consumer billing_service
 }
 
+subscription account_feed {
+  events [ AccountTradeUpdate ]
+  consumer trader_ui  scope accounts
+}
+
 channel orders {
   publishes  OrderPlaced ;
   publishes OrderCancelled;
 }
 
+channel accountTrades of accounts {
+  publishes AccountTradeUpdate;
+}
+
 event OrderPlaced version "1.0.0" {
   orderId : String;
   total : int;
+}
+
+event AccountTradeUpdate {
+  accountId : String;
 }
 
 event OrderCancelled {}

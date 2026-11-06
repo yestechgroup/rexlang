@@ -58,7 +58,9 @@ docs):
   declared events are emitted somewhere.
 - Unknown fields are ignored on deserialize; every field added after v1
   must keep the `#[serde(default)]` + skip discipline (the optional
-  `version` is omitted when absent).
+  `version` is omitted when absent; so are the `scope` keys — a
+  channel/subscription without a scope clause serializes byte-identical to
+  the pre-scope format, and the version stays 1).
 
 Minimal artifact: an empty model serializes as exactly `{"formatVersion":1}`.
 
@@ -89,12 +91,14 @@ Excerpt of the committed golden artifact
   ],
   "channels": [
     { "name": "orders",
+      "scope": "account",
       "publishes": [ { "event": "OrderPlaced" }, { "event": "OrderCancelled" } ] }
   ],
   "subscriptions": [
     { "name": "billing",
       "events": ["OrderPlaced", "OrderCancelled"],
-      "consumer": "billing_service" }
+      "consumer": "billing_service",
+      "scope": "account" }
   ]
 }
 ```
@@ -136,13 +140,20 @@ Language-level rules:
   `version` clause is a **free-form string** pinned into the artifact
   verbatim; rexlang attaches no semantics to it (no comparison, no
   ordering — consumers decide what a version means).
-- **`channel <name> { publishes <event>; ... }`** — a named channel with
-  the events published on it. A `publishes` entry is channel membership,
-  nothing more.
-- **`subscription <name> { events [ <event>* ] consumer <name> }`** — a
-  named delivery rule: the listed events go to the one consumer. The body
-  is exactly those two lines. Inside the list, the contextual `consumer`
-  word ends the list, so a missing `]` never swallows the consumer line.
+- **`channel <name> ("of" <scope>)? { publishes <event>; ... }`** — a
+  named channel with the events published on it. A `publishes` entry is
+  channel membership, nothing more. The optional `of` clause names the
+  channel's **scope**: the topic-template dimension its topics are
+  parameterized by — traderX's `/accounts/{id}/trades` family declares as
+  `channel account-trades of accounts { ... }`, the transport binding the
+  `{id}` segment to the consumer's slice.
+- **`subscription <name> { events [ <event>* ] consumer <name>
+  ("scope" <name>)? }`** — a named delivery rule: the listed events go to
+  the one consumer, optionally bound to one slice of a scoped topic family
+  (`consumer web_front_end_angular scope accounts`). Without the binding
+  the body is exactly the two lines `events [ A B ]` and `consumer C`.
+  Inside the list, the contextual `consumer` word ends the list, so a
+  missing `]` never swallows the consumer line.
 - **Field types** are a rex-syntax primitive (`String`, `int`, ...) or any
   declared domain kind — class, enum, datatype, interface, vocabulary —
   resolved against the imported domains (below).
@@ -156,9 +167,12 @@ Language-level rules:
   a kind).
 - **Keywords**: `event`, `channel`, `publishes`, `subscription` are real
   keywords of the shared chumsky lexer — reserved in `.mox`, `.actor`, and
-  `.ddd` sources too, escapable with `^` like every keyword. `events` and
-  `consumer` are **contextual** words, special only inside a subscription
-  body (the delegation-`to` precedent; `^events`/`^consumer` never match).
+  `.ddd` sources too, escapable with `^` like every keyword. `events`,
+  `consumer`, `of`, and `scope` are **contextual** words — ordinary
+  identifiers special only in their grammar positions (`events`/
+  `consumer`/`scope` inside a subscription body, `of` in a channel header;
+  the delegation-`to` precedent; `^events`/`^consumer`/`^of`/`^scope`
+  never match).
 - Slice-1 exclusions are deliberate: event fields are plain typed fields —
   no constraints, facets, `readonly`/`id`, or multiplicities — and there
   are no `when` filters, delivery policies, or webhooks.
@@ -198,6 +212,13 @@ file or an imported domain — drops the artifact; warnings do not):
    `subscription 'S' names an empty consumer` (only reachable through
    parser recovery, whose syntax error fires alongside — both name the
    subscription, so the pairing is deterministic).
+
+Scope labels are **never** validated: a channel's `of <scope>` clause and
+a subscription's `scope <name>` binding are opaque topic-template labels
+carried verbatim into the artifact (`ChannelDef::scope` /
+`SubscriptionDef::scope`) — no resolution, no uniqueness, no cross-checks.
+Interpretation (which payload field carries the key, which transport
+segment it binds) is a consumer/backend concern, never a driver concern.
 
 Diagnostics are ordered deterministically: the contract file's parse
 diagnostics first, then the import errors, then each domain's own
@@ -240,10 +261,12 @@ cargo run -p rex-cli -- ir tests/conformance/events/orders.evt -o orders.evt.jso
   hoisted into a tight first section, then declarations grouped by kind
   (event → channel → subscription, source order within a kind), fields as
   `name: Type;` one per line, `publishes` entries with a canonical
-  trailing `;`, and a subscription body of exactly the two lines
-  `events [ A B ]` and `consumer C`. Stdin is treated as `.mox`.
-- Directory inputs stay `.mox`-only: contracts are compiled by naming the
-  `.evt` file explicitly.
+  trailing `;`, a channel's `of <scope>` clause on the header line, and a
+  subscription body of the `events [ A B ]` line plus a `consumer C` line
+  carrying an optional `scope S` tail. Stdin is treated as `.mox`.
+- Directory batch mode (`rexlang check <dir>`) picks `.evt` files up like
+  every other surface: each contract in the directory compiles
+  independently, imports resolved relative to it.
 - `rexlang artifact check` classifies a non-empty event artifact by its
   `events`/`channels`/`subscriptions` keys (rule 4 of 6). The **empty**
   event artifact serializes as exactly `{"formatVersion":1}` and therefore
@@ -274,14 +297,14 @@ event OrderCancelled version "1.1.0" {
     reason: String;
 }
 
-channel orders {
+channel orders of account {
     publishes OrderPlaced;
     publishes OrderCancelled;
 }
 
 subscription billing {
     events [ OrderPlaced OrderCancelled ]
-    consumer billing_service
+    consumer billing_service scope account
 }
 
 subscription analytics {
@@ -294,7 +317,10 @@ Notes on the example: `status: OrderStatus` resolves to the enum the
 imported domain declares (see the golden excerpt above — it serializes as a
 qualified enum reference into `nz.example.orders`); `billing` and
 `analytics` subscribe to overlapping event sets, each with exactly one
-consumer; nothing in the file names a transport.
+consumer; the `orders` channel and the `billing` subscription carry an
+`account` scope (a topic-family dimension, carried verbatim — the
+`analytics` subscription shows the scope-less shape); nothing in the file
+names a transport.
 
 ---
 

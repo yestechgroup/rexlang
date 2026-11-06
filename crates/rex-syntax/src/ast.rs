@@ -1398,12 +1398,20 @@ pub struct EventFieldDecl {
     pub span: Span,
 }
 
-/// A `channel <name> { ... }` declaration: a named channel with the events
-/// published on it. Slice 1 has no delivery policy or webhook targets.
+/// A `channel <name> ("of" <scope>)? { ... }` declaration: a named channel
+/// with the events published on it. The optional scope names the channel's
+/// topic-template dimension (an opaque label). Slice 1 has no delivery
+/// policy or webhook targets.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChannelDecl {
     /// The channel name.
     pub name: Name,
+    /// The `of <scope>` clause's scope name, when present: an opaque
+    /// scoping-dimension label the channel's topics are parameterized by
+    /// (the `/accounts/{id}/trades` topic-family shape). Recovered as `None`
+    /// when the source omitted it or the clause is malformed (a reported
+    /// syntax error).
+    pub scope: Option<Name>,
     /// `publishes` entries in source order.
     pub publishes: Vec<PublishesDecl>,
     /// Span of the whole declaration, `channel` keyword included.
@@ -1421,8 +1429,9 @@ pub struct PublishesDecl {
     pub span: Span,
 }
 
-/// A `subscription <name> { events [...] consumer <name> }` declaration: a
-/// named subscription to a set of events, delivered to one consumer. Slice 1
+/// A `subscription <name> { events [...] consumer <name> ("scope" <name>)? }`
+/// declaration: a named subscription to a set of events, delivered to one
+/// consumer, optionally bound to one slice of a scoped topic family. Slice 1
 /// has no `when` filters or delivery policy.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubscriptionDecl {
@@ -1433,6 +1442,11 @@ pub struct SubscriptionDecl {
     /// The consumer receiving the events. Recovered as an empty name when
     /// the source omitted it (a reported syntax error).
     pub consumer: Name,
+    /// The optional `scope <name>` binding: the slice of the scoped topic
+    /// family the consumer subscribes to. Recovered as `None` when the
+    /// source omitted it or the clause is malformed (a reported syntax
+    /// error).
+    pub scope: Option<Name>,
     /// Span of the whole declaration, `subscription` keyword included.
     pub span: Span,
 }

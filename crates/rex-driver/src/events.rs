@@ -151,6 +151,9 @@ pub(crate) fn compile_evt_file(
         }
 
         let mut channel_out = ChannelDef::new(channel.name.text.clone());
+        // The channel's `of <scope>` clause rides through verbatim — an
+        // opaque topic-template label the driver never validates.
+        channel_out.scope = channel.scope.as_ref().map(|scope| scope.text.clone());
         for publishes in &channel.publishes {
             // Rule c — the published event must be declared in this file.
             // The parser recovers a missing event name as an empty name; the
@@ -255,6 +258,9 @@ pub(crate) fn compile_evt_file(
             subscription_out.events.push(event.text.clone());
         }
         subscription_out.consumer = subscription.consumer.text.clone();
+        // The subscription's `scope <name>` binding rides through verbatim
+        // — an opaque slice label the driver never validates.
+        subscription_out.scope = subscription.scope.as_ref().map(|scope| scope.text.clone());
         model.subscriptions.push(subscription_out);
     }
 

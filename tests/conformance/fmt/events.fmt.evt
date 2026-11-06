@@ -4,6 +4,10 @@ event OrderPlaced version "1.0.0" {
     total: int;
 }
 
+event AccountTradeUpdate {
+    accountId: String;
+}
+
 event OrderCancelled {}
 
 channel orders {
@@ -11,7 +15,16 @@ channel orders {
     publishes OrderCancelled;
 }
 
+channel accountTrades of accounts {
+    publishes AccountTradeUpdate;
+}
+
 subscription billing {
     events [ OrderPlaced OrderCancelled ]
     consumer billing_service
+}
+
+subscription account_feed {
+    events [ AccountTradeUpdate ]
+    consumer trader_ui scope accounts
 }
