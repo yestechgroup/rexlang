@@ -242,8 +242,9 @@ cargo run -p rex-cli -- ir tests/conformance/events/orders.evt -o orders.evt.jso
   `name: Type;` one per line, `publishes` entries with a canonical
   trailing `;`, and a subscription body of exactly the two lines
   `events [ A B ]` and `consumer C`. Stdin is treated as `.mox`.
-- Directory inputs stay `.mox`-only: contracts are compiled by naming the
-  `.evt` file explicitly.
+- Directory batch mode (`rexlang check <dir>`) picks `.evt` files up like
+  every other surface: each contract in the directory compiles
+  independently, imports resolved relative to it.
 - `rexlang artifact check` classifies a non-empty event artifact by its
   `events`/`channels`/`subscriptions` keys (rule 4 of 6). The **empty**
   event artifact serializes as exactly `{"formatVersion":1}` and therefore

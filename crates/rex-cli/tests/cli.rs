@@ -2934,6 +2934,19 @@ fn check_directory_batch_checks_every_surface_independently() {
         "package a\n\nclass B {\n    Mystery oops\n}\n",
     )
     .expect("write broken");
+    // `.evt` contracts are batch-checked like every other surface: the
+    // healthy one compiles clean (its import resolves relative to the file)
+    // and the broken one's driver diagnostics fail the batch.
+    std::fs::write(
+        dir.join("events.evt"),
+        "import \"good.mox\"\n\nevent BookAdded {\n    title: String;\n}\n\nchannel library {\n    publishes BookAdded;\n}\n",
+    )
+    .expect("write evt");
+    std::fs::write(
+        dir.join("broken.evt"),
+        "event Ghosted {\n    kind: String;\n}\n\nchannel trades {\n    publishes Ghost;\n}\n",
+    )
+    .expect("write broken evt");
 
     let output = rexlang()
         .args(["check", dir.to_str().unwrap()])
@@ -2942,8 +2955,16 @@ fn check_directory_batch_checks_every_surface_independently() {
     assert!(!output.status.success(), "one broken file fails the batch");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("OK"), "healthy files report OK: {stdout}");
+    assert!(
+        stdout.contains("events.evt"),
+        "the healthy .evt contract is batch-checked: {stdout}"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("1 of 4 files failed"), "{stderr}");
+    assert!(stderr.contains("2 of 6 files failed"), "{stderr}");
+    assert!(
+        stderr.contains("unknown event 'Ghost' on channel 'trades'"),
+        "the broken .evt's driver diagnostic fails the batch: {stderr}"
+    );
 }
 
 #[test]
