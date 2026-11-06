@@ -37,6 +37,8 @@ pub(crate) const REQUIRES: &str = "requires";
 pub(crate) const DESIGN: &str = "design";
 /// The `flow "<path>[#<Module>]"` binding of a component body.
 pub(crate) const FLOW: &str = "flow";
+/// The `env { NAME = "value" ... }` block of a component body.
+pub(crate) const ENV: &str = "env";
 /// The `use <profile>` line of a deployment body.
 pub(crate) const USE: &str = "use";
 /// The `configure { ... }` block of a deployment body.

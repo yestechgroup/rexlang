@@ -177,11 +177,11 @@ receiving step/occurrence begins after it arrives.
 
 ```
 perform verify: verifyRecipient;
-perform release: releaseParcel requires [ ReleaseParcel ];
+perform release: releaseParcel requires [ ReleaseParcel ] when (parcelSecured);
 ```
 
-`perform <name> (: <operation>)? (requires [<capability>*])?;` — a step
-the **subject** performs (a step on an actor is the
+`perform <name> (: <operation>)? (requires [<capability>*])? (when raw_parens)?;`
+— a step the **subject** performs (a step on an actor is the
 `only the subject performs steps` error; the bare `perform x` form names
 the operation after the step itself). Each step's operation must name an
 `Operation` on the subject's resolved class, walking `extends` (cycles are
@@ -200,6 +200,21 @@ file; every name must exist across the provided actor models and be
 covered by a participating actor (the structural contract below). Inside
 the list the contextual `occurrence`/`perform` words end it, so a missing
 `]` never swallows the next member line.
+
+**The `when (...)` guard** — written last, before the `;` — constrains the
+step with an expression over the subject (`self` is the subject's resolved
+class, exactly the `.ddd` document-expression universe): the guard must
+type as **boolean** against the union of the imported domains. A parse
+failure, unknown name, or non-boolean type is an error naming the step
+(help `in the \`when\` of step '<step>' in use case '<uc>'`), and any of
+them drops the artifact — but the condition text still lowers, as the
+**verbatim trimmed paren interior** (interior spacing is never normalized,
+so `rexlang fmt` round-trips it byte-identically; guards are never wrapped
+and may exceed the column budget). Guards are unreachable for sigil-typed
+subjects: those error on the step itself, and the guard adds no diagnostic
+of its own. The normative grammar is the `perform_decl` production of the
+parser module docs; `when` is a real lexer keyword there (escapable with
+`^`).
 
 ---
 
@@ -265,6 +280,9 @@ rex-ir [wire format contract](BACKENDS.md) (see also the
 - A domain-typed payload reuses the domain IR's `TypeRef` under the
   adjacent tags — no parallel wire-level type shape. Event payloads are
   bare event name strings.
+- A step's optional **`when`** field carries the guard's verbatim trimmed
+  paren-interior text; it is omitted when the step carries no guard (the
+  additive-field rule — pre-guard artifacts serialize byte-identically).
 - Names, successions, and `realizes` bindings are kept **as authored**;
   only participant types are stored resolved.
 - Empty = minimal: every collection field is `#[serde(default)]` and
@@ -320,7 +338,11 @@ the *Validation rules* section of `compile_usecase_str`
    namespace; bare actors must name an actor of a provided `.actor`
    model (always an error with none provided).
 3. **Steps** — each operation names an operation on the subject's
-   resolved class, walking `extends`.
+   resolved class, walking `extends`; an optional `when (...)` guard
+   (written last before `;`) must parse and type as boolean against the
+   imported-domain union with the subject's class as `self` — errors name
+   the step, and the condition text lowers verbatim even when typing
+   fails (the artifact drops on any error).
 4. **Placement** — steps are subject-only; occurrences on any
    participant.
 5. **Message end binding** — inline endpoint xor exactly one
@@ -346,8 +368,10 @@ the *Validation rules* section of `compile_usecase_str`
     named.
 13. **Order** — diagnostics are deterministic: parse diagnostics first,
     then import errors, then each domain's own diagnostics (import
-    order), then per use case: uniqueness, participants, messages,
-    successions, `requires` coverage, `never_both`, `realizes`.
+    order), then per use case: uniqueness, participants (typing,
+    occurrences, and per step its operation check followed immediately by
+    its guard check), messages, successions, `requires` coverage,
+    `never_both`, `realizes`.
 
 Every diagnostic is tagged with its file's path; on any error the
 result's `model` is `None` and `domains_model` still carries the imported
@@ -489,7 +513,8 @@ successions) and deviates deliberately where rexlang's model demands it:
 `handover.evt` (the imported design, policy, and event contract), and
 `delivery.uc` — the worked example whose four iterations (1: subject +
 bare policy actor; 2a: named occurrences + fully anchored message; 2b:
-message-owned ends; 3: steps, `requires`, event payload, `realizes`)
+message-owned ends; 3: steps with a `when` guard over the subject's
+`parcelSecured` feature, `requires`, event payload, `realizes`)
 progress through the pattern article's stages, plus the
 actors-only `MonitorHandover`. `delivery.uc` is formatter-canonical and
 covered by the CI `fmt --check` gate over `tests/conformance/usecases/`.

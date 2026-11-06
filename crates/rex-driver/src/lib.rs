@@ -1133,6 +1133,7 @@ fn compile_evt_with(
 
     let (model, diagnostics) = events::compile_evt_file(
         &contract_path,
+        &contract.text(db),
         parsed.ast.as_ref(),
         &parsed.diagnostics,
         &domains.domain_units,
@@ -1438,6 +1439,40 @@ fn compile_ddd_str_inner(
 ///    `subscription 'S' names an empty consumer`; the empty consumer is
 ///    only reachable through parser recovery, whose syntax error fires
 ///    alongside).
+/// 8. **CloudEvents attributes** — once an event carries a `cloudEvents`
+///    block, its `type` and `source` must be non-empty (`cloudEvents
+///    type/source on event 'X' must not be empty`); when present they are
+///    authoritative for a downstream generator, overriding any derived
+///    mapping.
+/// 9. **Governance `pii`** — every entry of a `pii [ ... ]` line must name
+///    a payload field of the same event (`unknown payload field 'x' in pii
+///    of event 'Y'`). The other governance lines (`owner`,
+///    `classification`, `retention`) are verbatim labels the driver never
+///    interprets.
+/// 10. **Delivery mode** — the `mode` entry of a `delivery` block must be
+///     one of `at_most_once`, `at_least_once`, `effectively_once`
+///     (`unknown delivery mode 'x' on subscription 'S'`, with help listing
+///     them).
+/// 11. **Delivery tuning knobs** — `maxAttempts`, `backoffSeconds`, and
+///     `timeoutSeconds` must be positive (`'maxAttempts' on subscription
+///     'S' must be positive`).
+/// 12. **Dead-letter channel** — the `deadLetter` entry must name a channel
+///     declared in the same file (`unknown dead-letter channel 'x' on
+///     subscription 'S'`).
+/// 13. **Subscription `when`** — the filter's interior (sliced strictly
+///     inside the parens, trimmed — the `when`-condition convention) must
+///     parse as a rex-expr condition and type `boolean` against **every**
+///     event in the subscription's `events [...]` list: the expression is
+///     typed with a synthetic per-event class (the subscribed event's
+///     payload fields as the implicit `self`, over the imported domains'
+///     class union — `DomainTypes::insert_class`, never a fake `Model`).
+///     A field absent from any subscribed event is an error **by design** —
+///     a filter is a routing decision per event, so an event without the
+///     field cannot be routed (the help names the subscription and, for
+///     per-event failures, the event). A parse failure leaves the filter
+///     out of the artifact; a type failure still lowers the verbatim
+///     interior (the `.cmmn` precedent) — the artifact drops on any error
+///     either way.
 ///
 /// Scope labels are **never** validated: a channel's `of <scope>` clause
 /// and a subscription's `scope <name>` binding are opaque topic-template
@@ -1448,8 +1483,14 @@ fn compile_ddd_str_inner(
 /// Diagnostics are ordered deterministically: the contract file's parse
 /// diagnostics first, then the import errors, then each domain's own
 /// diagnostics (import order), then the contract's semantic diagnostics
-/// grouped by declaration kind (events, channels, subscriptions; each in
-/// source order).
+/// grouped by declaration kind — events, then channels, then subscriptions
+/// — each group in source order, matching the artifact's declaration
+/// order. Within an event: its fields (source order), then `pii`, then
+/// `cloudEvents`; within a subscription: its `events [...]` list, then
+/// `when`, then `delivery`. Every diagnostic is tagged with its file's
+/// path, so hosts (and the CLI) render them grouped per file. On any error
+/// the result's `model` is `None`; `domains_model` still carries the
+/// imported domains when they lowered.
 pub fn compile_evt_str(
     path: &str,
     source: &str,
@@ -1497,6 +1538,7 @@ fn compile_usecase_with(
     imports: &DomainImports,
 ) -> UseCaseCompilation {
     let path = file.path(db);
+    let source = file.text(db);
     let parsed = parse_usecase_query(db, file);
     // The `.uc` import declarations reuse the `.actor` shape plus an
     // optional alias; the domain pipeline consumes the shared `ImportDecl`
@@ -1518,6 +1560,7 @@ fn compile_usecase_with(
 
     let (model, mut diagnostics) = usecases::compile_usecase_file(
         &path,
+        &source,
         parsed.ast.as_ref(),
         &parsed.diagnostics,
         &domains.domain_units,
@@ -1634,6 +1677,17 @@ fn compile_usecase_with(
 ///    lowered package functions stay callable from expression positions
 ///    that share the domain's `DomainTypes` (`.cmmn` `when` guards, `.ddd`
 ///    document expressions, generated code) — steps never resolve them.
+///    A step may carry a `when (<expr>)` guard, written last before `;`:
+///    the guard's paren interior is parsed and typed with rex-expr against
+///    the union of the imported domains, with the subject's resolved class
+///    as `self` (the `.cmmn` criterion typing — no synthetic classes), and
+///    must be boolean. A parse failure, unknown name, or non-boolean type
+///    is an error naming the step (help `in the \`when\` of step ...`); the
+///    condition text still lowers into the artifact verbatim (trimmed
+///    paren interior), and any error drops the artifact per the general
+///    rule. Guards are a subject concern: a non-class-typed subject errors
+///    on the step itself, so sigil-typed subjects never reach the guard
+///    check.
 /// 4. **Placement** — steps are subject-only (a step on an actor errors);
 ///    occurrences are allowed on any participant.
 /// 5. **Message end binding** — for each message and each side, exactly one
@@ -1690,9 +1744,11 @@ fn compile_usecase_with(
 /// 13. **Order** — diagnostics appear in declaration order: the file's
 ///     parse diagnostics first, then the import errors, then each domain's
 ///     own diagnostics (import order), then, per use case (source order):
-///     uniqueness, participants (typing, occurrences, steps), messages
-///     (payload, then binding), successions (resolution, then the graph
-///     checks), `requires` coverage, `never_both`, `realizes`.
+///     uniqueness, participants (typing, occurrences, and — per step in
+///     source order — its operation check followed immediately by its
+///     guard check), messages (payload, then binding), successions
+///     (resolution, then the graph checks), `requires` coverage,
+///     `never_both`, `realizes`.
 pub fn compile_usecase_str(
     path: &str,
     source: &str,
@@ -2006,6 +2062,14 @@ pub struct DeployCompilation {
 ///    component of the deployed application; word values must be in their
 ///    list (`engine: sqlite|postgres|d1`, ...); integer and text settings
 ///    take the matching literal kind; a path is declared once per level.
+///    The vocabulary carries the operational settings (issue #135): `port`
+///    (integer) on every kind, `health` (text) on `api`/`worker`, and
+///    `cors` (text, comma-separated origins) on `api`/`frontend`. An
+///    `env { NAME = "value" ... }` block is *not* settings: its entries
+///    are opaque strings lowered verbatim, checked only for empty and
+///    duplicated names per component (`duplicate env 'NAME' on component
+///    'C'`), never joined into the effective settings, and never
+///    policy-addressable.
 /// 6. **Bindings** — a binding's path must match one of the file's
 ///    imports, and a `#<Module>` suffix must name a module of the imported
 ///    design/flow.
@@ -2033,7 +2097,9 @@ pub struct DeployCompilation {
 /// 13. **Policies** — every profile policy is parsed with rex-expr, typed
 ///     as `boolean` against the application's components (the synthetic
 ///     settings universe: one class per component holding its setting
-///     vocabulary, the application as the root), and evaluated against the
+///     vocabulary — the operational settings included — and the
+///     application as the root; env entries are not features, so
+///     `api.env.FOO` is a type error), and evaluated against the
 ///     deployment's effective settings with rules R1 (checked arithmetic)
 ///     and R4 (no zero divisor). A `require` condition that evaluates
 ///     false — including through a deployment's overrides — or a

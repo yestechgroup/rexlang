@@ -5,6 +5,15 @@ event OrderPlaced version "1.0.0" {
     orderId: String;
     total: int;
     status: OrderStatus;
+    owner order_team;
+    classification confidential;
+    retention "7y";
+    pii [ orderId ];
+    cloudEvents {
+        type "nz.example.orders.orderplaced.v1"
+        source "/orders"
+        subject "{orderId}"
+    }
 }
 
 event OrderCancelled version "1.1.0" {
@@ -20,9 +29,18 @@ channel orders of account {
 subscription billing {
     events [ OrderPlaced OrderCancelled ]
     consumer billing_service scope account
+    when (orderId != "")
+    delivery {
+        mode at_least_once;
+        maxAttempts 5;
+        backoffSeconds 10;
+        timeoutSeconds 30;
+        deadLetter orders;
+    }
 }
 
 subscription analytics {
     events [ OrderPlaced ]
     consumer analytics_service
+    when (total > 0)
 }

@@ -278,12 +278,32 @@
 //! evt_file_item     := evt_import | event_decl | channel_decl
 //!                    | subscription_decl
 //! evt_import        := "import" string
-//! event_decl        := "event" name ("version" string)? "{" field* "}"
+//! event_decl        := "event" name ("version" string)? "{"
+//!                      event_member* "}"
+//! event_member      := field | owner_line | classification_line
+//!                    | retention_line | pii_line | cloud_events_decl
 //! field             := name ":" type_ref ";"
+//! owner_line        := "owner" name ";"
+//! classification_line := "classification" name ";"
+//! retention_line    := "retention" string ";"
+//! pii_line          := "pii" "[" name* "]" ";"
+//! cloud_events_decl := "cloudEvents" "{" ce_type ce_source
+//!                      (ce_subject)? "}"
+//! ce_type           := "type" string
+//! ce_source         := "source" string
+//! ce_subject        := "subject" string
 //! channel_decl      := "channel" name ("of" name)? "{" publishes_entry* "}"
 //! publishes_entry   := "publishes" name ";"
 //! subscription_decl := "subscription" name "{" "events" "[" name* "]"
-//!                      "consumer" name ("scope" name)? "}"
+//!                      "consumer" name ("scope" name)? ("when" raw_parens)?
+//!                      (delivery_decl)? "}"
+//! delivery_decl     := "delivery" "{" ce_mode (ce_attempts)?
+//!                      (ce_backoff)? (ce_timeout)? (ce_dead_letter)? "}"
+//! ce_mode           := "mode" name ";"
+//! ce_attempts       := "maxAttempts" int ";"
+//! ce_backoff        := "backoffSeconds" int ";"
+//! ce_timeout        := "timeoutSeconds" int ";"
+//! ce_dead_letter    := "deadLetter" name ";"
 //! ```
 //!
 //! * `evt_import` is the `.actor` import production verbatim (no trailing
@@ -303,21 +323,43 @@
 //!   `^events`/`^consumer`/`^of`/`^scope` never match). All of `event`,
 //!   `channel`, `publishes`, `subscription` are real keywords, escapable
 //!   with `^` like every keyword.
-//! * Slice-1 exclusions are deliberate: no `when` filters, no delivery
-//!   policy, no webhooks, no CloudEvents attributes; event fields are plain
-//!   typed fields (no constraints, facets, `readonly`/`id`, or
-//!   multiplicities).
+//! * The slice-2 clause words are contextual too — special only in the
+//!   clause/block position each parser commits to: `owner`,
+//!   `classification`, `retention`, `pii`, and `cloudEvents` as event-body
+//!   member introducers; `type`/`source`/`subject` inside the
+//!   `cloudEvents` block; `delivery` as a subscription-body clause (and
+//!   therefore reserved right after the consumer name — `scope ^delivery`
+//!   escapes); `mode`/`maxAttempts`/`backoffSeconds`/`timeoutSeconds`/
+//!   `deadLetter` inside the `delivery` block. `when` is the real lexer
+//!   keyword (the `.mox`/`.ddd` condition word — no registration), and
+//!   `type` is the real `.mox` datatype keyword: a `cloudEvents` block's
+//!   `type` entry matches the keyword token, and an event payload field
+//!   named `type` stays an ordinary name (the qname-segment rule;
+//!   `^type` escapes). Event-body members may appear in any source order;
+//!   a subscription's clauses are the fixed chain `events` → `consumer` →
+//!   `scope` → `when` → `delivery`.
+//! * The formatter canonicalizes event bodies to fields → `owner` →
+//!   `classification` → `retention` → `pii` → `cloudEvents`, the
+//!   `cloudEvents` entries to `type` → `source` → `subject`, and the
+//!   `delivery` entries to `mode` → `maxAttempts` → `backoffSeconds` →
+//!   `timeoutSeconds` → `deadLetter`; `when (...)` interiors are raw text
+//!   (ends trimmed, never wrapped). Webhook targets remain a deliberate
+//!   exclusion — runtime/tenant data, not contract syntax.
 //! * Recovery: an event's `version` clause, a field's `:`/type/`;`, a
-//!   `publishes` entry's name/`;`, a channel's `of` clause, and a
-//!   subscription's `events [...]` / `consumer` / `scope` halves are each
-//!   committed once their leading word matched — missing pieces are
-//!   reported errors and the declaration still recovers. A stray name in a
-//!   clause position without its leading word (`channel c x {`,
-//!   `consumer c x }`) is reported too. Inside the `events [...]` list the
-//!   contextual `consumer` word ends the list, so a missing `]` never
-//!   swallows the consumer line. A body item that cannot start a field/
-//!   entry at all fails the whole declaration into file-level junk (the
-//!   `actors_block` coarseness).
+//!   governance line's value/`;`, the `cloudEvents` block's `{`/entries/`}`,
+//!   a `publishes` entry's name/`;`, a channel's `of` clause, and a
+//!   subscription's `events [...]` / `consumer` / `scope` / `when` /
+//!   `delivery` halves are each committed once their leading word matched
+//!   — missing pieces are reported errors and the declaration still
+//!   recovers. With a block's `{` missing the parser commits to the
+//!   recovery consuming only the introducing word, so the declaration's
+//!   own closing `}` is never swallowed. A stray name in a clause position
+//!   without its leading word (`channel c x {`, `consumer c x }`) is
+//!   reported too. Inside the `events [...]` list the contextual
+//!   `consumer` word ends the list, so a missing `]` never swallows the
+//!   consumer line. A body item that cannot start a field/entry at all
+//!   fails the whole declaration into file-level junk (the `actors_block`
+//!   coarseness).
 //!
 //! ## `.deploy` deployment sources ([`parse_deploy`])
 //!
@@ -330,10 +372,12 @@
 //! component_decl    := "component" name ":" name component_body?
 //! component_body    := "{" component_member* "}"
 //! component_member  := requires_clause | design_binding | flow_binding
-//!                    | setting_line
+//!                    | env_decl | setting_line
 //! requires_clause   := "requires" name ("," name)*
 //! design_binding    := "design" string
 //! flow_binding      := "flow" string
+//! env_decl          := "env" "{" env_entry* "}"
+//! env_entry         := name "=" string
 //! setting_line      := name ":" setting_value
 //! setting_value     := string | int | name
 //! connects_decl     := "connects" name "->" name
@@ -366,6 +410,10 @@
 //!   and evaluates the text with rex-expr.
 //! * A binding's string is `"<path>"` or `"<path>#<Module>"`, split at its
 //!   last `#`; the path must match one of the file's imports *as written*.
+//! * An `env` entry's name is a bare word — keyword tokens included (the
+//!   qname-segment rule) — and its value is a quoted string, kept verbatim.
+//!   The `env` word itself is contextual (the `crate::deploy` table), so
+//!   `^env` remains usable as a setting/component name.
 //! * Imports must precede the first declaration; a later `import` is an
 //!   error (recovered, and the misplaced import is dropped), mirroring the
 //!   `.actor`/`.evt` rule. Duplicate imports are a driver concern.
@@ -373,7 +421,8 @@
 //!   AST folds them into per-kind lists, and the formatter canonicalizes to
 //!   import → application → profile → deployment order.
 //! * Recovery: a component's kind or body, a `requires` clause's comma
-//!   list, a setting's `:`/value, a `connects` entry's halves, a profile's
+//!   list, a setting's `:`/value, an `env` entry's `=`/value, an `env`
+//!   block's closing `}`, a `connects` entry's halves, a profile's
 //!   `target` line, a policy's parens, a mapping entry, a deployment's
 //!   `for`/`use` halves, and a `configure` block are each committed once
 //!   their leading word matched — missing pieces are reported errors and
@@ -392,7 +441,7 @@
 //! participant_body := "{" (occurrence_decl | perform_decl)* "}"
 //! occurrence_decl  := "occurrence" name ("." ("source" | "target"))? ";"
 //! perform_decl     := "perform" name (":" name)?
-//!                     ("requires" "[" name* "]")? ";"
+//!                     ("requires" "[" name* "]")? ("when" raw_parens)? ";"
 //! message_decl     := "message" name ("of" type_ref)? ("from" endpoint)?
 //!                     ("to" endpoint)? ";"
 //! endpoint         := name "." name
@@ -425,16 +474,22 @@
 //!   driver concern.
 //! * Doc comments (`///` runs) directly above a `usecase` declaration
 //!   become its description.
+//! * A perform step's `when (...)` guard (real lexer keyword, escapable
+//!   with `^`) is a [`raw_parens`] span, written last before `;` — the
+//!   driver slices the condition strictly inside the parens (the
+//!   `when`-condition convention) and types it against the subject's
+//!   resolved class. The guard's interior is never parsed here.
 //! * Recovery: an import's alias, a participant's `:`/type, an
 //!   occurrence's name/tail/`;`, a perform's `:`/operation/bracketed
-//!   list/`;`, a message's name/clauses/`;`, a succession's `then` half
-//!   and `;`, and a realizes binding's arity/`;` are each committed once
-//!   their leading word matched — missing pieces are reported errors and
-//!   the declaration still recovers. Inside a `requires [...]` list the
-//!   contextual `occurrence`/`perform` words end the list (the words
-//!   introducing the next member), so a missing `]` never swallows the
-//!   next line. A member that cannot start anything at all fails the whole
-//!   usecase into file-level junk (the `actors_block` coarseness).
+//!   list/`when` parens/`;`, a message's name/clauses/`;`, a succession's
+//!   `then` half and `;`, and a realizes binding's arity/`;` are each
+//!   committed once their leading word matched — missing pieces are
+//!   reported errors and the declaration still recovers. Inside a
+//!   `requires [...]` list the contextual `occurrence`/`perform` words end
+//!   the list (the words introducing the next member), so a missing `]`
+//!   never swallows the next line. A member that cannot start anything at
+//!   all fails the whole usecase into file-level junk (the `actors_block`
+//!   coarseness).
 //!
 //! ## `.cmmn` case management sources ([`parse_cmmn`])
 //!
@@ -728,11 +783,42 @@ mod grammar_doc_tests {
     /// Contextual words the grammar quotes that are *not* lexer keywords and
     /// not covered by a table below: feature modifiers, the import sigils,
     /// the delegation `to`, the datatype block words, `unique`, the `.evt`
-    /// subscription/channel words, and the parser-only `ranking` values
-    /// (`crate::ddd` documents them as parser-only).
-    const CONTEXTUAL_WORDS: [&str; 19] = [
-        "id", "readonly", "schema", "sigil", "to", "create", "convert", "format", "unique", "bm25",
-        "tfIdf", "exact", "custom", "entity", "value", "events", "consumer", "of", "scope",
+    /// subscription/channel words plus the slice-2 clause words, and the
+    /// parser-only `ranking` values (`crate::ddd` documents them as
+    /// parser-only).
+    const CONTEXTUAL_WORDS: [&str; 32] = [
+        "id",
+        "readonly",
+        "schema",
+        "sigil",
+        "to",
+        "create",
+        "convert",
+        "format",
+        "unique",
+        "bm25",
+        "tfIdf",
+        "exact",
+        "custom",
+        "entity",
+        "value",
+        "events",
+        "consumer",
+        "of",
+        "scope",
+        "owner",
+        "classification",
+        "retention",
+        "pii",
+        "cloudEvents",
+        "source",
+        "subject",
+        "delivery",
+        "mode",
+        "maxAttempts",
+        "backoffSeconds",
+        "timeoutSeconds",
+        "deadLetter",
     ];
 
     /// Every keyword of the lexer. Each entry is checked against the lexer
@@ -837,6 +923,7 @@ mod grammar_doc_tests {
             deploy::REQUIRES,
             deploy::DESIGN,
             deploy::FLOW,
+            deploy::ENV,
             deploy::USE,
             deploy::CONFIGURE,
             deploy::FOR,

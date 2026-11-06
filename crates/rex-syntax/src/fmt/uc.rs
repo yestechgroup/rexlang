@@ -107,6 +107,9 @@ impl<'src> Formatter<'src> {
                 ) {
                     self.scan_uc_requires_list();
                 }
+                if self.take_if(|token| matches!(token, Token::When)) {
+                    self.scan_uc_when_guard();
+                }
                 self.scan_uc_semicolon();
             }
             _ => {
@@ -146,6 +149,57 @@ impl<'src> Formatter<'src> {
             self.bump_token();
         }
         self.push_text("]", false);
+    }
+
+    /// The `when (...)` guard clause of a perform step, after `requires`:
+    /// the parenthesized condition's inner bytes are emitted verbatim
+    /// (ends trimmed), the `require (...)` policy rule — so guards are a
+    /// fixpoint. Guards are never wrapped onto continuation lines and may
+    /// exceed the column budget; that is deliberate (a guard is one
+    /// verbatim unit).
+    pub(crate) fn scan_uc_when_guard(&mut self) {
+        if !matches!(self.peek_tok(), Some(Token::LParen)) {
+            return;
+        }
+        // The `(` is consumed silently; the emitted parens carry the
+        // verbatim inner slice.
+        self.bump_token();
+        let Some(Node::Token(_, open_span)) = self.nodes.get(self.pos - 1) else {
+            return;
+        };
+        let open_span = *open_span;
+        // Find the matching close paren by depth over the token stream
+        // (parens inside comments or string tokens never count).
+        let mut depth = 1usize;
+        let mut close_index = self.pos;
+        while depth > 0 {
+            match self.nodes.get(close_index) {
+                None => break,
+                Some(Node::Token(Token::LParen, _)) => {
+                    depth += 1;
+                    close_index += 1;
+                }
+                Some(Node::Token(Token::RParen, _)) => {
+                    depth -= 1;
+                    close_index += 1;
+                }
+                Some(_) => close_index += 1,
+            }
+        }
+        // `close_index - 1` is the matching `)` (or the last node when the
+        // condition was never closed).
+        let content_end = self
+            .nodes
+            .get(close_index - 1)
+            .map(|node| node.span().start)
+            .unwrap_or(open_span.end);
+        let content = &self.source[open_span.end..content_end.max(open_span.end)];
+        // Every node inside the parens (tokens *and* comments) is already
+        // covered by the verbatim slice; skip them without emitting.
+        self.pos = close_index;
+        self.push_text("(", false);
+        self.line.push_str(content.trim());
+        self.line.push(')');
     }
 
     /// Consumes a source `;` silently and emits the canonical one (the

@@ -180,7 +180,8 @@
             "operation": "releaseParcel",
             "requires": [
               "ReleaseParcel"
-            ]
+            ],
+            "when": "parcelSecured"
           }
         ]
       },

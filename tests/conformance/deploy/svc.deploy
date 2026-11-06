@@ -7,6 +7,11 @@ import "../ifml/app.ifml"
 application Svc {
     component api: api {
         scaling: autoscaled
+        port: 18082
+        health: "/healthz"
+        env {
+            LOG_LEVEL = "info"
+        }
     }
     component lending: api {
         design "../ddd/library.ddd#media"

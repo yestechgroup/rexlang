@@ -80,10 +80,19 @@
 //!   section order: `import` declarations first (tight, one per line), then
 //!   `event`, `channel`, and `subscription` declarations — each kind grouped
 //!   in that order regardless of source order (source order is kept within a
-//!   kind). Event fields render `name: Type;` one per line; `publishes`
+//!   kind). Event bodies are reordered into fields → `owner` →
+//!   `classification` → `retention` → `pii` → `cloudEvents`; every
+//!   statement line gets its canonical `;` (`owner order_team;`,
+//!   `pii [ A B ];` — the `.ddd` import rule). The `cloudEvents` block
+//!   renders one bracket-only entry per line (`type "..."`, `source "..."`,
+//!   optional `subject "..."` — reordered into that order); a `delivery`
+//!   block renders one `word value;` entry per line, reordered into `mode`,
+//!   `maxAttempts`, `backoffSeconds`, `timeoutSeconds`, `deadLetter`. A
+//!   subscription's `when (...)` filter is emitted on its own line with the
+//!   condition's inner bytes verbatim (ends trimmed, never wrapped — the
+//!   `when`-condition rule); empty `{}` blocks stay inline. `publishes`
 //!   entries render with a canonical trailing `;` (emitted whether or not
-//!   the source had one, like the `.ddd` import rule); a subscription's body
-//!   is exactly the two lines `events [ A B ]` and `consumer C`.
+//!   the source had one, like the `.ddd` import rule).
 //! * A `.deploy` source (see [`format_deploy`]) canonicalizes the whole file
 //!   into section order like the `.evt` formatter: `import` declarations
 //!   first (tight, one per line), then `application`, `profile`, and
@@ -334,8 +343,11 @@ enum BodyKind {
     EvtSubscription,
     /// `component` blocks and `connects` lines of a `.deploy` application.
     DeployApplication,
-    /// `requires`/`design`/`flow`/setting members of a `.deploy` component.
+    /// `requires`/`design`/`flow`/`env`/setting members of a `.deploy`
+    /// component.
     DeployComponent,
+    /// `NAME = "value"` entries of a `.deploy` component's `env` block.
+    DeployEnv,
     /// `target`/`defaults`/`mappings`/policy members of a `.deploy` profile.
     DeployProfile,
     /// dotted `path: value` settings of a `.deploy` `defaults`/`configure`
@@ -1032,6 +1044,7 @@ impl<'src> Formatter<'src> {
                 BodyKind::EvtSubscription => self.scan_evt_subscription_item(),
                 BodyKind::DeployApplication => self.scan_deploy_application_item(),
                 BodyKind::DeployComponent => self.scan_deploy_component_item(),
+                BodyKind::DeployEnv => self.scan_deploy_env_item(),
                 BodyKind::DeployProfile => self.scan_deploy_profile_item(),
                 BodyKind::DeploySettings => self.scan_deploy_setting_item(),
                 BodyKind::DeployMappings => self.scan_deploy_mapping_item(),

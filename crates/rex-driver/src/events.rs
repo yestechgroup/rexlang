@@ -13,13 +13,18 @@
 //! resolve through the shared domain namespace helper
 //! ([`crate::lower::resolve_ddd_type`]) — never re-implemented here.
 
-use rex_ir::events::{ChannelDef, EventDef, EventModel};
+use rex_ir::events::{ChannelDef, CloudEventsAttributes, DeliveryMode, EventDef, EventModel};
 use rex_syntax::ast as dsl;
 use rex_syntax::Span;
 
 use crate::diagnostic::Diagnostic;
 use crate::lower::{self, DomainUnit};
 use crate::pipeline;
+
+/// The closed delivery-mode vocabulary of a `delivery` block's `mode`
+/// entry (the transition-vocabulary discipline: the words live in the
+/// driver, not in the syntax).
+const DELIVERY_MODES: [&str; 3] = ["at_most_once", "at_least_once", "effectively_once"];
 
 /// Lowers and validates one parsed `.evt` file against its imported domain
 /// models. Returns the event-contract artifact (or `None` when any
@@ -30,6 +35,7 @@ use crate::pipeline;
 /// contract.
 pub(crate) fn compile_evt_file(
     path: &str,
+    source: &str,
     ast: Option<&dsl::EvtFile>,
     parse_diagnostics: &[Diagnostic],
     domains: &[DomainUnit],
@@ -63,7 +69,9 @@ pub(crate) fn compile_evt_file(
     let mut model = EventModel::new();
 
     // Events: unique names, then payload fields (unique names, resolved
-    // types) in declaration order.
+    // types) in declaration order, the governance metadata (`pii` names
+    // declared payload fields), and the CloudEvents attributes (non-empty
+    // `type`/`source`).
     let mut event_names: Vec<(String, Span)> = Vec::new();
     for event in &ast.events {
         // Rule e — event names are unique within the file.
@@ -84,6 +92,15 @@ pub(crate) fn compile_evt_file(
 
         let mut event_out = EventDef::new(event.name.text.clone());
         event_out.version = event.version.clone();
+        // Governance metadata rides through verbatim — labels the driver
+        // never interprets (the retention period stays whatever string the
+        // source authored, e.g. `7y`).
+        event_out.owner = event.owner.as_ref().map(|owner| owner.text.clone());
+        event_out.classification = event
+            .classification
+            .as_ref()
+            .map(|classification| classification.text.clone());
+        event_out.retention = event.retention.clone();
 
         let mut field_names: Vec<String> = Vec::new();
         for field in &event.fields {
@@ -123,6 +140,59 @@ pub(crate) fn compile_evt_file(
             event_out
                 .fields
                 .push(rex_ir::events::EventField::new(field.name.text.clone(), ty));
+        }
+
+        // Rule 9 — `pii` entries must name declared payload fields (after
+        // the fields, in source order, whatever the source's member order).
+        for field in &event.pii {
+            if !field_names.contains(&field.text) {
+                local.push(
+                    Diagnostic::error(
+                        format!(
+                            "unknown payload field '{}' in pii of event '{}'",
+                            field.text, event.name.text
+                        ),
+                        Some(field.span),
+                    )
+                    .with_help("pii entries must name payload fields of the same event"),
+                );
+            } else {
+                event_out.pii.push(field.text.clone());
+            }
+        }
+
+        // Rule 8 — the CloudEvents attributes are non-empty when the block
+        // is present (they are authoritative for a downstream generator).
+        if let Some(cloud_events) = &event.cloud_events {
+            if cloud_events.r#type.is_empty() {
+                local.push(
+                    Diagnostic::error(
+                        format!(
+                            "cloudEvents type on event '{}' must not be empty",
+                            event.name.text
+                        ),
+                        Some(cloud_events.span),
+                    )
+                    .with_help("the CloudEvents spec requires a non-empty type"),
+                );
+            }
+            if cloud_events.source.is_empty() {
+                local.push(
+                    Diagnostic::error(
+                        format!(
+                            "cloudEvents source on event '{}' must not be empty",
+                            event.name.text
+                        ),
+                        Some(cloud_events.span),
+                    )
+                    .with_help("the CloudEvents spec requires a non-empty source"),
+                );
+            }
+            event_out.cloud_events = Some(CloudEventsAttributes {
+                r#type: cloud_events.r#type.clone(),
+                source: cloud_events.source.clone(),
+                subject: cloud_events.subject.clone(),
+            });
         }
         model.events.push(event_out);
     }
@@ -186,9 +256,25 @@ pub(crate) fn compile_evt_file(
         model.channels.push(channel_out);
     }
 
-    // Subscriptions: unique names, a non-empty event list and consumer, and
-    // every subscribed event declared in this file.
+    // Subscriptions: unique names, a non-empty event list and consumer,
+    // every subscribed event declared in this file, a `when` filter that
+    // types boolean against EVERY subscribed event, and a delivery policy
+    // whose mode, numbers, and dead-letter channel validate.
     let mut subscription_names: Vec<(String, Span)> = Vec::new();
+
+    // The synthetic per-event universe for `when` filters (the `.cmmn`
+    // discipline): the imported domains' classes merge first, then each
+    // subscribed event inserts a synthetic class whose features are its
+    // payload fields — the expression's implicit `self` — so a bare field
+    // name refers to the event being filtered. `insert_class` replaces the
+    // previous entry, so one universe serves every event.
+    let mut types = rex_expr::DomainTypes::default();
+    for unit in domains {
+        if let Some(domains_model) = &unit.model {
+            types.merge(rex_expr::DomainTypes::from_model(domains_model));
+        }
+    }
+
     for subscription in &ast.subscriptions {
         // Rule e — subscription names are unique within the file.
         if subscription_names
@@ -261,6 +347,176 @@ pub(crate) fn compile_evt_file(
         // The subscription's `scope <name>` binding rides through verbatim
         // — an opaque slice label the driver never validates.
         subscription_out.scope = subscription.scope.as_ref().map(|scope| scope.text.clone());
+
+        // Rule 13 — the `when` filter parses and types `boolean` against
+        // EVERY subscribed event: a filter is a routing decision per event,
+        // so a field absent from any listed event is an error by design.
+        // Parse errors leave the filter out of the artifact; type errors
+        // still lower the verbatim interior (the `.cmmn` precedent) — the
+        // artifact drops on any error either way.
+        if let Some(when_span) = subscription.when {
+            // The span covers the raw parens; slice strictly inside (the
+            // `when`-condition convention).
+            let interior = source
+                .get(when_span.start + 1..when_span.end.saturating_sub(1))
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            let parsed = rex_expr::parse(&interior);
+            for error in &parsed.errors {
+                local.push(
+                    Diagnostic::error(
+                        format!("invalid when filter: {}", error.message),
+                        Some(when_span),
+                    )
+                    .with_help(format!(
+                        "in the `when` of subscription '{}'",
+                        subscription.name.text
+                    )),
+                );
+            }
+            if let Some(expr) = parsed.ast {
+                for event_name in &subscription_out.events {
+                    // Unknown events were diagnosed above; typing skips
+                    // them (their payload shape is unknown).
+                    let Some(event_def) =
+                        model.events.iter().find(|event| &event.name == event_name)
+                    else {
+                        continue;
+                    };
+                    let features = event_def
+                        .fields
+                        .iter()
+                        .map(|field| {
+                            rex_ir::Feature::new(
+                                field.name.clone(),
+                                rex_ir::FeatureKind::Attribute,
+                                field.ty.clone(),
+                                rex_ir::Multiplicity::REQUIRED,
+                            )
+                        })
+                        .collect();
+                    types.insert_class("", event_name, Vec::new(), features, Vec::new());
+                    let checker =
+                        rex_expr::TypeChecker::new(types.clone()).with_self("", event_name);
+                    let where_help = format!(
+                        "in the `when` of subscription '{}' against event '{}'",
+                        subscription.name.text, event_name
+                    );
+                    match checker.type_of(&expr) {
+                        Ok(ty) if ty == rex_expr::Ty::boolean() => {}
+                        Ok(ty) => {
+                            local.push(
+                                Diagnostic::error(
+                                    format!("when filter must be boolean, found {ty}"),
+                                    Some(when_span),
+                                )
+                                .with_help(where_help),
+                            );
+                        }
+                        Err(errors) => {
+                            for error in errors {
+                                local.push(
+                                    Diagnostic::error(error.message, Some(when_span))
+                                        .with_help(where_help.clone()),
+                                );
+                            }
+                        }
+                    }
+                }
+                // Only a successfully parsed filter lowers into the
+                // artifact (the `.cmmn` precedent: parse errors leave
+                // nothing to carry).
+                subscription_out.when = Some(interior);
+            }
+        }
+
+        // Rule 10–12 — the delivery policy: the mode is one of the three
+        // vocabulary words, the tuning knobs are positive, and the
+        // dead-letter channel is declared in this file.
+        if let Some(delivery) = &subscription.delivery {
+            let mut policy = rex_ir::events::DeliveryPolicy::new(DeliveryMode::AtLeastOnce);
+            if let Some(mode) = &delivery.mode {
+                match DELIVERY_MODES.iter().find(|word| **word == mode.text) {
+                    Some(word) => {
+                        policy.mode = match *word {
+                            "at_most_once" => DeliveryMode::AtMostOnce,
+                            "effectively_once" => DeliveryMode::EffectivelyOnce,
+                            _ => DeliveryMode::AtLeastOnce,
+                        };
+                    }
+                    None => {
+                        local.push(
+                            Diagnostic::error(
+                                format!(
+                                    "unknown delivery mode '{}' on subscription '{}'",
+                                    mode.text, subscription.name.text
+                                ),
+                                Some(mode.span),
+                            )
+                            .with_help(format!(
+                                "delivery modes are {}",
+                                DELIVERY_MODES
+                                    .iter()
+                                    .map(|word| format!("`{word}`"))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )),
+                        );
+                    }
+                }
+            }
+            for (value, entry) in [
+                (delivery.max_attempts, "maxAttempts"),
+                (delivery.backoff_seconds, "backoffSeconds"),
+                (delivery.timeout_seconds, "timeoutSeconds"),
+            ] {
+                if let Some(value) = value {
+                    if value <= 0 {
+                        local.push(
+                            Diagnostic::error(
+                                format!(
+                                    "'{entry}' on subscription '{}' must be positive",
+                                    subscription.name.text
+                                ),
+                                Some(delivery.span),
+                            )
+                            .with_help("a delivery tuning knob must be greater than zero"),
+                        );
+                    }
+                }
+            }
+            if let Some(value) = delivery.max_attempts {
+                policy.max_attempts = Some(value.max(0) as u32);
+            }
+            if let Some(value) = delivery.backoff_seconds {
+                policy.backoff_seconds = Some(value.max(0) as u32);
+            }
+            if let Some(value) = delivery.timeout_seconds {
+                policy.timeout_seconds = Some(value.max(0) as u32);
+            }
+            if let Some(dead_letter) = &delivery.dead_letter {
+                if channel_names
+                    .iter()
+                    .any(|(name, _)| *name == dead_letter.text)
+                {
+                    policy.dead_letter = Some(dead_letter.text.clone());
+                } else {
+                    local.push(
+                        Diagnostic::error(
+                            format!(
+                                "unknown dead-letter channel '{}' on subscription '{}'",
+                                dead_letter.text, subscription.name.text
+                            ),
+                            Some(dead_letter.span),
+                        )
+                        .with_help("the dead-letter channel must be declared in this file"),
+                    );
+                }
+            }
+            subscription_out.delivery = Some(policy);
+        }
+
         model.subscriptions.push(subscription_out);
     }
 
