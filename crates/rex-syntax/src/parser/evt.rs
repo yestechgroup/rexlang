@@ -15,13 +15,42 @@ pub(crate) enum EvtFileItem {
     Junk,
 }
 
+/// One member of an event body: a payload field, a governance line, or the
+/// `cloudEvents` block. Members may appear in any source order; the fold
+/// below groups them — repeated governance lines and `cloudEvents` blocks
+/// overwrite (the last wins), `pii` entries append.
+#[derive(Clone)]
+pub(crate) enum EvtEventMember {
+    Field(EventFieldDecl),
+    Owner(Name),
+    Classification(Name),
+    Retention(String),
+    Pii(Vec<Name>),
+    CloudEvents(CloudEventsDecl),
+}
+
 /// One `name: type_ref;` payload field of an [`EventDecl`]. Committed once
 /// the field name matched: a missing `:`, type, or `;` is a reported error
 /// and the field still recovers (with an empty type when absent), so one
-/// malformed field never loses the surrounding event.
+/// malformed field never loses the surrounding event. The field name is
+/// ordinarily a name — plus the `type` keyword itself (the qname-segment
+/// rule: `type` is special only inside the `cloudEvents` block, so it
+/// remains usable as a payload field name without an escape).
+pub(crate) fn evt_field_name<'src>() -> impl Parser<'src, Tokens<'src>, Name, MoxExtra<'src>> + Clone
+{
+    name().or(any().try_map(|token: Token<'src>, span| match token {
+        Token::Type => Ok(Name {
+            text: "type".to_string(),
+            span,
+            escaped: false,
+        }),
+        _ => Err(Rich::custom(span, "expected a field name")),
+    }))
+}
+
 pub(crate) fn event_field<'src>(
 ) -> impl Parser<'src, Tokens<'src>, EventFieldDecl, MoxExtra<'src>> + Clone {
-    name()
+    evt_field_name()
         .then(kw(Token::Other(':')).or_not())
         .then(tref().or_not())
         .then(kw(Token::Other(';')).or_not())
@@ -50,33 +79,264 @@ pub(crate) fn event_field<'src>(
         })
 }
 
-/// An `event <name> ("version" string)? { field* }` declaration. The
+/// The contextual `word` of an `.evt` body: an ordinary identifier that is
+/// special only in the grammar position its clause parser commits to (the
+/// delegation-`to` precedent). Escaped `^word` never matches.
+pub(crate) fn evt_word<'src>(
+    word: &'static str,
+) -> impl Parser<'src, Tokens<'src>, Span, MoxExtra<'src>> + Clone {
+    select! { Token::Ident(text) = e if text == word => e.span() }
+}
+
+/// One committed `owner <name>;` / `classification <word>;` governance line
+/// of an event body: once the contextual word matched, a missing value or
+/// `;` is a reported error and the line still recovers.
+fn evt_name_line<'src>(
+    word: &'static str,
+) -> impl Parser<'src, Tokens<'src>, Name, MoxExtra<'src>> + Clone {
+    evt_word(word)
+        .ignore_then(name().or_not())
+        .then(kw(Token::Other(';')).or_not())
+        .map_with(|(value, semi), e| (value, semi, e.span()))
+        .validate(move |(value, semi, span), _e, emitter| {
+            if value.is_none() {
+                emitter.emit(Rich::custom(
+                    span,
+                    format!("expected a name after `{word}`"),
+                ));
+            }
+            if semi.is_none() {
+                emitter.emit(Rich::custom(
+                    span,
+                    format!("expected `;` after the `{word}` line"),
+                ));
+            }
+            value.unwrap_or_else(|| Name {
+                text: String::new(),
+                span,
+                escaped: false,
+            })
+        })
+}
+
+/// The `retention "<period>";` governance line of an event body, committed
+/// like [`evt_name_line`] (the string value is kept verbatim).
+fn evt_retention_line<'src>() -> impl Parser<'src, Tokens<'src>, String, MoxExtra<'src>> + Clone {
+    evt_word("retention")
+        .ignore_then(string_lit().or_not())
+        .then(kw(Token::Other(';')).or_not())
+        .map_with(|(value, semi), e| (value, semi, e.span()))
+        .validate(|(value, semi, span), _e, emitter| {
+            if value.is_none() {
+                emitter.emit(Rich::custom(
+                    span,
+                    "expected a retention string after `retention`",
+                ));
+            }
+            if semi.is_none() {
+                emitter.emit(Rich::custom(
+                    span,
+                    "expected `;` after the `retention` line",
+                ));
+            }
+            value.unwrap_or_default()
+        })
+}
+
+/// The `pii [ <field>* ];` governance line of an event body, committed once
+/// the contextual word matched: missing brackets or `;` are reported errors
+/// and the list still recovers.
+fn evt_pii_line<'src>() -> impl Parser<'src, Tokens<'src>, Vec<Name>, MoxExtra<'src>> + Clone {
+    evt_word("pii")
+        .ignore_then(
+            kw(Token::LBracket)
+                .ignore_then(name().repeated().collect::<Vec<_>>())
+                .then(kw(Token::RBracket).map_with(|_, e| e.span()).or_not())
+                .map_with(|(fields, close), e| (fields, close, e.span()))
+                .map(Some)
+                .or_not(),
+        )
+        .then(kw(Token::Other(';')).or_not())
+        .map_with(|(list, semi), e| (list, semi, e.span()))
+        .validate(|(list, semi, span), _e, emitter| {
+            // The inner layer is always `Some` (the `.map(Some)` follows a
+            // complete parse), so flattening keeps exactly the "no `[`"
+            // case as `None`.
+            let (fields, close, _list_span) = match list.flatten() {
+                Some(list) => list,
+                None => {
+                    emitter.emit(Rich::custom(span, "expected `[` after `pii`"));
+                    (Vec::new(), None, span)
+                }
+            };
+            if close.is_none() {
+                emitter.emit(Rich::custom(span, "expected `]` after the `pii` list"));
+            }
+            if semi.is_none() {
+                emitter.emit(Rich::custom(span, "expected `;` after the `pii` list"));
+            }
+            fields
+        })
+}
+
+/// One committed `type`/`source`/`subject` string entry of a `cloudEvents`
+/// block: once the word matched, a missing string is a reported error and
+/// the entry still recovers. The outer `None` means the word never matched
+/// (an entry required by the block is missing); `Some(None)` means the word
+/// matched but its string was missing (already diagnosed). `type` is the
+/// real lexer keyword (the `.mox` datatype word); `source`/`subject` are
+/// contextual identifiers.
+fn evt_ce_entry<'src, P>(
+    word: P,
+    missing_value: &'static str,
+) -> impl Parser<'src, Tokens<'src>, Option<Option<String>>, MoxExtra<'src>> + Clone
+where
+    P: Parser<'src, Tokens<'src>, Span, MoxExtra<'src>> + Clone,
+{
+    word.ignore_then(string_lit().or_not())
+        .map_with(|value, e| (value, e.span()))
+        .validate(move |(value, span), _e, emitter| {
+            if value.is_none() {
+                emitter.emit(Rich::custom(span, missing_value));
+            }
+            value
+        })
+        .map(Some)
+        .or_not()
+        .map(Option::flatten)
+}
+
+/// The `cloudEvents { type "..." source "..." ("subject" "...")? }` block of
+/// an event body. Committed once the contextual word matched: a missing
+/// `{`, `type`, or `source` entry is a reported error (both attributes are
+/// required once the block is present) and the block still recovers. With
+/// the `{` missing the parser commits to the recovery consuming only the
+/// word, so the event's own closing `}` is never swallowed. The entries
+/// carry no `;` — the block's grammar is bracket-only.
+pub(crate) fn cloud_events_decl<'src>(
+) -> impl Parser<'src, Tokens<'src>, CloudEventsDecl, MoxExtra<'src>> + Clone {
+    let block = kw(Token::LBrace)
+        .ignore_then(evt_ce_entry(
+            kw(Token::Type),
+            "expected a type string after `type`",
+        ))
+        .then(evt_ce_entry(
+            evt_word("source"),
+            "expected a source string after `source`",
+        ))
+        .then(evt_ce_entry(
+            evt_word("subject"),
+            "expected a subject string after `subject`",
+        ))
+        .then(kw(Token::RBrace).map_with(|_, e| e.span()).or_not())
+        .map_with(|(((ty, source), subject), close), _| (ty, source, subject, close));
+    evt_word("cloudEvents")
+        .ignore_then(block.or_not())
+        .map_with(|block, e| (block, e.span()))
+        .validate(|(block, span), _e, emitter| {
+            let Some((ty, source, subject, close)) = block else {
+                emitter.emit(Rich::custom(span, "expected `{` after `cloudEvents`"));
+                return CloudEventsDecl {
+                    r#type: String::new(),
+                    source: String::new(),
+                    subject: None,
+                    span,
+                };
+            };
+            if ty.is_none() {
+                emitter.emit(Rich::custom(
+                    span,
+                    "expected the `type` entry in the `cloudEvents` block",
+                ));
+            }
+            if source.is_none() {
+                emitter.emit(Rich::custom(
+                    span,
+                    "expected the `source` entry in the `cloudEvents` block",
+                ));
+            }
+            if close.is_none() {
+                emitter.emit(Rich::custom(
+                    span,
+                    "expected `}` after the `cloudEvents` block",
+                ));
+            }
+            CloudEventsDecl {
+                r#type: ty.flatten().unwrap_or_default(),
+                source: source.flatten().unwrap_or_default(),
+                subject: subject.flatten(),
+                span,
+            }
+        })
+}
+
+/// One member of an event body (any source order): a governance line, the
+/// `cloudEvents` block, or a payload field. The governance words and
+/// `cloudEvents` are contextual — special only as member introducers, so a
+/// payload field named `type` (the keyword lookalike, see
+/// [`evt_field_name`]) still parses as a field.
+pub(crate) fn event_body_member<'src>(
+) -> impl Parser<'src, Tokens<'src>, EvtEventMember, MoxExtra<'src>> + Clone {
+    choice((
+        evt_name_line("owner").map(EvtEventMember::Owner),
+        evt_name_line("classification").map(EvtEventMember::Classification),
+        evt_retention_line().map(EvtEventMember::Retention),
+        evt_pii_line().map(EvtEventMember::Pii),
+        cloud_events_decl().map(EvtEventMember::CloudEvents),
+        event_field().map(EvtEventMember::Field),
+    ))
+}
+
+/// An `event <name> ("version" string)? { member* }` declaration. The
 /// `version` clause is committed once the keyword matched: a missing version
-/// string is a reported error and the event still recovers.
+/// string is a reported error and the event still recovers. Members may
+/// appear in any source order; the fold groups them into the canonical
+/// shape (fields, then governance, then CloudEvents) — repeated governance
+/// lines and `cloudEvents` blocks overwrite (the last wins), `pii` appends.
 pub(crate) fn event_decl<'src>(
 ) -> impl Parser<'src, Tokens<'src>, EventDecl, MoxExtra<'src>> + Clone {
     kw(Token::Event)
         .ignore_then(name())
         .then(kw(Token::Version).or_not().then(string_lit().or_not()))
         .then_ignore(kw(Token::LBrace))
-        .then(event_field().repeated().collect::<Vec<_>>())
+        .then(event_body_member().repeated().collect::<Vec<_>>())
         .then_ignore(kw(Token::RBrace))
-        .map_with(|((name, (version_kw, version)), fields), e| {
-            (name, version_kw, version, fields, e.span())
+        .map_with(|((name, (version_kw, version)), members), e| {
+            (name, version_kw, version, members, e.span())
         })
-        .validate(|(name, version_kw, version, fields, span), _e, emitter| {
+        .validate(|(name, version_kw, version, members, span), _e, emitter| {
             if version_kw.is_some() && version.is_none() {
                 emitter.emit(Rich::custom(
                     name.span,
                     "expected a version string after `version`",
                 ));
             }
-            EventDecl {
+            let mut decl = EventDecl {
                 name,
                 version,
-                fields,
+                fields: Vec::new(),
+                owner: None,
+                classification: None,
+                retention: None,
+                pii: Vec::new(),
+                cloud_events: None,
                 span,
+            };
+            for member in members {
+                match member {
+                    EvtEventMember::Field(field) => decl.fields.push(field),
+                    EvtEventMember::Owner(owner) => decl.owner = Some(owner),
+                    EvtEventMember::Classification(classification) => {
+                        decl.classification = Some(classification)
+                    }
+                    EvtEventMember::Retention(retention) => decl.retention = Some(retention),
+                    EvtEventMember::Pii(pii) => decl.pii.extend(pii),
+                    EvtEventMember::CloudEvents(cloud_events) => {
+                        decl.cloud_events = Some(cloud_events)
+                    }
+                }
             }
+            decl
         })
 }
 
@@ -182,18 +442,187 @@ pub(crate) fn evt_consumer_keyword<'src>(
     select! { Token::Ident(text) = e if text == "consumer" => e.span() }
 }
 
+/// One committed `mode <word>;` / `maxAttempts <int>;` / `backoffSeconds
+/// <int>;` / `timeoutSeconds <int>;` / `deadLetter <channel>;` entry of a
+/// `delivery` block: once the contextual word matched, a missing value or
+/// `;` is a reported error and the entry still recovers. The outer `None`
+/// means the word never matched; `Some(None)` means the word matched but
+/// its value was missing (already diagnosed).
+fn evt_delivery_entry<'src, V, W, P>(
+    word: W,
+    missing_value: &'static str,
+    entry: &'static str,
+    value: P,
+) -> impl Parser<'src, Tokens<'src>, Option<Option<V>>, MoxExtra<'src>> + Clone
+where
+    V: Clone + 'static,
+    W: Parser<'src, Tokens<'src>, Span, MoxExtra<'src>> + Clone,
+    P: Parser<'src, Tokens<'src>, V, MoxExtra<'src>> + Clone,
+{
+    word.ignore_then(value.or_not())
+        .then(kw(Token::Other(';')).or_not())
+        .map_with(move |(value, semi), e| (value, semi, e.span()))
+        .validate(move |(value, semi, span), _e, emitter| {
+            if value.is_none() {
+                emitter.emit(Rich::custom(span, missing_value));
+            }
+            if semi.is_none() {
+                emitter.emit(Rich::custom(
+                    span,
+                    format!("expected `;` after the `{entry}` entry"),
+                ));
+            }
+            value
+        })
+        .map(Some)
+        .or_not()
+        .map(Option::flatten)
+}
+
+/// The `delivery { mode <word>; ... }` block of a subscription body.
+/// Committed once the contextual word matched: a missing `{`, the required
+/// `mode` entry, or the closing `}` is a reported error and the block still
+/// recovers. With the `{` missing the parser commits to the recovery
+/// consuming only the word, so the subscription's own closing `}` is never
+/// swallowed. The entries are a fixed chain in canonical order — `mode`
+/// first, then the optional tuning knobs.
+pub(crate) fn delivery_decl<'src>(
+) -> impl Parser<'src, Tokens<'src>, DeliveryDecl, MoxExtra<'src>> + Clone {
+    let mode_entry = evt_delivery_entry(
+        evt_word("mode"),
+        "expected a delivery mode after `mode`",
+        "mode",
+        name(),
+    );
+    let attempts_entry = evt_delivery_entry(
+        evt_word("maxAttempts"),
+        "expected an int after `maxAttempts`",
+        "maxAttempts",
+        int_lit(),
+    );
+    let backoff_entry = evt_delivery_entry(
+        evt_word("backoffSeconds"),
+        "expected an int after `backoffSeconds`",
+        "backoffSeconds",
+        int_lit(),
+    );
+    let timeout_entry = evt_delivery_entry(
+        evt_word("timeoutSeconds"),
+        "expected an int after `timeoutSeconds`",
+        "timeoutSeconds",
+        int_lit(),
+    );
+    let dead_letter_entry = evt_delivery_entry(
+        evt_word("deadLetter"),
+        "expected a channel name after `deadLetter`",
+        "deadLetter",
+        name(),
+    );
+    let block = kw(Token::LBrace)
+        .ignore_then(mode_entry)
+        .then(attempts_entry)
+        .then(backoff_entry)
+        .then(timeout_entry)
+        .then(dead_letter_entry)
+        .then(kw(Token::RBrace).map_with(|_, e| e.span()).or_not())
+        .map_with(
+            |(((((mode, attempts), backoff), timeout), dead_letter), close), _| {
+                (mode, attempts, backoff, timeout, dead_letter, close)
+            },
+        );
+    evt_word("delivery")
+        .ignore_then(block.or_not())
+        .map_with(|block, e| (block, e.span()))
+        .validate(|(block, span), _e, emitter| {
+            let Some((mode, attempts, backoff, timeout, dead_letter, close)) = block else {
+                emitter.emit(Rich::custom(span, "expected `{` after `delivery`"));
+                return DeliveryDecl {
+                    mode: None,
+                    max_attempts: None,
+                    backoff_seconds: None,
+                    timeout_seconds: None,
+                    dead_letter: None,
+                    span,
+                };
+            };
+            if mode.is_none() {
+                emitter.emit(Rich::custom(
+                    span,
+                    "expected a `mode` entry in the `delivery` block",
+                ));
+            }
+            if close.is_none() {
+                emitter.emit(Rich::custom(
+                    span,
+                    "expected `}` after the `delivery` block",
+                ));
+            }
+            DeliveryDecl {
+                mode: mode.flatten(),
+                max_attempts: attempts.flatten(),
+                backoff_seconds: backoff.flatten(),
+                timeout_seconds: timeout.flatten(),
+                dead_letter: dead_letter.flatten(),
+                span,
+            }
+        })
+}
+
+/// The `when (...)` filter clause of a subscription body — the real lexer
+/// keyword (escapable like every keyword). Committed once the keyword
+/// matched: a missing parenthesized condition is a reported error and the
+/// clause still recovers. The parens are a [`raw_parens`] span: the driver
+/// slices the interior strictly inside and types it.
+pub(crate) fn evt_when_clause<'src>(
+) -> impl Parser<'src, Tokens<'src>, Option<Span>, MoxExtra<'src>> + Clone {
+    kw(Token::When)
+        .ignore_then(raw_parens().map(Some).or_not())
+        .map_with(|parens, e| (parens, e.span()))
+        .validate(|(parens, span), _e, emitter| {
+            if parens.is_none() {
+                emitter.emit(Rich::custom(
+                    span,
+                    "expected a `(...)` condition after `when`",
+                ));
+            }
+            parens
+        })
+        .map(Option::flatten)
+}
+
 /// A `subscription <name> { events [ <event>* ] consumer <name>
-/// ("scope" <name>)? }` declaration. Once the body's `{` matched the
-/// declaration is committed: missing `events`, list brackets, `consumer`,
-/// the consumer name, or the scope name are each reported errors and the
-/// subscription still recovers. Inside the `[...]` list the contextual
-/// `consumer` word ends the list (the word introducing the next clause), so
-/// a missing `]` never swallows the consumer line. A stray name after the
-/// consumer without the leading `scope` is reported too.
+/// ("scope" <name>)? ("when" (...))? ("delivery" {...})? }` declaration.
+/// Once the body's `{` matched the declaration is committed: missing
+/// `events`, list brackets, `consumer`, the consumer name, the scope name,
+/// the `when` condition, or any `delivery` piece are each reported errors
+/// and the subscription still recovers. Inside the `[...]` list the
+/// contextual `consumer` word ends the list (the word introducing the next
+/// clause), so a missing `]` never swallows the consumer line; after the
+/// consumer name the contextual `delivery` word is likewise reserved (the
+/// next clause's introducer — `scope ^delivery` escapes). A stray name
+/// after the consumer without the leading `scope` is reported too. The
+/// clauses follow the canonical order `events` → `consumer` → `scope` →
+/// `when` → `delivery`.
 pub(crate) fn subscription_decl<'src>(
 ) -> impl Parser<'src, Tokens<'src>, SubscriptionDecl, MoxExtra<'src>> + Clone {
     let event_name = select! {
         Token::Ident(text) = e if text != "consumer" => Name {
+            text: text.to_string(),
+            span: e.span(),
+            escaped: false,
+        },
+        Token::IdentEscaped(text) = e => Name {
+            text: text.to_string(),
+            span: e.span(),
+            escaped: true,
+        },
+    };
+    // The scope-name / stray-name slot: any name except the unescaped
+    // `delivery` word, which introduces the next clause (the
+    // `consumer`-ends-the-list precedent; `^delivery` and `scope ^delivery`
+    // stay legal names).
+    let scope_name = select! {
+        Token::Ident(text) = e if text != "delivery" => Name {
             text: text.to_string(),
             span: e.span(),
             escaped: false,
@@ -218,10 +647,16 @@ pub(crate) fn subscription_decl<'src>(
         .then(evt_consumer_keyword().or_not())
         .then(name().or_not())
         .then(evt_scope_keyword().or_not())
-        .then(name().or_not())
+        .then(scope_name.or_not())
+        .then(evt_when_clause().or_not())
+        .then(delivery_decl().or_not())
         .then_ignore(kw(Token::RBrace).or_not())
         .map_with(
-            |((((((name, events_kw), list), consumer_kw), consumer), scope_kw), scope), e| {
+            |(
+                (((((((name, events_kw), list), consumer_kw), consumer), scope_kw), scope), when),
+                delivery,
+            ),
+             e| {
                 (
                     name,
                     events_kw,
@@ -230,12 +665,27 @@ pub(crate) fn subscription_decl<'src>(
                     consumer,
                     scope_kw,
                     scope,
+                    when,
+                    delivery,
                     e.span(),
                 )
             },
         )
         .validate(
-            |(name, events_kw, list, consumer_kw, consumer, scope_kw, scope, span), _e, emitter| {
+            |(
+                name,
+                events_kw,
+                list,
+                consumer_kw,
+                consumer,
+                scope_kw,
+                scope,
+                when,
+                delivery,
+                span,
+            ),
+             _e,
+             emitter| {
                 if events_kw.is_none() {
                     emitter.emit(Rich::custom(span, "expected `events`"));
                 }
@@ -267,7 +717,7 @@ pub(crate) fn subscription_decl<'src>(
                     if let Some(scope) = &scope {
                         emitter.emit(Rich::custom(
                             scope.span,
-                            "expected `scope` or `}` after the consumer name",
+                            "expected `scope`, `when`, `delivery`, or `}` after the consumer name",
                         ));
                     }
                 }
@@ -280,6 +730,8 @@ pub(crate) fn subscription_decl<'src>(
                         escaped: false,
                     }),
                     scope,
+                    when: when.flatten(),
+                    delivery,
                     span,
                 }
             },

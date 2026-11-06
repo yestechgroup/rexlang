@@ -1133,6 +1133,7 @@ fn compile_evt_with(
 
     let (model, diagnostics) = events::compile_evt_file(
         &contract_path,
+        &contract.text(db),
         parsed.ast.as_ref(),
         &parsed.diagnostics,
         &domains.domain_units,
@@ -1438,6 +1439,40 @@ fn compile_ddd_str_inner(
 ///    `subscription 'S' names an empty consumer`; the empty consumer is
 ///    only reachable through parser recovery, whose syntax error fires
 ///    alongside).
+/// 8. **CloudEvents attributes** — once an event carries a `cloudEvents`
+///    block, its `type` and `source` must be non-empty (`cloudEvents
+///    type/source on event 'X' must not be empty`); when present they are
+///    authoritative for a downstream generator, overriding any derived
+///    mapping.
+/// 9. **Governance `pii`** — every entry of a `pii [ ... ]` line must name
+///    a payload field of the same event (`unknown payload field 'x' in pii
+///    of event 'Y'`). The other governance lines (`owner`,
+///    `classification`, `retention`) are verbatim labels the driver never
+///    interprets.
+/// 10. **Delivery mode** — the `mode` entry of a `delivery` block must be
+///     one of `at_most_once`, `at_least_once`, `effectively_once`
+///     (`unknown delivery mode 'x' on subscription 'S'`, with help listing
+///     them).
+/// 11. **Delivery tuning knobs** — `maxAttempts`, `backoffSeconds`, and
+///     `timeoutSeconds` must be positive (`'maxAttempts' on subscription
+///     'S' must be positive`).
+/// 12. **Dead-letter channel** — the `deadLetter` entry must name a channel
+///     declared in the same file (`unknown dead-letter channel 'x' on
+///     subscription 'S'`).
+/// 13. **Subscription `when`** — the filter's interior (sliced strictly
+///     inside the parens, trimmed — the `when`-condition convention) must
+///     parse as a rex-expr condition and type `boolean` against **every**
+///     event in the subscription's `events [...]` list: the expression is
+///     typed with a synthetic per-event class (the subscribed event's
+///     payload fields as the implicit `self`, over the imported domains'
+///     class union — `DomainTypes::insert_class`, never a fake `Model`).
+///     A field absent from any subscribed event is an error **by design** —
+///     a filter is a routing decision per event, so an event without the
+///     field cannot be routed (the help names the subscription and, for
+///     per-event failures, the event). A parse failure leaves the filter
+///     out of the artifact; a type failure still lowers the verbatim
+///     interior (the `.cmmn` precedent) — the artifact drops on any error
+///     either way.
 ///
 /// Scope labels are **never** validated: a channel's `of <scope>` clause
 /// and a subscription's `scope <name>` binding are opaque topic-template
@@ -1448,8 +1483,14 @@ fn compile_ddd_str_inner(
 /// Diagnostics are ordered deterministically: the contract file's parse
 /// diagnostics first, then the import errors, then each domain's own
 /// diagnostics (import order), then the contract's semantic diagnostics
-/// grouped by declaration kind (events, channels, subscriptions; each in
-/// source order).
+/// grouped by declaration kind — events, then channels, then subscriptions
+/// — each group in source order, matching the artifact's declaration
+/// order. Within an event: its fields (source order), then `pii`, then
+/// `cloudEvents`; within a subscription: its `events [...]` list, then
+/// `when`, then `delivery`. Every diagnostic is tagged with its file's
+/// path, so hosts (and the CLI) render them grouped per file. On any error
+/// the result's `model` is `None`; `domains_model` still carries the
+/// imported domains when they lowered.
 pub fn compile_evt_str(
     path: &str,
     source: &str,

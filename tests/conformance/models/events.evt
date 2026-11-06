@@ -7,6 +7,8 @@ subscription billing {
 subscription account_feed {
   events [ AccountTradeUpdate ]
   consumer trader_ui  scope accounts
+  when (  accountId  !=  ""  )
+  delivery { deadLetter orders ; mode at_least_once ; timeoutSeconds 30 }
 }
 
 channel orders {
@@ -19,7 +21,12 @@ channel accountTrades of accounts {
 }
 
 event OrderPlaced version "1.0.0" {
+  cloudEvents { subject "{orderId}" type "com.example.orderplaced.v1" source "/orders" }
+  pii [ orderId ];
   orderId : String;
+  owner order_team;
+  classification confidential;
+  retention "7y";
   total : int;
 }
 
