@@ -46,6 +46,7 @@ fn conformance_actors_model_parses() {
             ("Agent", Some("Customer")),
             ("Manager", Some("Agent")),
             ("Finance", None),
+            ("Auditor", Some("Finance")),
         ]
     );
 

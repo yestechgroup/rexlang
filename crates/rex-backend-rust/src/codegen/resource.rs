@@ -94,6 +94,22 @@ impl End<'_> {
     }
 }
 
+/// The value parameter of an opposite-maintaining mutator (issue #3).
+///
+/// Distinct-class pairs keep the target class's snake name. When both ends
+/// share one class that name collides with the subject parameter, so the
+/// near-end role names the value instead — and when the role *is* the class
+/// name, a numbered fallback keeps the signature deterministic and valid.
+fn value_param_name(a_single: &str, role: &str, b_single: &str) -> String {
+    if b_single != a_single {
+        b_single.to_string()
+    } else if role != a_single {
+        role.to_string()
+    } else {
+        format!("{a_single}_2")
+    }
+}
+
 /// Emits all opposite-maintaining mutators.
 ///
 /// Containment/container pairs are emitted once per feature of the pair (each
@@ -207,13 +223,10 @@ fn emit_add_remove_many(e: &mut String, a: &End<'_>, b: &End<'_>) -> anyhow::Res
         &a.class.id_type,
         &a.class.slot_field,
     );
-    let (b_single, b_id, b_slot) = (
-        b.class.single.clone(),
-        &b.class.id_type,
-        &b.class.slot_field,
-    );
+    let (b_id, b_slot) = (&b.class.id_type, &b.class.slot_field);
     let field = a.field();
     let opposite = b.field();
+    let b_single = value_param_name(&a_single, &field, &b.class.single);
     e.push_str(&format!(
         "    /// Adds `{b_single}` to `{a_single}.{field}`, maintaining `{b_single}.{opposite}`.\n\
          \x20   pub fn {a_single}_add_{field}(&mut self, {a_single}: {a_id}, {b_single}: {b_id}) {{\n\
@@ -251,13 +264,10 @@ fn emit_set_single(e: &mut String, a: &End<'_>, b: &End<'_>) -> anyhow::Result<(
         &a.class.id_type,
         &a.class.slot_field,
     );
-    let (b_single, b_id, b_slot) = (
-        b.class.single.clone(),
-        &b.class.id_type,
-        &b.class.slot_field,
-    );
+    let (b_id, b_slot) = (&b.class.id_type, &b.class.slot_field);
     let field = a.field();
     let opposite = b.field();
+    let b_single = value_param_name(&a_single, &field, &b.class.single);
     e.push_str(&format!(
         "    /// Sets `{a_single}.{field}` (or clears it), maintaining `{b_single}.{opposite}`.\n\
          \x20   pub fn {a_single}_set_{field}(&mut self, {a_single}: {a_id}, {b_single}: Option<{b_id}>) {{\n\
@@ -300,13 +310,10 @@ fn emit_add_remove_to_single(e: &mut String, a: &End<'_>, b: &End<'_>) -> anyhow
         &a.class.id_type,
         &a.class.slot_field,
     );
-    let (b_single, b_id, b_slot) = (
-        b.class.single.clone(),
-        &b.class.id_type,
-        &b.class.slot_field,
-    );
+    let (b_id, b_slot) = (&b.class.id_type, &b.class.slot_field);
     let field = a.field();
     let opposite = b.field();
+    let b_single = value_param_name(&a_single, &field, &b.class.single);
     e.push_str(&format!(
         "    /// Adds `{b_single}` to `{a_single}.{field}`, detaching it from any previous `{opposite}` holder.\n\
          \x20   pub fn {a_single}_add_{field}(&mut self, {a_single}: {a_id}, {b_single}: {b_id}) {{\n\
@@ -353,13 +360,10 @@ fn emit_set_single_single(e: &mut String, a: &End<'_>, b: &End<'_>) -> anyhow::R
         &a.class.id_type,
         &a.class.slot_field,
     );
-    let (b_single, b_id, b_slot) = (
-        b.class.single.clone(),
-        &b.class.id_type,
-        &b.class.slot_field,
-    );
+    let (b_id, b_slot) = (&b.class.id_type, &b.class.slot_field);
     let field = a.field();
     let opposite = b.field();
+    let b_single = value_param_name(&a_single, &field, &b.class.single);
     e.push_str(&format!(
         "    /// Sets `{a_single}.{field}` (or clears it), maintaining `{b_single}.{opposite}`.\n\
          \x20   pub fn {a_single}_set_{field}(&mut self, {a_single}: {a_id}, {b_single}: Option<{b_id}>) {{\n\
@@ -414,12 +418,9 @@ fn emit_one_sided_containment(
         &owner.class.id_type,
         &owner.class.slot_field,
     );
-    let (b_single, b_id, b_slot) = (
-        child_class.single.clone(),
-        &child_class.id_type,
-        &child_class.slot_field,
-    );
+    let (b_id, b_slot) = (&child_class.id_type, &child_class.slot_field);
     let field = owner.field();
+    let b_single = value_param_name(&a_single, &field, &child_class.single);
     e.push_str(&format!(
         "    /// Adds `{b_single}` to `{a_single}.{field}` (one-way containment, no opposite).\n\
          \x20   pub fn {a_single}_add_{field}(&mut self, {a_single}: {a_id}, {b_single}: {b_id}) {{\n\

@@ -1333,8 +1333,9 @@ fn is_float_literal(expr: &Expr) -> bool {
 /// Whether a checked type participates in string concatenation (spec R9):
 /// `string`, or `Option<string>` (an operand that may be absent, R3). The
 /// `null` literal is not a string operand — it behaves as on the numeric
-/// path, which rejects it.
-fn is_string_operand(ty: Option<&Ty>) -> bool {
+/// path, which rejects it. Public so the Rust lowering branches on exactly
+/// the predicate the checker used.
+pub fn is_string_operand(ty: Option<&Ty>) -> bool {
     match ty {
         Some(Ty::Primitive(PrimitiveType::String)) => true,
         Some(Ty::Option(inner)) => matches!(**inner, Ty::Primitive(PrimitiveType::String)),

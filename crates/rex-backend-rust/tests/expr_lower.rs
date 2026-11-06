@@ -426,18 +426,52 @@ fn r4_division_is_plain_truncating_slash() {
 }
 
 // ---------------------------------------------------------------------------
-// R9 string concatenation — plain `+` on owned String operands
+// R9 string concatenation — `format!` on the owned `String` operands
 // ---------------------------------------------------------------------------
 
 #[test]
-fn r9_string_concatenation_is_plain_plus_on_owned_strings() {
-    // Left-associative chain: every binary node is parenthesized, and every
-    // string operand lowers to an owned `String`, so Rust's consuming `Add`
-    // moves them through the chain.
+fn r9_string_concatenation_lowers_to_format() {
+    // Left-associative chain: every binary node lowers to one `format!`, so
+    // nesting is safe and no operand ordering constraint from Rust's
+    // consuming `Add` (which `String + String` does not even implement)
+    // can surface.
     lower_in(
         "Book",
         r#"title + " - " + synopsis"#,
-        "((self.title.clone() + \" - \".to_string()) + self.synopsis.clone())",
+        "format!(\"{}{}\", format!(\"{}{}\", self.title.clone(), \" - \".to_string()), \
+         self.synopsis.clone())",
+    );
+}
+
+#[test]
+fn r9_string_literal_operand_concatenates_through_format() {
+    lower_in(
+        "Library",
+        r#""Book: " + name"#,
+        "format!(\"{}{}\", \"Book: \".to_string(), self.name.clone())",
+    );
+}
+
+#[test]
+fn r9_optional_string_concatenation_propagates_absence_via_zip() {
+    // R3: an absent operand yields an absent result. `citation` is an
+    // optional derived String; the present side rides along in `Some`.
+    lower_in(
+        "Book",
+        "citation + title",
+        "self.citation(res).zip(Some(self.title.clone())).map(|(concat_lhs, concat_rhs)| \
+         format!(\"{concat_lhs}{concat_rhs}\"))",
+    );
+}
+
+#[test]
+fn r9_concatenation_lowering_compiles_inside_filter_lambdas() {
+    // The `format!` operands are owned locals, so the lowering is
+    // capture-agnostic inside collection-algebra closures.
+    lower_in(
+        "Library",
+        "books.filter(b => b.title + b.title == name)",
+        r#"self.books.clone().iter().filter(|b| (format!("{}{}", res.book(**b).map(|o| o.title.clone()).expect("dangling `Book` id"), res.book(**b).map(|o| o.title.clone()).expect("dangling `Book` id")) == self.name.clone())).copied().collect::<Vec<_>>()"#,
     );
 }
 

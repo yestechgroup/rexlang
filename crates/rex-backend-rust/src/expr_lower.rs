@@ -13,8 +13,12 @@
 //!   via `unwrap_or` (the default is evaluated eagerly in Rust).
 //! - **R4** `/` is Rust's truncating integer division — a zero divisor
 //!   panics, which is exactly the rule's runtime contract.
-//! - **R9** string `+` lowers to plain `+` on the owned `String` operands
-//!   (left-associative chains; every binary node is parenthesized).
+//! - **R9** string `+` lowers to `format!("{}{}", lhs, rhs)` on the owned
+//!   `String` operands — Rust's `Add` is not implemented for
+//!   `String + String`, so plain `+` cannot carry the rule; when an operand
+//!   may be absent (R3) the absent operand propagates through `zip` and the
+//!   result is `Option<string>` (left-associative chains; every binary node
+//!   lowers to one `format!`, so nesting is safe).
 //!
 //! Runtime representation: class-typed values are their typed ids (`BookId`,
 //! always `Copy`), so every feature access on a class-typed receiver goes
@@ -28,7 +32,7 @@
 //! (strings, datatypes, lists, optional strings) clones, which keeps the
 //! emitted text correct in every context at the cost of a few allocations.
 
-use rex_expr::{BinOp, Expr, ExprKind, NamedKind, Ty, TypeChecker, UnOp};
+use rex_expr::{is_string_operand, BinOp, Expr, ExprKind, NamedKind, Ty, TypeChecker, UnOp};
 use rex_ir::{Feature, FeatureKind, Model, Operation, OperationParam, PrimitiveType, TypeRef};
 
 use crate::naming::{rust_ident, snake_case};
@@ -315,6 +319,23 @@ pub fn lower_expr(expr: &Expr, ty: &Ty, ctx: &LowerCtx<'_>) -> Result<String, Lo
     lowerer.lower(expr, ty)
 }
 
+/// Spec R9: the Rust text concatenating two owned `String` operand
+/// renderings. Rust's `Add` is not implemented for `String + String`, so
+/// plain `+` cannot carry the rule — `format!` on the owned operands does.
+/// An operand that may be absent (R3) propagates through `Option::zip` —
+/// the present side rides in `Some` — and the result types as
+/// `Option<string>`. The tree is already well-typed, so a poisoned operand
+/// cannot reach here.
+fn concat(lhs_ty: &Ty, rhs_ty: &Ty, lhs_code: String, rhs_code: String) -> String {
+    let zipped = match (lhs_ty, rhs_ty) {
+        (Ty::Option(_), Ty::Option(_)) => format!("{lhs_code}.zip({rhs_code})"),
+        (Ty::Option(_), _) => format!("{lhs_code}.zip(Some({rhs_code}))"),
+        (_, Ty::Option(_)) => format!("Some({lhs_code}).zip({rhs_code})"),
+        _ => return format!(r#"format!("{{}}{{}}", {lhs_code}, {rhs_code})"#),
+    };
+    format!("{zipped}.map(|(concat_lhs, concat_rhs)| format!(\"{{concat_lhs}}{{concat_rhs}}\"))")
+}
+
 struct Lowerer<'a, 'ctx> {
     ctx: &'ctx LowerCtx<'a>,
     /// A checker mirroring the lowering scope: closure parameters and `let`
@@ -496,14 +517,20 @@ impl Lowerer<'_, '_> {
             BinOp::Eq | BinOp::Ne => self.equality(op, lhs, rhs),
             // R1/R4: plain operators — Rust's overflow/division panics are
             // the contracted runtime behavior. All remaining operators map
-            // 1:1 — including R9 string `+`, whose operands lower to owned
-            // `String` values — with L1 adapting an integer-literal right
-            // operand to the left operand's `long` width.
+            // 1:1, with L1 adapting an integer-literal right operand to the
+            // left operand's `long` width — except R9 string `+`, which
+            // Rust's consuming `Add` cannot carry (`String + String` is not
+            // implemented) and so lowers through `concat` below.
             _ => {
                 let lhs_ty = self.type_of(lhs)?;
                 let rhs_ty = self.operand_ty(rhs, lhs_ty == Ty::long())?;
                 let lhs_code = self.lower(lhs, &lhs_ty)?;
                 let rhs_code = self.lower(rhs, &rhs_ty)?;
+                if op == BinOp::Add
+                    && (is_string_operand(Some(&lhs_ty)) || is_string_operand(Some(&rhs_ty)))
+                {
+                    return Ok(concat(&lhs_ty, &rhs_ty, lhs_code, rhs_code));
+                }
                 Ok(format!("({lhs_code} {op} {rhs_code})"))
             }
         }

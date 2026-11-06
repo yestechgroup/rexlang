@@ -460,7 +460,15 @@ capability.
 `agent` declares an autonomous LLM agent; the plain `actor` remains the
 human principal. Both take the same optional `extends` clause, and a
 declared kind is inherited: an actor that declares no kind takes the
-nearest ancestor's declared kind, defaulting to human.
+nearest ancestor's declared kind, defaulting to human. `extends` confers
+authority: an agent's effective permits are its own grants plus its
+ancestors' (the same rule `gen tools` and the delegation containment
+check use), so generated Cedar output addresses every holder — the
+action's `principalTypes` list the actors whose effective permits (or
+forbid bindings) reach it, and each grant entry emits one policy per
+holding actor, because Cedar's `is` matches the exact principal type and
+hierarchy membership (`memberOfTypes`) alone would leave an agent's
+request validated but unauthorized.
 
 Blocks declare obligations with `obligation <name>` lines — the named
 follow-through actions entries attach — under the same discipline as

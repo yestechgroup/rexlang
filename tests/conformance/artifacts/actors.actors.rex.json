@@ -96,6 +96,11 @@
         },
         {
           "name": "Finance"
+        },
+        {
+          "name": "Auditor",
+          "extends": "Finance",
+          "kind": "agent"
         }
       ],
       "capabilities": [

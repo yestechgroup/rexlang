@@ -198,7 +198,7 @@ fn library_example_compiles_with_zero_diagnostics() {
     assert_eq!(citation.multiplicity, Multiplicity::OPTIONAL);
     assert_eq!(
         citation.bodies.get("expr").map(String::as_str),
-        Some(" if pages > 400 { title } else { \"short read\" } "),
+        Some(" \"Book: \" + title "),
         "the derived body is carried verbatim into the IR"
     );
 
