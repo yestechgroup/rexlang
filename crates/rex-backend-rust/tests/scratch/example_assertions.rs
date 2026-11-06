@@ -105,9 +105,10 @@ mod example_assertions {
         }
 
         #[test]
-        fn derived_citation_depends_on_the_page_count() {
-            // `derived String citation { expr { if pages > 400 { title }
-            // else { "short read" } } }` — both branches exercised.
+        fn derived_citation_concatenates_the_title() {
+            // `derived String citation { expr { "Book: " + title } }` — the
+            // R9 concat lowering: `format!` on the owned String operands,
+            // compile-proven here in the scratch crate.
             let res = conformance_resource();
             let dune = res
                 .books
@@ -123,13 +124,13 @@ mod example_assertions {
                 .unwrap();
             assert_eq!(
                 res.book(dune).unwrap().citation(&res),
-                Some("Dune".to_string()),
-                "a long book cites its title"
+                Some("Book: Dune".to_string()),
+                "the citation prefixes the title"
             );
             assert_eq!(
                 res.book(hobbit).unwrap().citation(&res),
-                Some("short read".to_string()),
-                "a short book gets the fallback citation"
+                Some("Book: The Hobbit".to_string()),
+                "every book cites the same way"
             );
         }
 

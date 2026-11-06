@@ -27,7 +27,7 @@ class Book {
     BookCategory category
     refers Writer[] authors opposite books
     derived String citation {
-        expr { if pages > 400 { title } else { "short read" } }
+        expr { "Book: " + title }
     }
 }
 

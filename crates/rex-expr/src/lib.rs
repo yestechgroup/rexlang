@@ -48,7 +48,9 @@ pub mod parser;
 pub mod types;
 
 pub use ast::{AlgebraKind, BinOp, Expr, ExprKind, Span, Spanned, UnOp};
-pub use checker::{ClassInfo, DomainTypes, FunctionSignature, TypeChecker, TypeContext};
+pub use checker::{
+    is_string_operand, ClassInfo, DomainTypes, FunctionSignature, TypeChecker, TypeContext,
+};
 pub use error::{ExprError, ParseResult};
 pub use parser::parse;
 pub use types::{NamedKind, Ty};

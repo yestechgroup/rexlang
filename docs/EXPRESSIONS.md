@@ -416,12 +416,22 @@ mismatch. When neither operand is a string, `+` is entirely the numeric
 operator: L1 literal adaptation, the L2 same-type rule, and the R1/R4
 compile-time halves apply unchanged.
 
-**Rust lowering.** Plain `+` on the owned `String` operands — every string
-operand lowers to an owned value, so Rust's consuming `Add` is correct in
-left-associative chains (every binary node is parenthesized):
+**Rust lowering.** `format!("{}{}", lhs, rhs)` on the owned `String`
+operands — Rust's consuming `Add` is **not** implemented for
+`String + String`, so plain `+` cannot carry the rule. Every binary node
+lowers to one `format!`, so left-associative chains nest safely:
 
 ```rust
-((self.title.clone() + " - ".to_string()) + self.synopsis.clone())
+format!("{}{}", format!("{}{}", self.title.clone(), " - ".to_string()),
+        self.synopsis.clone())
+```
+
+An operand that may be absent propagates through `Option::zip` (the present
+side rides in `Some`), per R3:
+
+```rust
+self.citation(res).zip(Some(self.title.clone()))
+    .map(|(concat_lhs, concat_rhs)| format!("{concat_lhs}{concat_rhs}"))
 ```
 
 ## Collection algebra
