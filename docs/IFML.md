@@ -506,13 +506,24 @@ What is checked, and with which bindings:
 |---|---|
 | View/container `if` conditions | the view's `params` |
 | Component `filter:` / condition properties | view params + the `data:` entity's features (`with_self`) |
-| Table `column "L" -> expr …` | same as its component |
+| Table `column "L" -> expr …` | same as its component; deferred when the table declares no `data:` (no row type to bind — the explicit `Class.feature` column spelling is a generation-time shape) |
 | Event guards | same, minus event parameters (untyped — expressions naming them are skipped) |
 | Navigation binding pairs | same |
 | `use` override expressions | the enclosing view's params; expected type from the module input's `type_ref` |
 
+Every body that declares parameters binds them two ways: as bare idents
+(`customerId`) and through the **`params` record** (`params.customerId`) —
+the docs-promoted spelling (`navigate("CustomerEdit", { customerId:
+params.customerId })`) type-checks: the record is a synthetic class whose
+features are the body's typed params (a checking device, not a domain
+type; the next parameterized body overwrites it). A param whose type maps
+to nothing gets no feature (`params.<field>` defers like the bare ident),
+and a param literally named `params` shadows the record — the bare
+binding wins. The record exists for view/container/module bodies; command
+expressions bind their arguments and options as bare names.
+
 `type_ref` mapping for checking (one shared alias table in
-`crates/rex-ifml/src/check.rs`, used by both the checker and the
+`crates/rex-ifml/src/check/domains.rs`, used by both the checker and the
 resolver's override check): `String`/`Uuid` → string, `Int` → int,
 `Float` → float, `Boolean` → boolean, `DateTime` → the expression
 language's calendar `date` (a checking alias — no time-of-day

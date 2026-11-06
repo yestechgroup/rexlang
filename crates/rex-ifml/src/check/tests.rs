@@ -1,4 +1,3 @@
-
 use super::*;
 
 use rex_ir::{
@@ -830,6 +829,232 @@ view "Report" {
         !diags(mismatch, &shop_model()).is_empty(),
         "a date-vs-string comparison must be reported"
     );
+}
+
+#[test]
+fn params_record_navigation_type_checks_the_documented_spelling() {
+    // The docs-promoted spelling: a binding pair reads the *view's*
+    // params through the `params` record (`params.customerId`), not
+    // only the bare ident. Both spellings coexist; the record is
+    // exactly the body's (view + container / module input) params.
+    let source = r#"
+view "Detail" {
+    params { customerId: Uuid, slug: String };
+
+    component "editor" {
+        type: form;
+        data: Customer;
+        filter: slug != "";
+
+        on save(values) -> navigate("Home", {
+            customerId: params.customerId,
+            incoming: params.slug
+        });
+    }
+}
+
+view "Home" {
+    params { customerId: Uuid, incoming: String };
+}
+"#;
+    let found = diags(source, &shop_model());
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn params_record_unknown_field_is_reported() {
+    let source = r#"
+view "Detail" {
+    params { customerId: Uuid };
+
+    component "editor" {
+        type: form;
+        data: Customer;
+        filter: params.bogus == "x";
+    }
+}
+"#;
+    let diags = diags(source, &shop_model());
+    assert_eq!(diags.len(), 1, "{diags:?}");
+    assert_eq!(diags[0].code, E_UNKNOWN_FEATURE);
+    assert!(
+        diags[0].message.contains("unknown feature 'bogus'"),
+        "{}",
+        diags[0].message
+    );
+}
+
+#[test]
+fn params_record_defers_untyped_param_fields() {
+    // A param whose type does not resolve (a sigil/synthetic name) is
+    // untyped: `params.<that-field>` defers like the bare ident does —
+    // never a false unknown-feature error.
+    let source = r#"
+view "Detail" {
+    params { customerId: Uuid, meta: Mystery };
+
+    component "editor" {
+        type: form;
+        data: Customer;
+        filter: params.meta == "x";
+    }
+}
+"#;
+    assert!(diags(source, &shop_model()).is_empty());
+}
+
+#[test]
+fn a_param_named_params_keeps_bare_binding_precedence() {
+    // A view param literally named `params` shadows the record: the
+    // bare binding wins, the record is not registered.
+    let source = r#"
+view "Detail" {
+    params { params: String };
+
+    component "editor" {
+        type: form;
+        data: Customer;
+        filter: params == "x";
+    }
+}
+"#;
+    assert!(diags(source, &shop_model()).is_empty());
+}
+
+#[test]
+fn module_input_params_get_the_record() {
+    let source = r#"
+module "Pager" {
+    input { page: Int, pageSize: Int }
+    output { total: Int }
+
+    component "pages" {
+        type: list;
+        data: Product;
+        filter: page == params.page;
+    }
+}
+"#;
+    assert!(diags(source, &shop_model()).is_empty());
+}
+
+#[test]
+fn container_params_join_the_view_record() {
+    let source = r#"
+view "Report" {
+    params { region: String };
+
+    container "Summary" {
+        params { drill: String };
+
+        component "revenue" {
+            type: chart;
+            data: Product;
+            filter: region != drill;
+        }
+    }
+}
+"#;
+    assert!(diags(source, &shop_model()).is_empty());
+
+    let unknown = source.replace("filter: region != drill;", "filter: params.nope == \"x\";");
+    let diags = diags(&unknown, &shop_model());
+    assert_eq!(diags.len(), 1, "{diags:?}");
+    assert_eq!(diags[0].code, E_UNKNOWN_FEATURE);
+}
+
+#[test]
+fn canonical_fixture_checks_clean_against_its_reference_domain() {
+    // The conformance golden only pins parse + serialize; this closes
+    // the loop the docs promise: `check_ifml` over `app.ifml` with the
+    // domain it was written against (`domain "sales"`) is clean —
+    // including the doc-promoted `params.customerId` navigation
+    // binding, the `params`-free examples' bare spellings, the bare
+    // calls (`len`, `today`, `score`), and the field navigation
+    // (`Customer.name`, `Customer.status`).
+    let source = include_str!("../../../../tests/conformance/ifml/app.ifml");
+    let auth = include_str!("../../../../tests/conformance/ifml/rexlang/auth.actor");
+    let mut imports = crate::IfmlImports::default();
+    imports.provide("app.ifml", "rexlang/auth.actor", auth.to_string());
+    let compilation = crate::compile_ifml_str("app.ifml", source, &imports)
+        .expect("the canonical fixture must compile");
+    let diags = check_ifml(&compilation, Some(&sales_reference_model()));
+    assert!(diags.is_empty(), "{}", {
+        let rendered = diags
+            .iter()
+            .map(|diagnostic| {
+                format!(
+                    "  {} at {:?}: {}",
+                    diagnostic.code, diagnostic.span, diagnostic.message
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("the canonical fixture must check clean:\n{rendered}")
+    });
+}
+
+/// The domain the canonical fixture was written against: the classes
+/// and free functions its expressions reference (`domain "sales"`).
+fn sales_reference_model() -> Model {
+    let mut model = Model::new();
+    let mut package = Package::new("sales");
+    package.classes.push(ClassDef::new(
+        "Customer",
+        vec![],
+        vec![
+            attr("name", PrimitiveType::String),
+            attr("email", PrimitiveType::String),
+            attr("status", PrimitiveType::String),
+            attr("tier", PrimitiveType::String),
+            attr("title", PrimitiveType::String),
+            attr("active", PrimitiveType::Boolean),
+            attr("id", PrimitiveType::String),
+            attr("history", PrimitiveType::Int),
+        ],
+    ));
+    package.classes.push(ClassDef::new(
+        "Item",
+        vec![],
+        vec![attr("name", PrimitiveType::String)],
+    ));
+    package.classes.push(ClassDef::new(
+        "Order",
+        vec![],
+        vec![
+            attr("id", PrimitiveType::String),
+            attr("total", PrimitiveType::Int),
+            attr("date", PrimitiveType::Date),
+        ],
+    ));
+    package
+        .classes
+        .push(ClassDef::new("Person", vec![], vec![]));
+    package.functions.push(Operation::new(
+        "len",
+        TypeRef::Primitive(PrimitiveType::Int),
+        vec![OperationParam {
+            name: "value".to_string(),
+            type_: TypeRef::Primitive(PrimitiveType::String),
+            multiplicity: None,
+        }],
+    ));
+    package.functions.push(Operation::new(
+        "today",
+        TypeRef::Primitive(PrimitiveType::Date),
+        vec![],
+    ));
+    package.functions.push(Operation::new(
+        "score",
+        TypeRef::Primitive(PrimitiveType::Int),
+        vec![OperationParam {
+            name: "history".to_string(),
+            type_: TypeRef::Primitive(PrimitiveType::Int),
+            multiplicity: None,
+        }],
+    ));
+    model.packages.push(package);
+    model
 }
 
 #[test]

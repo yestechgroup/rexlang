@@ -16,13 +16,24 @@
 //! 1. View/container/component `if` conditions — bound to the view's (and
 //!    enclosing containers') `params`; component conditions additionally
 //!    bind the component's `data:` entity as the implicit self, so its
-//!    features are roots.
+//!    features are roots. The params are reachable two ways: as bare
+//!    idents (`customerId`) and through the doc-promoted **`params`
+//!    record** (`params.customerId`) — a synthetic class registered into
+//!    the checker's domain index, its features the body's typed params,
+//!    overwritten by each body that declares parameters. A param whose
+//!    type maps to nothing gets no feature (`params.<field>` defers, like
+//!    the bare ident); a param literally named `params` shadows the
+//!    record (the bare binding wins, and the record is not registered).
+//!    The record exists for view/container/module bodies only — command
+//!    expressions bind their arguments and options as bare names.
 //! 2. Component properties carrying expressions (`filter:`, and any
 //!    compound value — an operator tree or a navigation path) — same
 //!    self/param bindings. `data:` resolves the bare entity name to a
 //!    unique `(package, class)` in the domain model.
 //! 3. Table `column "..." -> expr ...` expressions — same component
-//!    bindings.
+//!    bindings. A table that declares no `data:` has no row type, so its
+//!    column expressions defer (the explicit `Class.feature` spelling of
+//!    such columns is a generation-time shape).
 //! 4. Event handler `if` guards and `navigate`/`refresh` binding pairs —
 //!    the enclosing component's bindings; expressions referencing event
 //!    parameters (untyped in the IR) are skipped. Action-invocation bodies
@@ -30,8 +41,8 @@
 //! 5. Non-literal `use` overrides of module *input* parameters — checked
 //!    against the resolved module input's declared type (the payoff for the
 //!    pattern-library flow); bindings are the enclosing view's (or
-//!    module's) params. Literal overrides were already checked
-//!    structurally by the resolver.
+//!    module's) params, bare or through the `params` record. Literal
+//!    overrides were already checked structurally by the resolver.
 //! 6. Command expressions — `if` guards, event-handler guards, and
 //!    navigation bindings inside `command` bodies (recursively through
 //!    subcommands) — bound to the command's typed arguments and options
@@ -121,7 +132,9 @@
 //! - expressions referencing event parameters, or parameters whose declared
 //!   type is an unresolvable domain name — those parameters get no binding,
 //!   and any expression naming one is skipped rather than mis-reported as
-//!   unknown;
+//!   unknown; the same deferral applies to `params.<field>` reads of such
+//!   parameters through the record, and to table column expressions in
+//!   components that declare no `data:` (no row type to bind);
 //! - overrides the resolver left unresolved, overrides of module
 //!   *properties* (no declared type), and overrides of inputs whose type
 //!   maps to nothing checkable.
@@ -148,7 +161,7 @@ use rex_ir::ifml::{
     EventAction, EventHandler, Expression, IfmlModel, ModuleUse, ParameterDecl, PromptKind,
     UnaryOp as IfmlUnaryOp, ValueExpression,
 };
-use rex_ir::{ActorModel, Model};
+use rex_ir::{ActorModel, Feature, FeatureKind, Model, Multiplicity, TypeRef};
 
 use crate::index::{IfmlIndex, LiteralKind};
 use crate::resolve::{IfmlCompilation, IfmlDiagnostic};
@@ -229,7 +242,7 @@ pub fn check_ifml_with_actors(
         return diags;
     };
     let index = &compilation.index;
-    let domains = DomainIndex::new(domains);
+    let mut domain_index = DomainIndex::new(domains);
     let mut override_spans: BTreeMap<(usize, usize), usize> = BTreeMap::new();
     for (site, use_site) in index.module_uses.iter().enumerate() {
         for override_item in &use_site.overrides {
@@ -237,7 +250,7 @@ pub fn check_ifml_with_actors(
         }
     }
     let mut checker = Checker {
-        domains: &domains,
+        domains: &mut domain_index,
         index,
         file: index.files[0].path.clone(),
         override_spans,
@@ -247,6 +260,7 @@ pub fn check_ifml_with_actors(
     diags.extend(checker.diags);
     diags
 }
+
 mod authorization;
 mod domains;
 mod reachability;
@@ -266,10 +280,22 @@ use domains::{DomainIndex, EntityError};
 struct Bindings {
     typed: Vec<(String, Ty)>,
     untyped: BTreeSet<String>,
+    /// Parameters that are part of the synthetic `params` record but whose
+    /// declared type mapped to nothing: `params.<field>` expressions defer
+    /// (the skip contract) instead of reporting a false unknown feature
+    /// against the record.
+    deferred_params: BTreeSet<String>,
 }
 
+/// The synthetic record class the `params.<name>` spelling navigates: one
+/// class per body, registered into the checker's [`DomainTypes`] and
+/// overwritten by the next body that declares parameters (insertion
+/// replaces by key). Empty package — the record is a checking device, not
+/// a domain type.
+const PARAMS_RECORD: (&str, &str) = ("", "params");
+
 impl Bindings {
-    fn build(domains: &DomainIndex, params: &[(String, String)]) -> Self {
+    fn build(domains: &mut DomainIndex, params: &[(String, String)]) -> Self {
         let mut typed = Vec::new();
         let mut untyped = BTreeSet::new();
         for (name, type_ref) in params {
@@ -280,7 +306,52 @@ impl Bindings {
                 }
             }
         }
-        Bindings { typed, untyped }
+        Bindings {
+            typed,
+            untyped,
+            deferred_params: BTreeSet::new(),
+        }
+    }
+
+    /// [`Bindings::build`] plus the doc-promoted `params.<name>` spelling: a
+    /// synthetic record class whose features are the body's typed params,
+    /// bound as the variable `params`. Registered only when at least one
+    /// param type-checks (otherwise `params.x` stays the unknown name it
+    /// was), and never when a param is literally named `params` — the bare
+    /// binding wins. Fields whose type mapped to nothing land in
+    /// [`Bindings::deferred_params`] so expressions reading them defer.
+    fn with_params_record(domains: &mut DomainIndex, params: &[(String, String)]) -> Self {
+        let mut bindings = Self::build(domains, params);
+        if bindings.typed.is_empty() || bindings.typed.iter().any(|(name, _)| name == "params") {
+            return bindings;
+        }
+        let features = bindings
+            .typed
+            .iter()
+            .filter_map(|(name, ty)| {
+                type_ref_of(ty).map(|type_ref| {
+                    Feature::new(
+                        name.clone(),
+                        FeatureKind::Attribute,
+                        type_ref,
+                        Multiplicity::REQUIRED,
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        domains.types.insert_class(
+            PARAMS_RECORD.0,
+            PARAMS_RECORD.1,
+            Vec::new(),
+            features,
+            Vec::new(),
+        );
+        bindings.typed.push((
+            PARAMS_RECORD.1.to_string(),
+            Ty::class(PARAMS_RECORD.0, PARAMS_RECORD.1),
+        ));
+        bindings.deferred_params = bindings.untyped.clone();
+        bindings
     }
 
     fn checker(&self, types: &DomainTypes, self_class: Option<&(String, String)>) -> TypeChecker {
@@ -305,7 +376,7 @@ struct Site {
 }
 
 struct Checker<'a> {
-    domains: &'a DomainIndex<'a>,
+    domains: &'a mut DomainIndex<'a>,
     index: &'a IfmlIndex,
     file: String,
     /// Property-assignment span → index of the module use site that
@@ -436,7 +507,7 @@ impl<'a> Checker<'a> {
                 .iter()
                 .map(|option| (option.name.clone(), option.type_ref.clone())),
         );
-        let mut bindings = Bindings::build(self.domains, &params);
+        let mut bindings = Bindings::build(&mut *self.domains, &params);
         bindings
             .untyped
             .extend(command.prompts.iter().map(|prompt| prompt.name.clone()));
@@ -535,7 +606,7 @@ impl<'a> Checker<'a> {
         module_uses: &[ModuleUse],
         condition: Option<&Expression>,
     ) {
-        let bindings = Bindings::build(self.domains, params);
+        let bindings = Bindings::with_params_record(&mut *self.domains, params);
         if let Some(condition) = condition {
             let site = Site {
                 context: context.to_vec(),
@@ -630,7 +701,7 @@ impl<'a> Checker<'a> {
             }
         }
 
-        let bindings = Bindings::build(self.domains, params);
+        let bindings = Bindings::with_params_record(&mut *self.domains, params);
 
         for property in &component.properties {
             if property.key == "data" || !carries_expression(&property.key, &property.value) {
@@ -672,6 +743,15 @@ impl<'a> Checker<'a> {
         if let Some(ComponentSpec::Table(spec)) = &component.spec {
             for column in &spec.columns {
                 if let ColumnDef::Expression { label, expr } = column {
+                    // A table without `data:` declares no row type, so the
+                    // column expression's bare-feature bindings cannot be
+                    // built (the explicit `Class.feature` spelling of such
+                    // columns is a generation-time shape). The expression
+                    // defers — the skip contract — rather than reporting
+                    // the class name as an unknown variable.
+                    let Some(self_class) = self_class.as_ref() else {
+                        continue;
+                    };
                     let mut column_context = component_context.clone();
                     column_context.push(format!("column '{label}'"));
                     let site = Site {
@@ -682,7 +762,7 @@ impl<'a> Checker<'a> {
                     self.check_expr(
                         expr,
                         &bindings,
-                        self_class.as_ref(),
+                        Some(self_class),
                         None,
                         &site,
                         &bindings.untyped,
@@ -852,10 +932,12 @@ impl<'a> Checker<'a> {
         site: &Site,
         skip: &BTreeSet<String>,
     ) {
-        if references_any(lowered, skip) {
+        if references_any(lowered, skip)
+            || references_deferred_params(lowered, &bindings.deferred_params)
+        {
             return;
         }
-        let domains = self.domains;
+        let domains = &*self.domains;
         let checker = bindings.checker(&domains.types, self_class);
         match checker.type_of(lowered) {
             Ok(actual) => {
@@ -1076,6 +1158,67 @@ fn references_any(expr: &Expr, names: &BTreeSet<String>) -> bool {
         }
         ExprKind::Unary { expr: inner, .. } => references_any(inner, names),
         _ => false,
+    }
+}
+
+/// Whether the lowered tree reads a field of the `params` record whose
+/// type mapped to nothing — the per-field twin of [`references_any`]'s
+/// whole-expression skip: the record binding itself is typed, so a
+/// `params.<untyped-field>` navigation would otherwise be mis-reported as
+/// an unknown feature instead of deferring.
+fn references_deferred_params(expr: &Expr, fields: &BTreeSet<String>) -> bool {
+    match &expr.kind {
+        ExprKind::FeatureAccess { receiver, name, .. } => {
+            matches!(
+                &receiver.kind,
+                ExprKind::Name(receiver_name) if receiver_name == PARAMS_RECORD.1 && fields.contains(&name.value)
+            ) || references_deferred_params(receiver, fields)
+        }
+        ExprKind::FunctionCall { args, .. } => args
+            .iter()
+            .any(|arg| references_deferred_params(arg, fields)),
+        ExprKind::Binary { lhs, rhs, .. } => {
+            references_deferred_params(lhs, fields) || references_deferred_params(rhs, fields)
+        }
+        ExprKind::Unary { expr: inner, .. } => references_deferred_params(inner, fields),
+        _ => false,
+    }
+}
+
+/// The IR type reference of a checked expression type — the inverse of
+/// [`Ty::from_type_ref`], needed to declare the synthetic `params`
+/// record's features. `List`/`Option`/`Null` never arise from a param
+/// mapping; they map to nothing.
+fn type_ref_of(ty: &Ty) -> Option<TypeRef> {
+    match ty {
+        Ty::Primitive(primitive) => Some(TypeRef::Primitive(*primitive)),
+        Ty::Named {
+            kind,
+            package,
+            name,
+        } => match kind {
+            rex_expr::NamedKind::Class => Some(TypeRef::Class {
+                package: package.clone(),
+                name: name.clone(),
+            }),
+            rex_expr::NamedKind::Enum => Some(TypeRef::Enum {
+                package: package.clone(),
+                name: name.clone(),
+            }),
+            rex_expr::NamedKind::Datatype => Some(TypeRef::Datatype {
+                package: package.clone(),
+                name: name.clone(),
+            }),
+            rex_expr::NamedKind::Interface => Some(TypeRef::Interface {
+                package: package.clone(),
+                name: name.clone(),
+            }),
+            rex_expr::NamedKind::Vocabulary => Some(TypeRef::Vocabulary {
+                package: package.clone(),
+                name: name.clone(),
+            }),
+        },
+        Ty::List(_) | Ty::Option(_) | Ty::Null => None,
     }
 }
 
