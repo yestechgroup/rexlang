@@ -1149,6 +1149,260 @@ fn enum_and_vocabulary_bounds_follow_value_and_key_facets() {
     );
     assert!(
         code.contains("let number = value.code();"),
-        "Int-keyed vocabulary numeric bounds use the key facet accessor:\n{code}"
+        "Int-keyed vocabulary numeric bounds use the key facet accessor:\\n{code}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Opposite-maintaining mutators: same-class pairs (issue #3). When both ends
+// share one class, the class-derived parameter names collide and the
+// generated code cannot compile — the value parameter is named after the
+// near-end role instead.
+// ---------------------------------------------------------------------------
+
+fn class_ref(name: &str) -> TypeRef {
+    TypeRef::Class {
+        package: PKG.to_string(),
+        name: name.to_string(),
+    }
+}
+
+/// One class with a same-class opposite pair: `a` (the canonical,
+/// lexicographically-first end) and `b`.
+fn self_pair_model(
+    class: &str,
+    a: (&str, FeatureKind, Multiplicity),
+    b: (&str, FeatureKind, Multiplicity),
+) -> Model {
+    let mut model = Model::new();
+    let mut package = Package::new(PKG);
+    package.classes.push(ClassDef::new(
+        class,
+        vec![],
+        vec![
+            Feature::new(a.0, a.1, class_ref(class), a.2).with_opposite(class, b.0),
+            Feature::new(b.0, b.1, class_ref(class), b.2).with_opposite(class, a.0),
+        ],
+    ));
+    model.packages.push(package);
+    model
+}
+
+fn generate_self_pair(
+    class: &str,
+    a: (&str, FeatureKind, Multiplicity),
+    b: (&str, FeatureKind, Multiplicity),
+) -> String {
+    generate(&self_pair_model(class, a, b))
+        .expect("generate")
+        .remove("models.rs")
+        .expect("models.rs")
+}
+
+#[test]
+fn same_class_single_many_pair_names_the_value_parameter_by_role() {
+    let code = generate_self_pair(
+        "Employee",
+        (
+            "manager",
+            FeatureKind::CrossReference,
+            Multiplicity::OPTIONAL,
+        ),
+        ("reports", FeatureKind::CrossReference, Multiplicity::MANY),
+    );
+    // `set_manager` takes the new manager under its role name, not a second
+    // colliding `employee`.
+    assert!(
+        code.contains(
+            "pub fn employee_set_manager(&mut self, employee: EmployeeId, \
+             manager: Option<EmployeeId>)"
+        ),
+        "{code}"
+    );
+    // The body reads the renamed variable everywhere.
+    assert!(code.contains("if let Some(target) = manager {"), "{code}");
+    assert!(code.contains("if let Some(new_b) = manager {"), "{code}");
+    // `add_reports`/`remove_reports` take the added/removed employee under
+    // the near-end role name.
+    assert!(
+        code.contains(
+            "pub fn employee_add_reports(&mut self, employee: EmployeeId, \
+             reports: EmployeeId)"
+        ),
+        "{code}"
+    );
+    assert!(
+        code.contains(
+            "pub fn employee_remove_reports(&mut self, employee: EmployeeId, \
+             reports: EmployeeId)"
+        ),
+        "{code}"
+    );
+    assert!(code.contains("b.manager = Some(employee);"), "{code}");
+    // No duplicated parameter name survives anywhere.
+    assert!(
+        !code.contains("employee: EmployeeId, employee: EmployeeId"),
+        "{code}"
+    );
+}
+
+#[test]
+fn same_class_many_many_pair_names_the_value_parameter_by_role() {
+    let code = generate_self_pair(
+        "Node",
+        ("children", FeatureKind::CrossReference, Multiplicity::MANY),
+        ("parents", FeatureKind::CrossReference, Multiplicity::MANY),
+    );
+    assert!(
+        code.contains("pub fn node_add_children(&mut self, node: NodeId, children: NodeId)"),
+        "{code}"
+    );
+    assert!(
+        code.contains("pub fn node_add_parents(&mut self, node: NodeId, parents: NodeId)"),
+        "{code}"
+    );
+    assert!(!code.contains("node: NodeId, node: NodeId"), "{code}");
+}
+
+#[test]
+fn same_class_single_single_pair_names_the_value_parameter_by_role() {
+    let code = generate_self_pair(
+        "Person",
+        (
+            "sponsor",
+            FeatureKind::CrossReference,
+            Multiplicity::OPTIONAL,
+        ),
+        (
+            "protege",
+            FeatureKind::CrossReference,
+            Multiplicity::OPTIONAL,
+        ),
+    );
+    assert!(
+        code.contains(
+            "pub fn person_set_sponsor(&mut self, person: PersonId, \
+             sponsor: Option<PersonId>)"
+        ),
+        "{code}"
+    );
+    assert!(
+        code.contains(
+            "pub fn person_set_protege(&mut self, person: PersonId, \
+             protege: Option<PersonId>)"
+        ),
+        "{code}"
+    );
+    assert!(
+        !code.contains("person: PersonId, person: PersonId"),
+        "{code}"
+    );
+}
+
+#[test]
+fn same_class_one_sided_containment_names_the_value_parameter_by_role() {
+    // One-way same-class containment (`contains` without an opposite)
+    // collides on the class name just the same.
+    let mut model = Model::new();
+    let mut package = Package::new(PKG);
+    package.classes.push(ClassDef::new(
+        "TreeNode",
+        vec![],
+        vec![Feature::new(
+            "items",
+            FeatureKind::Containment,
+            class_ref("TreeNode"),
+            Multiplicity::MANY,
+        )],
+    ));
+    model.packages.push(package);
+    let code = generate(&model)
+        .expect("generate")
+        .remove("models.rs")
+        .expect("models.rs");
+    assert!(
+        code.contains(
+            "pub fn tree_node_add_items(&mut self, tree_node: TreeNodeId, \
+             items: TreeNodeId)"
+        ),
+        "{code}"
+    );
+    assert!(
+        !code.contains("tree_node: TreeNodeId, tree_node: TreeNodeId"),
+        "{code}"
+    );
+}
+
+#[test]
+fn residual_parameter_collision_falls_back_to_a_numbered_name() {
+    // When the role name *is* the class name (`Manager.manager`), the role
+    // cannot disambiguate either — a numbered fallback keeps the signature
+    // deterministic and valid.
+    let code = generate_self_pair(
+        "Manager",
+        (
+            "manager",
+            FeatureKind::CrossReference,
+            Multiplicity::OPTIONAL,
+        ),
+        ("reports", FeatureKind::CrossReference, Multiplicity::MANY),
+    );
+    assert!(
+        code.contains(
+            "pub fn manager_set_manager(&mut self, manager: ManagerId, \
+             manager_2: Option<ManagerId>)"
+        ),
+        "{code}"
+    );
+    assert!(code.contains("if let Some(target) = manager_2 {"), "{code}");
+    assert!(
+        !code.contains("manager: ManagerId, manager: ManagerId"),
+        "{code}"
+    );
+}
+
+#[test]
+fn distinct_class_pairs_keep_the_class_named_value_parameter() {
+    // The disambiguation never touches distinct-class pairs: the value
+    // parameter stays the target class's snake name.
+    let mut model = Model::new();
+    let mut package = Package::new(PKG);
+    package.classes.push(ClassDef::new(
+        "Library",
+        vec![],
+        vec![Feature::new(
+            "books",
+            FeatureKind::Containment,
+            class_ref("Book"),
+            Multiplicity::MANY,
+        )
+        .with_opposite("Book", "library")],
+    ));
+    package.classes.push(ClassDef::new(
+        "Book",
+        vec![],
+        vec![Feature::new(
+            "library",
+            FeatureKind::CrossReference,
+            class_ref("Library"),
+            Multiplicity::OPTIONAL,
+        )
+        .with_opposite("Library", "books")],
+    ));
+    model.packages.push(package);
+    let code = generate(&model)
+        .expect("generate")
+        .remove("models.rs")
+        .expect("models.rs");
+    assert!(
+        code.contains("pub fn library_add_books(&mut self, library: LibraryId, book: BookId)"),
+        "{code}"
+    );
+    assert!(
+        code.contains(
+            "pub fn book_set_library(&mut self, book: BookId, \
+             library: Option<LibraryId>)"
+        ),
+        "{code}"
     );
 }

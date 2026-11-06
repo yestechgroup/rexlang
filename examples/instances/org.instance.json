@@ -17,6 +17,14 @@
             }
           ],
           "name": "Ada",
+          "reports": [
+            {
+              "$ref": "employee/1"
+            },
+            {
+              "$ref": "employee/2"
+            }
+          ],
           "salary": 200000
         }
       ],
@@ -32,14 +40,22 @@
               "$id": "employee/1",
               "$type": "Employee",
               "leadsTeams": [],
+              "manager": {
+                "$ref": "employee/0"
+              },
               "name": "Grace",
+              "reports": [],
               "salary": 150000
             },
             {
               "$id": "employee/2",
               "$type": "Employee",
               "leadsTeams": [],
+              "manager": {
+                "$ref": "employee/0"
+              },
               "name": "Alan",
+              "reports": [],
               "salary": 90000
             }
           ],

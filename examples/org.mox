@@ -25,4 +25,6 @@ class Employee {
     container Department department opposite staff
     container Team memberOf opposite members
     refers Team[] leadsTeams opposite lead
+    refers Employee[0..1] manager opposite reports
+    refers Employee[] reports opposite manager
 }

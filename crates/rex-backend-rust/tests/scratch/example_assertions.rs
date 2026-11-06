@@ -242,13 +242,9 @@ mod example_assertions {
     // ------------------------------------------------------------------
     // org — three-level hierarchy (Department → Team → Employee) built
     // through container/refers mutators, navigation on both ends of the
-    // lead (manager) / members (reports) relation, and two expr operations
-    // over the members collection.
-    //
-    // The manager/reports relation spans Team↔Employee rather than
-    // Employee↔Employee: same-class opposite pairs would collide in the
-    // generated mutator signatures (both parameters are named after the
-    // single class), so the model factors the manager role out into Team.
+    // lead (manager) / members (reports) relation, both ends of the
+    // same-class manager / reports pair on Employee (issue #3), and two
+    // expr operations over the members collection.
     // ------------------------------------------------------------------
     mod org_example {
         use crate::org::*;
@@ -293,6 +289,11 @@ mod example_assertions {
             res.team_add_members(platform, grace);
             res.team_add_members(platform, alan);
             res.team_set_lead(platform, Some(ada));
+            // Ada manages Grace and Alan: one direction through `set`
+            // (which pushes the report onto the manager's list), the other
+            // through `add` (which sets the report's back-pointer).
+            res.employee_set_manager(grace, Some(ada));
+            res.employee_add_reports(ada, alan);
             (
                 res,
                 engineering,
@@ -301,6 +302,45 @@ mod example_assertions {
                 alan,
                 platform,
             )
+        }
+
+        #[test]
+        fn manager_and_reports_maintain_both_directions() {
+            let (mut res, _engineering, ada, grace, alan, _platform) = org_resource();
+
+            // Down (manager → reports): the report list resolves each report.
+            let report_names: Vec<String> = res
+                .employee(ada)
+                .unwrap()
+                .reports(&res)
+                .iter()
+                .map(|report| report.name.clone())
+                .collect();
+            assert_eq!(
+                report_names,
+                vec!["Grace".to_string(), "Alan".to_string()]
+            );
+
+            // Up (report → manager): the back-pointer resolves the manager.
+            assert_eq!(res.employee(grace).unwrap().manager, Some(ada));
+            assert_eq!(res.employee(alan).unwrap().manager, Some(ada));
+            assert_eq!(res.employee(ada).unwrap().manager, None);
+            assert_eq!(
+                res.employee(grace)
+                    .unwrap()
+                    .manager(&res)
+                    .map(|manager| manager.name.clone()),
+                Some("Ada".to_string())
+            );
+
+            // Removing a report clears exactly that back-pointer; re-adding
+            // restores both directions.
+            res.employee_remove_reports(ada, alan);
+            assert_eq!(res.employee(alan).unwrap().manager, None);
+            assert_eq!(res.employee(ada).unwrap().reports, vec![grace]);
+            res.employee_add_reports(ada, alan);
+            assert_eq!(res.employee(alan).unwrap().manager, Some(ada));
+            assert_eq!(res.employee(ada).unwrap().reports, vec![grace, alan]);
         }
 
         #[test]
