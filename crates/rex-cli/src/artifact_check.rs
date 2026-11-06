@@ -10,7 +10,8 @@
 //!
 //! * the root shape matches a known artifact kind (IR artifact, standalone
 //!   actor-policy artifact, DDD design artifact, event-contract artifact,
-//!   deployment artifact, use-case artifact, or canonical instance),
+//!   deployment artifact, use-case artifact, case-management artifact,
+//!   interaction-flow artifact, or canonical instance),
 //! * `formatVersion` is present and supported — a higher version is rejected
 //!   with an error naming it, mirroring the readers' version gate
 //!   ([`rex_ir::IrError::UnsupportedFormatVersion`]),
@@ -28,7 +29,7 @@
 //! documented on [`check`], and
 //! [`tests::classification_table_over_all_artifact_kinds`] pins it for every
 //! kind — including the two shapes an [`rex_ir::ifml::IfmlModel`] artifact
-//! collides with (IFML is deliberately not a classified kind; see the table).
+//! collides with (the empty form and the module-only form; see the table).
 
 use std::collections::BTreeSet;
 
@@ -65,6 +66,13 @@ pub enum ArtifactKind {
     /// A standalone case-management artifact (`rex_ir::cmmn::CmmnModel`):
     /// root carries a `cases` array (omitted when empty).
     CmmnModel,
+    /// A standalone interaction-flow artifact
+    /// (`rex_ir::ifml::IfmlModel`): root carries a `views`, `domains`,
+    /// `actions`, `commands`, or `imports` entry (all omitted when
+    /// empty). The `modules` key alone is shape-ambiguous with the DDD
+    /// design artifact — a module-only IFML model classifies as a
+    /// DddModel, the documented limitation.
+    IfmlModel,
     /// A canonical instance document: root `$type` is `rex.instance`.
     Instance,
 }
@@ -92,37 +100,44 @@ pub fn check_str(path: &str, text: &str) -> Result<ArtifactKind, Vec<String>> {
 /// 2. **`packages`/`rexVersion` → IR artifact.** A [`rex_ir::Model`] always
 ///    emits `packages` (and stamps `rexVersion` provenance), so either key
 ///    claims the document for [`ArtifactKind::IrModel`].
-/// 3. **`application`/`modules` → DDD design.** A `formatVersion`-bearing
+/// 3. **`views`/`domains`/`actions`/`commands`/`imports` → interaction
+///    flow.** A `formatVersion`-bearing root carrying any of those entries
+///    validates as an [`ArtifactKind::IfmlModel`]. This check runs *before*
+///    the DDD shape so an IFML model that also carries `modules` classifies
+///    as an IfmlModel; the keys exist on no other artifact, and a
+///    module-only IFML model falls through to rule 4 — the documented
+///    shape collision.
+/// 4. **`application`/`modules` → DDD design.** A `formatVersion`-bearing
 ///    root without `blocks` that carries an `application` object or a
 ///    `modules` array validates as a [`ArtifactKind::DddModel`]. This check
 ///    runs *before* the actor fallback: those keys exist on no other
 ///    artifact, so design-shaped documents must be reported as designs even
 ///    when malformed (the tightened-fallback regression).
-/// 4. **`events`/`channels`/`subscriptions` → event contract.** A
+/// 5. **`events`/`channels`/`subscriptions` → event contract.** A
 ///    `formatVersion`-bearing root that carries any of those arrays
 ///    validates as an [`ArtifactKind::EventModel`]. Like the DDD rule this
 ///    runs *before* the actor fallback (the keys exist on no other
 ///    artifact), and after the DDD rule only for documentation symmetry —
-///    the key sets are disjoint, so rules 3 and 4 can never both match.
-/// 5. **`applications`/`profiles`/`deployments` → deployment artifact.** A
+///    the key sets are disjoint, so rules 4 and 5 can never both match.
+/// 6. **`applications`/`profiles`/`deployments` → deployment artifact.** A
 ///    `formatVersion`-bearing root that carries any of those arrays
 ///    validates as an [`ArtifactKind::DeployModel`]. The keys are disjoint
 ///    from every earlier rule (`application` on a DDD design is a singular
 ///    object, not these plural arrays), so the ordering is documentation
 ///    symmetry again.
-/// 6. **`useCases` → use-case artifact.** A `formatVersion`-bearing root
+/// 7. **`useCases` → use-case artifact.** A `formatVersion`-bearing root
 ///    that carries that array validates as an
 ///    [`ArtifactKind::UseCaseModel`]. The key exists on no other artifact,
 ///    so the ordering is documentation symmetry once more.
-/// 7. **`cases` → case artifact.** A `formatVersion`-bearing root that
+/// 8. **`cases` → case artifact.** A `formatVersion`-bearing root that
 ///    carries that array validates as an [`ArtifactKind::CmmnModel`] —
 ///    same disjointness, same symmetry.
-/// 8. **`blocks` or exactly `{"formatVersion": N}` → actor artifact.** The
+/// 9. **`blocks` or exactly `{"formatVersion": N}` → actor artifact.** The
 ///    canonical block-less [`rex_ir::ActorModel`] is exactly the version
 ///    marker, and the marker alone can only be an ActorModel (a Model always
 ///    emits `packages`; a DddModel always carries the design keys), so the
 ///    minimal-empty document falls here.
-/// 9. **Anything else** is rejected as `unrecognized artifact`.
+/// 10. **Anything else** is rejected as `unrecognized artifact`.
 ///
 /// Known limitations, same root cause: the minimal-empty artifact is exactly
 /// `{"formatVersion":1}` for several kinds, and shape-sniffing cannot tell
@@ -137,10 +152,10 @@ pub fn check_str(path: &str, text: &str) -> Result<ArtifactKind, Vec<String>> {
 ///   (rule 7; only a non-empty one reaches rule 6).
 /// - [`rex_ir::cmmn::CmmnModel`] is empty-form-collided the same way (rule
 ///   7; only a non-empty one reaches rule 7's `cases` check first).
-/// - [`rex_ir::ifml::IfmlModel`] is *not* a classified kind at all: an empty
-///   IFML model is the same `{"formatVersion":1}` bytes (rule 7), and a
-///   module-bearing one carries `modules` (rule 3); only a view-bearing one
-///   is unrecognized.
+/// - [`rex_ir::ifml::IfmlModel`] is empty-form-collided (rule 9; only a
+///   non-empty one reaches rule 3) and module-only-collided: an IFML model
+///   carrying *only* `modules` shape-matches the DDD design keys and
+///   classifies as a DddModel (rule 4). Any other IFML key claims it.
 ///
 /// A root `$type` discriminator on all artifact kinds would resolve both, at
 /// the cost of a wire-format change (golden churn, version bump) — see the
@@ -166,6 +181,22 @@ pub fn check(text: &str) -> Result<ArtifactKind, Vec<String>> {
     }
     if root.contains_key("packages") || root.contains_key("rexVersion") {
         return check_ir_model(root);
+    }
+    // An IFML interaction-flow artifact carries a `views`, `domains`,
+    // `actions`, `commands`, or `imports` entry — keys no other artifact
+    // has — so its check runs before the DDD shape: an IFML model that
+    // also carries `modules` must classify as an IfmlModel, never the
+    // DddModel design shape. A module-only IFML model (no other IFML key)
+    // falls through to the DDD rule — the documented shape collision,
+    // shared root cause with the empty-form limitation below.
+    if root.get("formatVersion").is_some_and(Value::is_u64)
+        && (root.get("views").is_some_and(Value::is_array)
+            || root.get("domains").is_some_and(Value::is_array)
+            || root.get("actions").is_some_and(Value::is_array)
+            || root.get("commands").is_some_and(Value::is_array)
+            || root.get("imports").is_some_and(Value::is_array))
+    {
+        return check_ifml_model(root);
     }
     // A DDD design artifact carries an `application` object or a `modules`
     // array — keys no other artifact has — so its check runs before the
@@ -224,19 +255,22 @@ pub fn check(text: &str) -> Result<ArtifactKind, Vec<String>> {
     {
         return check_cmmn_model(root);
     }
-    // No `packages`/`rexVersion`, no DDD design shape, no event-contract
-    // shape, no deployment shape, no use-case shape: the canonical
-    // block-less ActorModel is exactly `{"formatVersion": N}` — a Model
-    // always emits `packages`, a DddModel always carries the design keys,
-    // an EventModel always carries one of the event arrays, a DeployModel
-    // always carries one of the deployment arrays, a UseCaseModel always
-    // carries `useCases`. Anything else has no known root shape.
+    // No `packages`/`rexVersion`, no IFML shape, no DDD design shape, no
+    // event-contract shape, no deployment shape, no use-case shape: the
+    // canonical block-less ActorModel is exactly `{"formatVersion": N}` —
+    // a Model always emits `packages`, a DddModel always carries the
+    // design keys, an EventModel always carries one of the event arrays, a
+    // DeployModel always carries one of the deployment arrays, a
+    // UseCaseModel always carries `useCases`, an IfmlModel always carries
+    // one of the IFML keys. Anything else has no known root shape.
     if root.contains_key("blocks") || (root.len() == 1 && root.contains_key("formatVersion")) {
         return check_actor_model(root);
     }
     Err(vec![format!(
         "unrecognized artifact: no known root shape (IR artifacts carry \"packages\", \
-         actor artifacts \"blocks\", DDD design artifacts \"application\"/\"modules\", \
+         actor artifacts \"blocks\", interaction-flow artifacts \
+         \"views\"/\"domains\"/\"actions\"/\"commands\", \
+         DDD design artifacts \"application\"/\"modules\", \
          event artifacts \"events\"/\"channels\"/\"subscriptions\", \
          deployment artifacts \"applications\"/\"profiles\"/\"deployments\", \
          use-case artifacts \"useCases\", \
@@ -294,6 +328,24 @@ fn check_ddd_application(root: &serde_json::Map<String, Value>, errors: &mut Vec
             _ => {}
         },
     }
+}
+
+/// Validates an interaction-flow artifact: the version gate mirrors
+/// [`rex_ir::ifml::IfmlModel::from_json`], and `views`, `domains`,
+/// `actions`, `modules`, `actors`, and `commands` must be arrays of named
+/// objects (`imports` is an array of strings — excluded from the named
+/// check).
+fn check_ifml_model(root: &serde_json::Map<String, Value>) -> Result<ArtifactKind, Vec<String>> {
+    check_kind(
+        root,
+        ArtifactKind::IfmlModel,
+        rex_ir::ifml::IFML_MODEL_FORMAT_VERSION,
+        "interaction-flow artifact",
+        &[
+            "views", "domains", "actions", "modules", "actors", "commands",
+        ],
+        no_extra,
+    )
 }
 
 fn check_ir_model(root: &serde_json::Map<String, Value>) -> Result<ArtifactKind, Vec<String>> {
@@ -504,6 +556,7 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "children",
     "class",
     "classes",
+    "componentType",
     "composition",
     "constraints",
     "consumer",
@@ -517,11 +570,13 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "dependencies",
     "description",
     "designs",
+    "detailFields",
     "details",
     "effect",
     "end",
     "entries",
     "enums",
+    "eventType",
     "events",
     "extends",
     "facets",
@@ -534,25 +589,35 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "from",
     "functions",
     "grants",
+    "hierarchyField",
     "id",
     "ifPart",
+    "inputParams",
     "interfaces",
+    "isDefault",
     "isDerived",
     "isId",
+    "isLandmark",
+    "isModal",
     "isReadOnly",
+    "isXor",
     "key",
     "kind",
     "label",
+    "labelField",
+    "labelFields",
     "literals",
     "lower",
     "manualActivation",
     "manualActivationRule",
+    "maxDepth",
     "maxLength",
     "maximum",
     "message",
     "messages",
     "minLength",
     "minimum",
+    "moduleUses",
     "modules",
     "multiplicity",
     "name",
@@ -566,6 +631,7 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "operations",
     "opposite",
     "optimisticLocking",
+    "outputParams",
     "packages",
     "params",
     "participant",
@@ -587,11 +653,13 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "returnMultiplicity",
     "returnType",
     "rexVersion",
+    "schemaName",
     "sentryRef",
     "services",
     "source",
     "steps",
     "stereotype",
+    "subcommands",
     "subject",
     "subscriptions",
     "successions",
@@ -606,6 +674,7 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "upper",
     "useCases",
     "value",
+    "valueFields",
     "version",
     "vocabularies",
     "when",
@@ -986,9 +1055,9 @@ mod tests {
                 },
                 expected: Ok(ArtifactKind::ActorModel),
             },
-            // IfmlModel is not a classified kind; the two shape collisions
-            // and the one clean miss are pinned here so any future $type
-            // discriminator must update them consciously.
+            // IfmlModel is a classified kind; the two unfixable shape
+            // collisions are pinned here so any future $type discriminator
+            // must update them consciously.
             ClassificationCase {
                 name: "empty IFML artifact serializes as the same minimal-empty bytes",
                 json: {
@@ -1002,7 +1071,8 @@ mod tests {
                 expected: Ok(ArtifactKind::ActorModel),
             },
             ClassificationCase {
-                name: "module-bearing IFML artifact shape-matches the DDD design keys",
+                name: "module-only IFML artifact shape-matches the DDD design keys \
+                       (the documented limitation)",
                 json: serde_json::to_string(&rex_ir::ifml::IfmlModel {
                     modules: vec![rex_ir::ifml::ModuleDeclaration {
                         name: "Pagination".to_string(),
@@ -1020,7 +1090,7 @@ mod tests {
                 expected: Ok(ArtifactKind::DddModel),
             },
             ClassificationCase {
-                name: "view-bearing IFML artifact has no recognized root shape",
+                name: "view-bearing IFML artifact classifies as an IfmlModel",
                 json: serde_json::to_string(&rex_ir::ifml::IfmlModel {
                     views: vec![rex_ir::ifml::ViewDeclaration {
                         name: "Home".to_string(),
@@ -1042,7 +1112,50 @@ mod tests {
                     ..rex_ir::ifml::IfmlModel::default()
                 })
                 .expect("serialize IfmlModel"),
-                expected: Err("unrecognized artifact"),
+                expected: Ok(ArtifactKind::IfmlModel),
+            },
+            ClassificationCase {
+                name: "a view-and-module IFML artifact classifies as an IfmlModel, \
+                       never the DDD shape",
+                json: serde_json::to_string(&rex_ir::ifml::IfmlModel {
+                    views: vec![rex_ir::ifml::ViewDeclaration {
+                        name: "Home".to_string(),
+                        label: None,
+                        is_landmark: false,
+                        is_xor: false,
+                        is_modal: false,
+                        params: Vec::new(),
+                        properties: Vec::new(),
+                        containers: Vec::new(),
+                        components: Vec::new(),
+                        events: Vec::new(),
+                        module_uses: Vec::new(),
+                        roles: Vec::new(),
+                        requires: Vec::new(),
+                        condition: None,
+                        position: None,
+                    }],
+                    modules: vec![rex_ir::ifml::ModuleDeclaration {
+                        name: "Pagination".to_string(),
+                        input_params: Vec::new(),
+                        output_params: Vec::new(),
+                        properties: Vec::new(),
+                        containers: Vec::new(),
+                        components: Vec::new(),
+                        events: Vec::new(),
+                        module_uses: Vec::new(),
+                    }],
+                    ..rex_ir::ifml::IfmlModel::default()
+                })
+                .expect("serialize IfmlModel"),
+                expected: Ok(ArtifactKind::IfmlModel),
+            },
+            // Misclassification guard: a malformed IFML-shaped document is
+            // reported by the IfmlModel check, never the actor fallback.
+            ClassificationCase {
+                name: "malformed IFML shape is reported as an IfmlModel, not an ActorModel",
+                json: r#"{"formatVersion": 1, "views": [{"oops": true}]}"#.to_string(),
+                expected: Err("views[0]"),
             },
         ];
 
@@ -1200,6 +1313,52 @@ mod tests {
         // check may claim it.
         let golden = include_str!("../../../tests/conformance/ddd/library.ddd.json");
         assert_eq!(check(golden), Ok(ArtifactKind::DddModel));
+    }
+
+    #[test]
+    fn the_ifml_golden_artifact_classifies_as_ifml_model() {
+        // The real emitter output (`rexlang ir` on the canonical fixture):
+        // view-bearing, so the IFML rule claims it before the DDD shape
+        // (the fixture carries `modules` too — the precedence case).
+        let golden = include_str!("../../../tests/conformance/ifml/app.ifml.json");
+        assert_eq!(check(golden), Ok(ArtifactKind::IfmlModel));
+    }
+
+    #[test]
+    fn an_ifml_artifact_does_not_fall_through_to_the_actor_fallback() {
+        // Regression for the fallback order: before the IfmlModel check
+        // existed, only a view-bearing artifact was rejected outright and
+        // a module-bearing one was claimed by the DDD shape. Every
+        // IFML-exclusive root key claims the document.
+        assert_eq!(
+            check(r#"{"formatVersion": 1, "views": [{"name": "Home"}]}"#),
+            Ok(ArtifactKind::IfmlModel)
+        );
+        assert_eq!(
+            check(r#"{"formatVersion": 1, "domains": [{"name": "sales"}]}"#),
+            Ok(ArtifactKind::IfmlModel)
+        );
+        assert_eq!(
+            check(r#"{"formatVersion": 1, "actions": [{"name": "Update"}]}"#),
+            Ok(ArtifactKind::IfmlModel)
+        );
+        assert_eq!(
+            check(r#"{"formatVersion": 1, "commands": [{"name": "deploy"}]}"#),
+            Ok(ArtifactKind::IfmlModel)
+        );
+        assert_eq!(
+            check(r#"{"formatVersion": 1, "imports": ["./patterns.ifml"]}"#),
+            Ok(ArtifactKind::IfmlModel)
+        );
+    }
+
+    #[test]
+    fn ifml_format_version_gate_names_both_versions() {
+        let errors = check(r#"{"formatVersion": 2, "views": [{"name": "Home"}]}"#).unwrap_err();
+        assert!(
+            errors[0].contains("formatVersion 2") && errors[0].contains("formatVersion 1"),
+            "errors: {errors:?}"
+        );
     }
 
     #[test]

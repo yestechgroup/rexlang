@@ -19,6 +19,16 @@ The IFML DSL lives alongside the `.mox` domain model as a *complementary* input:
 
 Minimal artifact: an empty model serializes as exactly `{"formatVersion":1}` — every struct `Vec` field is `#[serde(default, skip_serializing_if = "Vec::is_empty")]` (the `ActorModel`/`DddModel` discipline), so empty vecs are omitted on write and absent vecs read back as empty.
 
+`rexlang artifact check` classifies a non-empty IFML artifact by its
+`views`/`domains`/`actions`/`commands`/`imports` keys (rule 3 of the
+classifier's precedence list — ahead of the DDD `modules` shape, so a
+view-and-module model classifies as an IfmlModel). Two shape-sniffing
+limitations are documented and pinned: the **empty** IFML model
+serializes as exactly `{"formatVersion":1}` and classifies as an
+ActorModel, and a **module-only** model (no other IFML key) shape-matches
+the DDD design keys and classifies as a DddModel (see the classification
+rules in the CLI's `artifact_check` module).
+
 ```rust
 let model = rex_ifml::parse_ifml(source)?;
 let json = model.to_json_pretty()?;      // versioned artifact
