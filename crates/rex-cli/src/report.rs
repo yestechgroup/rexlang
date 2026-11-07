@@ -1,6 +1,6 @@
 //! Diagnostics rendering for the command handlers: the ariadne render
 //! helper and the per-file grouped reporters for multi-model, `.actor`,
-//! `.ddd`, `.evt`, `.deploy`, `.uc`, `.cmmn`, and `.ifml` compiles.
+//! `.ddd`, `.evt`, `.dmn`, `.deploy`, `.uc`, `.cmmn`, and `.ifml` compiles.
 
 use rex_driver::{render, ActorCompilation};
 
@@ -48,6 +48,13 @@ pub(crate) fn report_ddd_diagnostics(
 /// diagnostics are ariadne-rendered against that file's own source, the way
 /// `check` renders single-model diagnostics.
 pub(crate) fn report_evt_diagnostics(pair: &EvtPair, compilation: &rex_driver::EventCompilation) {
+    render_grouped(&compilation.diagnostics, |path| pair.source_of(path));
+}
+
+/// Renders a `.dmn` compilation's diagnostics grouped per file: each file's
+/// diagnostics are ariadne-rendered against that file's own source, the way
+/// `check` renders single-model diagnostics.
+pub(crate) fn report_dmn_diagnostics(pair: &DomainPair, compilation: &rex_driver::DmnCompilation) {
     render_grouped(&compilation.diagnostics, |path| pair.source_of(path));
 }
 

@@ -46,10 +46,12 @@ decision_model Approval {
         applicant: string;
     }
 
-    /// The desk-level auto-approval gate.
-    decision auto_approve {
-        output boolean;
-        logic expression "amount <= 5000"
+    decisions {
+        /// The desk-level auto-approval gate.
+        decision auto_approve {
+            output boolean;
+            logic expression "amount <= 5000"
+        }
     }
 }
 ```

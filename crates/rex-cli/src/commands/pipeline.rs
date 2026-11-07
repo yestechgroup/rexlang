@@ -6,19 +6,20 @@ use std::path::{Path, PathBuf};
 
 use rex_driver::{
     compile_actors_str, compile_actors_str_with_designs, compile_cmmn_str, compile_ddd_str,
-    compile_ddd_str_with_actors, compile_deploy_str, compile_evt_str, compile_usecase_str,
+    compile_ddd_str_with_actors, compile_deploy_str, compile_dmn_str, compile_evt_str,
+    compile_usecase_str,
 };
 
 use crate::inputs::{
-    compile_sources, is_actor_file, is_cmmn_file, is_ddd_file, is_deploy_file, is_evt_file,
-    is_ifml_file, is_uc_file, read_actor_pair_in, read_cmmn_pair, read_ddd_design,
-    read_deploy_pair, read_evt_pair, read_ifml_inputs, read_sources, read_uc_pair,
+    compile_sources, is_actor_file, is_cmmn_file, is_ddd_file, is_deploy_file, is_dmn_file,
+    is_evt_file, is_ifml_file, is_uc_file, read_actor_pair_in, read_cmmn_pair, read_ddd_design,
+    read_deploy_pair, read_dmn_pair, read_evt_pair, read_ifml_inputs, read_sources, read_uc_pair,
 };
 use crate::project::{Artifact, Project};
 use crate::report::{
     report_actor_diagnostics, report_cmmn_diagnostics, report_ddd_diagnostics,
-    report_deploy_diagnostics, report_evt_diagnostics, report_ifml_diagnostics,
-    report_multi_diagnostics, report_usecase_diagnostics,
+    report_deploy_diagnostics, report_dmn_diagnostics, report_evt_diagnostics,
+    report_ifml_diagnostics, report_multi_diagnostics, report_usecase_diagnostics,
 };
 
 /// The multi-file `.mox` pipeline: read the sources, compile them as one
@@ -330,6 +331,29 @@ pub(crate) fn compile_surface(
             return Ok(None);
         };
         let artifact = Artifact::Case(case_model.clone());
+        if let Some(project) = project.as_deref_mut() {
+            project.store(&files[0].display().to_string(), &artifact);
+        }
+        return Ok(Some(SurfaceOutcome {
+            ok: vec![pair.pair.path.clone()],
+            json: artifact.to_json_pretty()?,
+            warnings: 0,
+        }));
+    }
+    if files.len() == 1 && is_dmn_file(&files[0]) {
+        let pair = read_dmn_pair(&files[0], project.as_deref_mut())?;
+        let compilation = compile_dmn_str(
+            &pair.pair.path,
+            &pair.pair.source,
+            &pair.pair.domains,
+            &pair.pair.imports(),
+            &pair.tables,
+        );
+        report_dmn_diagnostics(&pair.pair, &compilation);
+        let Some(decision_model) = compilation.model else {
+            return Ok(None);
+        };
+        let artifact = Artifact::Decision(decision_model.clone());
         if let Some(project) = project.as_deref_mut() {
             project.store(&files[0].display().to_string(), &artifact);
         }

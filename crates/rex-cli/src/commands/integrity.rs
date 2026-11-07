@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 use rex_driver::{
     check_integrity, compile_actors_str, compile_cmmn_str, compile_ddd_str, compile_deploy_str,
-    compile_evt_str, compile_usecase_str, Diagnostic,
+    compile_dmn_str, compile_evt_str, compile_usecase_str, Diagnostic,
 };
 use rex_ir::ddd::DddModel;
 use rex_ir::deploy::DeployModel;
@@ -30,14 +30,14 @@ use rex_ir::ifml::IfmlModel;
 use rex_ir::ActorModel;
 
 use crate::inputs::{
-    is_actor_file, is_cmmn_file, is_ddd_file, is_deploy_file, is_evt_file, is_ifml_file,
-    is_uc_file, read_actor_pair, read_cmmn_pair, read_ddd_design, read_deploy_pair, read_evt_pair,
-    read_ifml_inputs, read_uc_pair,
+    is_actor_file, is_cmmn_file, is_ddd_file, is_deploy_file, is_dmn_file, is_evt_file,
+    is_ifml_file, is_uc_file, read_actor_pair, read_cmmn_pair, read_ddd_design, read_deploy_pair,
+    read_dmn_pair, read_evt_pair, read_ifml_inputs, read_uc_pair,
 };
 use crate::report::{
     report_actor_diagnostics, report_cmmn_diagnostics, report_ddd_diagnostics,
-    report_deploy_diagnostics, report_evt_diagnostics, report_ifml_diagnostics,
-    report_usecase_diagnostics,
+    report_deploy_diagnostics, report_dmn_diagnostics, report_evt_diagnostics,
+    report_ifml_diagnostics, report_usecase_diagnostics,
 };
 
 use super::pipeline::compile_reported_sources;
@@ -266,6 +266,22 @@ fn check_contribution(files: &[PathBuf]) -> anyhow::Result<Vec<Contribution>> {
         );
         if compilation.model.is_none() {
             report_cmmn_diagnostics(&pair.pair, &compilation);
+        }
+    } else if files.len() == 1 && is_dmn_file(&files[0]) {
+        // The decision-model surface contributes no bucket: the union pass
+        // diagnoses the design/actor/event/deploy/flow wiring, and a
+        // `.dmn` file is a consumer of domain types like the use case
+        // surfaces (the `.uc`/`.cmmn` precedent).
+        let pair = read_dmn_pair(&files[0], None)?;
+        let compilation = compile_dmn_str(
+            &pair.pair.path,
+            &pair.pair.source,
+            &pair.pair.domains,
+            &pair.pair.imports(),
+            &pair.tables,
+        );
+        if compilation.model.is_none() {
+            report_dmn_diagnostics(&pair.pair, &compilation);
         }
     } else {
         let (sources, compilation) = compile_reported_sources(&files)?;

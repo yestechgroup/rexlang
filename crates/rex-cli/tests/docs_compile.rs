@@ -1,7 +1,7 @@
 //! Documentation honesty: every fenced code block in the markdown docs
 //! that is tagged with a surface language (` ```mox `, ` ```actor `,
-//! ` ```ddd `, ` ```evt `, ` ```deploy `, ` ```uc `, ` ```cmmn `,
-//! ` ```ifml `) is a **contract** — it is extracted and compiled with that
+//! ` ```ddd `, ` ```evt `, ` ```dmn `, ` ```deploy `, ` ```uc `,
+//! ` ```cmmn `, ` ```ifml `) is a **contract** — it is extracted and compiled with that
 //! surface's real entry point, imports resolved from disk exactly the way
 //! the CLI resolves them (relative to the declaring document, so snippets
 //! import real repo files). An untagged ` ```text ` fence is prose (EBNF,
@@ -18,12 +18,13 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// The documents the harness sweeps (repo-root relative).
-const DOCUMENTS: [&str; 10] = [
+const DOCUMENTS: [&str; 11] = [
     "README.md",
     "docs/README.md",
     "docs/LANGUAGE.md",
     "docs/DDD.md",
     "docs/EVENTS.md",
+    "docs/DMN.md",
     "docs/DEPLOY.md",
     "docs/USECASES.md",
     "docs/CMMN.md",
@@ -33,11 +34,12 @@ const DOCUMENTS: [&str; 10] = [
 
 /// The minimum number of compiling fences per surface across all
 /// documents. A surface with zero tagged snippets cannot drift.
-const MINIMUMS: [(&str, usize); 8] = [
+const MINIMUMS: [(&str, usize); 9] = [
     ("mox", 3),
     ("actor", 1),
     ("ddd", 1),
     ("evt", 1),
+    ("dmn", 1),
     ("deploy", 1),
     ("uc", 1),
     ("cmmn", 1),
@@ -57,7 +59,9 @@ struct Fence {
 /// info string is exactly a surface tag count (indented fences, other
 /// languages, and bare ` ``` ` blocks are prose).
 fn fences_of(document: &'static str, source: &str) -> Vec<Fence> {
-    const TAGS: [&str; 8] = ["mox", "actor", "ddd", "evt", "deploy", "uc", "cmmn", "ifml"];
+    const TAGS: [&str; 9] = [
+        "mox", "actor", "ddd", "evt", "dmn", "deploy", "uc", "cmmn", "ifml",
+    ];
     let mut fences = Vec::new();
     let mut lines = source.lines().peekable();
     let mut index = 0usize;
@@ -336,6 +340,14 @@ fn compile_fence(fence: &Fence, workspace: &Path) -> String {
                 &gathered.domains,
                 &imports,
             );
+            problems(tagged_errors_of(&compilation.diagnostics))
+        }
+        "dmn" => {
+            // The DMN doc snippets are self-contained (no imports): empty
+            // domains/imports/tables — the compile is the full validation
+            // over primitives only.
+            let compilation =
+                rex_driver::compile_dmn_str(&virtual_path, &fence.source, &[], &empty, &[]);
             problems(tagged_errors_of(&compilation.diagnostics))
         }
         "deploy" => {
