@@ -1733,9 +1733,13 @@ pub struct DmnCompilation {
 ///     nothing unknown, and binds nothing twice (E0213).
 /// 12. **FEEL syntax** — `logic expression` texts and binding expressions
 ///     parse as FEEL with the dsntk parser (`invalid FEEL expression on
-///     <what> '<name>': <error>`, E0208). Deep FEEL typing is a documented
-///     deferral: expressions are stored verbatim; evaluation is out of
-///     scope for the compile.
+///     <what> '<name>': <error>`, E0208). One documented deferral:
+///     conditional (`if`) expressions are **not** gated — the rev-pinned
+///     dsntk parser mis-rejects several valid conditional forms (`if
+///     <bare name> then`, composite `and`/`not` conditions, nested ifs),
+///     and a syntax gate must not false-positive on legitimate FEEL.
+///     Deep FEEL typing is out of scope for the compile: expressions are
+///     stored verbatim; evaluation is a backend concern.
 /// 13. **Decision tables** — every `logic table "<path>"` decision's
 ///     markdown file is provided (E0209), parses (E0210), and its clause
 ///     signature matches the declared contract: the table's input clauses

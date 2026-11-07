@@ -1,0 +1,417 @@
+{
+  "formatVersion": 1,
+  "name": "Lending",
+  "namespace": "nz.example.lending",
+  "inputs": [
+    {
+      "name": "income",
+      "typeRef": {
+        "type": "primitive",
+        "value": "int"
+      }
+    },
+    {
+      "name": "expenses",
+      "typeRef": {
+        "type": "primitive",
+        "value": "int"
+      }
+    },
+    {
+      "name": "debt_repayments",
+      "typeRef": {
+        "type": "primitive",
+        "value": "int"
+      }
+    },
+    {
+      "name": "loan_amount",
+      "typeRef": {
+        "type": "primitive",
+        "value": "int"
+      }
+    },
+    {
+      "name": "property_value",
+      "typeRef": {
+        "type": "primitive",
+        "value": "int"
+      }
+    },
+    {
+      "name": "credit_score",
+      "typeRef": {
+        "type": "primitive",
+        "value": "int"
+      }
+    },
+    {
+      "name": "payment_history",
+      "typeRef": {
+        "type": "primitive",
+        "value": "string"
+      }
+    },
+    {
+      "name": "banker_authority_level",
+      "typeRef": {
+        "type": "primitive",
+        "value": "int"
+      }
+    }
+  ],
+  "knowledgeSources": [
+    {
+      "name": "ResponsibleLendingCode",
+      "displayName": "Responsible Lending Code",
+      "reference": "https://www.legislation.govt.nz/act/credit-contracts-2003"
+    },
+    {
+      "name": "CreditPolicy",
+      "displayName": "Bank Credit Policy",
+      "reference": "https://intranet.example.nz/policy/credit"
+    },
+    {
+      "name": "RiskFramework",
+      "displayName": "Enterprise Risk Framework",
+      "reference": "https://intranet.example.nz/policy/risk"
+    }
+  ],
+  "businessKnowledgeModels": [
+    {
+      "name": "calculate_lvr",
+      "description": "Loan-to-value ratio, in percent.",
+      "parameters": [
+        {
+          "name": "loan_amount",
+          "typeRef": {
+            "type": "primitive",
+            "value": "int"
+          }
+        },
+        {
+          "name": "property_value",
+          "typeRef": {
+            "type": "primitive",
+            "value": "int"
+          }
+        }
+      ],
+      "output": {
+        "type": "primitive",
+        "value": "int"
+      },
+      "logic": {
+        "type": "expression",
+        "value": {
+          "text": "loan_amount / property_value * 100"
+        }
+      }
+    },
+    {
+      "name": "calculate_serviceability",
+      "description": "Free cash after living costs and existing debt repayments.",
+      "parameters": [
+        {
+          "name": "income",
+          "typeRef": {
+            "type": "primitive",
+            "value": "int"
+          }
+        },
+        {
+          "name": "expenses",
+          "typeRef": {
+            "type": "primitive",
+            "value": "int"
+          }
+        },
+        {
+          "name": "debt_repayments",
+          "typeRef": {
+            "type": "primitive",
+            "value": "int"
+          }
+        }
+      ],
+      "output": {
+        "type": "primitive",
+        "value": "int"
+      },
+      "logic": {
+        "type": "expression",
+        "value": {
+          "text": "income - expenses - debt_repayments"
+        }
+      }
+    }
+  ],
+  "decisions": [
+    {
+      "name": "lending_capacity",
+      "description": "The applicant's free cash after living costs and existing debt.",
+      "outputs": [
+        {
+          "name": "",
+          "typeRef": {
+            "type": "primitive",
+            "value": "int"
+          }
+        }
+      ],
+      "logic": {
+        "type": "invoke",
+        "value": {
+          "model": "calculate_serviceability",
+          "bindings": [
+            {
+              "name": "income",
+              "expression": "income"
+            },
+            {
+              "name": "expenses",
+              "expression": "expenses"
+            },
+            {
+              "name": "debt_repayments",
+              "expression": "debt_repayments"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "risk_assessment",
+      "description": "The credit-risk grade for the application.",
+      "outputs": [
+        {
+          "name": "risk_grade",
+          "typeRef": {
+            "type": "primitive",
+            "value": "string"
+          }
+        },
+        {
+          "name": "decline_reason",
+          "typeRef": {
+            "type": "primitive",
+            "value": "string"
+          }
+        }
+      ],
+      "logic": {
+        "type": "expression",
+        "value": {
+          "text": "if credit_score >= 600 and payment_history == \"clean\" then \"accept\" else if credit_score >= 500 then \"review\" else \"decline\""
+        }
+      }
+    },
+    {
+      "name": "security_assessment",
+      "description": "The loan-to-value ratio of the proposed security, in percent.",
+      "outputs": [
+        {
+          "name": "",
+          "typeRef": {
+            "type": "primitive",
+            "value": "int"
+          }
+        }
+      ],
+      "logic": {
+        "type": "invoke",
+        "value": {
+          "model": "calculate_lvr",
+          "bindings": [
+            {
+              "name": "loan_amount",
+              "expression": "loan_amount"
+            },
+            {
+              "name": "property_value",
+              "expression": "property_value"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "loan_approval",
+      "description": "The approval decision and the amount released.",
+      "outputs": [
+        {
+          "name": "approved",
+          "typeRef": {
+            "type": "primitive",
+            "value": "boolean"
+          }
+        },
+        {
+          "name": "approved_amount",
+          "typeRef": {
+            "type": "primitive",
+            "value": "int"
+          }
+        }
+      ],
+      "logic": {
+        "type": "expression",
+        "value": {
+          "text": "risk_assessment == \"accept\" and lending_capacity > 0"
+        }
+      }
+    },
+    {
+      "name": "pricing",
+      "description": "The indicative rate band for the application.",
+      "outputs": [
+        {
+          "name": "rate",
+          "typeRef": {
+            "type": "primitive",
+            "value": "int"
+          }
+        }
+      ],
+      "logic": {
+        "type": "table",
+        "value": {
+          "source": "./tables/lvr.md"
+        }
+      }
+    }
+  ],
+  "informationRequirements": [
+    {
+      "requiring": "lending_capacity",
+      "required": "income"
+    },
+    {
+      "requiring": "lending_capacity",
+      "required": "expenses"
+    },
+    {
+      "requiring": "lending_capacity",
+      "required": "debt_repayments"
+    },
+    {
+      "requiring": "risk_assessment",
+      "required": "credit_score"
+    },
+    {
+      "requiring": "risk_assessment",
+      "required": "payment_history"
+    },
+    {
+      "requiring": "security_assessment",
+      "required": "loan_amount"
+    },
+    {
+      "requiring": "security_assessment",
+      "required": "property_value"
+    },
+    {
+      "requiring": "loan_approval",
+      "required": "lending_capacity"
+    },
+    {
+      "requiring": "loan_approval",
+      "required": "risk_assessment"
+    },
+    {
+      "requiring": "pricing",
+      "required": "loan_amount"
+    },
+    {
+      "requiring": "pricing",
+      "required": "property_value"
+    }
+  ],
+  "knowledgeRequirements": [
+    {
+      "requiring": "lending_capacity",
+      "required": "calculate_serviceability"
+    },
+    {
+      "requiring": "security_assessment",
+      "required": "calculate_lvr"
+    }
+  ],
+  "authorityRequirements": [
+    {
+      "requiring": "lending_capacity",
+      "required": "ResponsibleLendingCode"
+    },
+    {
+      "requiring": "risk_assessment",
+      "required": "RiskFramework"
+    },
+    {
+      "requiring": "security_assessment",
+      "required": "RiskFramework"
+    },
+    {
+      "requiring": "loan_approval",
+      "required": "CreditPolicy"
+    },
+    {
+      "requiring": "pricing",
+      "required": "ResponsibleLendingCode"
+    }
+  ],
+  "services": [
+    {
+      "name": "loan_assessment",
+      "description": "The application-facing contract: assess one loan application.",
+      "inputs": [
+        "income",
+        "expenses",
+        "debt_repayments",
+        "loan_amount",
+        "property_value",
+        "credit_score",
+        "payment_history",
+        "banker_authority_level"
+      ],
+      "outputs": [
+        "loan_approval",
+        "pricing"
+      ],
+      "encapsulates": [
+        "lending_capacity",
+        "risk_assessment",
+        "security_assessment",
+        "loan_approval",
+        "pricing",
+        "calculate_lvr",
+        "calculate_serviceability"
+      ]
+    }
+  ],
+  "views": [
+    {
+      "name": "overview",
+      "description": "The lending decision requirements graph end to end.",
+      "show": [
+        "lending_capacity",
+        "risk_assessment",
+        "security_assessment",
+        "loan_approval",
+        "pricing"
+      ],
+      "direction": "left_to_right"
+    },
+    {
+      "name": "risk_analysis",
+      "description": "The risk slice: grade and security, with the framework behind them.",
+      "show": [
+        "risk_assessment",
+        "security_assessment",
+        "RiskFramework",
+        "calculate_lvr",
+        "calculate_serviceability"
+      ],
+      "direction": "top_to_bottom"
+    }
+  ]
+}

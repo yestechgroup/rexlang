@@ -116,14 +116,18 @@ impl RexBackend {
                 // rexlang#128 (J3 at compile time): the capability clauses
                 // resolve against every `.actor` artifact of the open
                 // design's directory — the empty slice is the exact
-                // `compile_ddd_str` behavior.
+                // `compile_ddd_str` behavior. rexlang#78 (rule 17): the
+                // `invokes`/`inject decision` clauses resolve the same way
+                // against every `.dmn` artifact of the directory.
                 let actors = self.sibling_actor_models(uri);
-                rex_driver::compile_ddd_str_with_actors(
+                let decisions = self.sibling_decision_models(uri);
+                rex_driver::compile_ddd_str_with_decisions(
                     &driver_path,
                     &text,
                     &domains,
                     &imports,
                     &actors,
+                    &decisions,
                 )
                 .diagnostics
                 .iter()
@@ -399,6 +403,74 @@ impl RexBackend {
                 rex_driver::compile_ddd_str(&key, &text, &domains, &domain_import_bundle(&domains));
             if let Some(model) = compilation.model {
                 models.push(model);
+            }
+        }
+        models
+    }
+
+    /// The compiled `.dmn` artifacts of the open design's directory, keyed
+    /// by their disk paths (rule 17's decisions bucket, rexlang#78 — the
+    /// keys are what the provision check resolves `.dmn` import paths
+    /// against). Gathered exactly like [`RexBackend::sibling_design_models`]
+    /// (open documents win over disk); a sibling that fails to compile
+    /// contributes nothing. Decision tables resolve from disk next to each
+    /// sibling — an unprovided table names it and the sibling drops out.
+    fn sibling_decision_models(&self, except: &Url) -> Vec<(String, rex_ir::dmn::DmnModel)> {
+        let Ok(path) = except.to_file_path() else {
+            return Vec::new();
+        };
+        let mut models = Vec::new();
+        for (sibling, text) in self.sibling_sources(&path, "dmn") {
+            let key = sibling.display().to_string();
+            let mut fetch =
+                |resolved: &str| -> Option<String> { self.fetch_open_or_disk(resolved) };
+            let domains = rex_driver::project::gather_domain_sources(
+                &key,
+                &text,
+                |source| {
+                    rex_syntax::parse_dmn(source)
+                        .ast
+                        .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
+                        .unwrap_or_default()
+                },
+                &mut fetch,
+            );
+            let tables: Vec<(String, String)> = rex_syntax::parse_dmn(&text)
+                .ast
+                .and_then(|ast| ast.model)
+                .map(|model| {
+                    model
+                        .decisions
+                        .iter()
+                        .filter_map(|decision| match &decision.logic {
+                            Some(rex_syntax::DmnLogic::Table { source, .. }) => {
+                                Some(source.clone())
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|written| {
+                    let resolved = sibling
+                        .parent()
+                        .map(|dir| dir.join(&written))
+                        .unwrap_or_else(|| std::path::PathBuf::from(&written));
+                    std::fs::read_to_string(resolved)
+                        .ok()
+                        .map(|content| (written, content))
+                })
+                .collect();
+            let compilation = rex_driver::compile_dmn_str(
+                &key,
+                &text,
+                &domains,
+                &domain_import_bundle(&domains),
+                &tables,
+            );
+            if let Some(model) = compilation.model {
+                models.push((key, model));
             }
         }
         models

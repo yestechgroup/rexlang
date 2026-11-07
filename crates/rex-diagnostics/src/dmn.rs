@@ -134,7 +134,7 @@ pub(crate) const ENTRIES: &[Entry] = &[
         band: DMN_BAND,
         severity: Severity::Error,
         title: "Invalid FEEL expression",
-        meaning: "`invalid FEEL expression on <what> '<name>': <error>` — the element's FEEL expression (FEEL is DMN's expression language for decision logic and table cells) failed to parse or type; the message carries the FEEL error verbatim.",
+        meaning: "`invalid FEEL expression on <what> '<name>': <error>` — the element's FEEL expression (FEEL is DMN's expression language for decision logic and table cells) failed to parse; the message carries the FEEL error verbatim. Conditional (`if`) expressions are not gated: the pinned dsntk parser mis-rejects several valid conditional forms, and the gate never false-positives on legitimate FEEL.",
         fix: "Fix the reported FEEL error in the expression.",
     },
     Entry {

@@ -548,6 +548,34 @@ decision_model M {
 }
 
 #[test]
+fn conditional_feel_expressions_are_deferred_not_gated() {
+    // The rev-pinned dsntk parser mis-rejects `if <bare name> then ...`
+    // (a valid FEEL conditional) — the gate must not false-positive on it,
+    // and `diff` must not read as the `if` keyword.
+    let source = r#"
+decision_model M {
+    inputs { eligible: boolean; }
+    decisions {
+        decision d {
+            output int;
+            logic expression "if eligible then 1 else 2"
+        }
+        decision e {
+            output int;
+            logic expression "diff + 1"
+        }
+    }
+}
+"#;
+    let compilation = compile(source, &[], &[]);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "conditional FEEL defers: {:?}",
+        compilation.diagnostics
+    );
+}
+
+#[test]
 fn an_unprovided_decision_table_errors() {
     let source = r#"
 decision_model M {

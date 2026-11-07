@@ -23,6 +23,9 @@ use std::sync::OnceLock;
 /// The canonical `.evt` event-contract examples.
 const EVT_EXAMPLES: [&str; 2] = ["ecommerce", "support"];
 
+/// The canonical `.dmn` decision-model examples.
+const DMN_EXAMPLES: [&str; 2] = ["lending", "support"];
+
 /// The canonical `.ddd` design examples.
 const DDD_EXAMPLES: [&str; 2] = ["orders", "support"];
 
@@ -288,6 +291,52 @@ fn uc_examples_match_golden_artifacts_and_round_trip() {
 }
 
 #[test]
+fn dmn_examples_match_golden_artifacts_and_round_trip() {
+    for name in DMN_EXAMPLES {
+        let (path, source) = example(name, "dmn");
+        let dir = examples_dir();
+        // The example's domain imports resolve next to the file (the CLI
+        // rule); `lending.dmn` imports nothing.
+        let domains: Vec<(String, String)> = if source.contains("import \"") {
+            vec![domain_of(name)]
+        } else {
+            Vec::new()
+        };
+        // The external markdown decision tables resolve relative to the
+        // example file and are keyed by the paths the `logic table`
+        // clauses write.
+        let mut tables: Vec<(String, String)> = Vec::new();
+        for relative in ["./tables/refund-authority.md", "./tables/lvr.md"] {
+            let absolute = dir.join(relative.trim_start_matches("./"));
+            if absolute.exists() {
+                tables.push((relative.to_string(), read(&absolute)));
+            }
+        }
+        let compilation = rex_driver::compile_dmn_str(
+            path.to_str().expect("utf-8 example path"),
+            &source,
+            &domains,
+            &rex_driver::DomainImports::default(),
+            &tables,
+        );
+        assert_clean(&format!("{name}.dmn"), &compilation.diagnostics);
+        let model = compilation
+            .model
+            .unwrap_or_else(|| panic!("{name}.dmn must lower to a decision artifact"));
+        assert_eq!(model.format_version, rex_ir::dmn::DMN_MODEL_FORMAT_VERSION);
+        let json = model.to_json_pretty().expect("serialize decision artifact");
+        assert_matches_golden(name, "dmn", &json);
+        let reloaded = rex_ir::dmn::DmnModel::from_json(&json)
+            .unwrap_or_else(|error| panic!("{name}.dmn artifact must round-trip: {error}"));
+        assert_eq!(
+            reloaded.to_json_pretty().expect("re-serialize"),
+            json,
+            "{name}.dmn artifact round trip must be stable"
+        );
+    }
+}
+
+#[test]
 fn deploy_examples_match_golden_artifacts_and_round_trip() {
     for name in DEPLOY_EXAMPLES {
         let (path, source) = example(name, "deploy");
@@ -415,6 +464,7 @@ fn the_example_lists_cover_every_artifact_file_on_disk() {
         );
     };
     assert_sync(&EVT_EXAMPLES, "evt");
+    assert_sync(&DMN_EXAMPLES, "dmn");
     assert_sync(&DDD_EXAMPLES, "ddd");
     assert_sync(&UC_EXAMPLES, "uc");
     assert_sync(&DEPLOY_EXAMPLES, "deploy");
