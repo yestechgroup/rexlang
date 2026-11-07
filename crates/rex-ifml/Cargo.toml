@@ -10,6 +10,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+rex-diagnostics = { workspace = true }
 rex-ir = { workspace = true }
 rex-expr = { workspace = true }
 pest = { workspace = true }

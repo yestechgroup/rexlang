@@ -74,12 +74,12 @@ pub(super) fn check_authorization(
                 )
             }
         };
-        diags.push(IfmlDiagnostic {
+        diags.push(IfmlDiagnostic::error(
             code,
             message,
-            span: site.name_span,
-            file: index.files[site.file].path.clone(),
-        });
+            site.name_span,
+            index.files[site.file].path.clone(),
+        ));
     }
     diags
 }

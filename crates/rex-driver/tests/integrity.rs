@@ -119,9 +119,13 @@ fn unknown_op_capability_warns_on_the_design() {
     let (path, diagnostic) = &diagnostics[0];
     assert_eq!(path, "model/time.ddd");
     assert_eq!(diagnostic.severity, Severity::Warning);
+    assert!(
+        diagnostic.message.starts_with("X0001 "),
+        "the lint carries its stable registry code: {diagnostic:?}"
+    );
     assert_eq!(
         diagnostic.message,
-        "unknown capability 'Bogus' on operation 'AddTimecardItem' of service 'TimeService'"
+        "X0001 unknown capability 'Bogus' on operation 'AddTimecardItem' of service 'TimeService'"
     );
     assert_eq!(
         diagnostic.help.as_deref(),
@@ -270,9 +274,13 @@ fn granted_capability_with_no_carrier_warns_on_the_actor_file() {
     let (path, diagnostic) = &diagnostics[0];
     assert_eq!(path, "model/core.actor");
     assert_eq!(diagnostic.severity, Severity::Warning);
+    assert!(
+        diagnostic.message.starts_with("X0002 "),
+        "the lint carries its stable registry code: {diagnostic:?}"
+    );
     assert_eq!(
         diagnostic.message,
-        "capability 'TerminateWorker' is granted but no operation or search carries it"
+        "X0002 capability 'TerminateWorker' is granted but no operation or search carries it"
     );
     assert!(diagnostic.help.is_some());
 }
@@ -310,7 +318,7 @@ fn delegated_capability_with_no_carrier_warns_like_a_grant() {
     );
     assert_eq!(
         diagnostics[0].1.message,
-        "capability 'TerminateWorker' is granted but no operation or search carries it"
+        "X0002 capability 'TerminateWorker' is granted but no operation or search carries it"
     );
 }
 
@@ -443,13 +451,17 @@ fn action_with_no_matching_operation_errors_on_the_flow() {
     );
     assert_eq!(diagnostics[0].0, "model/time.ifml");
     assert_eq!(diagnostics[0].1.severity, Severity::Error);
+    assert!(
+        diagnostics[0].1.message.starts_with("X0005 "),
+        "the error carries its stable registry code: {diagnostics:?}"
+    );
     assert_eq!(
         diagnostics[0].1.message,
-        "action 'Punch' does not bind to any service operation"
+        "X0005 action 'Punch' does not bind to any service operation"
     );
     assert_eq!(
         diagnostics[1].1.message,
-        "action 'ApproveTimecard' does not bind to any service operation"
+        "X0005 action 'ApproveTimecard' does not bind to any service operation"
     );
     assert!(diagnostics[0].1.help.is_some());
 }
@@ -485,6 +497,53 @@ fn action_binding_matches_case_insensitively() {
     assert!(
         diagnostics.is_empty(),
         "PascalCase action ↔ camelCase operation is one verb: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn action_matching_two_operations_errors_ambiguously() {
+    // rexlang#128 follow-up: the fold-to-a-set binding leaves an action
+    // whose lowercase mirror two operations share bound to no unique
+    // backend. That collision is an error naming every carrier.
+    let designs = vec![
+        design_with_op("model/time.ddd", "TimeService", "submit", &[]),
+        design_with_op("model/core.ddd", "WorkerService", "submit", &[]),
+    ];
+    let flows = vec![flow_with_actions("model/ui.ifml", &["Submit"])];
+    let diagnostics = check_integrity(&designs, &[], &[], &[], &flows);
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "exactly the ambiguous binding: {diagnostics:?}"
+    );
+    let (path, diagnostic) = &diagnostics[0];
+    assert_eq!(path, "model/ui.ifml");
+    assert_eq!(diagnostic.severity, Severity::Error);
+    assert!(
+        diagnostic.message.starts_with("X0006 "),
+        "the error carries its stable registry code: {diagnostic:?}"
+    );
+    assert_eq!(
+        diagnostic.message,
+        "X0006 action 'Submit' binds ambiguously to 'TimeService.submit' and \
+         'WorkerService.submit'"
+    );
+    assert!(diagnostic.help.is_some());
+}
+
+#[test]
+fn unique_action_binding_still_passes() {
+    // Duplicate lowercase names only bite when the action's mirror hits
+    // more than one carrier: distinct verbs keep their unique binding.
+    let designs = vec![
+        design_with_op("model/time.ddd", "TimeService", "submit", &[]),
+        design_with_op("model/core.ddd", "WorkerService", "cancel", &[]),
+    ];
+    let flows = vec![flow_with_actions("model/ui.ifml", &["Submit", "Cancel"])];
+    let diagnostics = check_integrity(&designs, &[], &[], &[], &flows);
+    assert!(
+        diagnostics.is_empty(),
+        "each action mirrors exactly one operation: {diagnostics:?}"
     );
 }
 
@@ -566,10 +625,14 @@ fn consumer_with_no_declared_component_errors_on_the_event_file() {
     let (path, diagnostic) = &diagnostics[0];
     assert_eq!(path, "model/core.evt");
     assert_eq!(diagnostic.severity, Severity::Error);
+    assert!(
+        diagnostic.message.starts_with("X0007 "),
+        "the error carries its stable registry code: {diagnostic:?}"
+    );
     assert_eq!(
         diagnostic.message,
-        "subscription 'workerEvents' consumer 'onboarding_service' does not resolve to \
-         a declared component"
+        "X0007 subscription 'workerEvents' consumer 'onboarding_service' does not \
+         resolve to a declared component"
     );
     assert!(diagnostic.help.is_some());
 }
@@ -739,9 +802,13 @@ fn view_requires_unknown_name_errors_on_the_flow() {
     );
     assert_eq!(diagnostics[0].0, "model/benefits.ifml");
     assert_eq!(diagnostics[0].1.severity, Severity::Error);
+    assert!(
+        diagnostics[0].1.message.starts_with("X0008 "),
+        "the error carries its stable registry code: {diagnostics:?}"
+    );
     assert_eq!(
         diagnostics[0].1.message,
-        "unknown capability or actor 'Nonexistent' in requires of view 'EnrollmentWizard'"
+        "X0008 unknown capability or actor 'Nonexistent' in requires of view 'EnrollmentWizard'"
     );
     assert!(diagnostics[0].1.help.is_some());
 }
@@ -764,7 +831,7 @@ fn handler_requires_unknown_name_errors_on_the_flow() {
     );
     assert_eq!(
         diagnostics[0].1.message,
-        "unknown capability or actor 'Ghost' in requires of view 'Tickets'"
+        "X0008 unknown capability or actor 'Ghost' in requires of view 'Tickets'"
     );
 }
 
@@ -780,7 +847,7 @@ fn command_requires_unknown_name_errors_on_the_flow() {
     );
     assert_eq!(
         diagnostics[0].1.message,
-        "unknown capability or actor 'Ghost' in requires of command 'tickets'"
+        "X0008 unknown capability or actor 'Ghost' in requires of command 'tickets'"
     );
 }
 
@@ -827,7 +894,7 @@ fn subcommand_requires_are_reached_recursively() {
     );
     assert_eq!(
         diagnostics[0].1.message,
-        "unknown capability or actor 'Ghost' in requires of command 'show'"
+        "X0008 unknown capability or actor 'Ghost' in requires of command 'show'"
     );
 }
 
@@ -874,9 +941,13 @@ fn view_roles_unknown_actor_errors_on_the_flow() {
         "exactly the dangling role: {diagnostics:?}"
     );
     assert_eq!(diagnostics[0].1.severity, Severity::Error);
+    assert!(
+        diagnostics[0].1.message.starts_with("X0008 "),
+        "the error carries its stable registry code: {diagnostics:?}"
+    );
     assert_eq!(
         diagnostics[0].1.message,
-        "unknown actor 'Supervisor' in roles of view 'Payroll'"
+        "X0008 unknown actor 'Supervisor' in roles of view 'Payroll'"
     );
     assert!(diagnostics[0].1.help.is_some());
 }
@@ -964,9 +1035,13 @@ fn unknown_emitted_event_errors_on_the_design() {
     let (path, diagnostic) = &diagnostics[0];
     assert_eq!(path, "model/payrun.ddd");
     assert_eq!(diagnostic.severity, Severity::Error);
+    assert!(
+        diagnostic.message.starts_with("X0003 "),
+        "the error carries its stable registry code: {diagnostic:?}"
+    );
     assert_eq!(
         diagnostic.message,
-        "operation 'approve' of service 'PayRunService' emits unknown event 'Ghost'"
+        "X0003 operation 'approve' of service 'PayRunService' emits unknown event 'Ghost'"
     );
     assert_eq!(
         diagnostic.help.as_deref(),
@@ -1016,7 +1091,7 @@ fn duplicate_emission_is_one_emission() {
     );
     assert_eq!(
         diagnostics[0].1.message,
-        "operation 'approve' of service 'PayRunService' emits unknown event 'Ghost'"
+        "X0003 operation 'approve' of service 'PayRunService' emits unknown event 'Ghost'"
     );
 
     let designs = vec![design_with_emitting_op(
@@ -1092,9 +1167,13 @@ fn orphan_declared_event_errors_on_the_event_file() {
     let (path, diagnostic) = &diagnostics[0];
     assert_eq!(path, "model/payrun.evt");
     assert_eq!(diagnostic.severity, Severity::Error);
+    assert!(
+        diagnostic.message.starts_with("X0004 "),
+        "the error carries its stable registry code: {diagnostic:?}"
+    );
     assert_eq!(
         diagnostic.message,
-        "event 'Orphan' is declared but no operation emits it"
+        "X0004 event 'Orphan' is declared but no operation emits it"
     );
     assert!(diagnostic.help.is_some());
 }
@@ -1147,7 +1226,7 @@ fn channel_membership_does_not_satisfy_production() {
     );
     assert_eq!(
         diagnostics[0].1.message,
-        "event 'PayRunStateChanged' is declared but no operation emits it"
+        "X0004 event 'PayRunStateChanged' is declared but no operation emits it"
     );
 }
 
@@ -1161,4 +1240,62 @@ fn declared_event_without_any_design_passes() {
         diagnostics.is_empty(),
         "without designs there is nothing to emit events: {diagnostics:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Stable codes — every union-pass diagnostic message is prefixed with its
+// registry code (the `driver.integrity` band of rex-diagnostics), the way
+// the CLI's `.ifml` converter prefixes codes onto messages.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integrity_codes_are_registered() {
+    // Every X-constant the union pass prefixes resolves in the central
+    // registry, in the `driver.integrity` band, with the severity the
+    // check emits: the capability joins are the warning lint channel,
+    // everything else an error.
+    let cases = [
+        (
+            rex_diagnostics::X_UNKNOWN_OP_CAPABILITY,
+            rex_diagnostics::Severity::Warning,
+        ),
+        (
+            rex_diagnostics::X_GRANTED_CAPABILITY_UNCARRIED,
+            rex_diagnostics::Severity::Warning,
+        ),
+        (
+            rex_diagnostics::X_UNKNOWN_EMISSION,
+            rex_diagnostics::Severity::Error,
+        ),
+        (
+            rex_diagnostics::X_ORPHAN_EVENT,
+            rex_diagnostics::Severity::Error,
+        ),
+        (
+            rex_diagnostics::X_UNBOUND_ACTION,
+            rex_diagnostics::Severity::Error,
+        ),
+        (
+            rex_diagnostics::X_AMBIGUOUS_ACTION,
+            rex_diagnostics::Severity::Error,
+        ),
+        (
+            rex_diagnostics::X_UNKNOWN_CONSUMER,
+            rex_diagnostics::Severity::Error,
+        ),
+        (
+            rex_diagnostics::X_UNKNOWN_FLOW_REFERENCE,
+            rex_diagnostics::Severity::Error,
+        ),
+    ];
+    for (code, severity) in cases {
+        let entry = rex_diagnostics::lookup(code)
+            .unwrap_or_else(|| panic!("{code} must be registered in rex-diagnostics"));
+        assert_eq!(
+            entry.band,
+            rex_diagnostics::integrity::INTEGRITY_BAND,
+            "{code}"
+        );
+        assert_eq!(entry.severity, severity, "{code}");
+    }
 }

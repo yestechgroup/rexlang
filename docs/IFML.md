@@ -436,7 +436,9 @@ byte-identically to the pre-#80 shape.
 ## Downstream Consumption
 
 The `rexlang` language server supports the surface: diagnostics (resolver
-`E0001`–`E0009` + typed-binding `E0100`–`E0108`, authorization included),
+`E0001`–`E0009` + typed-binding `E0100`–`E0109`, authorization included —
+the code table is
+[docs/DIAGNOSTICS.md](DIAGNOSTICS.md), rendered by `rexlang explain`),
 document symbols, hover
 (module signatures), go-to-definition on `use` sites (cross-file), and
 `textDocument/formatting` backed by the canonical formatter. Imports fetch
@@ -469,7 +471,7 @@ crates/rex-ifml/
 │   ├── parser.rs         # Pest parser wrapper + IfmlParseError
 │   ├── index.rs          # Span side-table (IfmlIndex): module decls/uses, views, containers, actions, actors, components, commands, auth sites — never serialized
 │   ├── resolve.rs        # Cross-file module resolution: IfmlImports bundle, compile_ifml_str, IfmlDiagnostic (E0001–E0009)
-│   ├── check.rs          # Typed expression checking against a domain Model, via rex_expr::DomainTypes (E0100–E0106); interaction cross-reference (E0104–E0106) and authorization (E0107–E0108) passes over instantiated-module sites
+│   ├── check/           # Typed expression checking against a domain Model, via rex_expr::DomainTypes; interaction cross-reference, authorization, and lint passes over instantiated-module sites (code table: docs/DIAGNOSTICS.md)
 │   ├── expand.rs         # Module-use expansion (opt-in for the IR artifact; the manifest always derives from it)
 │   ├── manifest.rs       # The control/route manifest emitter: IfmlCompilation (+ imports, + optional domain union) → rex_ir::ifml_manifest::IfmlManifest
 │   ├── fmt.rs            # Comment-preserving canonical formatter
@@ -611,6 +613,34 @@ on a capability no policy declares can no longer compile clean — the
 #112 defect class one level up. The conformance fixture pair
 `tests/conformance/ifml/rexlang/auth.{mox,actor}` makes `app.ifml`'s
 `import "rexlang/auth.actor"` load-bearing.
+
+### Warnings and Lints
+
+Every diagnostic carries a severity class. The resolver and checker
+bands (`E0001`–`E0009`, `E0100`–`E0109`) are **errors**: they fail
+`rexlang check`/`ir`/`build`/`manifest` and the LSP publishes them as
+errors. The lint pass (`check_ifml_with_actors`, after the
+authorization pass) adds the `ifml.lints` band — **warnings**
+(`W0150`–`W0199`) that render but never fail a compilation; the carrier
+decides what they mean (`rexlang check --deny-warnings` turns them into
+failures, per-file and in the union integrity pass whose lint channel
+they join). Every lint judges **only the main file's** declarations —
+imported pattern libraries declare unused modules and actions by
+design — while references count anywhere in the compilation (an
+uninstantiated module's `action("X")` is still live intent):
+
+| Code | Warns when |
+|---|---|
+| `W0150` | a main-file `action "X"` declaration no `action("X")` invocation names — `action 'X' is declared but never invoked` |
+| `W0151` | a main-file view that is not the entry view (first by position), not `landmark: true`, reached by no `navigate` target, and carries no body content — the empty shell nothing routes to (a content view is intentionally routable: the manifest exports every view as a route) |
+| `W0152` | a main-file module declaration shadows an imported module of the same name — resolution deliberately lets the main file win silently; the warning documents it at the winning declaration |
+| `W0153` | a main-file component with no `data:` binding that also declares no events, carries no chart, and spells no explicit `Entity.field` table column — a fully static placeholder |
+| `W0154` | a main-file view with no domain tie at all — no `data:` binding or explicit entity columns in its body, no `params`, no module composition, no event handlers, no `roles:`/`requires:` gate |
+
+The canonical fixtures, examples, and pattern library are all
+warning-silent (`rexlang check` on them renders nothing); `rexlang
+explain W0150` renders one entry, and `docs/DIAGNOSTICS.md` is the
+generated code table.
 
 ### Control/Route Manifest
 

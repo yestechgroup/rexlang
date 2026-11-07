@@ -1233,6 +1233,163 @@ async fn ifml_open_clean_document_publishes_no_diagnostics() {
     );
 }
 
+/// A dead action: declared, never invoked — the W0150 lint.
+const DEAD_ACTION_IFML: &str = r#"view "Home" {
+    component "grid" {
+        type: list;
+
+        on save -> navigate("Home");
+    }
+}
+
+action "RaiseRefund" {
+    target: Order;
+}
+"#;
+
+#[tokio::test]
+async fn ifml_lint_warning_publishes_with_warning_severity() {
+    let (mut service, mut socket) = initialized_service().await;
+    open_at(&mut service, &ifml_uri("dead.ifml"), DEAD_ACTION_IFML).await;
+
+    let publish = next_publish(&mut socket, &ifml_uri("dead.ifml"))
+        .await
+        .expect("publishDiagnostics for the lint");
+    assert_eq!(
+        publish.diagnostics.len(),
+        1,
+        "the dead action is the one finding: {publish:?}"
+    );
+    let diagnostic = &publish.diagnostics[0];
+    assert_eq!(
+        diagnostic.severity,
+        Some(DiagnosticSeverity::WARNING),
+        "lint findings publish as warnings, not errors"
+    );
+    assert_eq!(
+        diagnostic.code,
+        Some(NumberOrString::String("W0150".to_string()))
+    );
+    assert!(diagnostic
+        .message
+        .contains("action 'RaiseRefund' is declared but never invoked"));
+}
+
+/// A dangling `action(...)` reference: the E0104 quick-fix's source.
+const UNKNOWN_ACTION_IFML: &str = r#"view "Home" {
+    component "grid" {
+        type: list;
+
+        on save -> action("RaiseRefund");
+    }
+}
+"#;
+
+/// `code_actions_at` for an arbitrary (`.ifml`) document URI.
+async fn ifml_code_actions_at(
+    service: &mut LspService<RexBackend>,
+    uri: &Url,
+    diagnostics: Vec<Diagnostic>,
+    range: Range,
+) -> Vec<CodeAction> {
+    let response = service
+        .call(
+            jsonrpc::Request::build("textDocument/codeAction")
+                .params(json!({
+                    "textDocument": {"uri": uri.as_str()},
+                    "range": range,
+                    "context": {"diagnostics": diagnostics},
+                }))
+                .id(510)
+                .finish(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let (_, body) = response.into_parts();
+    let value = body.expect("codeAction must not error");
+    let actions: Vec<CodeActionOrCommand> =
+        serde_json::from_value(value).expect("a CodeActionResponse");
+    actions
+        .into_iter()
+        .map(|action| match action {
+            CodeActionOrCommand::CodeAction(action) => action,
+            CodeActionOrCommand::Command(_) => panic!("expected code actions"),
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn code_action_on_unknown_action_offers_the_declaration_skeleton() {
+    let (mut service, mut socket) = initialized_service().await;
+    let flow = ifml_uri("refund.ifml");
+    open_at(&mut service, &flow, UNKNOWN_ACTION_IFML).await;
+    let publish = next_publish(&mut socket, &flow)
+        .await
+        .expect("publishDiagnostics for the dangling reference");
+    let diagnostic = publish
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == Some(NumberOrString::String("E0104".to_string())))
+        .cloned()
+        .expect("the unknown action publishes");
+
+    let actions = ifml_code_actions_at(
+        &mut service,
+        &flow,
+        vec![diagnostic.clone()],
+        diagnostic.range,
+    )
+    .await;
+    assert_eq!(actions.len(), 1, "one declaration fix: {actions:?}");
+    let action = &actions[0];
+    assert_eq!(action.kind, Some(CodeActionKind::QUICKFIX));
+    assert_eq!(
+        action.title,
+        "Add action \"RaiseRefund\" { target: <Entity>; }"
+    );
+    assert_eq!(action.diagnostics, Some(vec![diagnostic.clone()]));
+    // The skeleton lands right after the file's last top-level
+    // declaration — the view's closing `}` at (6, 1).
+    let changes = action.edit.as_ref().unwrap().changes.as_ref().unwrap();
+    let edit = &changes.get(&flow).expect("edits for the flow")[0];
+    let at_view_end = Range {
+        start: Position {
+            line: 6,
+            character: 1,
+        },
+        end: Position {
+            line: 6,
+            character: 1,
+        },
+    };
+    assert_eq!(edit.range, at_view_end);
+    assert_eq!(
+        edit.new_text,
+        "\naction \"RaiseRefund\" { target: <Entity>; }\n"
+    );
+}
+
+#[tokio::test]
+async fn code_action_ignores_non_e0104_ifml_diagnostics() {
+    let (mut service, mut socket) = initialized_service().await;
+    let flow = ifml_uri("dead.ifml");
+    open_at(&mut service, &flow, DEAD_ACTION_IFML).await;
+    let publish = next_publish(&mut socket, &flow)
+        .await
+        .expect("publishDiagnostics for the lint");
+    let diagnostic = publish.diagnostics[0].clone();
+
+    let actions = ifml_code_actions_at(
+        &mut service,
+        &flow,
+        vec![diagnostic.clone()],
+        diagnostic.range,
+    )
+    .await;
+    assert!(actions.is_empty(), "warnings carry no fixes: {actions:?}");
+}
+
 #[tokio::test]
 async fn ifml_open_resolves_requires_and_roles_against_the_actor_import() {
     let (mut service, mut socket) = initialized_service().await;
@@ -2006,6 +2163,82 @@ async fn ifml_completion_labels(
     }
     let items: Vec<CompletionItem> = serde_json::from_value(value).expect("completion items");
     items.into_iter().map(|item| item.label).collect()
+}
+
+/// Views, a container, components, and one action: the declaration set
+/// the interaction-string completions offer from.
+const STORE_IFML: &str = r#"view "Checkout" {
+    container "cart" {
+        component "items" {
+            type: list;
+        }
+    }
+
+    component "summary" {
+        type: details;
+        data: Order;
+
+        on pay -> action("");
+        on reload -> refresh("");
+        on done -> navigate("");
+    }
+}
+
+action "ChargeCard" {
+    target: Order;
+}
+"#;
+
+#[tokio::test]
+async fn ifml_completion_inside_action_string_offers_declared_actions() {
+    let (mut service, mut socket) = initialized_service().await;
+    let flow = ifml_uri("store.ifml");
+    open_at(&mut service, &flow, STORE_IFML).await;
+    drain_socket(&mut socket).await;
+
+    // Caret between the quotes of `action("|")` — an undeclared action,
+    // so the compilation carries an E0104 while completing.
+    let (line, character) = pos_of(STORE_IFML, "action(\"\")", 0);
+    let labels = ifml_completion_labels(&mut service, &flow, line, character + 8).await;
+    assert_eq!(
+        labels,
+        vec!["ChargeCard".to_string()],
+        "declared actions complete: {labels:?}"
+    );
+}
+
+#[tokio::test]
+async fn ifml_completion_inside_navigate_string_offers_views_and_containers() {
+    let (mut service, mut socket) = initialized_service().await;
+    let flow = ifml_uri("store.ifml");
+    open_at(&mut service, &flow, STORE_IFML).await;
+    drain_socket(&mut socket).await;
+
+    // The E0105 set: declared views and containers, sorted.
+    let (line, character) = pos_of(STORE_IFML, "navigate(\"\")", 0);
+    let labels = ifml_completion_labels(&mut service, &flow, line, character + 10).await;
+    assert_eq!(
+        labels,
+        vec!["Checkout".to_string(), "cart".to_string()],
+        "views and containers complete: {labels:?}"
+    );
+}
+
+#[tokio::test]
+async fn ifml_completion_inside_refresh_string_offers_components() {
+    let (mut service, mut socket) = initialized_service().await;
+    let flow = ifml_uri("store.ifml");
+    open_at(&mut service, &flow, STORE_IFML).await;
+    drain_socket(&mut socket).await;
+
+    // The E0106 set: declared components.
+    let (line, character) = pos_of(STORE_IFML, "refresh(\"\")", 0);
+    let labels = ifml_completion_labels(&mut service, &flow, line, character + 9).await;
+    assert_eq!(
+        labels,
+        vec!["items".to_string(), "summary".to_string()],
+        "declared components complete: {labels:?}"
+    );
 }
 
 #[tokio::test]

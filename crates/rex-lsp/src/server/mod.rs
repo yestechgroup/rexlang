@@ -339,24 +339,48 @@ impl LanguageServer for RexBackend {
     ) -> tower_lsp::jsonrpc::Result<Option<CodeActionResponse>> {
         let uri = params.text_document.uri;
         let requested = params.range;
-        let actions = self.with_navigation(&uri, |map, _index| {
-            let mut actions = Vec::new();
-            for diagnostic in &params.context.diagnostics {
-                // Only diagnostics that overlap the requested range.
-                let inside = diagnostic.range.start <= requested.end
-                    && requested.start <= diagnostic.range.end;
-                if !inside {
-                    continue;
+        // `.ifml` quick fixes run over the compiled snapshot (its index
+        // knows the interaction sites and the declaration layout); the
+        // `.mox` path stays on the navigation index.
+        let actions = if self.open_ifml_document(&uri) {
+            self.with_ifml(&uri, |snapshot| {
+                let mut actions = Vec::new();
+                for diagnostic in &params.context.diagnostics {
+                    // Only diagnostics that overlap the requested range.
+                    let inside = diagnostic.range.start <= requested.end
+                        && requested.start <= diagnostic.range.end;
+                    if !inside {
+                        continue;
+                    }
+                    actions.extend(ifml_quick_fix_actions(snapshot, &uri, diagnostic));
                 }
-                actions.extend(quick_fix_actions(&uri, map, diagnostic));
-            }
-            Some(CodeActionResponse::from(
-                actions
-                    .into_iter()
-                    .map(CodeActionOrCommand::CodeAction)
-                    .collect::<Vec<_>>(),
-            ))
-        });
+                Some(CodeActionResponse::from(
+                    actions
+                        .into_iter()
+                        .map(CodeActionOrCommand::CodeAction)
+                        .collect::<Vec<_>>(),
+                ))
+            })
+        } else {
+            self.with_navigation(&uri, |map, _index| {
+                let mut actions = Vec::new();
+                for diagnostic in &params.context.diagnostics {
+                    // Only diagnostics that overlap the requested range.
+                    let inside = diagnostic.range.start <= requested.end
+                        && requested.start <= diagnostic.range.end;
+                    if !inside {
+                        continue;
+                    }
+                    actions.extend(quick_fix_actions(&uri, map, diagnostic));
+                }
+                Some(CodeActionResponse::from(
+                    actions
+                        .into_iter()
+                        .map(CodeActionOrCommand::CodeAction)
+                        .collect::<Vec<_>>(),
+                ))
+            })
+        };
         Ok(actions)
     }
 

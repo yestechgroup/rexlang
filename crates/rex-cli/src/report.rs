@@ -83,9 +83,10 @@ pub(crate) fn report_cmmn_diagnostics(
     render_grouped(&compilation.diagnostics, |path| pair.source_of(path));
 }
 
-/// Renders an `.ifml` compilation's diagnostics (resolver plus typed-binding
-/// checker) grouped per file, ariadne-rendered against each file's own
-/// source — the main interaction file and every imported `.ifml` file.
+/// Renders an `.ifml` compilation's diagnostics (resolver, typed-binding
+/// checker, and lints) grouped per file, ariadne-rendered against each
+/// file's own source — the main interaction file and every imported
+/// `.ifml` file. Severity is carried through: lints render as warnings.
 pub(crate) fn report_ifml_diagnostics(
     sources: &[(String, String)],
     diagnostics: &[rex_ifml::IfmlDiagnostic],
@@ -93,9 +94,14 @@ pub(crate) fn report_ifml_diagnostics(
     let converted: Vec<(String, rex_driver::Diagnostic)> = diagnostics
         .iter()
         .map(|diagnostic| {
+            let constructor = if diagnostic.severity.is_error() {
+                rex_driver::Diagnostic::error
+            } else {
+                rex_driver::Diagnostic::warning
+            };
             (
                 diagnostic.file.clone(),
-                rex_driver::Diagnostic::error(
+                constructor(
                     format!("{} {}", diagnostic.code, diagnostic.message),
                     Some(rex_driver::Span {
                         start: diagnostic.span.0,

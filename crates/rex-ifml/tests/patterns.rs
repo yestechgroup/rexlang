@@ -7,7 +7,7 @@
 use std::fs;
 use std::path::Path;
 
-use rex_ifml::{compile_ifml_str, IfmlCompilation, IfmlImports, E_UNKNOWN_INPUT};
+use rex_ifml::{check_ifml, compile_ifml_str, IfmlCompilation, IfmlImports, E_UNKNOWN_INPUT};
 
 const PATTERNS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../patterns/ifml");
 
@@ -102,6 +102,48 @@ fn every_pattern_file_compiles_with_zero_diagnostics() {
                 use_site.target
             );
         }
+    }
+}
+
+#[test]
+fn every_pattern_file_checks_without_warnings() {
+    // A standalone check reports the library's by-design dangling targets
+    // (`E0105` — the consuming app declares `ItemDetail` and friends, per
+    // the reference-resolution rule), so only the lint band is asserted
+    // here: a pattern library never carries its own warnings.
+    let mut entries: Vec<String> = fs::read_dir(PATTERNS_DIR)
+        .expect("patterns directory exists")
+        .map(|entry| entry.expect("readable entry").path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "ifml")
+        })
+        .map(|path| {
+            path.file_name()
+                .expect("named file")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    entries.sort();
+
+    for file_name in &entries {
+        let compilation = compile_pattern(file_name);
+        let warnings: Vec<String> = check_ifml(&compilation, None)
+            .into_iter()
+            .filter(|diagnostic| !diagnostic.severity.is_error())
+            .map(|diagnostic| {
+                format!(
+                    "  {} at {:?}: {}",
+                    diagnostic.code, diagnostic.span, diagnostic.message
+                )
+            })
+            .collect();
+        assert!(
+            warnings.is_empty(),
+            "{file_name} must be warning-silent:\n{}",
+            warnings.join("\n")
+        );
     }
 }
 
