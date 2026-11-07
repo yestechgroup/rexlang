@@ -1,6 +1,6 @@
 //! Turning command-line inputs into in-memory sources and driver
 //! compilations: input expansion, source reading, and the thin
-//! `.ifml`/`.actor`/`.ddd`/`.evt`/`.uc`/`.cmmn`/`.deploy` readers — import
+//! `.ifml`/`.actor`/`.ddd`/`.evt`/`.dmn`/`.uc`/`.cmmn`/`.deploy` readers — import
 //! gathering itself lives in [`rex_driver::project`], so each reader here
 //! only builds the disk fetch closure (the CLI's read-error policy is a
 //! closure side-channel) and compiles the gathered project. In project
@@ -60,11 +60,11 @@ pub(crate) fn expand_inputs(files: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
 }
 
 /// Expands `rexlang check` inputs: directories scan recursively for **every
-/// supported surface** (`.mox`, `.actor`, `.ddd`, `.evt`, `.uc`, `.ifml`),
-/// not just `.mox` — formatter-golden `X.fmt.<ext>` artifacts excepted (see
-/// [`is_formatter_golden`]). Used by the directory batch mode, where each
-/// expanded file is checked independently; explicit file arguments pass
-/// through as-is.
+/// supported surface** (`.mox`, `.actor`, `.ddd`, `.evt`, `.dmn`, `.uc`,
+/// `.ifml`), not just `.mox` — formatter-golden `X.fmt.<ext>` artifacts
+/// excepted (see [`is_formatter_golden`]). Used by the directory batch
+/// mode, where each expanded file is checked independently; explicit file
+/// arguments pass through as-is.
 pub(crate) fn expand_check_inputs(files: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
     let mut expanded = Vec::new();
     for entry in files {
@@ -139,7 +139,9 @@ fn is_formatter_golden(path: &Path) -> bool {
 fn collect_supported_files(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
     collect_with_extensions(
         dir,
-        &["mox", "actor", "ddd", "evt", "uc", "cmmn", "ifml", "deploy"],
+        &[
+            "mox", "actor", "ddd", "evt", "dmn", "uc", "cmmn", "ifml", "deploy",
+        ],
         out,
     )
 }
@@ -193,6 +195,13 @@ pub(crate) fn is_actor_file(file: &Path) -> bool {
 /// against the domain models it imports.
 pub(crate) fn is_evt_file(file: &Path) -> bool {
     file.extension().and_then(|extension| extension.to_str()) == Some("evt")
+}
+
+/// `true` for `.dmn` paths: the standalone decision-model surface, compiled
+/// against the domain models it imports and the decision-table contents its
+/// `logic table` clauses name.
+pub(crate) fn is_dmn_file(file: &Path) -> bool {
+    file.extension().and_then(|extension| extension.to_str()) == Some("dmn")
 }
 
 /// `true` for `.uc` paths: the use case surface, compiled against the
@@ -567,6 +576,74 @@ pub(crate) fn read_evt_pair(file: &Path, project: Option<&mut Project>) -> anyho
         },
         project,
     )
+}
+
+/// A `.dmn` decision-model file and its compiled inputs, ready for
+/// [`rex_driver::compile_dmn_str`]: the raw imported domains (in
+/// [`DomainPair`]) plus the decision-table contents its `logic table`
+/// clauses name.
+pub(crate) struct DmnPair {
+    /// The decision-model file plus its raw imported domains.
+    pub(crate) pair: DomainPair,
+    /// Each `logic table "<path>"` clause's markdown content, keyed by the
+    /// path **as written** — the driver matches table paths exactly as
+    /// written.
+    pub(crate) tables: Vec<(String, String)>,
+}
+
+/// Reads a `.dmn` file plus every domain it imports; each `logic table
+/// "<path>"` clause's markdown file is resolved relative to the `.dmn`
+/// file's directory and read from disk. A table file that cannot be read
+/// is simply not provided — the driver reports
+/// `decision table "<path>" was not provided` with the written path.
+pub(crate) fn read_dmn_pair(file: &Path, project: Option<&mut Project>) -> anyhow::Result<DmnPair> {
+    let source = std::fs::read_to_string(file)
+        .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
+    let tables = table_sources(file, &source);
+    let pair = read_domain_pair(
+        file,
+        |source| {
+            rex_syntax::parse_dmn(source)
+                .ast
+                .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
+                .unwrap_or_default()
+        },
+        project,
+    )?;
+    Ok(DmnPair { pair, tables })
+}
+
+/// The decision-table contents a `.dmn` source names: every `logic table
+/// "<path>"` clause of a decision, resolved relative to the `.dmn` file's
+/// directory and read from disk, keyed by the path as written. A table
+/// file that cannot be read is skipped (the driver's unprovided-table
+/// diagnostic names it); duplicated table references are gathered once.
+fn table_sources(file: &Path, source: &str) -> Vec<(String, String)> {
+    let written: Vec<String> = rex_syntax::parse_dmn(source)
+        .ast
+        .and_then(|ast| ast.model)
+        .map(|model| {
+            model
+                .decisions
+                .iter()
+                .filter_map(|decision| match &decision.logic {
+                    Some(rex_syntax::DmnLogic::Table { source, .. }) => Some(source.clone()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let dir = dir_of(file);
+    let mut tables: Vec<(String, String)> = Vec::new();
+    for table in written {
+        if tables.iter().any(|(name, _)| *name == table) {
+            continue;
+        }
+        if let Ok(content) = std::fs::read_to_string(dir.join(&table)) {
+            tables.push((table, content));
+        }
+    }
+    tables
 }
 
 /// The plain disk-read fetch the driver gatherers take: the gatherer
