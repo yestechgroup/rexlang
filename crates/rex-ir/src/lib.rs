@@ -152,6 +152,7 @@ use serde::{Deserialize, Serialize};
 pub mod cmmn;
 pub mod ddd;
 pub mod deploy;
+pub mod dmn;
 pub mod events;
 pub mod ifml;
 pub mod ifml_manifest;
