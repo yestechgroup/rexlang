@@ -26,6 +26,8 @@ consumes the IR — in or out of tree — start with
                                                     -> EventModel (orders.evt.json)
                                     .uc use case file  -> resolve & validate (4 import buckets)
                                                     -> UseCaseModel (support.uc.json)
+                                    .dmn decision file -> resolve & validate (.mox types, markdown tables)
+                                                    -> DmnModel (kiwisaver.dmn.json) --dsntk--> decision tables
                                     .deploy deployment file -> resolve & validate
                                                     -> DeployModel (svc.deploy.json)
                                     .cmmn case file    -> resolve & validate
@@ -46,7 +48,11 @@ JSON Schema (wire/api), the Tier-2 expression language, hermetic
 vocabularies, the `.actor` authorization dimension with Cedar policy
 generation, the `.ddd` Sculptor-style design layer over imported domains
 (with entity state machines lowered to xstate-ir), the `.evt`
-event-contract surface, the `.deploy` deployment-projection surface, the
+event-contract surface, the `.dmn` decision-model surface (the
+decision-requirements graph over imported domain types, with external
+markdown decision tables validated through the dsntk toolchain and `.ddd`
+service operations declaring the decision services they invoke), the
+`.deploy` deployment-projection surface, the
 `.uc` use-case-pattern surface, the `.cmmn` case-management surface with
 its cmmn-rs lowering backend, the `.ifml` interaction-flow surface, and
 structural `import schema` / `import sigil` (Rune DSL) imports —
@@ -63,7 +69,7 @@ rexlang gen rust model.mox -o src-gen/
 rexlang gen json-schema model.mox --profile wire -o schemas/
 rexlang gen cedar model.mox -o policies/      # from inline actors blocks
 rexlang gen cedar policy.actor -o policies/   # from a standalone actor file
-rexlang ir usecase.uc -o usecase.uc.json      # every artifact surface: .ddd/.evt/.deploy/.uc/.cmmn
+rexlang ir usecase.uc -o usecase.uc.json      # every artifact surface: .ddd/.evt/.dmn/.deploy/.uc/.cmmn
 rexlang artifact check usecase.uc.json        # lint any serialized artifact, no toolchain needed
 rexlang vocab fetch model.mox --provider file:vocab-sources/
 rexlang explain E0104              # explain any diagnostic code (--list: the allocation ledger)
