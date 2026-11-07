@@ -2,11 +2,12 @@
 // (Deliberately non-canonical source: the formatter golden compares against
 // the canonical layout; do not "fix" the spacing here. The missing
 // statement semicolons are deliberate too — the formatter emits the
-// canonical `;` whether or not the source had one.)
-import "library.mox";
-import "jurisdiction.mox";
+// canonical `;` whether or not the source had one. The import is real so
+// the batch check compiles this file like any model — shapes that need
+// richer cross-surface detail live in tests/conformance/dmn/kiwisaver.dmn
+// and the unit tests.)
+import "../ddd/library.mox";
 
-/// The loan approval decision model: whether an application passes.
 decision_model LoanApproval {
     namespace banking.loan;
     id "loan-approval";
@@ -15,9 +16,9 @@ decision_model LoanApproval {
     jurisdiction "NZ";
     /// The facts the decision reads.
     inputs {
-        history: CreditHistory;
-        applicant: Applicant;
-        request: LoanRequest;
+        history: int;
+        applicant: int;
+        request: int;
     }
     knowledge {
         /// The underwriting policy manual.
@@ -30,44 +31,41 @@ decision_model LoanApproval {
         }
         model EligibilityRules {
             parameters {
-                age: Number;
+                age: int;
             }
-            output Boolean;
-            logic table "eligibility.dmn"
+            output int;
+            logic table "./tables/eligibility.md"
         }
         model RateLookup {
             parameters {
-                tier: String;
+                tier: string;
             }
-            output Rate;
-            logic invoke PricingService {
-                tier: "applicant.tier";
-                amount: "request.amount";
-            }
+            output int;
+            logic expression "tier"
         }
         model FeeSchedule {
             parameters {}
-            output Money;
+            output int;
             logic expression "fee = base * factor"
         }
     }
     decisions {
         /// Whether the application passes.
         decision Approve {
-            output Boolean;
+            output int;
             logic invoke EligibilityRules {
                 age: "applicant.age";
             }
         }
         decision Fee {
             outputs {
-                waiver: Boolean;
-                fee: Money;
+                waiver: boolean;
+                fee: int;
             }
-            logic table "fees.dmn"
+            logic table "./tables/fees.md"
         }
         decision Plain {
-            output Boolean;
+            output boolean;
         }
     }
     requirements {
@@ -86,15 +84,15 @@ decision_model LoanApproval {
     services {
         service PricingService {
             description "Rates and fees.";
-            inputs { tier amount }
-            outputs { rate }
+            inputs { request history }
+            outputs { Approve }
             encapsulates { RateLookup }
         }
     }
     views {
         view DecisionLetter {
             description "The approval letter.";
-            show { Approve fee }
+            show { Approve Fee }
             direction outgoing;
         }
         view CommitteeBrief {
