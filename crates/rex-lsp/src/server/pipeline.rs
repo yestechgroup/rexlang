@@ -615,15 +615,20 @@ fn domain_import_bundle(domains: &[(String, String)]) -> rex_driver::DomainImpor
 }
 
 /// Converts an `.ifml` diagnostic into its LSP shape: the code string as
-/// `code`, the span mapped through the position map. The resolver's
-/// byte-offset spans convert directly.
+/// `code`, the span mapped through the position map, and the severity
+/// class mapped — checker/resolver errors stay errors, the lint band
+/// (`W0150`–) publishes as warnings. The resolver's byte-offset spans
+/// convert directly.
 pub(super) fn to_ifml_diagnostic(
     diagnostic: &rex_ifml::IfmlDiagnostic,
     map: &PositionMap,
 ) -> Diagnostic {
     Diagnostic {
         range: map.range_for((diagnostic.span.0..diagnostic.span.1).into()),
-        severity: Some(DiagnosticSeverity::ERROR),
+        severity: Some(match diagnostic.severity {
+            rex_ifml::Severity::Error => DiagnosticSeverity::ERROR,
+            rex_ifml::Severity::Warning => DiagnosticSeverity::WARNING,
+        }),
         code: Some(NumberOrString::String(diagnostic.code.to_string())),
         code_description: None,
         source: Some(SOURCE_NAME.to_string()),

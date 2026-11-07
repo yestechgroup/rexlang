@@ -211,11 +211,15 @@ pub(super) fn ifml_hover(snapshot: &IfmlSnapshot, position: Position) -> Option<
 
 /// `.ifml` completions, by cursor context:
 ///
-/// 1. inside a `use "…"` name token — the module names the compilation
+/// 1. inside an interaction-reference string — `action("…")`,
+///    `navigate("…")`, or `refresh("…")` — the declarations the
+///    cross-reference pass accepts (actions; views plus containers;
+///    components);
+/// 2. inside a `use "…"` name token — the module names the compilation
 ///    knows (local + imported);
-/// 2. inside a use body — the resolved module's inputs (defaults noted)
+/// 3. inside a use body — the resolved module's inputs (defaults noted)
 ///    and slot properties;
-/// 3. after `entity.` — the features of that entity, resolved from view
+/// 4. after `entity.` — the features of that entity, resolved from view
 ///    params (`params { product: Product }`) or the enclosing component's
 ///    `data:` declaration, against the imported domain union.
 pub(super) fn ifml_completions(
@@ -226,6 +230,67 @@ pub(super) fn ifml_completions(
     let text = &index.files[0].text;
     let map = PositionMap::new(text);
     let offset = map.offset_for(position);
+
+    // Interaction-reference strings: inside an `action("…")`,
+    // `navigate("…")`, or `refresh("…")` token the candidates are exactly
+    // what the cross-reference pass (E0104–E0106) accepts — declared
+    // actions; declared views plus containers; declared components. The
+    // full declared-name lists go out (the client filters by prefix), and
+    // the lenient compile keeps the index navigable on broken code.
+    let reference = index
+        .action_targets
+        .iter()
+        .find(|site| site.file == 0 && contains(site.name_span, offset));
+    if let Some(site) = reference {
+        let mut names: Vec<(String, CompletionItemKind, &str)> = match site.action.as_str() {
+            "navigate" => index
+                .views
+                .iter()
+                .map(|view| (view.name.clone(), CompletionItemKind::CLASS, "view"))
+                .chain(
+                    index
+                        .containers
+                        .iter()
+                        .map(|container| {
+                            (
+                                container.name.clone(),
+                                CompletionItemKind::STRUCT,
+                                "container",
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .collect(),
+            "refresh" => index
+                .components
+                .iter()
+                .map(|component| {
+                    (
+                        component.name.clone(),
+                        CompletionItemKind::PROPERTY,
+                        "component",
+                    )
+                })
+                .collect(),
+            _ => index
+                .actions
+                .iter()
+                .map(|action| (action.name.clone(), CompletionItemKind::FUNCTION, "action"))
+                .collect(),
+        };
+        names.sort_by(|a, b| a.0.cmp(&b.0));
+        names.dedup_by(|a, b| a.0 == b.0);
+        let items = names
+            .into_iter()
+            .map(|(name, kind, detail)| CompletionItem {
+                label: name,
+                kind: Some(kind),
+                detail: Some(detail.to_string()),
+                ..CompletionItem::default()
+            })
+            .collect();
+        return Some(CompletionResponse::Array(items));
+    }
 
     // Feature access: the text before the cursor ends with `word.`.
     let before = &text[..offset.min(text.len())];
@@ -293,6 +358,88 @@ pub(super) fn ifml_completions(
 
 pub(super) fn contains(span: (usize, usize), offset: usize) -> bool {
     span.0 <= offset && offset <= span.1
+}
+
+// --- `.ifml` quick fixes ---------------------------------------------------------
+
+/// The `.ifml` quick fixes for one echoed diagnostic. Only the unknown
+/// action reference (`E0104`) has a mechanical fix today: the declaration
+/// skeleton the error message itself names, inserted after the main
+/// file's last top-level declaration (`target: <Entity>` is the
+/// placeholder the lowering needs bound — an implicit declaration from a
+/// bare reference would have nothing to bind).
+pub(super) fn ifml_quick_fix_actions(
+    snapshot: &IfmlSnapshot,
+    uri: &Url,
+    diagnostic: &Diagnostic,
+) -> Vec<CodeAction> {
+    let Some(NumberOrString::String(code)) = &diagnostic.code else {
+        return vec![];
+    };
+    if code.as_str() != "E0104" {
+        return vec![];
+    }
+    let index = &snapshot.compilation.index;
+    let text = &index.files[0].text;
+    let map = PositionMap::new(text);
+    // The site the squiggle covers: the `action("…")` string whose token
+    // overlaps the diagnostic's byte span (the checker squiggles the
+    // string token itself).
+    let span = map.span_for(diagnostic.range);
+    let Some(site) = index.action_targets.iter().find(|site| {
+        site.file == 0
+            && site.action == "action"
+            && site.name_span.0 <= span.end
+            && span.start <= site.name_span.1
+    }) else {
+        return vec![];
+    };
+    // The insertion point: the end of the main file's last top-level
+    // declaration — each site's `span` covers its whole declaration.
+    let mut ends: Vec<usize> = index
+        .module_decls
+        .iter()
+        .filter(|decl| decl.file == 0)
+        .map(|decl| decl.span.1)
+        .collect();
+    for site in index
+        .views
+        .iter()
+        .chain(&index.actions)
+        .chain(&index.components)
+        .chain(&index.containers)
+        .chain(&index.commands)
+    {
+        if site.file == 0 {
+            ends.push(site.span.1);
+        }
+    }
+    let insertion = ends.into_iter().max().unwrap_or(0);
+    let header = format!("action \"{}\" {{ target: <Entity>; }}", site.target);
+    let new_text = if insertion == 0 {
+        format!("{header}\n")
+    } else {
+        format!("\n{header}\n")
+    };
+    let range = map_range(map, (insertion, insertion));
+    vec![CodeAction {
+        title: format!("Add {header}"),
+        kind: Some(CodeActionKind::QUICKFIX),
+        diagnostics: Some(vec![diagnostic.clone()]),
+        edit: Some(WorkspaceEdit {
+            changes: Some(
+                [(uri.clone(), vec![TextEdit { range, new_text }])]
+                    .into_iter()
+                    .collect(),
+            ),
+            document_changes: None,
+            change_annotations: None,
+        }),
+        command: None,
+        data: None,
+        disabled: None,
+        is_preferred: None,
+    }]
 }
 
 /// The identifier immediately before the cursor, if the trailing
