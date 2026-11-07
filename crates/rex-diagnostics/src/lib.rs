@@ -175,7 +175,7 @@ const BANDS: &[Band] = &[
         range: "X0001–X0099",
         owner: "rex-driver integrity pass",
         severity_note: "error",
-        next_free: "X0001",
+        next_free: "X0009",
     },
 ];
 

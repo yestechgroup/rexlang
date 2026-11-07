@@ -10,7 +10,7 @@ Every diagnostic a rexlang surface emits carries a stable string code. The codes
 | `ifml.check` | E0100–E0149 | rex-ifml typed checker | error | E0110 |
 | `ifml.lints` | W0150–W0199 | rex-ifml lints | warning | W0150 |
 | `driver.payload` | camelCase names | rex-driver DiagnosticCode | error | n/a |
-| `driver.integrity` | X0001–X0099 | rex-driver integrity pass | error | X0001 |
+| `driver.integrity` | X0001–X0099 | rex-driver integrity pass | error | X0009 |
 
 ## Band `ifml.resolver` (E0001–E0099)
 
@@ -55,4 +55,13 @@ No codes allocated yet — the next free code is `W0150`.
 
 ## Band `driver.integrity` (X0001–X0099)
 
-No codes allocated yet — the next free code is `X0001`.
+| Code | Class | Title | Meaning | Fix |
+|------|-------|-------|---------|-----|
+| `X0001` | warning | Unknown operation capability | `unknown capability '<capability>' on operation '<op>' of service '<service>'` (or `on search '<search>'`) — the capability clause names no capability declared in any provided actor block. Since rexlang#128 the compile-time join is the language error (code `unknownCapability`); this union-pass finding is the lint channel for hosts that gather artifacts without compiling. | Declare the capability (`capability X on <Class>;` in an actors block), or rename the reference to a declared capability. |
+| `X0002` | warning | Granted capability uncarried | `capability '<capability>' is granted but no operation or search carries it` — the granted (or delegated) capability guards a transition that cannot happen. Since rexlang#128 the compile-time join is the language error (code `grantedCapabilityUncarried`); this union-pass finding is the lint channel. | Carry the capability — add it to an operation or search across the designs — or drop the grant entry. |
+| `X0003` | error | Unknown emitted event | `operation '<op>' of service '<service>' emits unknown event '<event>'` — the `emits` clause is loosely coupled by design (the design compile has no event bucket), so the name resolves only across the artifact union. | Declare the event in an `.evt` contract, or fix the spelling. |
+| `X0004` | error | Orphan declared event | `event '<event>' is declared but no operation emits it` — nothing produces the declared event, so it is dead weight. Channel `publishes` entries and subscription `events [...]` lists are consumption-side wiring and never satisfy production. | Emit the event from a service operation's `emits` clause, or drop the declaration. |
+| `X0005` | error | Unbound action | `action '<action>' does not bind to any service operation` — binding is ASCII-case-insensitive name equality (the PascalCase action ↔ camelCase operation mirror), and no operation carries the name. An unbound action is a button whose backend does not exist. | Name the action after the operation it drives (or the reverse), or add the operation to a design. |
+| `X0006` | error | Ambiguous action binding | `action '<action>' binds ambiguously to '<service.op>' and '<service.op>'` — several operations across the designs share the action's case-insensitive mirror name, so the binding names no unique backend (listing every carrier). | Rename the colliding operations so each action's case-insensitive mirror names exactly one service operation. |
+| `X0007` | error | Unknown subscription consumer | `subscription '<subscription>' consumer '<consumer>' does not resolve to a declared component` — a dead inbox: the events are published, but no deploy component receives them. | Declare the component in a deploy model (any application), or fix the consumer's spelling. |
+| `X0008` | error | Unknown flow actor reference | `unknown capability or actor '<name>' in requires of view/command '<name>'`, or `unknown actor '<name>' in roles of view '<name>'` — the flow clause names neither a capability nor an actor the actor layer declares (`roles:` is strictly actors). | Declare the capability or actor in an actors block, or fix the spelling. |

@@ -23,9 +23,19 @@
 //! are the **lint channel** (warning severity): they remain available to
 //! hosts that gather artifacts without compiling (codegraph's doctor),
 //! while the compiler's diagnostics are the language errors.
+//!
+//! Every diagnostic message is prefixed with its stable registry code
+//! (`"{code} {message}"`, the CLI's `.ifml`-converter shape): the codes
+//! live in the `driver.integrity` band of `rex-diagnostics`
+//! (`X0001`–`X0008`), documented on the band module's entries and rendered
+//! into `docs/DIAGNOSTICS.md` — `rexlang explain X0006` resolves them.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
+use rex_diagnostics::{
+    X_AMBIGUOUS_ACTION, X_GRANTED_CAPABILITY_UNCARRIED, X_ORPHAN_EVENT, X_UNBOUND_ACTION,
+    X_UNKNOWN_CONSUMER, X_UNKNOWN_EMISSION, X_UNKNOWN_FLOW_REFERENCE, X_UNKNOWN_OP_CAPABILITY,
+};
 use rex_ir::ddd::DddModel;
 use rex_ir::deploy::DeployModel;
 use rex_ir::events::EventModel;
@@ -33,6 +43,13 @@ use rex_ir::ifml::IfmlModel;
 use rex_ir::ActorModel;
 
 use crate::diagnostic::Diagnostic;
+
+/// Prefixes a diagnostic message with its stable registry code — `"{code}
+/// {message}"`, the shape the CLI's `.ifml` converter prints and
+/// `rexlang explain` resolves.
+fn coded(code: &str, message: impl std::fmt::Display) -> String {
+    format!("{code} {message}")
+}
 
 /// The union referential-integrity pass (issue rexlang#114): a pure
 /// function over the pre-compiled artifact buckets a host gathered —
@@ -46,16 +63,16 @@ use crate::diagnostic::Diagnostic;
 ///
 /// The cross-layer references no per-surface compiler can see:
 ///
-/// 1. **Capability existence** (the design engine's rule 10, generalized
-///    across the union; the union pass's *lint channel* since rexlang#128
-///    promoted the join into the compiler — warning severity): every
-///    `capability` clause on a service operation or a search must name a
-///    capability declared in some provided actor block — `unknown
+/// 1. **Capability existence** (`X0001`, warning; the design engine's
+///    rule 10, generalized across the union; the union pass's *lint
+///    channel* since rexlang#128 promoted the join into the compiler):
+///    every `capability` clause on a service operation or a search must
+///    name a capability declared in some provided actor block — `unknown
 ///    capability 'X' on operation 'O' of service 'S'` / `on search 'Z'`,
 ///    help listing the declared names. Fires when any actor artifacts are
 ///    provided.
-/// 2. **Capability coverage** (rule 10's reverse; the lint channel since
-///    rexlang#128 — warning severity): every capability a grant — or a
+/// 2. **Capability coverage** (`X0002`, warning; rule 10's reverse; the
+///    lint channel since rexlang#128): every capability a grant — or a
 ///    delegation — hands out must be carried by at least one operation or
 ///    search across the designs, else it guards a transition that cannot
 ///    happen: `capability 'X' is granted but no operation or search
@@ -64,39 +81,44 @@ use crate::diagnostic::Diagnostic;
 ///    entry serializes with an empty capability name (verbatim policy, not
 ///    a reference) and is never read as one. Fires when any design
 ///    artifacts are provided.
-/// 3. **Action bindings**: every `.ifml` action declaration must bind to a
-///    service operation — ASCII-case-insensitive name equality, the two
-///    layers' naming conventions being PascalCase labels over camelCase
-///    verbs (`ApproveRefund` ↔ `approveRefund`): `action 'X' does not bind
-///    to any service operation`, help listing the declared operations.
-///    This closes the chain the `.ifml` checker opened — invocation →
+/// 3. **Action bindings** (`X0005` unbound, `X0006` ambiguous): every
+///    `.ifml` action declaration must bind to a service operation —
+///    ASCII-case-insensitive name equality, the two layers' naming
+///    conventions being PascalCase labels over camelCase verbs
+///    (`ApproveRefund` ↔ `approveRefund`): `action 'X' does not bind to
+///    any service operation`, help listing the declared operations. An
+///    action whose case-insensitive mirror **several** operations share
+///    names no unique backend and is an error: `action 'X' binds
+///    ambiguously to 'S1.op1' and 'S2.op2'` (every carrier listed). This
+///    closes the chain the `.ifml` checker opened — invocation →
 ///    declaration resolves there (E0104); declaration → operation
 ///    resolves here. Fires when any design artifacts are provided.
-/// 4. **Consumer resolution**: every `.evt` subscription's consumer must
-///    name a declared `.deploy` component (any application) — a consumer
-///    naming no component is a dead inbox: `subscription 'S' consumer 'C'
-///    does not resolve to a declared component`, help listing the declared
-///    components. Fires when any deploy artifacts are provided.
-/// 5. **Flow actor references**: `.ifml` `requires:` names resolve as a
-///    capability **or** an actor (the command surface's documented
-///    `requires: [Agent]` gates on an actor), on views, event handlers,
-///    and commands (recursing into subcommands) — `unknown capability or
-///    actor 'X' in requires of view/command 'V'`. `roles:` names are
-///    strictly actors — `unknown actor 'X' in roles of view 'V'`. Fires
-///    when any actor artifacts are provided.
-/// 6. **Emission existence**: every event name on a service operation's
-///    `emits` clause must name an event declared in some provided `.evt`
-///    contract — `operation 'approve' of service 'PayRunService' emits
-///    unknown event 'X'`, help listing the declared event names. The
-///    clause is loosely coupled by design (the design compile has no
-///    event bucket), so this is where the names resolve. Fires when any
-///    event artifacts are provided.
-/// 7. **Emission coverage** (the reverse): every declared event must be
-///    emitted by at least one service operation across the designs —
-///    `event 'E' is declared but no operation emits it`, help naming the
-///    remedy. Channel `publishes` entries and subscription `events [...]`
-///    lists are consumption-side wiring; they do not satisfy production.
-///    Fires when any design artifacts are provided.
+/// 4. **Consumer resolution** (`X0007`): every `.evt` subscription's
+///    consumer must name a declared `.deploy` component (any application)
+///    — a consumer naming no component is a dead inbox: `subscription 'S'
+///    consumer 'C' does not resolve to a declared component`, help listing
+///    the declared components. Fires when any deploy artifacts are
+///    provided.
+/// 5. **Flow actor references** (`X0008`): `.ifml` `requires:` names
+///    resolve as a capability **or** an actor (the command surface's
+///    documented `requires: [Agent]` gates on an actor), on views, event
+///    handlers, and commands (recursing into subcommands) — `unknown
+///    capability or actor 'X' in requires of view/command 'V'`. `roles:`
+///    names are strictly actors — `unknown actor 'X' in roles of view
+///    'V'`. Fires when any actor artifacts are provided.
+/// 6. **Emission existence** (`X0003`): every event name on a service
+///    operation's `emits` clause must name an event declared in some
+///    provided `.evt` contract — `operation 'approve' of service
+///    'PayRunService' emits unknown event 'X'`, help listing the declared
+///    event names. The clause is loosely coupled by design (the design
+///    compile has no event bucket), so this is where the names resolve.
+///    Fires when any event artifacts are provided.
+/// 7. **Emission coverage** (`X0004`, the reverse): every declared event
+///    must be emitted by at least one service operation across the
+///    designs — `event 'E' is declared but no operation emits it`, help
+///    naming the remedy. Channel `publishes` entries and subscription
+///    `events [...]` lists are consumption-side wiring; they do not
+///    satisfy production. Fires when any design artifacts are provided.
 ///
 /// # Opt-in in the house style
 ///
@@ -122,9 +144,11 @@ use crate::diagnostic::Diagnostic;
 /// contract, so the pass runs at the artifact level where no source is
 /// attached. Each tags the owning file's path (the bucket entry's path)
 /// and names the offending element precisely, with help text listing the
-/// declared names to bind against. Block-local actor names pool
-/// union-wide: two blocks declaring the same capability name are one name
-/// for every check.
+/// declared names to bind against, and every message is prefixed with its
+/// stable registry code (`X0001`–`X0008`, the `driver.integrity` band of
+/// `rex-diagnostics` — see [`rex_diagnostics::integrity`]). Block-local
+/// actor names pool union-wide: two blocks declaring the same capability
+/// name are one name for every check.
 pub fn check_integrity(
     _designs: &[(String, DddModel)],
     _actors: &[(String, ActorModel)],
@@ -176,10 +200,13 @@ fn check_capability_existence(
                             diagnostics.push((
                                 path.clone(),
                                 Diagnostic::warning(
-                                    format!(
-                                        "unknown capability '{capability}' on operation '{}' \
-                                         of service '{}'",
-                                        operation.name, service.name
+                                    coded(
+                                        X_UNKNOWN_OP_CAPABILITY,
+                                        format!(
+                                            "unknown capability '{capability}' on operation \
+                                             '{}' of service '{}'",
+                                            operation.name, service.name
+                                        ),
                                     ),
                                     None,
                                 )
@@ -195,9 +222,12 @@ fn check_capability_existence(
                         diagnostics.push((
                             path.clone(),
                             Diagnostic::warning(
-                                format!(
-                                    "unknown capability '{capability}' on search '{}'",
-                                    search.name
+                                coded(
+                                    X_UNKNOWN_OP_CAPABILITY,
+                                    format!(
+                                        "unknown capability '{capability}' on search '{}'",
+                                        search.name
+                                    ),
                                 ),
                                 None,
                             )
@@ -263,9 +293,12 @@ fn check_capability_coverage(
                 diagnostics.push((
                     path.clone(),
                     Diagnostic::warning(
-                        format!(
-                            "capability '{capability}' is granted but no operation or \
-                             search carries it"
+                        coded(
+                            X_GRANTED_CAPABILITY_UNCARRIED,
+                            format!(
+                                "capability '{capability}' is granted but no operation or \
+                                 search carries it"
+                            ),
                         ),
                         None,
                     )
@@ -314,10 +347,13 @@ fn check_emission_existence(
                             diagnostics.push((
                                 path.clone(),
                                 Diagnostic::error(
-                                    format!(
-                                        "operation '{}' of service '{}' emits unknown \
-                                         event '{event}'",
-                                        operation.name, service.name
+                                    coded(
+                                        X_UNKNOWN_EMISSION,
+                                        format!(
+                                            "operation '{}' of service '{}' emits unknown \
+                                             event '{event}'",
+                                            operation.name, service.name
+                                        ),
                                     ),
                                     None,
                                 )
@@ -363,9 +399,12 @@ fn check_emission_coverage(
                 diagnostics.push((
                     path.clone(),
                     Diagnostic::error(
-                        format!(
-                            "event '{}' is declared but no operation emits it",
-                            event.name
+                        coded(
+                            X_ORPHAN_EVENT,
+                            format!(
+                                "event '{}' is declared but no operation emits it",
+                                event.name
+                            ),
                         ),
                         None,
                     )
@@ -397,8 +436,10 @@ fn operation_names(designs: &[(String, DddModel)]) -> BTreeSet<String> {
 /// in their own convention (IFML actions are user-facing PascalCase labels,
 /// service operations are camelCase; the pairing `ApproveRefund` ↔
 /// `approveRefund` is the docs' own example). An unbound action is a button
-/// whose backend does not exist. With no design artifacts the check is
-/// silent.
+/// whose backend does not exist (`X0005`); an action whose case-insensitive
+/// mirror **several** operations across the designs share names no unique
+/// backend and binds ambiguously (`X0006`, every `'service.operation'`
+/// carrier listed). With no design artifacts the check is silent.
 fn check_action_bindings(
     designs: &[(String, DddModel)],
     flows: &[(String, IfmlModel)],
@@ -407,37 +448,90 @@ fn check_action_bindings(
         return Vec::new();
     }
     let declared = operation_names(designs);
-    let operations: BTreeSet<String> = declared
-        .iter()
-        .map(|name| name.to_ascii_lowercase())
-        .collect();
+    // Lowercase operation name → every `'service.operation'` carrier, in
+    // design order. One carrier is the binding; several are the ambiguity.
+    let mut carriers: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (_, design) in designs {
+        for module in &design.modules {
+            for service in &module.services {
+                for operation in &service.operations {
+                    carriers
+                        .entry(operation.name.to_ascii_lowercase())
+                        .or_default()
+                        .push(format!("'{}.{}'", service.name, operation.name));
+                }
+            }
+        }
+    }
     let mut diagnostics = Vec::new();
     for (path, flow) in flows {
         for action in &flow.actions {
-            if !operations.contains(&action.name.to_ascii_lowercase()) {
-                let help = if declared.is_empty() {
-                    "no design in the union declares any service operation".to_string()
-                } else {
-                    format!(
-                        "the designs declare the operations: {}",
-                        declared.iter().cloned().collect::<Vec<_>>().join(", ")
-                    )
-                };
-                diagnostics.push((
-                    path.clone(),
-                    Diagnostic::error(
+            let bound = carriers.get(&action.name.to_ascii_lowercase());
+            match bound.map(Vec::as_slice) {
+                // Exactly one carrier: the binding is unique — pass.
+                Some([_]) => {}
+                Some(many) => {
+                    let help = "rename the colliding operations so each action's \
+                                case-insensitive mirror names exactly one service operation";
+                    diagnostics.push((
+                        path.clone(),
+                        Diagnostic::error(
+                            coded(
+                                X_AMBIGUOUS_ACTION,
+                                format!(
+                                    "action '{}' binds ambiguously to {}",
+                                    action.name,
+                                    quoted_and_joined(many)
+                                ),
+                            ),
+                            None,
+                        )
+                        .with_help(help),
+                    ));
+                }
+                None => {
+                    let help = if declared.is_empty() {
+                        "no design in the union declares any service operation".to_string()
+                    } else {
                         format!(
-                            "action '{}' does not bind to any service operation",
-                            action.name
-                        ),
-                        None,
-                    )
-                    .with_help(help),
-                ));
+                            "the designs declare the operations: {}",
+                            declared.iter().cloned().collect::<Vec<_>>().join(", ")
+                        )
+                    };
+                    diagnostics.push((
+                        path.clone(),
+                        Diagnostic::error(
+                            coded(
+                                X_UNBOUND_ACTION,
+                                format!(
+                                    "action '{}' does not bind to any service operation",
+                                    action.name
+                                ),
+                            ),
+                            None,
+                        )
+                        .with_help(help),
+                    ));
+                }
             }
         }
     }
     diagnostics
+}
+
+/// Joins quoted carrier names for a diagnostic message: two carriers read
+/// `'a' and 'b'`, three or more `'a', 'b' and 'c'`.
+fn quoted_and_joined(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [first, second] => format!("{first} and {second}"),
+        _ => format!(
+            "{} and {}",
+            items[..items.len() - 1].join(", "),
+            items[items.len() - 1]
+        ),
+    }
 }
 
 /// Every `.evt` subscription's consumer must resolve to a declared
@@ -471,10 +565,13 @@ fn check_subscription_consumers(
                 diagnostics.push((
                     path.clone(),
                     Diagnostic::error(
-                        format!(
-                            "subscription '{}' consumer '{}' does not resolve to a \
-                             declared component",
-                            subscription.name, subscription.consumer
+                        coded(
+                            X_UNKNOWN_CONSUMER,
+                            format!(
+                                "subscription '{}' consumer '{}' does not resolve to a \
+                                 declared component",
+                                subscription.name, subscription.consumer
+                            ),
                         ),
                         None,
                     )
@@ -537,10 +634,13 @@ fn check_flow_actor_references(
                     diagnostics.push((
                         path.clone(),
                         Diagnostic::error(
-                            format!(
-                                "unknown capability or actor '{requirement}' in requires \
-                                 of view '{}'",
-                                view.name
+                            coded(
+                                X_UNKNOWN_FLOW_REFERENCE,
+                                format!(
+                                    "unknown capability or actor '{requirement}' in \
+                                     requires of view '{}'",
+                                    view.name
+                                ),
                             ),
                             None,
                         )
@@ -553,7 +653,10 @@ fn check_flow_actor_references(
                     diagnostics.push((
                         path.clone(),
                         Diagnostic::error(
-                            format!("unknown actor '{role}' in roles of view '{}'", view.name),
+                            coded(
+                                X_UNKNOWN_FLOW_REFERENCE,
+                                format!("unknown actor '{role}' in roles of view '{}'", view.name),
+                            ),
                             None,
                         )
                         .with_help(&roles_help),
@@ -566,10 +669,13 @@ fn check_flow_actor_references(
                         diagnostics.push((
                             path.clone(),
                             Diagnostic::error(
-                                format!(
-                                    "unknown capability or actor '{requirement}' in \
-                                     requires of view '{}'",
-                                    view.name
+                                coded(
+                                    X_UNKNOWN_FLOW_REFERENCE,
+                                    format!(
+                                        "unknown capability or actor '{requirement}' in \
+                                         requires of view '{}'",
+                                        view.name
+                                    ),
                                 ),
                                 None,
                             )
@@ -608,10 +714,13 @@ fn check_command_requires(
             diagnostics.push((
                 path.to_string(),
                 Diagnostic::error(
-                    format!(
-                        "unknown capability or actor '{requirement}' in requires of \
-                         command '{}'",
-                        command.name
+                    coded(
+                        X_UNKNOWN_FLOW_REFERENCE,
+                        format!(
+                            "unknown capability or actor '{requirement}' in requires of \
+                             command '{}'",
+                            command.name
+                        ),
                     ),
                     None,
                 )
