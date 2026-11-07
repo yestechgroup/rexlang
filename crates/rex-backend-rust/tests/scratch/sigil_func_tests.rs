@@ -7,10 +7,13 @@ mod sigil_func_assertions {
     #[test]
     fn stub_signatures_follow_the_multiplicity_conventions() {
         // Compile-time proof of the emitted signatures: a `0..*` parameter
-        // arrives as `Vec<..>`, a required `(1..1)` one as a plain value.
+        // arrives as `Vec<..>`, a required `(1..1)` one as a plain value,
+        // and a `(0..*)` output lifts the return to `Vec<..>` — never
+        // called here (the body is still a `todo!()` stub at this wave).
         let any_active: fn(Vec<String>) -> bool = crate::any_active;
         let calc_rate: fn(f64, Vec<String>) -> f64 = crate::calc_rate;
-        let _ = (any_active, calc_rate);
+        let trade_ids: fn(String) -> Vec<String> = crate::trade_ids;
+        let _ = (any_active, calc_rate, trade_ids);
     }
 
     #[test]

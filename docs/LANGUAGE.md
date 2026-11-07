@@ -256,9 +256,15 @@ A `func` or `library function` declaration lowers to a **signature-only
 operation** on the namespace package's `functions` (`rex_ir::Operation` —
 the node domain `op`s use, minus a receiver): `inputs` → parameters with
 their cardinalities (the required `(1..1)` stays unset, the domain-operation
-convention), the `output` → the return type, the `definition` string → the
+convention), the `output` → the return type **and the output's cardinality
+→ the operation's return multiplicity** (`returnMultiplicity` on the wire;
+`(0..1)` and `(0..*)` lower verbatim so call sites type the call as
+`Option`/`List` and backends emit the lifted return shape — rex-expr and
+the Rust backend do), the `definition` string → the
 description, and a `library function`'s array parameters carry a `0..*`
-multiplicity. A func without an `output` cannot become an operation (rexlang
+multiplicity (a library function's return carries no cardinality in the
+sigil AST, so its return multiplicity always stays unset). A func without
+an `output` cannot become an operation (rexlang
 operations always return) and is skipped with a warning naming it. The
 declaration's complete Rune source is embedded **ends-trimmed verbatim**
 (the declaration's text without trailing whitespace — sigil spans consume

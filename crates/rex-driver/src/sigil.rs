@@ -100,9 +100,15 @@
 //!    ([`ir::Operation`], wire contract rule 15): `inputs` → parameters
 //!    (an input's cardinality becomes the parameter's `multiplicity`; the
 //!    required `(1..1)` stays unset, the domain-operation convention), the
-//!    `output` → the return type, and `definition` → the description.
+//!    `output` → the return type **and the output's cardinality → the
+//!    operation's `return_multiplicity`** (the same `optional_multiplicity`
+//!    rule: `(0..1)`/`(0..*)` and every other non-`(1..1)` cardinality lower
+//!    verbatim so call sites and backends see the multi-valued return
+//!    shape; `(1..1)` stays unset, the single-valued convention), and
+//!    `definition` → the description.
 //!    A `library function` lowers the same way (`is_array` parameters carry
-//!    a `0..*` multiplicity). A function without an output cannot become an
+//!    a `0..*` multiplicity; its return carries no cardinality in the sigil
+//!    AST, so the return multiplicity always stays unset). A function without an output cannot become an
 //!    operation — rexlang operations always return — so it is skipped with
 //!    a **warning** diagnostic naming it. The declaration's complete Rune
 //!    source is embedded **ends-trimmed** verbatim as the body target
@@ -1016,6 +1022,9 @@ impl<'a> Lowerer<'a> {
             self.map_type_ref(namespace, &output.type_ref),
             params,
         );
+        // The output's cardinality lowers into the return multiplicity (the
+        // `0..1`/`0..*` return shapes); the required `(1..1)` stays unset.
+        operation.return_multiplicity = optional_multiplicity(&output.cardinality);
         operation.description = function.definition.clone();
         self.with_rosetta_body(file, function.span, &mut operation);
         Some(operation)
@@ -1023,7 +1032,9 @@ impl<'a> Lowerer<'a> {
 
     /// A `LibraryFunction` → signature-only [`ir::Operation`] (rule 8); an
     /// `is_array` parameter carries a `0..*` multiplicity. Library functions
-    /// always declare a return type, so nothing is skipped.
+    /// always declare a return type, so nothing is skipped; the sigil AST
+    /// carries no return cardinality for them, so the operation's return
+    /// multiplicity always stays unset.
     fn lower_library_function(
         &mut self,
         file: &ModelFile,

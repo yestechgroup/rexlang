@@ -73,7 +73,11 @@ minimal `{"formatVersion": N}` bytes.
   rule 15). Backends skip body targets they do not own — the `rosetta`
   text is never emitted as code. The Rust backend emits each lowered
   function as a free function in the flattened module: a `rust` body
-  verbatim, anything else a `todo!()` stub named after the function. Bare
+  verbatim, anything else a `todo!()` stub named after the function. A
+  function's `return_multiplicity` shapes the stub's return type the same
+  way a parameter's multiplicity shapes its parameters: `0..*` → `Vec<T>`,
+  `0..1` → `Option<T>`, the single-valued convention → `T` (rex-expr types
+  calls to the function identically). Bare
   `expr`-body calls (issue #63) lower to exactly those emitted stubs.
 - **Stable feature ids.** `Feature::id` equals its 0-based declaration index
   at publication time and is frozen for wire formats; backends key on it.

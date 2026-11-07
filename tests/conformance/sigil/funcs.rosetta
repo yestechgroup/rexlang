@@ -22,3 +22,9 @@ func calcRate: <"Compute the rate of a leg.">
 
 	set rate:
 		notional
+
+func tradeIds: <"Collect the trade ids of a leg.">
+	inputs:
+		legId string (1..1)
+	output:
+		ids string (0..*) <"The trade ids.">

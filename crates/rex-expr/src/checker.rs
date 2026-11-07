@@ -18,7 +18,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use rex_ir::{Feature, Model, Operation, OperationParam, PrimitiveType, TypeRef};
+use rex_ir::{Feature, Model, Multiplicity, Operation, OperationParam, PrimitiveType, TypeRef};
 
 use crate::ast::{AlgebraKind, BinOp, Expr, ExprKind, Span, Spanned, UnOp};
 use crate::error::ExprError;
@@ -50,6 +50,10 @@ pub struct FunctionSignature {
     pub package: String,
     /// The resolved return type.
     pub return_type: TypeRef,
+    /// The declared return cardinality; `None` is single-valued. Lifts the
+    /// call's type the same way a parameter's multiplicity lifts an
+    /// argument's (`return_result_ty`).
+    pub return_multiplicity: Option<Multiplicity>,
     /// Parameters in declaration order.
     pub params: Vec<OperationParam>,
 }
@@ -105,6 +109,7 @@ impl DomainTypes {
                     FunctionSignature {
                         package: package.name.clone(),
                         return_type: function.return_type.clone(),
+                        return_multiplicity: function.return_multiplicity,
                         params: function.params.clone(),
                     },
                 );
@@ -910,8 +915,9 @@ impl TypeChecker {
     /// function is within edit distance 2. Parameters follow the
     /// receiver-call shape (`param_result_ty`: multiplicity-mapped, L1
     /// literal adaptation via the expected type, R1–R4 on the arguments);
-    /// the declared return type is the call's type. There is no `?.` form:
-    /// a function has no receiver to be optional.
+    /// the declared return cardinality lifts the call's type
+    /// (`return_result_ty`). There is no `?.` form: a function has no
+    /// receiver to be optional.
     fn function_call(
         &self,
         scope: &Scope,
@@ -973,7 +979,7 @@ impl TypeChecker {
             }
         }
 
-        Ok(Ty::from_type_ref(&signature.return_type))
+        Ok(return_result_ty(signature))
     }
 
     /// The typed calendar algebra on `date` receivers (spec R5–R8):
@@ -1390,6 +1396,20 @@ fn feature_result_ty(feature: &Feature) -> Ty {
 fn param_result_ty(param: &OperationParam) -> Ty {
     let base = Ty::from_type_ref(&param.type_);
     match &param.multiplicity {
+        Some(multiplicity) if multiplicity.is_many() => base.list(),
+        Some(multiplicity) if multiplicity.lower == 0 => base.optional(),
+        _ => base,
+    }
+}
+
+/// The type a free-function call produces: the declared return type lifted
+/// by the return multiplicity — the same mapping as [`param_result_ty`], so
+/// a `(0..*)` return types the call as a `List`, a `(0..1)` return as an
+/// `Option`, and the single-valued convention (unset or `(1..1)`) stays the
+/// plain element type.
+fn return_result_ty(signature: &FunctionSignature) -> Ty {
+    let base = Ty::from_type_ref(&signature.return_type);
+    match &signature.return_multiplicity {
         Some(multiplicity) if multiplicity.is_many() => base.list(),
         Some(multiplicity) if multiplicity.lower == 0 => base.optional(),
         _ => base,

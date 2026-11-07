@@ -298,7 +298,7 @@ fn emit_functions(e: &mut String, unit: &Unit<'_>) -> anyhow::Result<()> {
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?
                 .join(", ");
-            let ret = op_type(&function.return_type)?;
+            let ret = fn_return_type(&function.return_type, function.return_multiplicity.as_ref())?;
             let snake = rust_ident(&snake_case(&function.name));
             e.push('\n');
             match rust_body {
@@ -334,6 +334,21 @@ fn fn_param_type(type_: &TypeRef, multiplicity: Option<&Multiplicity>) -> anyhow
     let inner = op_type(type_)?;
     Ok(match multiplicity {
         Some(multiplicity) if multiplicity.is_many() => format!("Vec<{inner}>"),
+        _ => inner,
+    })
+}
+
+/// The Rust return type of one package function: the `fn_param_type`
+/// convention for the return position, plus the `Option<..>` lift a `0..1`
+/// cardinality takes in field position (lower 0) — the same mapping rex-expr
+/// applies when typing a call to the function, so a lowered Rune output
+/// cardinality (`return_multiplicity`) shapes the stub the call sites type
+/// against.
+fn fn_return_type(type_: &TypeRef, multiplicity: Option<&Multiplicity>) -> anyhow::Result<String> {
+    let inner = op_type(type_)?;
+    Ok(match multiplicity {
+        Some(multiplicity) if multiplicity.is_many() => format!("Vec<{inner}>"),
+        Some(multiplicity) if multiplicity.lower == 0 => format!("Option<{inner}>"),
         _ => inner,
     })
 }

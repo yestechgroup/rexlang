@@ -578,9 +578,14 @@ fn sigil_functions_generate_todo_stubs_without_rosetta_text() {
         code.contains("pub fn calc_rate(notional: f64, leg_ids: Vec<String>) -> f64"),
         "func stub with mixed multiplicities:\n{code}"
     );
+    assert!(
+        code.contains("pub fn trade_ids(leg_id: String) -> Vec<String>"),
+        "func stub with a (0..*) output — the return multiplicity lifts the\n\
+         return type:\n{code}"
+    );
     assert_eq!(
         code.matches("\n    todo!()").count(),
-        2,
+        3,
         "one stub body per lowered function (the header note's todo!() mention\n\
          doesn't count):\n{code}"
     );
@@ -683,6 +688,51 @@ fn function_less_models_emit_no_function_section() {
     let code = &rex_backend_rust::generate(&model).expect("generate")["models.rs"];
     assert!(!code.contains("Package function"), "{code}");
     assert!(!code.contains("sigil-lowered package functions"), "{code}");
+}
+
+/// A function with a non-singleton return cardinality generates the lifted
+/// return shape: `0..*` → `Vec<_>` (the `fn_param_type` convention, return
+/// position), `0..1` → `Option<_>` (the feature-field convention, matching
+/// rex-expr's call typing); the single-valued convention stays the plain
+/// type.
+#[test]
+fn a_function_return_multiplicity_lifts_the_generated_return_type() {
+    let mut model = Model::new();
+    let mut package = Package::new("sigil::example");
+    let mut many = Operation::new(
+        "legRates",
+        TypeRef::Primitive(PrimitiveType::Double),
+        vec![],
+    );
+    many.return_multiplicity = Some(Multiplicity::MANY);
+    package.functions.push(many);
+    let mut optional = Operation::new(
+        "maybeRate",
+        TypeRef::Primitive(PrimitiveType::Double),
+        vec![],
+    );
+    optional.return_multiplicity = Some(Multiplicity::OPTIONAL);
+    package.functions.push(optional);
+    package.functions.push(Operation::new(
+        "scalarRate",
+        TypeRef::Primitive(PrimitiveType::Double),
+        vec![],
+    ));
+    model.packages.push(package);
+
+    let code = &rex_backend_rust::generate(&model).expect("generate")["models.rs"];
+    assert!(
+        code.contains("pub fn leg_rates() -> Vec<f64>"),
+        "the (0..*) return lifts to Vec:\n{code}"
+    );
+    assert!(
+        code.contains("pub fn maybe_rate() -> Option<f64>"),
+        "the (0..1) return lifts to Option:\n{code}"
+    );
+    assert!(
+        code.contains("pub fn scalar_rate() -> f64"),
+        "the (1..1) return stays the plain type:\n{code}"
+    );
 }
 
 fn sigil_funcs_scratch_crate_files() -> Vec<(std::path::PathBuf, String)> {

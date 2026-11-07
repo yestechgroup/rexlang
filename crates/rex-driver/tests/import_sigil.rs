@@ -1515,6 +1515,74 @@ fn a_user_library_function_lowers_to_a_signature_only_operation() {
         .starts_with("library function Round"));
 }
 
+/// A func's output cardinality lowers into the operation's return
+/// multiplicity: `(0..*)` and `(0..1)` lower verbatim, the required `(1..1)`
+/// stays unset (the single-valued convention), and a `library function` —
+/// whose return carries no cardinality in the sigil AST — always stays
+/// unset too.
+#[test]
+fn a_function_output_cardinality_lowers_a_return_multiplicity() {
+    let rosetta = concat!(
+        "namespace oracle.ret\n\n",
+        "func Rates:\n",
+        "    inputs:\n",
+        "        legId string (1..1)\n",
+        "    output:\n",
+        "        rates number (0..*)\n",
+        "\n",
+        "func MaybeRate:\n",
+        "    inputs:\n",
+        "        legId string (1..1)\n",
+        "    output:\n",
+        "        rate number (0..1)\n",
+        "\n",
+        "func ScalarRate:\n",
+        "    inputs:\n",
+        "        legId string (1..1)\n",
+        "    output:\n",
+        "        rate number (1..1)\n",
+        "\n",
+        "library function Any(xs number[]) boolean\n"
+    );
+    let compilation = compile_with_sigil(
+        &[(
+            MOX.to_string(),
+            "package demo\n\nimport sigil \"r.rosetta\"\n\nclass C { String x }\n".to_string(),
+        )],
+        &rex_driver::SigilImports::new().provide(MOX, "r.rosetta", rosetta),
+    );
+    let model = compile_clean(&compilation);
+    let functions = &model.packages[1].functions;
+    assert_eq!(
+        functions
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Rates", "MaybeRate", "ScalarRate", "Any"]
+    );
+    assert_eq!(
+        functions[0].return_multiplicity,
+        Some(rex_ir::Multiplicity {
+            lower: 0,
+            upper: rex_ir::Upper::Unbounded
+        }),
+        "the (0..*) output lowers verbatim"
+    );
+    assert_eq!(
+        functions[1].return_multiplicity,
+        Some(rex_ir::Multiplicity::OPTIONAL),
+        "the (0..1) output lowers verbatim"
+    );
+    assert_eq!(
+        functions[2].return_multiplicity, None,
+        "the required (1..1) stays unset"
+    );
+    assert_eq!(
+        functions[3].return_multiplicity, None,
+        "a library function's return carries no cardinality in the sigil AST"
+    );
+}
+
 /// Builtin (`com.rosetta.model`) library functions stay skipped: rule 6
 /// keeps that namespace minimal, and it is still emitted only when
 /// referenced.
