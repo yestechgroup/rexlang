@@ -26,6 +26,8 @@
 
 use creusot_std::prelude::{Clone, PartialEq, *};
 
+pub mod correspondence;
+pub mod domain_types;
 pub mod feature_ids;
 
 /// The unique identity of a node in a [`Graph`].
@@ -143,6 +145,19 @@ impl Graph {
         }
     }
 
+    /// Whether the containment edge `parent → child` is recorded — the
+    /// logical counterpart of the [`Graph::contains_edge`] scan (proved
+    /// below; register row V8).
+    #[doc(hidden)]
+    #[logic]
+    pub fn has_contains(self, parent: NodeId, child: NodeId) -> bool {
+        pearlite! {
+            exists<j: Int>
+                0 <= j && j < self.slots()[parent.id_int()].contains@.len()
+                && self.slots()[parent.id_int()].contains@[j] == child
+        }
+    }
+
     /// Parent-clause: every declared parent exists, differs from the node,
     /// and lists the node among its contained children (the child half of
     /// the parent/child agreement — see [`Graph::children_ok`]). Logical
@@ -211,6 +226,81 @@ impl Graph {
                     #[trigger(self.slots()[i])]
                     0 <= i && i < self.len_int() ==>
                         self.parent_ok(i) && self.references_ok(i)
+        }
+    }
+
+    /// Bounded-`k` reachability over the parent relation (register V3,
+    /// the reachability predicate): `anc_k(x, y, k)` holds when following
+    /// at most `k` parent edges from `x` reaches `y` — the reflexive
+    /// closure restricted to existing nodes. `#[variant(k)]` terminates
+    /// the recursion.
+    #[doc(hidden)]
+    #[logic]
+    #[variant(k)]
+    pub fn anc_k(self, x: NodeId, y: NodeId, k: Int) -> bool {
+        pearlite! {
+            (x == y && 0 <= x.id_int() && x.id_int() < self.len_int())
+            || (k > 0
+                && 0 <= x.id_int() && x.id_int() < self.len_int()
+                && ( exists<j: Int>
+                        0 <= j && j < self.slots()[x.id_int()].parents@.len()
+                        && self.anc_k(self.slots()[x.id_int()].parents@[j], y, k - 1) ))
+        }
+    }
+
+    /// Reachability within the executable walk's budget (the node count):
+    /// `anc(x, y)` holds when `y` is reachable from `x` over parent edges
+    /// in at most `len` steps — the reflexive closure `is_ancestor`'s
+    /// functional spec hangs on (register V3/V7).
+    #[doc(hidden)]
+    #[logic]
+    pub fn anc(self, x: NodeId, y: NodeId) -> bool {
+        pearlite! {
+            exists<k: Int> 0 <= k && k <= self.len_int() && self.anc_k(x, y, k)
+        }
+    }
+
+    /// **Strict** reachability over parent edges (at least one edge) —
+    /// the step relation `acyclicity` forbids. `anc_strict_k(x, y, k)`
+    /// holds when following between 1 and `k` parent edges from `x`
+    /// reaches `y`.
+    #[doc(hidden)]
+    #[logic]
+    #[variant(k)]
+    pub fn anc_strict_k(self, x: NodeId, y: NodeId, k: Int) -> bool {
+        pearlite! {
+            k > 0
+                && 0 <= x.id_int() && x.id_int() < self.len_int()
+                && ( exists<j: Int>
+                        0 <= j && j < self.slots()[x.id_int()].parents@.len()
+                        && self.anc_k(self.slots()[x.id_int()].parents@[j], y, k - 1) )
+        }
+    }
+
+    /// Strict reachability within the node-count budget: `y` is reachable
+    /// from `x` over a nonempty parent path. The witness bound mirrors
+    /// `anc`'s — a shortest strict path never repeats a node, so the
+    /// executable walk's budget suffices (register V3).
+    #[doc(hidden)]
+    #[logic]
+    pub fn anc_strict(self, x: NodeId, y: NodeId) -> bool {
+        pearlite! {
+            exists<k: Int> 0 <= k && k <= self.len_int() && self.anc_strict_k(x, y, k)
+        }
+    }
+
+    /// Containment acyclicity (register V3): no node reaches itself over
+    /// a **strict** parent path — the reflexive closure does not count,
+    /// so the predicate says "no genuine cycle", not "no node is its own
+    /// ancestor". Bounded by the node count like every reachability
+    /// witness here.
+    #[doc(hidden)]
+    #[logic]
+    pub fn acyclic(self) -> bool {
+        pearlite! {
+            forall<x: NodeId>
+                #[trigger(self.anc_strict(x, x))]
+                !self.anc_strict(x, x)
         }
     }
 
@@ -524,9 +614,11 @@ impl Graph {
     /// This is the test-side oracle for the property tests; the formal
     /// counterpart is [`Graph::well_formed`]. The oracle is `#[trusted]`
     /// for the prover (an assumption, recorded as such in the
-    /// proof-obligation register) because its bounded walks exist to
-    /// inspect *arbitrary*, possibly malformed graphs — the very states
-    /// the invariant excludes.
+    /// proof-obligation register) because it inspects *arbitrary*,
+    /// possibly malformed graphs — the very states the invariant
+    /// excludes — so its cycle walk may run outside that walk's
+    /// contracts. Its two bounded helpers (`contains_edge`,
+    /// `has_containment_cycle`) are proved (V8).
     #[trusted]
     pub fn check_invariants(&self) -> bool {
         for (i, node) in self.nodes.iter().enumerate() {
@@ -552,53 +644,109 @@ impl Graph {
                     return false;
                 }
             }
-            if self.has_parent_cycle(id) {
+            if self.has_containment_cycle(id) {
                 return false;
             }
         }
         true
     }
 
-    /// Trusted for the prover for the same reason as
-    /// [`Graph::check_invariants`] (register row V8); only called from
-    /// trusted code.
-    #[trusted]
+    /// Whether `parent` directly contains `child` — the executable scan
+    /// behind the logical [`Graph::has_contains`].
+    ///
+    /// Proved (register row V8): a bounded index loop in exactly the shape
+    /// `link`'s duplicate scan uses; the contract is the full functional
+    /// spec (`result == has_contains(parent, child)`), so callers may rely
+    /// on it.
+    #[requires(parent.id_int() < self.len_int())]
+    #[ensures(result == self.has_contains(parent, child))]
     fn contains_edge(&self, parent: NodeId, child: NodeId) -> bool {
+        let bound = self.nodes[parent.0 as usize].contains.len();
         let mut i = 0;
-        while i < self.nodes[parent.0 as usize].contains.len() {
+        let mut found = false;
+        #[invariant(i@ <= bound@)]
+        #[invariant(bound@ == self.slots()[parent.id_int()].contains@.len())]
+        #[invariant(
+            forall<j: Int>
+                0 <= j && j < i@ && self.slots()[parent.id_int()].contains@[j] == child ==> found
+        )]
+        #[invariant(
+            found ==>
+                exists<j: Int> 0 <= j && j < i@
+                    && self.slots()[parent.id_int()].contains@[j] == child
+        )]
+        #[invariant(
+            !found ==>
+                forall<j: Int>
+                    0 <= j && j < i@ ==> self.slots()[parent.id_int()].contains@[j] != child
+        )]
+        while i < bound {
             if self.nodes[parent.0 as usize].contains[i] == child {
-                return true;
+                found = true;
             }
             i += 1;
         }
-        false
+        found
     }
 
-    /// Bounded cycle check: mark-on-push walk over parent pointers.
+    /// Bounded cycle check: mark-on-push walk over parent pointers —
+    /// `true` exactly when `start` turns up as some reachable node's
+    /// parent, i.e. `start` sits on a containment cycle.
     ///
-    /// Trusted for the prover for the same reason as
-    /// [`Graph::check_invariants`] (register row V8); only called from
-    /// trusted code.
-    #[trusted]
-    fn has_parent_cycle(&self, start: NodeId) -> bool {
-        let mut seen = std::vec![false; self.nodes.len()];
+    /// Proved memory-safe and terminating (register row V8): the seen
+    /// array bounds every index (out-of-range parent edges — possible only
+    /// on malformed graphs, which this oracle exists to inspect — are
+    /// skipped rather than indexed), every node enters the stack at most
+    /// once (mark-before-push), and the pop budget bounds the walk. The
+    /// walk shape is [`Graph::is_ancestor`]'s, whose proof it mirrors.
+    #[requires(start.id_int() < self.len_int())]
+    #[requires(self.len_int() <= 4294967295)]
+    #[ensures(true)]
+    fn has_containment_cycle(&self, start: NodeId) -> bool {
+        let mut seen = Vec::new();
+        let mut k = 0;
+        #[invariant(k@ <= self.len_int())]
+        #[invariant(seen@.len() == k@)]
+        #[invariant(forall<j: Int> 0 <= j && j < k@ ==> seen@[j] == false)]
+        while k < self.nodes.len() {
+            seen.push(false);
+            k += 1;
+        }
         seen[start.0 as usize] = true;
         let mut stack = Vec::new();
         stack.push(start);
         let mut budget = self.nodes.len() + 1;
+        #[invariant(seen@.len() == self.len_int())]
+        #[invariant(
+            forall<j: Int> 0 <= j && j < stack@.len() ==>
+                self.has_id(stack@[j]) && stack@[j].id_int() < seen@.len()
+                && seen@[stack@[j].id_int()] == true
+        )]
         while budget > 0 {
-            match stack.pop() {
+            let popped = stack.pop();
+            match popped {
                 None => return false,
                 Some(cur) => {
                     budget -= 1;
-                    for &parent in &self.nodes[cur.0 as usize].parents {
-                        if parent == start {
+                    let parents = self.nodes[cur.0 as usize].parents.clone();
+                    let mut j = 0;
+                    #[invariant(seen@.len() == self.len_int())]
+                    #[invariant(
+                        forall<j2: Int> 0 <= j2 && j2 < stack@.len() ==>
+                            self.has_id(stack@[j2]) && stack@[j2].id_int() < seen@.len()
+                            && seen@[stack@[j2].id_int()] == true
+                    )]
+                    #[invariant(j@ <= parents@.len())]
+                    while j < parents.len() {
+                        let p = parents[j];
+                        if p == start {
                             return true;
                         }
-                        if !seen[parent.0 as usize] {
-                            seen[parent.0 as usize] = true;
-                            stack.push(parent);
+                        if (p.0 as usize) < seen.len() && !seen[p.0 as usize] {
+                            seen[p.0 as usize] = true;
+                            stack.push(p);
                         }
+                        j += 1;
                     }
                 }
             }
@@ -685,4 +833,46 @@ fn push_containment(nodes: &mut Vec<Node>, p: NodeId, child: NodeId) {
 )]
 fn push_reference(nodes: &mut Vec<Node>, f: NodeId, to: NodeId) {
     nodes[f.0 as usize].references.push(to);
+}
+
+// ---------------------------------------------------------------------------
+// Reachability lemmas (register V3).
+//
+// The shift lemma is the workhorse: with old-slot parent edges unchanged
+// and every fresh slot parentless, bounded reachability (reflexive and
+// strict) agrees in both directions for old slots. It is proved by
+// induction on the bound `k`; `lemma_acyclic_preserved` instantiates it
+// at the node-count budget and folds in the fresh-slot case.
+// ---------------------------------------------------------------------------
+
+/// Shift lemma: bounded reachability transfers across a mutation that
+/// keeps every old slot's parent list and appends parentless slots.
+#[logic]
+#[variant(k)]
+#[requires(post.len_int() >= pre.len_int())]
+#[requires(
+    forall<i: Int>
+        #[trigger(post.slots()[i])]
+        #[trigger(pre.slots()[i])]
+        0 <= i && i < pre.len_int() ==> post.slots()[i].parents@ == pre.slots()[i].parents@
+)]
+#[requires(
+    forall<i: Int>
+        #[trigger(post.slots()[i])]
+        pre.len_int() <= i && i < post.len_int() ==> post.slots()[i].parents@.len() == 0
+)]
+#[requires(pre.well_formed())]
+#[ensures(
+    forall<k2: Int, x: NodeId, y: NodeId>
+        #[trigger(pre.anc_k(x, y, k2))]
+        0 <= k2 && k2 <= k && x.id_int() < pre.len_int() ==>
+            (pre.anc_k(x, y, k2) ==> post.anc_k(x, y, k2))
+            && (post.anc_k(x, y, k2) ==> pre.anc_k(x, y, k2))
+            && (pre.anc_strict_k(x, y, k2) ==> post.anc_strict_k(x, y, k2))
+            && (post.anc_strict_k(x, y, k2) ==> pre.anc_strict_k(x, y, k2))
+)]
+fn lemma_anc_shift(pre: &Graph, post: &Graph, k: Int) {
+    if k > 0 {
+        lemma_anc_shift(pre, post, k - 1);
+    }
 }

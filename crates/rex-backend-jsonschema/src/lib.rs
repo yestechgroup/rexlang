@@ -975,4 +975,48 @@ mod tests {
         );
         assert_eq!(context.cross_reference_targets(), BTreeSet::new());
     }
+
+    /// The V16 correspondence, executably, on the real emitter: every
+    /// declared class produces exactly one wire `$defs` entry, keyed by
+    /// its name — none dropped, none synthesized (the proved mirror is
+    /// `rex_verify::correspondence`).
+    #[test]
+    fn wire_defs_map_every_declared_class() {
+        let class = |name: &str| ClassDef::new(name, vec![], vec![]);
+        let mut model = Model::new();
+        let mut package = rex_ir::Package::new("zoo");
+        package.classes = vec![class("Animal"), class("Dog")];
+        model.packages.push(package);
+        let context = Context::collect(&model).expect("context");
+
+        let defs = wire_defs(&context).expect("wire defs");
+        let def_map = defs.as_object().expect("defs object");
+        assert!(def_map.contains_key("Animal"));
+        assert!(def_map.contains_key("Dog"));
+        // Exactly one entry per class: a model without cross-reference
+        // targets emits no `$ref` defs, so the def set is exactly the
+        // class-name set.
+        assert_eq!(def_map.len(), 2);
+        assert!(def_map.keys().all(|k| k == "Animal" || k == "Dog"));
+    }
+
+    /// The correspondence's precondition discipline: duplicate class
+    /// names across packages are rejected at collect time — the real
+    /// emitter's `bail!` (the proved mirror's `collect` → `None`).
+    #[test]
+    fn collect_rejects_duplicate_class_names() {
+        let mut model = Model::new();
+        let mut first = rex_ir::Package::new("zoo");
+        first.classes.push(ClassDef::new("Animal", vec![], vec![]));
+        let mut second = rex_ir::Package::new("aviary");
+        second.classes.push(ClassDef::new("Animal", vec![], vec![]));
+        model.packages.push(first);
+        model.packages.push(second);
+
+        let error = match Context::collect(&model) {
+            Err(error) => error,
+            Ok(_) => panic!("duplicate class name must be rejected"),
+        };
+        assert!(error.to_string().contains("duplicate class name 'Animal'"));
+    }
 }
