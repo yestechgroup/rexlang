@@ -1,0 +1,171 @@
+// Lending decisions over primitive inputs only: the architecture-first
+// reference example — the decision requirements graph is the product and
+// the logic is an attachment, one table among five decisions (rexlang#78).
+decision_model Lending {
+    namespace nz.example.lending;
+
+    inputs {
+        income: int;
+        expenses: int;
+        debt_repayments: int;
+        loan_amount: int;
+        property_value: int;
+        credit_score: int;
+        payment_history: string;
+        banker_authority_level: int;
+    }
+
+    knowledge {
+        source ResponsibleLendingCode {
+            name "Responsible Lending Code";
+            reference "https://www.legislation.govt.nz/act/credit-contracts-2003";
+        }
+
+        source CreditPolicy {
+            name "Bank Credit Policy";
+            reference "https://intranet.example.nz/policy/credit";
+        }
+
+        source RiskFramework {
+            name "Enterprise Risk Framework";
+            reference "https://intranet.example.nz/policy/risk";
+        }
+
+        /// Loan-to-value ratio, in percent.
+        model calculate_lvr {
+            parameters {
+                loan_amount: int;
+                property_value: int;
+            }
+            output int;
+            logic expression "loan_amount / property_value * 100"
+        }
+
+        /// Free cash after living costs and existing debt repayments.
+        model calculate_serviceability {
+            parameters {
+                income: int;
+                expenses: int;
+                debt_repayments: int;
+            }
+            output int;
+            logic expression "income - expenses - debt_repayments"
+        }
+    }
+
+    /// The applicant's free cash after living costs and existing debt.
+    decision lending_capacity {
+        output int;
+        logic invoke calculate_serviceability {
+            income: "income";
+            expenses: "expenses";
+            debt_repayments: "debt_repayments";
+        }
+    }
+
+    /// The credit-risk grade for the application.
+    decision risk_assessment {
+        outputs {
+            risk_grade: string;
+            decline_reason: string;
+        }
+        logic expression "if credit_score >= 600 and payment_history == \"clean\" then \"accept\" else if credit_score >= 500 then \"review\" else \"decline\""
+    }
+
+    /// The loan-to-value ratio of the proposed security, in percent.
+    decision security_assessment {
+        output int;
+        logic invoke calculate_lvr {
+            loan_amount: "loan_amount";
+            property_value: "property_value";
+        }
+    }
+
+    /// The approval decision and the amount released.
+    decision loan_approval {
+        outputs {
+            approved: boolean;
+            approved_amount: int;
+        }
+        logic expression "risk_assessment == \"accept\" and lending_capacity > 0"
+    }
+
+    /// The indicative rate band for the application.
+    decision pricing {
+        outputs {
+            rate: int;
+        }
+        logic table "./tables/lvr.md"
+    }
+
+    requirements {
+        information {
+            lending_capacity requires income;
+            lending_capacity requires expenses;
+            lending_capacity requires debt_repayments;
+            risk_assessment requires credit_score;
+            risk_assessment requires payment_history;
+            security_assessment requires loan_amount;
+            security_assessment requires property_value;
+            loan_approval requires lending_capacity;
+            loan_approval requires risk_assessment;
+            pricing requires loan_amount;
+            pricing requires property_value;
+        }
+
+        knowledge {
+            lending_capacity invokes calculate_serviceability;
+            security_assessment invokes calculate_lvr;
+        }
+
+        authority {
+            lending_capacity governed_by ResponsibleLendingCode;
+            risk_assessment governed_by RiskFramework;
+            security_assessment governed_by RiskFramework;
+            loan_approval governed_by CreditPolicy;
+            pricing governed_by ResponsibleLendingCode;
+        }
+    }
+
+    /// The application-facing contract: assess one loan application.
+    service loan_assessment {
+        inputs {
+            income
+            expenses
+            debt_repayments
+            loan_amount
+            property_value
+            credit_score
+            payment_history
+            banker_authority_level
+        }
+        outputs { loan_approval pricing }
+        encapsulates {
+            lending_capacity
+            risk_assessment
+            security_assessment
+            loan_approval
+            pricing
+            calculate_lvr
+            calculate_serviceability
+        }
+    }
+
+    view overview {
+        description "The lending decision requirements graph end to end.";
+        show { lending_capacity risk_assessment security_assessment loan_approval pricing }
+        direction left_to_right;
+    }
+
+    view risk_analysis {
+        description "The risk slice: grade and security, with the framework behind them.";
+        show {
+            risk_assessment
+            security_assessment
+            RiskFramework
+            calculate_lvr
+            calculate_serviceability
+        }
+        direction top_to_bottom;
+    }
+}

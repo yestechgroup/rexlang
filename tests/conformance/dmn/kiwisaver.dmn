@@ -1,0 +1,133 @@
+// KiwiSaver contribution decisions over the nz.payroll domain.
+import "kiwisaver.mox";
+
+decision_model KiwiSaver {
+    namespace nz.payroll.kiwisaver;
+    id "NZ-KS-001";
+    version "1.0.0";
+    effective "2025-04-01";
+    jurisdiction "NZ";
+
+    inputs {
+        age: int;
+        member: boolean;
+        employee_rate: int;
+        other_super_fund: SuperFundType;
+        gross_salary: int;
+        savings_suspension: boolean;
+        new_employee: boolean;
+        esct_rate: int;
+        employer_rss_contribution: int;
+    }
+
+    knowledge {
+        source KiwiSaverAct {
+            name "KiwiSaver Act 2006";
+            reference "https://www.legislation.govt.nz/act/kiwisaver2006";
+        }
+
+        source IncomeTaxAct {
+            name "Income Tax Act 2007";
+            reference "https://www.legislation.govt.nz/act/incometax2007";
+        }
+
+        /// Employer superannuation contribution tax: the tax on the
+        /// employer's contribution at the given rate.
+        model calculate_esct {
+            parameters {
+                employer_contribution: int;
+                rate: int;
+            }
+            output int;
+            logic expression "employer_contribution * rate / 100"
+        }
+    }
+
+    /// Whether the employee's KiwiSaver deduction is compulsory.
+    decision contribution_eligibility {
+        output EmployeeDeductionRequired;
+        logic table "./tables/eligibility.md"
+    }
+
+    /// The pay-run contribution picture: the employee deduction, the
+    /// employer's compulsory contribution, the ESCT on it, and the
+    /// compliance status the pay run records.
+    decision calculate_contributions {
+        outputs {
+            employee_deduction_required: EmployeeDeductionRequired;
+            employer_cec_amount: int;
+            esct_amount: int;
+            compliance_status: ComplianceStatus;
+        }
+        logic table "./tables/contributions.md"
+    }
+
+    /// The ESCT owed on the employer's contribution, at the member's
+    /// ESCT rate.
+    decision esct_calculation {
+        output int;
+        logic invoke calculate_esct {
+            employer_contribution: "employer_cec_amount";
+            rate: "esct_rate";
+        }
+    }
+
+    requirements {
+        information {
+            contribution_eligibility requires age;
+            contribution_eligibility requires member;
+            calculate_contributions requires gross_salary;
+            calculate_contributions requires employee_rate;
+            calculate_contributions requires savings_suspension;
+            esct_calculation requires employer_rss_contribution;
+            esct_calculation requires esct_rate;
+            esct_calculation requires calculate_contributions;
+        }
+
+        knowledge {
+            esct_calculation invokes calculate_esct;
+        }
+
+        authority {
+            contribution_eligibility governed_by KiwiSaverAct;
+            calculate_contributions governed_by KiwiSaverAct;
+            esct_calculation governed_by IncomeTaxAct;
+        }
+    }
+
+    /// The payroll-facing contract: assess one employee's contributions
+    /// for a pay run.
+    service AssessContributions {
+        inputs {
+            age
+            member
+            employee_rate
+            other_super_fund
+            gross_salary
+            savings_suspension
+            new_employee
+            esct_rate
+            employer_rss_contribution
+        }
+        outputs { calculate_contributions esct_calculation }
+        encapsulates {
+            contribution_eligibility
+            calculate_contributions
+            esct_calculation
+            calculate_esct
+        }
+    }
+
+    view overview {
+        description "The KiwiSaver decision requirements graph: eligibility, contributions, and ESCT.";
+        show {
+            contribution_eligibility
+            calculate_contributions
+            esct_calculation
+            calculate_esct
+            KiwiSaverAct
+            IncomeTaxAct
+        }
+        direction left_to_right;
+    }
+}
