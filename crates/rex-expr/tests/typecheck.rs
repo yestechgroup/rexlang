@@ -990,6 +990,25 @@ fn domain_types_is_assembled_incrementally_and_merges() {
     extra.insert_named(PKG, "Date", NamedKind::Vocabulary); // collision: other wins
     assembled.merge(extra);
 
+    // Per-source lookups survive the merge (the V15 contract): the
+    // colliding key resolves to the right-hand kind, a left-only key
+    // still resolves to what `from_model` saw, and an unknown key stays
+    // absent.
+    let mut left_only = DomainTypes::default();
+    left_only.insert_named(PKG, "OnlyLeft", NamedKind::Datatype);
+    let mut right_only = DomainTypes::default();
+    right_only.insert_named(PKG, "Book", NamedKind::Vocabulary); // collision
+    left_only.merge(right_only);
+    assert_eq!(
+        left_only.named_kind(PKG, "Book"),
+        Some(NamedKind::Vocabulary)
+    );
+    assert_eq!(
+        left_only.named_kind(PKG, "OnlyLeft"),
+        Some(NamedKind::Datatype)
+    );
+    assert_eq!(left_only.named_kind(PKG, "Nope"), None);
+
     assert_eq!(assembled.named_kind(PKG, "Book"), Some(NamedKind::Class));
     assert_eq!(
         assembled.named_kind(PKG, "Date"),
