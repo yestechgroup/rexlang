@@ -27,7 +27,7 @@ pub(crate) use compile::{
     compile, compile_actor_file, compile_multi, compile_union_per_file, MultiFile,
 };
 pub(crate) use imports::collect_schema_imports;
-pub(crate) use resolve::{resolve_ddd_class, resolve_ddd_type};
+pub(crate) use resolve::{resolve_ddd_class, resolve_ddd_type, resolve_preferred};
 
 use std::collections::{HashMap, HashSet};
 
@@ -494,7 +494,7 @@ fn primitive_type(name: &str) -> Option<ir::PrimitiveType> {
 
 /// Builds an IR type reference from a resolution, or a placeholder (the model
 /// is discarded whenever errors exist) when resolution failed.
-fn ir_type_of(
+pub(crate) fn ir_type_of(
     resolution: Option<&Resolution>,
     package: &str,
     type_ref: &mox::TypeRef,

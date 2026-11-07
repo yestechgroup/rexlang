@@ -1,11 +1,11 @@
 decision_model Minimal {
     namespace nz.example.minimal;
-
     inputs {
         flag: boolean;
     }
-
-    decision draft {
-        output boolean;
+    decisions {
+        decision draft {
+            output boolean;
+        }
     }
 }
