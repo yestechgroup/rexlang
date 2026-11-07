@@ -8,7 +8,7 @@ Every diagnostic a rexlang surface emits carries a stable string code. The codes
 |------|-------|-------|----------|-----------|
 | `ifml.resolver` | E0001–E0099 | rex-ifml resolver | error | E0010 |
 | `ifml.check` | E0100–E0149 | rex-ifml typed checker | error | E0110 |
-| `ifml.lints` | W0150–W0199 | rex-ifml lints | warning | W0150 |
+| `ifml.lints` | W0150–W0199 | rex-ifml lints | warning | W0155 |
 | `driver.payload` | camelCase names | rex-driver DiagnosticCode | error | n/a |
 | `driver.integrity` | X0001–X0099 | rex-driver integrity pass | error | X0001 |
 
@@ -43,7 +43,13 @@ Every diagnostic a rexlang surface emits carries a stable string code. The codes
 
 ## Band `ifml.lints` (W0150–W0199)
 
-No codes allocated yet — the next free code is `W0150`.
+| Code | Class | Title | Meaning | Fix |
+|------|-------|-------|---------|-----|
+| `W0150` | warning | Dead action | A main-file `action "X" { ... }` declaration no `action("X")` invocation names (`action 'X' is declared but never invoked`). References count anywhere in the compilation — an uninstantiated module's invocation is still live intent — and only the main file's declarations are judged, so pattern libraries never warn. | Invoke the action from an event handler, or delete the declaration. |
+| `W0151` | warning | Unreachable view | A main-file view that is neither the first view (the entry view by position), nor `landmark: true`, nor reached by any `navigate` target anywhere in the compilation, and whose body carries no content — no components, containers, event handlers, or module uses (`view 'X' is never navigated to ...`). A content view is intentionally routed (the manifest exports every view as a route); the empty shell no navigation reaches is the dead-UI class. | Navigate to it from another view, mark it `landmark: true`, give it content, or delete it. |
+| `W0152` | warning | Shadowed module | A main-file module declaration whose name equals an imported file's module declaration (`module 'X' shadows an imported module of the same name (from '<path>')`). Resolution deliberately lets the local declaration win silently; the warning documents the shadowing at the winning declaration's name. | Rename the local module (and its `use` sites), or drop it if the imported one is wanted. |
+| `W0153` | warning | Component without data | A main-file component with no `data:` binding that also declares no event handlers, carries no chart (inline spec, chart reference, or `type: chart`), and spells no explicit `Entity.field` table column (`<context> component 'X' binds no entity data`) — a fully static placeholder. Interactive components wire their data flow through handlers; charts aggregate by construction; explicit-column tables use the generation-time `Class.feature` spelling — all exempt. | Bind `data: <Entity>;`, or leave as-is when the component is deliberately static. |
+| `W0154` | warning | View without domain binding | A main-file view with no domain tie at all: no `data:` binding on any component (recursively through containers), no explicit `Entity.field` column references, no declared `params`, no module composition, no event handlers anywhere in its body, and no `roles:`/`requires:` policy gate (`view 'X' has no domain binding ...`). Views that bind nothing are placeholders — often leftovers from a deleted flow. | Bind `data:` on a component, declare `params`, compose a module, add the interactions — or delete the view. |
 
 ## Band `driver.payload` (camelCase names)
 

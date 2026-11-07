@@ -90,10 +90,17 @@ fn scored_shop_model() -> Model {
     model
 }
 
+/// Compiles `source` as `app.ifml` with no imports, checks against
+/// `model`, and keeps the **error-severity** diagnostics: these fixtures
+/// pin the E-band passes; the lint band's warnings have their own tests
+/// ([`lint_diags`] keeps them).
 fn diags(source: &str, model: &Model) -> Vec<IfmlDiagnostic> {
     let compilation = crate::compile_ifml_str("app.ifml", source, &crate::IfmlImports::default())
         .expect("source must parse and resolve");
     check_ifml(&compilation, Some(model))
+        .into_iter()
+        .filter(|diagnostic| diagnostic.severity.is_error())
+        .collect()
 }
 
 /// An actors layer declaring what app-style flows require: two
@@ -108,10 +115,14 @@ fn auth_model() -> ActorModel {
     )
 }
 
+/// [`diags`] with an actor layer — error-severity only, like [`diags`].
 fn diags_with_actors(source: &str, model: &Model, actors: &[ActorModel]) -> Vec<IfmlDiagnostic> {
     let compilation = crate::compile_ifml_str("app.ifml", source, &crate::IfmlImports::default())
         .expect("source must parse and resolve");
     check_ifml_with_actors(&compilation, Some(model), actors)
+        .into_iter()
+        .filter(|diagnostic| diagnostic.severity.is_error())
+        .collect()
 }
 
 #[test]
@@ -183,11 +194,440 @@ view "Ledger" {
 }
 
 #[test]
+fn severity_defaults_to_error_for_resolver_and_checker_diagnostics() {
+    let source = r#"
+view "Queue" {
+    use "Missing";
+
+    component "intake" {
+        type: form;
+
+        on raise(values) -> action("RaiseRefund");
+    }
+}
+"#;
+    let (compilation, resolver_diags) =
+        crate::compile_ifml_lenient("app.ifml", source, &crate::IfmlImports::default());
+    assert_eq!(resolver_diags.len(), 1, "{resolver_diags:?}");
+    assert_eq!(resolver_diags[0].code, crate::E_UNKNOWN_MODULE);
+    assert_eq!(resolver_diags[0].severity, crate::Severity::Error);
+    assert!(resolver_diags[0].severity.is_error());
+
+    let diags = check_ifml(&compilation, None);
+    assert!(
+        diags
+            .iter()
+            .any(|diagnostic| diagnostic.code == E_UNKNOWN_ACTION),
+        "{diags:?}"
+    );
+    assert!(
+        diags
+            .iter()
+            .all(|diagnostic| diagnostic.severity == crate::Severity::Error),
+        "{diags:?}"
+    );
+}
+
+// --- lints (issue #119) ----------------------------------------------
+
+/// Compiles `source` with no imports and checks with no domains: the lint
+/// pass is domain-independent, so pure-lint cases need no fixture model.
+fn lint_diags(source: &str) -> Vec<IfmlDiagnostic> {
+    let compilation = crate::compile_ifml_str("app.ifml", source, &crate::IfmlImports::default())
+        .expect("source must parse and resolve");
+    check_ifml(&compilation, None)
+}
+
+/// [`lint_diags`] with one import provided.
+fn lint_diags_with_import(source: &str, imports: &crate::IfmlImports) -> Vec<IfmlDiagnostic> {
+    let compilation = crate::compile_ifml_str("app.ifml", source, imports)
+        .expect("source must parse and resolve");
+    check_ifml(&compilation, None)
+}
+
+#[test]
+fn dead_action_warns_w0150_at_its_name() {
+    let source = r#"
+view "Home" {
+    params { q: String };
+}
+
+action "Orphan" {
+    target: Customer;
+}
+"#;
+    let diags = lint_diags(source);
+    assert_eq!(diags.len(), 1, "{diags:?}");
+    assert_eq!(diags[0].code, W_DEAD_ACTION);
+    assert_eq!(diags[0].severity, crate::Severity::Warning);
+    assert!(!diags[0].severity.is_error());
+    assert_eq!(
+        diags[0].message,
+        "action 'Orphan' is declared but never invoked"
+    );
+    let (start, end) = diags[0].span;
+    assert_eq!(&source[start..end], "\"Orphan\"");
+}
+
+#[test]
+fn invoked_action_is_not_dead() {
+    let source = r#"
+view "Home" {
+    params { q: String };
+
+    on save(values) -> action("Orphan");
+}
+
+action "Orphan" {
+    target: Customer;
+}
+"#;
+    assert!(lint_diags(source).is_empty());
+}
+
+#[test]
+fn action_invoked_from_an_imported_module_is_not_dead() {
+    let mut imports = crate::IfmlImports::default();
+    imports.provide(
+        "app.ifml",
+        "lib.ifml",
+        r#"module "Panel" {
+    input { page: Int = 1 }
+    output { n: Int }
+
+    component "body" {
+        type: list;
+
+        on go -> action("Orphan");
+    }
+}"#,
+    );
+    let source = r#"
+import "lib.ifml";
+
+view "Home" {
+    params { q: String };
+
+    use "Panel" as panel;
+}
+
+action "Orphan" {
+    target: Customer;
+}
+"#;
+    assert!(lint_diags_with_import(source, &imports).is_empty());
+}
+
+#[test]
+fn unreachable_view_warns_w0151_at_its_name() {
+    let source = r#"view "Entry" {
+    params { q: String };
+}
+
+view "Ghost" {
+    params { q: String };
+}
+"#;
+    let diags = lint_diags(source);
+    assert_eq!(diags.len(), 1, "{diags:?}");
+    assert_eq!(diags[0].code, W_UNREACHABLE_VIEW);
+    assert_eq!(diags[0].severity, crate::Severity::Warning);
+    assert!(
+        diags[0]
+            .message
+            .starts_with("view 'Ghost' is never navigated to"),
+        "{}",
+        diags[0].message
+    );
+    let (start, end) = diags[0].span;
+    assert_eq!(&source[start..end], "\"Ghost\"");
+}
+
+#[test]
+fn navigated_and_landmark_and_first_views_are_exempt() {
+    let navigated = r#"view "Entry" {
+    component "menu" {
+        type: list;
+
+        on select(row) -> navigate("Ghost");
+    }
+}
+
+view "Ghost" {
+    params { q: String };
+}
+"#;
+    assert!(lint_diags(navigated).is_empty());
+
+    let landmark = r#"view "Entry" {
+    params { q: String };
+}
+
+view "Ghost" {
+    params { q: String };
+    landmark: true;
+}
+"#;
+    assert!(lint_diags(landmark).is_empty());
+
+    let first = "view \"Shell\" { params { q: String }; }\n";
+    assert!(lint_diags(first).is_empty());
+}
+
+#[test]
+fn shadowed_module_warns_w0152_at_the_main_declaration() {
+    let source = r#"
+import "lib.ifml";
+
+view "Home" {
+    params { q: String };
+
+    use "Pager" { page: 1; };
+}
+
+module "Pager" {
+    input { page: Int = 1 }
+    output { total: Int }
+}
+"#;
+    let mut imports = crate::IfmlImports::default();
+    imports.provide(
+        "app.ifml",
+        "lib.ifml",
+        "module \"Pager\" { input { page: Int = 1, pageSize: Int = 25 } output { total: Int } }",
+    );
+    let diags = lint_diags_with_import(source, &imports);
+    assert_eq!(diags.len(), 1, "{diags:?}");
+    assert_eq!(diags[0].code, W_SHADOWED_MODULE);
+    assert_eq!(diags[0].severity, crate::Severity::Warning);
+    assert_eq!(
+        diags[0].message,
+        "module 'Pager' shadows an imported module of the same name (from 'lib.ifml')"
+    );
+    let (start, end) = diags[0].span;
+    assert_eq!(&source[start..end], "\"Pager\"");
+}
+
+#[test]
+fn renamed_module_silences_the_shadow_warning() {
+    let source = r#"
+import "lib.ifml";
+
+view "Home" {
+    params { q: String };
+
+    use "LocalPager" { page: 1; };
+}
+
+module "LocalPager" {
+    input { page: Int = 1 }
+    output { total: Int }
+}
+"#;
+    let mut imports = crate::IfmlImports::default();
+    imports.provide(
+        "app.ifml",
+        "lib.ifml",
+        "module \"Pager\" { input { page: Int = 1, pageSize: Int = 25 } output { total: Int } }",
+    );
+    assert!(lint_diags_with_import(source, &imports).is_empty());
+}
+
+#[test]
+fn component_without_data_warns_w0153() {
+    let source = r#"
+view "Entry" {
+    params { q: String };
+
+    component "ghost" {
+        type: list;
+        fields: [name];
+    }
+}
+"#;
+    let diags = lint_diags(source);
+    assert_eq!(diags.len(), 1, "{diags:?}");
+    assert_eq!(diags[0].code, W_COMPONENT_WITHOUT_DATA);
+    assert_eq!(diags[0].severity, crate::Severity::Warning);
+    assert!(
+        diags[0]
+            .message
+            .contains("component 'ghost' binds no entity data"),
+        "{}",
+        diags[0].message
+    );
+    let (start, end) = diags[0].span;
+    assert_eq!(&source[start..end], "fields: [name];");
+}
+
+#[test]
+fn data_bound_and_interactive_components_are_exempt() {
+    let bound = r#"
+view "Entry" {
+    params { q: String };
+
+    component "grid" {
+        type: list;
+        data: Item;
+        fields: [name];
+    }
+}
+"#;
+    assert!(lint_diags(bound).is_empty());
+
+    let interactive = r#"
+view "Entry" {
+    params { q: String };
+
+    component "actions" {
+        type: list;
+
+        on select(row) -> stay;
+    }
+}
+"#;
+    assert!(lint_diags(interactive).is_empty());
+}
+
+#[test]
+fn view_without_domain_binding_warns_w0154() {
+    let source = r#"view "Entry" {
+    params { q: String };
+}
+
+view "Ghost" {
+    component "metric" {
+        type: chart;
+        chart metric { label: m; values: [v]; }
+    }
+}
+"#;
+    let diags = lint_diags(source);
+    assert_eq!(diags.len(), 1, "{diags:?}");
+    assert_eq!(diags[0].code, W_VIEW_WITHOUT_DOMAIN);
+    assert_eq!(diags[0].severity, crate::Severity::Warning);
+    assert!(
+        diags[0]
+            .message
+            .starts_with("view 'Ghost' has no domain binding"),
+        "{}",
+        diags[0].message
+    );
+    let (start, end) = diags[0].span;
+    assert_eq!(&source[start..end], "\"Ghost\"");
+}
+
+#[test]
+fn data_params_and_composition_are_domain_ties() {
+    let data = r#"
+view "Entry" {
+    params { q: String };
+}
+
+view "Bound" {
+    component "grid" {
+        type: chart;
+        data: Item;
+        chart metric { label: m; values: [v]; }
+    }
+}
+"#;
+    assert!(lint_diags(data).is_empty());
+
+    let params = r#"
+view "Entry" {
+    params { q: String };
+}
+
+view "Shell" {
+    params { id: Uuid };
+    landmark: true;
+}
+"#;
+    assert!(lint_diags(params).is_empty());
+
+    let composed = r#"
+view "Entry" {
+    params { q: String };
+}
+
+view "Composed" {
+    use "Pager" as pager;
+}
+"#;
+    let composed = format!(
+        "{composed}\n\nmodule \"Pager\" {{ input {{ page: Int = 1 }} output {{ total: Int }} }}"
+    );
+    assert!(lint_diags(&composed).is_empty());
+}
+
+#[test]
+fn lints_only_consider_the_main_file() {
+    // The imported pattern declares a dead action and a data-less
+    // component — library content, never the app's warnings.
+    let source = r#"
+import "lib.ifml";
+
+view "Home" {
+    params { q: String };
+}
+"#;
+    let mut imports = crate::IfmlImports::default();
+    imports.provide(
+        "app.ifml",
+        "lib.ifml",
+        r#"action "Ghost" { target: Customer; }
+
+module "Unused" {
+    input { page: Int = 1 }
+    output { n: Int }
+
+    component "lost" {
+        type: list;
+    }
+}"#,
+    );
+    assert!(lint_diags_with_import(source, &imports).is_empty());
+}
+
+#[test]
+fn lints_have_warning_severity_and_errors_keep_error_severity() {
+    let source = r#"
+view "Home" {
+    params { q: String };
+
+    component "intake" {
+        type: form;
+
+        on raise(values) -> action("Missing");
+    }
+}
+
+action "Orphan" {
+    target: Customer;
+}
+"#;
+    let diags = lint_diags(source);
+    assert_eq!(diags.len(), 2, "{diags:?}");
+    let dangling = diags
+        .iter()
+        .find(|diagnostic| diagnostic.code == E_UNKNOWN_ACTION)
+        .expect("the dangling invocation is diagnosed");
+    assert_eq!(dangling.severity, crate::Severity::Error);
+    let dead = diags
+        .iter()
+        .find(|diagnostic| diagnostic.code == W_DEAD_ACTION)
+        .expect("the dead declaration warns");
+    assert_eq!(dead.severity, crate::Severity::Warning);
+}
+
+#[test]
 fn empty_actor_models_skip_authorization_checking() {
     // The compatibility contract: without an actor dimension no
     // authorization diagnostic is ever produced.
     let source = r#"
 view "Edit" {
+    params { id: Uuid };
     requires: [Ghost];
     roles: [ghost];
 }
@@ -1162,7 +1602,13 @@ action "ListWidgets" {
 "#;
     let compilation = crate::compile_ifml_str("app.ifml", source, &crate::IfmlImports::default())
         .expect("source must parse and resolve");
-    assert!(check_ifml(&compilation, None).is_empty());
+    let diags = check_ifml(&compilation, None);
+    assert!(
+        diags
+            .iter()
+            .all(|diagnostic| diagnostic.code != E_UNKNOWN_ACTION_TARGET),
+        "without domains the target check is off: {diags:?}"
+    );
 }
 
 #[test]
@@ -1496,7 +1942,8 @@ command "customers" {
 // --- instantiated-module references (issue #114, interaction layer) -
 
 /// Compiles `source` as `app.ifml` with `imports` provided, then
-/// checks against `model` (no actor layer).
+/// checks against `model` (no actor layer) — error-severity only, like
+/// [`diags`].
 fn diags_with_import(
     source: &str,
     imports: &crate::IfmlImports,
@@ -1505,6 +1952,9 @@ fn diags_with_import(
     let compilation = crate::compile_ifml_str("app.ifml", source, imports)
         .expect("source must parse and resolve");
     check_ifml(&compilation, Some(model))
+        .into_iter()
+        .filter(|diagnostic| diagnostic.severity.is_error())
+        .collect()
 }
 
 #[test]
@@ -1812,9 +2262,12 @@ view "Queue" {
     use "Inbox" as inbox;
 }
 
-view "Folder" {
-    component "rows" { type: list; }
-}
+    view "Folder" {
+        component "rows" {
+            type: list;
+            data: Customer;
+        }
+    }
 "#;
     let mut imports = crate::IfmlImports::default();
     imports.provide(

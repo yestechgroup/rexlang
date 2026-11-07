@@ -43,19 +43,25 @@ use crate::report::{
 use super::pipeline::compile_reported_sources;
 
 /// Runs the pass over the expanded directory inputs; returns the number of
-/// error-severity integrity diagnostics (file failures already reported).
+/// failing integrity diagnostics — error-severity always, plus the
+/// warnings when `deny_warnings` is set (file failures already reported).
 /// `checked_clean` carries the driver paths phase 1 compiled: a file that
 /// failed there already owns its spanned compiler diagnostics, so the
 /// pass's lint-channel warnings for it stay unprinted (rexlang#128).
 pub(crate) fn run_union_pass(
     expanded: &[PathBuf],
     checked_clean: &BTreeSet<String>,
+    deny_warnings: bool,
 ) -> anyhow::Result<usize> {
     let mut contributions: Vec<Contribution> = Vec::new();
     for file in expanded {
         contributions.extend(check_contribution(std::slice::from_ref(file))?);
     }
-    Ok(report_union_integrity(&contributions, checked_clean))
+    Ok(report_union_integrity(
+        &contributions,
+        checked_clean,
+        deny_warnings,
+    ))
 }
 
 /// The compiled artifact a successful standalone check contributes to the
@@ -128,7 +134,13 @@ fn check_contribution(files: &[PathBuf]) -> anyhow::Result<Vec<Contribution>> {
                 }
             };
         let binding = rex_ifml::check_ifml(&compilation, inputs.domains.as_ref());
-        if !binding.is_empty() {
+        // Only an error-severity finding disagrees with phase 1 (which
+        // owns the warnings' rendering, and the `--deny-warnings` call on
+        // them): a warning-only standalone re-check still contributes.
+        if binding
+            .iter()
+            .any(|diagnostic| diagnostic.severity.is_error())
+        {
             report_ifml_diagnostics(&sources(&compilation), &binding);
             return Ok(sink);
         }
@@ -279,10 +291,12 @@ fn check_contribution(files: &[PathBuf]) -> anyhow::Result<Vec<Contribution>> {
 
 /// Clusters the contributions into import-connected applications and runs
 /// [`check_integrity`] per application, rendering its diagnostics against
-/// the owning files. Returns the number of error-severity diagnostics.
+/// the owning files. Returns the number of failing diagnostics —
+/// error-severity always, plus warnings when `deny_warnings` is set.
 /// Warnings (the rexlang#128 lint channel for the capability joins) render
 /// only for files phase 1 checked clean — a failed file's compiler error
-/// is the report of record.
+/// is the report of record — and that suppression rule holds under
+/// `deny_warnings` too.
 ///
 /// Two files share an application when an import of one resolves to the
 /// other (transitively, through the `.mox` domains every surface names) —
@@ -293,6 +307,7 @@ fn check_contribution(files: &[PathBuf]) -> anyhow::Result<Vec<Contribution>> {
 fn report_union_integrity(
     contributions: &[Contribution],
     checked_clean: &BTreeSet<String>,
+    deny_warnings: bool,
 ) -> usize {
     let mut nodes = Nodes::default();
     // Contribution index → node index.
@@ -399,13 +414,21 @@ fn report_union_integrity(
                 .iter()
                 .filter(|diagnostic| diagnostic.is_error())
                 .count();
+            let warnings = if deny_warnings {
+                group
+                    .iter()
+                    .filter(|diagnostic| !diagnostic.is_error())
+                    .count()
+            } else {
+                0
+            };
             // rexlang#128: a lint-channel-only group for a file whose
             // phase-1 check already failed stays unprinted — the
             // compiler's spanned error rendered there.
             if errors == 0 && !checked_clean.contains(path.as_str()) {
                 continue;
             }
-            total_errors += errors;
+            total_errors += errors + warnings;
             eprint!("{}", rex_driver::render(&path, source, &group));
         }
     }

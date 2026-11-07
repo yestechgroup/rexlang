@@ -77,6 +77,11 @@ enum Command {
         /// Files to compile, or directories (batch mode: every supported
         /// surface under them is checked independently).
         files: Vec<PathBuf>,
+        /// Also exit `1` when only warning-severity diagnostics were
+        /// found: the `.ifml` lints (`W0150`–`W0154`) and the union
+        /// integrity pass's lint channel.
+        #[arg(long)]
+        deny_warnings: bool,
     },
     /// Compile `.mox`, `.actor`, `.ddd`, `.evt`, `.deploy`, `.uc`, or `.cmmn` files
     /// and emit the artifact as JSON (`.actor` files emit the standalone
@@ -265,7 +270,10 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     match cli.command {
-        Command::Check { files } => commands::check::run(files),
+        Command::Check {
+            files,
+            deny_warnings,
+        } => commands::check::run(files, deny_warnings),
         Command::Ir { files, out, expand } => commands::ir::run(files, out, expand),
         Command::Build { files, out } => commands::build::run(files, out),
         Command::Manifest { file, out } => commands::manifest::run(vec![file], out),

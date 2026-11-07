@@ -58,6 +58,9 @@ pub(crate) struct SurfaceOutcome {
     pub(crate) ok: Vec<String>,
     /// The artifact JSON exactly `rexlang ir` emits for the surface.
     pub(crate) json: String,
+    /// How many warning-severity diagnostics were rendered. Warnings never
+    /// fail a compile; `check --deny-warnings` turns them into failures.
+    pub(crate) warnings: usize,
 }
 
 /// The compiled `.actor` artifacts of the project snapshot (excluding the
@@ -156,6 +159,13 @@ pub(crate) fn compile_surface(
             };
         let binding =
             rex_ifml::check_ifml_with_actors(&compilation, inputs.domains.as_ref(), &inputs.actors);
+        // Warnings (the `ifml.lints` band) render but never fail the file;
+        // only error-severity diagnostics do. `check --deny-warnings`
+        // flips the rule via the outcome's warning count.
+        let warnings = binding
+            .iter()
+            .filter(|diagnostic| !diagnostic.severity.is_error())
+            .count();
         if !binding.is_empty() {
             let sources: Vec<(String, String)> = compilation
                 .index
@@ -164,6 +174,8 @@ pub(crate) fn compile_surface(
                 .map(|file| (file.path.clone(), file.text.clone()))
                 .collect();
             report_ifml_diagnostics(&sources, &binding);
+        }
+        if warnings < binding.len() {
             return Ok(None);
         }
         if let Some(project) = project.as_deref_mut() {
@@ -180,6 +192,7 @@ pub(crate) fn compile_surface(
         return Ok(Some(SurfaceOutcome {
             ok: vec![inputs.path.clone()],
             json: model.to_json_pretty()?,
+            warnings,
         }));
     }
     if files.len() == 1 && is_ddd_file(&files[0]) {
@@ -209,6 +222,7 @@ pub(crate) fn compile_surface(
         return Ok(Some(SurfaceOutcome {
             ok: vec![design.path.clone()],
             json: artifact.to_json_pretty()?,
+            warnings: 0,
         }));
     }
     if files.len() == 1 && is_actor_file(&files[0]) {
@@ -238,6 +252,7 @@ pub(crate) fn compile_surface(
         return Ok(Some(SurfaceOutcome {
             ok: vec![pair.path.clone()],
             json: artifact.to_json_pretty()?,
+            warnings: 0,
         }));
     }
     if files.len() == 1 && is_evt_file(&files[0]) {
@@ -254,6 +269,7 @@ pub(crate) fn compile_surface(
         return Ok(Some(SurfaceOutcome {
             ok: vec![pair.path.clone()],
             json: artifact.to_json_pretty()?,
+            warnings: 0,
         }));
     }
     if files.len() == 1 && is_deploy_file(&files[0]) {
@@ -270,6 +286,7 @@ pub(crate) fn compile_surface(
         return Ok(Some(SurfaceOutcome {
             ok: vec![pair.path.clone()],
             json: artifact.to_json_pretty()?,
+            warnings: 0,
         }));
     }
     if files.len() == 1 && is_uc_file(&files[0]) {
@@ -294,6 +311,7 @@ pub(crate) fn compile_surface(
         return Ok(Some(SurfaceOutcome {
             ok: vec![pair.pair.path.clone()],
             json: artifact.to_json_pretty()?,
+            warnings: 0,
         }));
     }
     if files.len() == 1 && is_cmmn_file(&files[0]) {
@@ -318,6 +336,7 @@ pub(crate) fn compile_surface(
         return Ok(Some(SurfaceOutcome {
             ok: vec![pair.pair.path.clone()],
             json: artifact.to_json_pretty()?,
+            warnings: 0,
         }));
     }
     let (sources, compilation) = compile_reported_sources(files)?;
@@ -334,5 +353,9 @@ pub(crate) fn compile_surface(
     } else {
         model.to_json_pretty()?
     };
-    Ok(Some(SurfaceOutcome { ok, json }))
+    Ok(Some(SurfaceOutcome {
+        ok,
+        json,
+        warnings: 0,
+    }))
 }

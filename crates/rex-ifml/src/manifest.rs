@@ -69,11 +69,15 @@ use crate::resolve::{IfmlCompilation, IfmlImports};
 ///         data: Customer;
 ///
 ///         on select(row) -> navigate("Detail", { id: row.id });
+///         on open -> action("Open");
 ///     }
 /// }
 ///
 /// view "Detail" {
-///     component "form" { type: form; }
+///     component "form" {
+///         type: form;
+///         data: Customer;
+///     }
 /// }
 ///
 /// action "Open" {
@@ -85,7 +89,7 @@ use crate::resolve::{IfmlCompilation, IfmlImports};
 /// assert!(check_ifml(&compilation, None).is_empty());
 /// let manifest = manifest_ifml(&compilation, &IfmlImports::default(), None);
 /// assert_eq!(manifest.views.len(), 2);
-/// assert_eq!(manifest.edges.len(), 1);
+/// assert_eq!(manifest.edges.len(), 2);
 /// assert_eq!(manifest.edges[0].target, "Detail");
 /// assert_eq!(manifest.actions.len(), 1);
 /// ```

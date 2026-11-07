@@ -103,6 +103,19 @@
 //! backend), and the declaration's own event handlers are expression-walked
 //! like a view's (`action 'X'` site context, no params of their own).
 //!
+//! # Lints
+//!
+//! The lint pass ([`lints::check_lints`], the `ifml.lints` band,
+//! `W0150`–`W0199`) adds warning-severity structural findings over the
+//! **main file's** declarations only — imported pattern libraries declare
+//! unused modules and actions by design — while references count anywhere
+//! in the compilation: a dead action declaration (`W0150`), an empty view
+//! no navigation reaches (`W0151`), a module declaration shadowing an
+//! imported one (`W0152`, the documented resolve-time silence made
+//! visible), a component with no entity binding (`W0153`), and a view with
+//! no domain tie at all (`W0154`). Warnings never fail a compilation; the
+//! carrier decides (`rexlang check --deny-warnings`).
+//!
 //! # Bare calls
 //!
 //! A bare call (`today()`, `score(...)`) lowers as a package-function call
@@ -167,6 +180,10 @@ pub use rex_diagnostics::ifml_check::{
     E_UNKNOWN_COMPONENT, E_UNKNOWN_ENTITY, E_UNKNOWN_FEATURE, E_UNKNOWN_ROLE, E_UNKNOWN_VARIABLE,
     E_UNKNOWN_VIEW,
 };
+pub use rex_diagnostics::ifml_lints::{
+    W_COMPONENT_WITHOUT_DATA, W_DEAD_ACTION, W_SHADOWED_MODULE, W_UNREACHABLE_VIEW,
+    W_VIEW_WITHOUT_DOMAIN,
+};
 
 /// Checks a compiled IFML model: the interaction cross-reference pass
 /// (every `action(...)`/`navigate(...)`/`refresh(...)` reference resolves
@@ -214,6 +231,7 @@ pub fn check_ifml_with_actors(
 ) -> Vec<IfmlDiagnostic> {
     let mut diags = check_references(compilation);
     diags.extend(check_authorization(compilation, actors));
+    diags.extend(check_lints(compilation));
     let Some(domains) = domains else {
         return diags;
     };
@@ -239,10 +257,12 @@ pub fn check_ifml_with_actors(
 
 mod authorization;
 mod domains;
+mod lints;
 mod reachability;
 mod references;
 
 use authorization::check_authorization;
+use lints::check_lints;
 use references::check_references;
 #[cfg(test)]
 mod tests;
@@ -364,12 +384,12 @@ struct Checker<'a> {
 
 impl<'a> Checker<'a> {
     fn push(&mut self, code: &'static str, site: &Site, detail: String) {
-        self.diags.push(IfmlDiagnostic {
+        self.diags.push(IfmlDiagnostic::error(
             code,
-            message: format!("{}: {}", site.context.join(" "), detail.replace('`', "'")),
-            span: site.span,
-            file: self.file.clone(),
-        });
+            format!("{}: {}", site.context.join(" "), detail.replace('`', "'")),
+            site.span,
+            self.file.clone(),
+        ));
     }
 
     fn check_model(&mut self, model: &IfmlModel) {
