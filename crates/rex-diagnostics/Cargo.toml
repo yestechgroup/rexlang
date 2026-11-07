@@ -1,0 +1,12 @@
+[package]
+name = "rex-diagnostics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Central diagnostic-code registry: bands, entries, allocation ledger, and docs/DIAGNOSTICS.md"
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

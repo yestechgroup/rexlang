@@ -39,6 +39,11 @@
 //! - **Verbatim policy expressions.** A [`DeployPolicy`]'s expression is the
 //!   raw source text between the policy's parentheses — the IR never parses
 //!   or reformats it (the `when`-condition rule, wire contract rule 9).
+//! - **Verbatim env entries.** A [`DeployEnv`] entry is the authored
+//!   `NAME = "value"` pair exactly as written (author order kept). Env is
+//!   opaque and deliberately *not* part of the closed setting vocabulary:
+//!   it is never policy-addressable, and it serializes only when
+//!   non-empty.
 //! - **Equality policy.** Like every artifact root, [`DeployModel`] derives
 //!   [`Eq`] (wire contract rule 14); this artifact carries no
 //!   floating-point values.
@@ -62,7 +67,8 @@ use crate::IrError;
 /// marker), [`crate::ACTOR_MODEL_FORMAT_VERSION`] (the policy marker),
 /// [`crate::ddd::DDD_MODEL_FORMAT_VERSION`] (the design marker),
 /// [`crate::events::EVENT_MODEL_FORMAT_VERSION`] (the event marker), and
-/// [`crate::ifml::IFML_MODEL_FORMAT_VERSION`] (the interaction marker); bump
+/// [`crate::ifml::IFML_MODEL_FORMAT_VERSION`] (the interaction marker),
+/// [`crate::cmmn::CMMN_MODEL_FORMAT_VERSION`] (the case marker); bump
 /// whenever the deployment wire format changes incompatibly.
 pub const DEPLOY_MODEL_FORMAT_VERSION: u32 = 1;
 
@@ -122,12 +128,12 @@ impl DeployModel {
 
     /// Serializes the artifact to pretty-printed (2-space indent) JSON.
     pub fn to_json_pretty(&self) -> Result<String, IrError> {
-        Ok(serde_json::to_string_pretty(self)?)
+        crate::wire::to_json_pretty(self)
     }
 
     /// Serializes the artifact to compact JSON.
     pub fn to_json(&self) -> Result<String, IrError> {
-        Ok(serde_json::to_string(self)?)
+        crate::wire::to_json(self)
     }
 
     /// Deserializes a deployment artifact from JSON, rejecting artifacts
@@ -135,19 +141,12 @@ impl DeployModel {
     ///
     /// Unknown fields are ignored for forward compatibility.
     pub fn from_json(json: &str) -> Result<Self, IrError> {
-        let value: serde_json::Value = serde_json::from_str(json)?;
-        let found = value
-            .get("formatVersion")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or_default() as u32;
-        if found != DEPLOY_MODEL_FORMAT_VERSION {
-            return Err(IrError::UnsupportedFormatVersion {
-                found,
-                expected: DEPLOY_MODEL_FORMAT_VERSION,
-            });
-        }
-        Ok(serde_json::from_value(value)?)
+        crate::wire::from_json(json)
     }
+}
+
+impl crate::wire::VersionedArtifact for DeployModel {
+    const FORMAT_VERSION: u32 = DEPLOY_MODEL_FORMAT_VERSION;
 }
 
 impl Default for DeployModel {
@@ -223,6 +222,11 @@ pub struct DeployComponent {
     /// declaration order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub flows: Vec<FlowBinding>,
+    /// Opaque environment variables (`env { NAME = "value" ... }`), in
+    /// declaration order. Deliberately not settings: never
+    /// policy-addressable, never validated against the kind's vocabulary.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env: Vec<DeployEnv>,
 }
 
 impl DeployComponent {
@@ -235,6 +239,7 @@ impl DeployComponent {
             settings: Vec::new(),
             designs: Vec::new(),
             flows: Vec::new(),
+            env: Vec::new(),
         }
     }
 
@@ -247,6 +252,12 @@ impl DeployComponent {
     /// Chainable setter appending a baseline setting.
     pub fn setting(mut self, setting: DeploySetting) -> Self {
         self.settings.push(setting);
+        self
+    }
+
+    /// Chainable setter appending an env entry.
+    pub fn env(mut self, entry: DeployEnv) -> Self {
+        self.env.push(entry);
         self
     }
 
@@ -610,6 +621,31 @@ impl DeploySetting {
     }
 }
 
+/// One `NAME = "value"` entry of a [`DeployComponent`]'s `env` block: an
+/// opaque string environment variable, carried verbatim in declaration
+/// order. Deliberately not a [`DeploySetting`]: env is never
+/// policy-addressable and never validated against a kind's closed
+/// vocabulary — secrets and platform knobs live here, semantics live in
+/// settings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeployEnv {
+    /// The environment variable's name, as written.
+    pub name: String,
+    /// The environment variable's string value, verbatim.
+    pub value: String,
+}
+
+impl DeployEnv {
+    /// Creates an env entry from a name and value.
+    pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            value: value.into(),
+        }
+    }
+}
+
 /// A setting value (wire contract rule 2: adjacent tagging).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "camelCase")]
@@ -664,6 +700,10 @@ mod tests {
                         DeployComponent::new("db", ComponentKind::Database)
                             .requires("sqlDatabase")
                             .setting(DeploySetting::new("engine", DeployValue::Word("d1".into())))
+                            .env(DeployEnv {
+                                name: "LOG_LEVEL".into(),
+                                value: "debug".into(),
+                            })
                             .design(DesignBinding::parse("library.ddd#Catalogue"))
                             .flow(FlowBinding::parse("app.ifml")),
                     )
@@ -695,6 +735,10 @@ mod tests {
             "setting values are adjacently tagged: {json}"
         );
         assert!(
+            json.contains(r#""name": "LOG_LEVEL""#) && json.contains(r#""value": "debug""#),
+            "env entries serialize as {{\"name\", \"value\"}} pairs: {json}"
+        );
+        assert!(
             !json.contains("requires_") && !json.contains("object_store"),
             "no snake_case keys: {json}"
         );
@@ -705,5 +749,26 @@ mod tests {
             Some("Module")
         );
         assert_eq!(FlowBinding::parse("plain.ifml").module, None);
+    }
+
+    /// A component without `env` entries serializes without the key at all
+    /// (the default + skip discipline): adding the field must not change
+    /// the wire shape of vocabulary-less models.
+    #[test]
+    fn absent_env_is_omitted_from_the_wire() {
+        let model = DeployModel::new().application(
+            DeployApplication::new("Svc")
+                .component(DeployComponent::new("db", ComponentKind::Database)),
+        );
+        let json = model.to_json().expect("serialize");
+        assert!(
+            !json.contains("\"env\""),
+            "an absent env block must not serialize: {json}"
+        );
+        assert_eq!(
+            DeployModel::from_json(&json).expect("round trip"),
+            model,
+            "a model without env round trips unchanged"
+        );
     }
 }

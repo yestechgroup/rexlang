@@ -85,6 +85,30 @@ where
         .boxed()
 }
 
+/// The bare free-function call primary (issue #63): `name(args)` with no
+/// receiver, resolving at check time against the sigil-lowered package
+/// functions. Like `date`, the call is contextual on the parentheses — a
+/// bare `name` without them still parses as an ordinary variable reference.
+/// Ordered choice does the dispatch (the `date_literal` precedent): this
+/// parser sits before `name()` in the atom `choice`, and a name not
+/// followed by an argument list rewinds to it. The argument list mirrors
+/// `member`'s; the node span covers the whole call, closing paren included.
+fn free_call<'src, I, P>(expr: &P) -> impl Parser<'src, I, Expr, ExExtra<'src>> + Clone
+where
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
+    P: Parser<'src, I, Expr, ExExtra<'src>> + Clone + 'src,
+{
+    name()
+        .then(
+            expr.clone()
+                .separated_by(just(Token::Comma))
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LParen), just(Token::RParen)),
+        )
+        .map_with(|(name, args), e| Expr::new(ExprKind::FunctionCall { name, args }, e.span()))
+        .boxed()
+}
+
 /// Consumes every token after a successfully parsed expression, emitting one
 /// error for the skipped region. Consuming zero tokens emits no error, so a
 /// clean parse stays clean.
@@ -309,6 +333,7 @@ where
             float_lit().map_with(|value, e| Expr::new(ExprKind::Float(value), e.span())),
             string_lit().map_with(|value, e| Expr::new(ExprKind::String(value), e.span())),
             date_literal(&expr),
+            free_call(&expr),
             just(Token::True).map_with(|_, e| Expr::new(ExprKind::Bool(true), e.span())),
             just(Token::False).map_with(|_, e| Expr::new(ExprKind::Bool(false), e.span())),
             just(Token::Null).map_with(|_, e| Expr::new(ExprKind::Null, e.span())),

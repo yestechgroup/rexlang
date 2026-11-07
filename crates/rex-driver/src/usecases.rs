@@ -30,6 +30,7 @@ use rex_syntax::Span;
 use crate::diagnostic::Diagnostic;
 use crate::import_matches;
 use crate::lower::{self, DomainPackage, DomainUnit};
+use crate::pipeline;
 
 /// The provided-artifact bucket an import hits when it names a `.ddd`
 /// design (the designs entry of the four-bucket hit array).
@@ -100,8 +101,10 @@ enum Color {
 ///
 /// See [`compile_usecase_str`](crate::compile_usecase_str) for the
 /// normative contract.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compile_usecase_file(
     path: &str,
+    source: &str,
     ast: Option<&dsl::UcFile>,
     parse_diagnostics: &[Diagnostic],
     domains: &[DomainUnit],
@@ -109,11 +112,6 @@ pub(crate) fn compile_usecase_file(
     actors: &[(String, ActorModel)],
     events: &[(String, EventModel)],
 ) -> (Option<UseCaseModel>, Vec<(String, Diagnostic)>) {
-    let mut diags: Vec<(String, Diagnostic)> = parse_diagnostics
-        .iter()
-        .map(|diagnostic| (path.to_string(), diagnostic.clone()))
-        .collect();
-
     let imports = ast.map(|file| file.imports.as_slice()).unwrap_or_default();
 
     // Which provided bucket each import resolves against (exact path or
@@ -139,24 +137,21 @@ pub(crate) fn compile_usecase_file(
         })
         .collect();
 
+    let mut import_diagnostics = Vec::new();
     for (import, hit) in imports.iter().zip(&hits) {
         // Rule 1 — every import must name a provided artifact of any
         // surface.
         if !hit.iter().any(|hit| *hit) {
-            diags.push((
-                path.to_string(),
-                Diagnostic::error(
-                    format!("imported file \"{}\" was not provided", import.path),
-                    Some(import.span),
-                ),
+            import_diagnostics.push(Diagnostic::error(
+                format!("imported file \"{}\" was not provided", import.path),
+                Some(import.span),
             ));
             continue;
         }
         // Rule 1 — aliases exist for `realizes`, which names designs; every
         // other surface rejects them.
         if import.alias.is_some() && !hit[BUCKET_DESIGNS] {
-            diags.push((
-                path.to_string(),
+            import_diagnostics.push(
                 Diagnostic::error(
                     format!(
                         "import \"{}\" is not a design; only design imports take an alias",
@@ -165,16 +160,11 @@ pub(crate) fn compile_usecase_file(
                     Some(import.span),
                 )
                 .with_help("alias the `.ddd` design a `realizes` binding names"),
-            ));
+            );
         }
     }
 
-    // Domain diagnostics propagate under their own file, in import order.
-    for unit in domains {
-        for diagnostic in &unit.diagnostics {
-            diags.push((unit.path.clone(), diagnostic.clone()));
-        }
-    }
+    let diags = pipeline::engine_diags(path, parse_diagnostics, import_diagnostics, domains);
 
     let Some(ast) = ast else {
         return (None, diags);
@@ -195,6 +185,18 @@ pub(crate) fn compile_usecase_file(
     for unit in domains {
         if let Some(model) = &unit.model {
             union.packages.extend(model.packages.iter().cloned());
+        }
+    }
+
+    // The expression universe for step `when` guards (rule 3): every
+    // imported domain unit that lowered, merged into one `DomainTypes` —
+    // the `.cmmn` typing pattern with no synthetic classes, since a guard's
+    // `self` is the subject's resolved domain class. The checker is
+    // constructed per step with that class as `self`.
+    let mut types = rex_expr::DomainTypes::default();
+    for unit in domains {
+        if let Some(model) = &unit.model {
+            types.merge(rex_expr::DomainTypes::from_model(model));
         }
     }
 
@@ -399,7 +401,8 @@ pub(crate) fn compile_usecase_file(
                     }
                 }
                 // Rule 3 — the step's operation names an operation on the
-                // subject's resolved class, walking extends.
+                // subject's resolved class, walking extends; the optional
+                // `when` guard types as boolean against the same class.
                 if is_subject {
                     check_step_operation(
                         &union,
@@ -410,10 +413,13 @@ pub(crate) fn compile_usecase_file(
                         &mut local,
                     );
                 }
+                let when =
+                    check_step_guard(source, &types, resolved.as_ref(), step, decl, &mut local);
                 steps_out.push(Step {
                     name: step.name.clone(),
                     operation: step.operation.clone(),
                     requires: step.requires.clone(),
+                    when,
                 });
             }
 
@@ -654,10 +660,7 @@ pub(crate) fn compile_usecase_file(
         model.use_cases.push(out);
     }
 
-    diags.extend(local.into_iter().map(|d| (path.to_string(), d)));
-
-    let blocked = diags.iter().any(|(_, diagnostic)| diagnostic.is_error());
-    ((!blocked).then_some(model), diags)
+    pipeline::engine_finish(path, local, diags, model)
 }
 
 /// Rule 3 — the step's operation must name an operation on the subject's
@@ -732,6 +735,74 @@ fn check_step_operation(
         ),
         Some(step.span),
     ));
+}
+
+/// Rule 3 — the step's `when (...)` guard must parse and type as boolean
+/// against the subject's resolved class, with that class as the checker's
+/// `self` (the `.cmmn` criterion typing). Parse or type errors are
+/// diagnostics naming the step; the condition text still lowers (trimmed,
+/// verbatim) — the artifact is dropped on any error anyway.
+///
+/// Guards are a subject concern: a non-class-typed subject already errors
+/// on the step itself (the must-be-class-typed diagnostic), so sigil-typed
+/// subjects — whose lowered classes carry no operations — can never reach
+/// the guard check. Their guard text still lowers untouched.
+fn check_step_guard(
+    source: &str,
+    types: &rex_expr::DomainTypes,
+    resolved: Option<&TypeRef>,
+    step: &dsl::UcStep,
+    decl: &dsl::UcDecl,
+    local: &mut Vec<Diagnostic>,
+) -> Option<String> {
+    let span = step.when?;
+    // The span covers the raw parens; slice strictly inside (the
+    // `when`-condition convention).
+    let interior = source
+        .get(span.start + 1..span.end.saturating_sub(1))
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let Some(TypeRef::Class { package, name }) = resolved else {
+        return Some(interior);
+    };
+    let help = format!(
+        "in the `when` of step '{}' in use case '{}'",
+        step.name, decl.name
+    );
+    let parsed = rex_expr::parse(&interior);
+    for error in &parsed.errors {
+        local.push(
+            Diagnostic::error(
+                format!("invalid step guard condition: {}", error.message),
+                Some(span),
+            )
+            .with_help(help.clone()),
+        );
+    }
+    let Some(ast) = parsed.ast else {
+        return Some(interior);
+    };
+    let checker = rex_expr::TypeChecker::new(types.clone()).with_self(package, name);
+    match checker.type_of(&ast) {
+        Ok(ty) if ty == rex_expr::Ty::boolean() => Some(interior),
+        Ok(ty) => {
+            local.push(
+                Diagnostic::error(
+                    format!("step guard condition must be boolean, found {ty}"),
+                    Some(span),
+                )
+                .with_help(help),
+            );
+            Some(interior)
+        }
+        Err(errors) => {
+            for error in errors {
+                local.push(Diagnostic::error(error.message, Some(span)).with_help(help.clone()));
+            }
+            Some(interior)
+        }
+    }
 }
 
 /// Rule 5 — one message end's binding: the inline endpoint xor exactly one

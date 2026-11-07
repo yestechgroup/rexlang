@@ -31,7 +31,16 @@
 //! - **Shared IR types.** Signatures reuse the domain IR's [`crate::TypeRef`]
 //!   (adjacent tagging: `{"type": "class", "value": {...}}`) and
 //!   [`crate::OperationParam`] (`{"name": ..., "type": ...}`); there are no
-//!   parallel wire-level signature types.
+//!   parallel wire-level signature types. A [`StateMachine`]'s enum is the
+//!   same [`crate::TypeRef::Enum`].
+//! - **State machines.** A [`Design`] may carry a [`StateMachine`] (`machine`
+//!   block). The state set is derived — `initial` + `terminals` + transition
+//!   endpoints — never serialized as a separate list; terminalness is
+//!   membership in `terminals`. A [`Transition`]'s `trigger` is the `via`
+//!   workflow action (`None` = bare arrow, action name derived downstream),
+//!   and its `guard`/an operation's `condition` are the `when`-condition
+//!   rule: verbatim source text between the parentheses, typed by the
+//!   driver.
 //! - **Equality policy.** Like every artifact root, [`DddModel`] derives
 //!   [`Eq`] (wire contract rule 14): the one floating-point field in any
 //!   artifact — [`SearchField::boost`] — is wrapped in the ordered
@@ -42,8 +51,10 @@
 //! package-qualified at this layer); resolution against the domain
 //! [`crate::Model`] is a driver/consumer concern, never a wire concern.
 //! Likewise [`ServiceOperation::capabilities`] loosely references actor
-//! capability names (the [`crate::ActorModel`] dimension); it is not
-//! validated at the wire layer.
+//! capability names (the [`crate::ActorModel`] dimension), and
+//! [`ServiceOperation::emits`] loosely references event names (the
+//! [`crate::events::EventModel`] dimension); neither is validated at the
+//! wire layer.
 //!
 //! A [`RepositoryOperation`] carries **exactly one** of a built-in op
 //! ([`RepositoryOperation::builtin`] — the consumer knows its signature) or
@@ -54,9 +65,6 @@
 //!
 //! [rexlang]: https://github.com/anton-makes/rexlang
 
-use std::cmp::Ordering;
-use std::hash::{Hash, Hasher};
-
 use serde::{Deserialize, Serialize};
 
 use crate::{IrError, Multiplicity, OperationParam, TypeRef};
@@ -66,7 +74,8 @@ use crate::{IrError, Multiplicity, OperationParam, TypeRef};
 ///
 /// Versioned independently of [`crate::FORMAT_VERSION`] (the domain-model
 /// marker), [`crate::ACTOR_MODEL_FORMAT_VERSION`] (the policy marker), and
-/// [`crate::ifml::IFML_MODEL_FORMAT_VERSION`] (the interaction marker); bump
+/// [`crate::ifml::IFML_MODEL_FORMAT_VERSION`] (the interaction marker),
+/// [`crate::cmmn::CMMN_MODEL_FORMAT_VERSION`] (the case marker); bump
 /// whenever the DDD wire format changes incompatibly.
 pub const DDD_MODEL_FORMAT_VERSION: u32 = 1;
 
@@ -120,12 +129,12 @@ impl DddModel {
 
     /// Serializes the artifact to pretty-printed (2-space indent) JSON.
     pub fn to_json_pretty(&self) -> Result<String, IrError> {
-        Ok(serde_json::to_string_pretty(self)?)
+        crate::wire::to_json_pretty(self)
     }
 
     /// Serializes the artifact to compact JSON.
     pub fn to_json(&self) -> Result<String, IrError> {
-        Ok(serde_json::to_string(self)?)
+        crate::wire::to_json(self)
     }
 
     /// Deserializes a design artifact from JSON, rejecting artifacts whose
@@ -133,19 +142,12 @@ impl DddModel {
     ///
     /// Unknown fields are ignored for forward compatibility.
     pub fn from_json(json: &str) -> Result<Self, IrError> {
-        let value: serde_json::Value = serde_json::from_str(json)?;
-        let found = value
-            .get("formatVersion")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or_default() as u32;
-        if found != DDD_MODEL_FORMAT_VERSION {
-            return Err(IrError::UnsupportedFormatVersion {
-                found,
-                expected: DDD_MODEL_FORMAT_VERSION,
-            });
-        }
-        Ok(serde_json::from_value(value)?)
+        crate::wire::from_json(json)
     }
+}
+
+impl crate::wire::VersionedArtifact for DddModel {
+    const FORMAT_VERSION: u32 = DDD_MODEL_FORMAT_VERSION;
 }
 
 impl Default for DddModel {
@@ -267,11 +269,20 @@ pub struct ServiceOperation {
     /// the wire layer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<String>,
+    /// Event names this operation emits (the `emits` clause; the
+    /// [`crate::events::EventModel`] dimension); loosely coupled, not
+    /// validated at the wire layer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub emits: Vec<String>,
+    /// The `when (...)` guard condition's source text, verbatim between the
+    /// parentheses (the `when`-condition rule); typing is a driver concern.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<String>,
 }
 
 impl ServiceOperation {
-    /// Creates an operation with no return type, parameters, delegation, or
-    /// capabilities.
+    /// Creates an operation with no return type, parameters, delegation,
+    /// capabilities, or emitted events.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -281,6 +292,8 @@ impl ServiceOperation {
             delegation: None,
             is_protected: false,
             capabilities: Vec::new(),
+            emits: Vec::new(),
+            condition: None,
         }
     }
 
@@ -293,6 +306,12 @@ impl ServiceOperation {
     /// Chainable setter marking the operation `protected`.
     pub fn with_protected(mut self, is_protected: bool) -> Self {
         self.is_protected = is_protected;
+        self
+    }
+
+    /// Chainable setter for the emitted event names.
+    pub fn with_emits(mut self, emits: Vec<String>) -> Self {
+        self.emits = emits;
         self
     }
 }
@@ -386,6 +405,9 @@ pub struct Design {
     /// The class's repository, when designed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repository: Option<Repository>,
+    /// The class's lifecycle state machine, when designed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<StateMachine>,
 }
 
 impl Design {
@@ -397,6 +419,7 @@ impl Design {
             is_abstract: false,
             flags: DesignFlags::default(),
             repository: None,
+            machine: None,
         }
     }
 }
@@ -418,6 +441,101 @@ impl Repository {
         Self {
             name: name.into(),
             operations: Vec::new(),
+        }
+    }
+}
+
+/// The lifecycle state machine of a [`Design`]: a `machine <field>: <Enum>`
+/// block over one enum-typed feature of the designed class.
+///
+/// The state set is the union of [`StateMachine::initial`], the
+/// [`StateMachine::terminals`], and every transition endpoint; consumers
+/// derive it (the artifact never repeats a bare list). Whether a state is
+/// terminal is carried by the [`StateMachine::terminals`] list, not by a
+/// per-state flag.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateMachine {
+    /// The designed class's feature carrying the state. The driver binds the
+    /// machine to it (the feature must exist and be enum-typed); the wire
+    /// layer carries the name loosely.
+    pub field: String,
+    /// The enum the states are drawn from.
+    #[serde(rename = "enumType")]
+    pub enum_type: TypeRef,
+    /// The initial state.
+    pub initial: String,
+    /// Terminal states, in declaration order. A terminal state takes no
+    /// outgoing transitions; the driver validates the machine before
+    /// lowering, so consumers may rely on it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub terminals: Vec<String>,
+    /// Transitions in declaration order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transitions: Vec<Transition>,
+}
+
+impl StateMachine {
+    /// Creates a state machine with no terminals or transitions.
+    pub fn new(field: impl Into<String>, enum_type: TypeRef, initial: impl Into<String>) -> Self {
+        Self {
+            field: field.into(),
+            enum_type,
+            initial: initial.into(),
+            terminals: Vec::new(),
+            transitions: Vec::new(),
+        }
+    }
+
+    /// Every state of the machine, in canonical order: the initial state
+    /// first, then the terminals in declaration order, then every remaining
+    /// transition endpoint in first-appearance order (duplicates removed).
+    pub fn states(&self) -> Vec<&str> {
+        let mut states = vec![self.initial.as_str()];
+        for terminal in &self.terminals {
+            if !states.contains(&terminal.as_str()) {
+                states.push(terminal);
+            }
+        }
+        for transition in &self.transitions {
+            for endpoint in [&transition.from, &transition.to] {
+                if !states.contains(&endpoint.as_str()) {
+                    states.push(endpoint);
+                }
+            }
+        }
+        states
+    }
+}
+
+/// One transition of a [`StateMachine`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Transition {
+    /// The source state name.
+    pub from: String,
+    /// The target state name.
+    pub to: String,
+    /// The `via` trigger — the workflow action performed through this
+    /// transition. `None` for a bare arrow, whose action name is derived
+    /// (the lowerCamel of the target state; documented in `docs/DDD.md`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<String>,
+    /// The guard condition's source text, verbatim between the parentheses
+    /// (the `when`-condition rule). Parsing, typing, and evaluation are
+    /// driver concerns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard: Option<String>,
+}
+
+impl Transition {
+    /// Creates an unguarded transition.
+    pub fn new(from: impl Into<String>, to: impl Into<String>) -> Self {
+        Self {
+            from: from.into(),
+            to: to.into(),
+            trigger: None,
+            guard: None,
         }
     }
 }
@@ -455,6 +573,11 @@ pub struct RepositoryOperation {
     /// `false`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_protected: bool,
+    /// The `when (...)` guard condition's source text, verbatim between the
+    /// parentheses (the `when`-condition rule); typing is a driver concern.
+    /// A built-in never carries one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<String>,
 }
 
 impl RepositoryOperation {
@@ -467,6 +590,7 @@ impl RepositoryOperation {
             return_multiplicity: None,
             params: Vec::new(),
             is_protected: false,
+            condition: None,
         }
     }
 
@@ -484,6 +608,7 @@ impl RepositoryOperation {
             return_multiplicity: None,
             params,
             is_protected: false,
+            condition: None,
         }
     }
 
@@ -496,6 +621,12 @@ impl RepositoryOperation {
     /// Chainable setter marking the operation `protected`.
     pub fn with_protected(mut self, is_protected: bool) -> Self {
         self.is_protected = is_protected;
+        self
+    }
+
+    /// Chainable setter installing the `when (...)` condition's source text.
+    pub fn with_condition(mut self, condition: Option<String>) -> Self {
+        self.condition = condition;
         self
     }
 }
@@ -686,89 +817,39 @@ impl SearchField {
     }
 }
 
-/// The relevance-boost weight of a [`SearchField`] (`boost <n>` in the
-/// source): an ordered, equality-preserving wrapper around `f32`, so the
-/// artifact chain derives [`Eq`] end to end (wire contract rule 14).
-///
-/// # Wire layout
-///
-/// `#[serde(transparent)]`: a `Boost` serializes and deserializes exactly
-/// as the bare JSON number it wraps — artifacts are byte-identical to the
-/// raw-`f32` encoding.
-///
-/// # Equality and hashing
-///
-/// [`PartialEq`]/[`Eq`] follow `f32::total_cmp` semantics: equality is
-/// bit-pattern equality, which makes it reflexive even for `NaN` (a `NaN`
-/// equals only another `NaN` with the same bit pattern) and distinguishes
-/// `-0.0` from `0.0` (both deliberate). [`Hash`] hashes the raw bit
-/// pattern, consistent with that equality.
-///
-/// # Ordering
-///
-/// [`Ord`]/[`PartialOrd`] are `f32::total_cmp`: a genuine total order
-/// (`-0.0 < 0.0`, every `NaN` above [`f32::INFINITY`]), so boosts can be
-/// sorted and compared like any other key.
-///
-/// # Where `NaN`/`-0.0` can come from
-///
-/// The `.ddd` grammar accepts only integer boosts (`boost 3`) and JSON
-/// cannot encode `NaN`, so neither source nor wire artifacts produce one
-/// today; the `NaN`/`-0.0` behavior above is the type's deliberate
-/// contract for programmatic construction and any future float-tolerant
-/// syntax, not dead-letter handling.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Boost(f32);
-
-impl Boost {
-    /// Wraps a raw `f32` weight.
-    pub fn new(value: f32) -> Self {
-        Self(value)
-    }
-
-    /// The raw `f32` weight.
-    pub fn value(self) -> f32 {
-        self.0
-    }
-}
-
-impl From<f32> for Boost {
-    fn from(value: f32) -> Self {
-        Self(value)
-    }
-}
-
-impl From<Boost> for f32 {
-    fn from(value: Boost) -> Self {
-        value.0
-    }
-}
-
-impl PartialEq for Boost {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.total_cmp(&other.0) == Ordering::Equal
-    }
-}
-
-impl Eq for Boost {}
-
-impl Hash for Boost {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.to_bits().hash(state);
-    }
-}
-
-impl Ord for Boost {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.0.total_cmp(&other.0)
-    }
-}
-
-impl PartialOrd for Boost {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
+crate::wire::total_order_float! {
+    /// The relevance-boost weight of a [`SearchField`] (`boost <n>` in the
+    /// source): an ordered, equality-preserving wrapper around `f32`, so the
+    /// artifact chain derives [`Eq`] end to end (wire contract rule 14).
+    ///
+    /// # Wire layout
+    ///
+    /// `#[serde(transparent)]`: a `Boost` serializes and deserializes exactly
+    /// as the bare JSON number it wraps — artifacts are byte-identical to the
+    /// raw-`f32` encoding.
+    ///
+    /// # Equality and hashing
+    ///
+    /// [`PartialEq`]/[`Eq`] follow `f32::total_cmp` semantics: equality is
+    /// bit-pattern equality, which makes it reflexive even for `NaN` (a `NaN`
+    /// equals only another `NaN` with the same bit pattern) and distinguishes
+    /// `-0.0` from `0.0` (both deliberate). [`Hash`] hashes the raw bit
+    /// pattern, consistent with that equality.
+    ///
+    /// # Ordering
+    ///
+    /// [`Ord`]/[`PartialOrd`] are `f32::total_cmp`: a genuine total order
+    /// (`-0.0 < 0.0`, every `NaN` above [`f32::INFINITY`]), so boosts can be
+    /// sorted and compared like any other key.
+    ///
+    /// # Where `NaN`/`-0.0` can come from
+    ///
+    /// The `.ddd` grammar accepts only integer boosts (`boost 3`) and JSON
+    /// cannot encode `NaN`, so neither source nor wire artifacts produce one
+    /// today; the `NaN`/`-0.0` behavior above is the type's deliberate
+    /// contract for programmatic construction and any future float-tolerant
+    /// syntax, not dead-letter handling.
+    Boost(f32)
 }
 
 /// A structured filter key of a [`SearchDef`]: an exact-match facet a query
@@ -914,6 +995,8 @@ mod tests {
                             delegation: None,
                             is_protected: false,
                             capabilities: vec!["BorrowBooks".to_string()],
+                            emits: vec!["LoanStateChanged".to_string()],
+                            condition: None,
                         },
                         ServiceOperation {
                             name: "renew".to_string(),
@@ -926,6 +1009,8 @@ mod tests {
                             }),
                             is_protected: false,
                             capabilities: Vec::new(),
+                            emits: Vec::new(),
+                            condition: None,
                         },
                     ],
                     dependencies: vec![
@@ -963,6 +1048,7 @@ mod tests {
                                 ),
                             ],
                         }),
+                        machine: None,
                     },
                     Design {
                         class: "Money".to_string(),
@@ -970,6 +1056,7 @@ mod tests {
                         is_abstract: false,
                         flags: DesignFlags::default(),
                         repository: None,
+                        machine: None,
                     },
                     Design {
                         class: "LoanSummary".to_string(),
@@ -982,6 +1069,7 @@ mod tests {
                             ..Default::default()
                         },
                         repository: None,
+                        machine: None,
                     },
                 ],
                 searches: Vec::new(),
@@ -1095,6 +1183,7 @@ mod tests {
             is_abstract: false,
             flags: DesignFlags::default(),
             repository: None,
+            machine: None,
         };
         assert_eq!(
             serde_json::to_string(&design).expect("serialize"),
@@ -1116,6 +1205,7 @@ mod tests {
                 cache: true,
             },
             repository: None,
+            machine: None,
         };
         assert_eq!(
             serde_json::to_string(&design).expect("serialize"),
@@ -1249,6 +1339,37 @@ mod tests {
             serde_json::to_string(&RankingStrategy::Custom("x".to_string())).expect("serialize"),
             r#"{"type":"custom","value":"x"}"#
         );
+    }
+
+    #[test]
+    fn emits_are_omitted_when_empty_and_round_trip_when_set() {
+        // Additive rule 9: an operation with no `emits` clause serializes
+        // without the key (artifacts authored before the clause stay
+        // byte-identical), and a populated list round-trips.
+        let mut op = ServiceOperation::new("approve");
+        let json = serde_json::to_string(&op).expect("serialize");
+        assert!(!json.contains("emits"), "empty emits are omitted: {json}");
+        let parsed: ServiceOperation =
+            serde_json::from_str(&json).expect("deserialize without emits");
+        assert_eq!(parsed, op, "the default is the empty list");
+
+        op.emits = vec!["PayRunStateChanged".to_string()];
+        let json = serde_json::to_string(&op).expect("serialize");
+        assert_eq!(
+            json, r#"{"name":"approve","emits":["PayRunStateChanged"]}"#,
+            "camelCase key, in declaration order: {json}"
+        );
+        let parsed: ServiceOperation = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, op);
+        assert_eq!(
+            serde_json::to_string(&parsed).expect("re-serialize"),
+            json,
+            "re-serialization is byte-identical"
+        );
+
+        // The chainable setter.
+        let op = ServiceOperation::new("submit").with_emits(vec!["PayRunSubmitted".to_string()]);
+        assert_eq!(op.emits, vec!["PayRunSubmitted".to_string()]);
     }
 
     #[test]

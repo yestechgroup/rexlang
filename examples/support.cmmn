@@ -1,0 +1,66 @@
+// Support-desk case management over the full stack: the domain
+// (support.mox) types the case file, the design (support.ddd, aliased for
+// `execute`) supplies the automated refund assessment, the policy
+// (support.actor) names the role bindings, and the designed service
+// (support.ddd, via `execute`) automates the refund assessment. The case
+// reacts to the ticket's creation (a case-file transition, which the
+// engine's sentries watch); the `.evt` contracts remain the wider
+// integration vocabulary — TicketRaised and friends are what other
+// services subscribe to. The case owns the work around a ticket — triage,
+// assessment, approval, closure — never the ticket's own state, which
+// stays in the domain.
+import "support.mox"
+import "support.evt"
+import "support.actor"
+import "support.ddd" as support
+
+/// A refund-desk case: the work coordinated around one support ticket
+/// that needs money back.
+case RefundDesk {
+    roles {
+        role triage as Agent;
+        role finance as Finance;
+        role escalation as Manager;
+    }
+    case_file {
+        /// The ticket under triage.
+        Ticket[1..1] ticket;
+        /// The refund decision, once assessed.
+        RefundDecision[0..1] decision;
+    }
+    stage Assessment {
+        entry on ticket.create;
+        /// A human triages the ticket before anything automatic runs.
+        task ReviewTicket {
+            performer: triage;
+        }
+        /// The desk's own assessment runs once the review lands and only
+        /// while no decision is on file; the ceiling arithmetic lives in
+        /// the domain (Ticket.raiseRefund), the automation binds to the
+        /// designed service operation.
+        service AssessRefund {
+            execute support.TicketService.raiseRefund;
+            entry on ReviewTicket.complete when (decision == null);
+            required;
+        }
+        /// Finance approves only what assessment could not settle.
+        discretionary task ApproveRefund {
+            performer: finance;
+            entry on AssessRefund.complete;
+        }
+        /// A manager may escalate at any point in the assessment.
+        discretionary task Escalate {
+            performer: escalation;
+        }
+        milestone RefundSettled {
+            entry on AssessRefund.complete;
+        }
+        /// Closure terminates when the decision is on file.
+        task CloseTicket {
+            performer: triage;
+            entry on RefundSettled.occur;
+            exit on decision.create;
+            required;
+        }
+    }
+}

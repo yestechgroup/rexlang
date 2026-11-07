@@ -1,0 +1,169 @@
+{
+  "id": "PayRun",
+  "initial": "Draft",
+  "context": {
+    "fields": [
+      {
+        "name": "status",
+        "type_name": "nz.example.payroll.PayRunStatus",
+        "default_value": "Draft"
+      }
+    ]
+  },
+  "states": [
+    {
+      "name": "Draft",
+      "description": null,
+      "initial": null,
+      "entry": [],
+      "exit": [],
+      "transitions": [
+        {
+          "event": "Calculate",
+          "target": "Calculating",
+          "targets": [],
+          "guard": null,
+          "actions": [],
+          "description": null
+        },
+        {
+          "event": "reversed",
+          "target": "Reversed",
+          "targets": [],
+          "guard": null,
+          "actions": [],
+          "description": null
+        }
+      ],
+      "children": [],
+      "type": "atomic",
+      "tags": [],
+      "invoke": null,
+      "on_done": [],
+      "output": null
+    },
+    {
+      "name": "Reversed",
+      "description": null,
+      "initial": null,
+      "entry": [],
+      "exit": [],
+      "transitions": [],
+      "children": [],
+      "type": "final",
+      "tags": [],
+      "invoke": null,
+      "on_done": [],
+      "output": null
+    },
+    {
+      "name": "Posted",
+      "description": null,
+      "initial": null,
+      "entry": [],
+      "exit": [],
+      "transitions": [],
+      "children": [],
+      "type": "final",
+      "tags": [],
+      "invoke": null,
+      "on_done": [],
+      "output": null
+    },
+    {
+      "name": "Calculating",
+      "description": null,
+      "initial": null,
+      "entry": [],
+      "exit": [],
+      "transitions": [
+        {
+          "event": "Submit",
+          "target": "AwaitingApproval",
+          "targets": [],
+          "guard": null,
+          "actions": [],
+          "description": null
+        }
+      ],
+      "children": [],
+      "type": "atomic",
+      "tags": [],
+      "invoke": null,
+      "on_done": [],
+      "output": null
+    },
+    {
+      "name": "AwaitingApproval",
+      "description": null,
+      "initial": null,
+      "entry": [],
+      "exit": [],
+      "transitions": [
+        {
+          "event": "Approve",
+          "target": "Approved",
+          "targets": [],
+          "guard": {
+            "name": "total > 0"
+          },
+          "actions": [],
+          "description": null
+        }
+      ],
+      "children": [],
+      "type": "atomic",
+      "tags": [],
+      "invoke": null,
+      "on_done": [],
+      "output": null
+    },
+    {
+      "name": "Approved",
+      "description": null,
+      "initial": null,
+      "entry": [],
+      "exit": [],
+      "transitions": [
+        {
+          "event": "Schedule",
+          "target": "Processing",
+          "targets": [],
+          "guard": null,
+          "actions": [],
+          "description": null
+        }
+      ],
+      "children": [],
+      "type": "atomic",
+      "tags": [],
+      "invoke": null,
+      "on_done": [],
+      "output": null
+    },
+    {
+      "name": "Processing",
+      "description": null,
+      "initial": null,
+      "entry": [],
+      "exit": [],
+      "transitions": [
+        {
+          "event": "Post",
+          "target": "Posted",
+          "targets": [],
+          "guard": null,
+          "actions": [],
+          "description": null
+        }
+      ],
+      "children": [],
+      "type": "atomic",
+      "tags": [],
+      "invoke": null,
+      "on_done": [],
+      "output": null
+    }
+  ],
+  "setup": null
+}

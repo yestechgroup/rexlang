@@ -23,4 +23,16 @@ class Ticket {
     derived boolean needsRefund {
         expr { refundCents > 0 }
     }
+    op boolean raiseRefund(int cents) {
+        expr { refundCents + cents <= 5000 }
+    }
+    op boolean approveRefund(int cents) {
+        expr { refundCents + cents <= 100000 }
+    }
+}
+
+class RefundDecision {
+    id readonly String decisionId
+    readonly int cents
+    readonly boolean approved
 }

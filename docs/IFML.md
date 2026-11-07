@@ -19,6 +19,16 @@ The IFML DSL lives alongside the `.mox` domain model as a *complementary* input:
 
 Minimal artifact: an empty model serializes as exactly `{"formatVersion":1}` — every struct `Vec` field is `#[serde(default, skip_serializing_if = "Vec::is_empty")]` (the `ActorModel`/`DddModel` discipline), so empty vecs are omitted on write and absent vecs read back as empty.
 
+`rexlang artifact check` classifies a non-empty IFML artifact by its
+`views`/`domains`/`actions`/`commands`/`imports` keys (rule 3 of the
+classifier's precedence list — ahead of the DDD `modules` shape, so a
+view-and-module model classifies as an IfmlModel). Two shape-sniffing
+limitations are documented and pinned: the **empty** IFML model
+serializes as exactly `{"formatVersion":1}` and classifies as an
+ActorModel, and a **module-only** model (no other IFML key) shape-matches
+the DDD design keys and classifies as a DddModel (see the classification
+rules in the CLI's `artifact_check` module).
+
 ```rust
 let model = rex_ifml::parse_ifml(source)?;
 let json = model.to_json_pretty()?;      // versioned artifact
@@ -156,7 +166,7 @@ view "Dashboard" {
         data: Product;
         fields: [name, salesCount];
         filter: salesCount > 1000;
-        sort: salesCount desc;
+        sort: "salesCount desc";
     }
 }
 ```
@@ -207,6 +217,111 @@ view "DeleteConfirm" {
 }
 ```
 
+### Charts
+
+Components of `type: chart` carry an inline `chart_decl`. The kind
+vocabulary is closed — `bar | line | pie | radar | metric | org` — and an
+unknown kind is a parse error.
+
+```ifml
+view "Analytics" {
+    component "revenueByRegion" {
+        type: chart;
+        chart bar {
+            label: region;
+            values: [revenue];
+            aggregate: sum;      // sum | avg | count | min | max
+        }
+    }
+
+    component "team" {
+        chart org {
+            hierarchy: managerId;   // self-referencing FK to walk
+            labels: [name, title];  // ordered node label projections
+            details: [email];       // ordered node detail projections
+            maxDepth: 4;            // client-side render pruning
+        }
+    }
+
+    component "modeled" {
+        // Placement of a chart modeled elsewhere (e.g. codegraph's
+        // `[charts]` table): the string is a permissive reference the
+        // consumer resolves against its own graph — the artifact never
+        // does.
+        chart: "headcount";
+    }
+}
+```
+
+Series kinds aggregate their `value_fields`; an absent `aggregate:` stays
+unspecified in the artifact (consumers apply their own default, e.g.
+codegraph models `count`). An org chart uses `hierarchy`/`labels`/
+`details`/`maxDepth` instead of `label`/`values`. A component cannot carry
+both a `chart: "<name>"` reference and an inline chart declaration — that
+combination is a parse error naming the component.
+
+### CLI Commands
+
+A command-line application is the same interaction model in a different
+interaction vocabulary. Top-level `command` declarations — peers of
+`view`/`action`/`module`/`actor` — describe the terminal surface and bind
+to the same domain types and actions the views bind to; subcommands nest
+to the invocation path (`tickets show TICKET-1`).
+
+```ifml
+command "tickets" {
+    description: "Work the support ticket queue";
+    requires: [Agent];
+
+    option state: TicketState = "open";
+    option limit: Int = 20;
+
+    output: table;
+
+    on run -> action("ListTickets");
+
+    command "show" {
+        argument ticketNo: String;
+
+        output: details;
+
+        on run -> action("GetTicket");
+    }
+
+    command "refund" {
+        argument ticketNo: String;
+
+        prompt amount: number;
+        prompt confirm: confirm = false;
+
+        on run if amount > 0 -> action("RefundTicket", {
+            ticketNo: ticketNo;
+        });
+    }
+}
+```
+
+Body vocabulary:
+
+| Member | Meaning |
+|---|---|
+| `argument <name>: <Type>;` | Positional input, required by nature (what is optional is an option). |
+| `option <name>: <Type> (= default)?;` | Invocation-line input, optional by nature. |
+| `prompt <name>: <kind> (= default)?;` | Interactive input collected while the command runs — kinds: `text`, `secret`, `number`, `confirm`, `select`, `multiselect`, `date`, or a custom identifier. |
+| `on <event> (if expr)? -> …` | The shared event-handler vocabulary; `on run -> action("X", { … })` binds the command to a domain action. |
+| `use "Module" …` | Resolved and validated like any other use site (expansion keeps them as references — a command has no containers/components to splice into). |
+| nested `command` | Subcommands, to any depth. |
+| properties (`description:`, `output:`, …) | Free property bag; `description` (string) and `requires` (identifier list) are extracted into dedicated artifact fields, the view discipline. |
+
+Checking (`check_ifml`) treats a command's typed arguments and options as
+the bindings for its `if` guards and event expressions — domain types
+included, so `if agent.active` navigates `User`'s features. Generic
+identifier types and prompt names are deferred, not errors; option and
+prompt defaults get the structural literal check (the resolver's rule).
+The example `examples/cli.ifml` is the reference consumer; the deferred
+CLI ideas (modality profiles, CLI pattern modules, doc/completion
+generation, TUI constructs) are tracked in the follow-up issue.
+
 ---
 
 ## Grammar
@@ -220,13 +335,14 @@ productions.
 
 - **Entry point** — `ifml_model`: imports and `domain_declaration`s first,
   then `view_declaration` / `action_declaration` / `module_declaration` /
-  `actor_declaration` items.
+  `actor_declaration` / `command_declaration` items.
 - **Views and containers** — `view_declaration` / `container_declaration`
   share a body shape: optional `params_block` and `label_declaration`,
   property assignments, then nested containers, components, event handlers,
   condition statements, and module uses.
 - **Components** — `component_declaration` with `column_decl`, `field_decl`
-  (typed inputs), and `chart_decl` members alongside properties and events.
+  (typed inputs), and `chart_decl` (closed kind vocabulary, see
+  [Charts](#charts)) members alongside properties and events.
 - **Events** — `event_handler`: `on <type> (params)? (requires ...)? (if
   expr)? -> <action> ;` with `navigate_action`, `refresh_action`,
   `action_invocation`, or `stay_statement`.
@@ -254,6 +370,7 @@ pub struct IfmlModel {
     pub actions: Vec<ActionDeclaration>,
     pub modules: Vec<ModuleDeclaration>,
     pub actors: Vec<ActorDeclaration>,
+    pub commands: Vec<CommandDeclaration>,   // CLI surface; subcommands nest
     pub imports: Vec<String>,
 }
 ```
@@ -302,6 +419,16 @@ pub enum BinOp { Eq, Ne, Lt, Le, Gt, Ge, RegexMatch, NegRegex, Add, Sub, Mul, Di
 pub enum UnaryOp { Not, Neg }
 ```
 
+Chart components carry a `ComponentSpec::Chart(ChartSpec)` (inline) or
+`ComponentSpec::ChartRef(String)` (modeled-chart placement). `ChartSpec`
+holds the closed `ChartKind` vocabulary (`bar | line | pie | radar | metric
+| org`), the series pair (`labelField`/`valueFields`), the org payload
+(`hierarchyField`, `labelFields`, `detailFields`, `maxDepth`), and
+`aggregate: Option<ChartAggregate>` (`sum | avg | count | min | max`).
+Every payload field beyond `kind` is `#[serde(default)]` +
+`skip_serializing_if` — charts that do not use the new vocabulary serialize
+byte-identically to the pre-#80 shape.
+
 `rex_ifml::render_expression(&expr)` renders an expression back to its deterministic DSL source form.
 
 ---
@@ -309,7 +436,10 @@ pub enum UnaryOp { Not, Neg }
 ## Downstream Consumption
 
 The `rexlang` language server supports the surface: diagnostics (resolver
-`E0001`–`E0009` + typed-binding `E0100`–`E0103`), document symbols, hover
+`E0001`–`E0009` + typed-binding `E0100`–`E0109`, authorization included —
+the code table is
+[docs/DIAGNOSTICS.md](DIAGNOSTICS.md), rendered by `rexlang explain`),
+document symbols, hover
 (module signatures), go-to-definition on `use` sites (cross-file), and
 `textDocument/formatting` backed by the canonical formatter. Imports fetch
 from open editor buffers first, disk second.
@@ -337,19 +467,22 @@ Expression evaluation is **deferred to generation time** — the artifact stores
 crates/rex-ifml/
 ├── Cargo.toml
 ├── src/
-│   ├── lib.rs            # Public API: parse_ifml, parse_ifml_file, parse_ifml_indexed, compile_ifml_str, check_ifml, format_ifml + re-exports of rex_ir::ifml
+│   ├── lib.rs            # Public API: parse_ifml, parse_ifml_file, parse_ifml_indexed, compile_ifml_str, check_ifml(+_with_actors), expand_ifml, manifest_ifml, format_ifml + re-exports of rex_ir::ifml
 │   ├── parser.rs         # Pest parser wrapper + IfmlParseError
-│   ├── index.rs          # Span side-table (IfmlIndex): module decls/uses, views, actions, actors — never serialized
+│   ├── index.rs          # Span side-table (IfmlIndex): module decls/uses, views, containers, actions, actors, components, commands, auth sites — never serialized
 │   ├── resolve.rs        # Cross-file module resolution: IfmlImports bundle, compile_ifml_str, IfmlDiagnostic (E0001–E0009)
-│   ├── check.rs          # Typed expression checking against a domain Model, via rex_expr::DomainTypes (E0100–E0103)
+│   ├── check/           # Typed expression checking against a domain Model, via rex_expr::DomainTypes; interaction cross-reference, authorization, and lint passes over instantiated-module sites (code table: docs/DIAGNOSTICS.md)
+│   ├── expand.rs         # Module-use expansion (opt-in for the IR artifact; the manifest always derives from it)
+│   ├── manifest.rs       # The control/route manifest emitter: IfmlCompilation (+ imports, + optional domain union) → rex_ir::ifml_manifest::IfmlManifest
 │   ├── fmt.rs            # Comment-preserving canonical formatter
 │   └── grammar/
 │       └── ifml.pest     # Pest grammar file
 └── tests/
-    ├── golden.rs         # Conformance golden (REX_UPDATE_FIXTURES=1 regenerates)
+    ├── golden.rs         # Conformance goldens — IR artifacts and manifests (REX_UPDATE_FIXTURES=1 regenerates)
+    ├── manifest.rs       # The manifest emitter's derivation contract
     ├── resolve.rs        # Resolver conformance tests
     ├── patterns.rs       # patterns/ifml library compiles clean; composition + negative cases
-    └── examples.rs       # examples/*.ifml compile, type-check, and are fmt-canonical
+    └── examples.rs       # examples/*.ifml compile, type-check, are fmt-canonical, and manifest byte-identically
 ```
 
 ### Module Resolution
@@ -385,25 +518,180 @@ What is checked, and with which bindings:
 |---|---|
 | View/container `if` conditions | the view's `params` |
 | Component `filter:` / condition properties | view params + the `data:` entity's features (`with_self`) |
-| Table `column "L" -> expr …` | same as its component |
+| Table `column "L" -> expr …` | same as its component; deferred when the table declares no `data:` (no row type to bind — the explicit `Class.feature` column spelling is a generation-time shape) |
 | Event guards | same, minus event parameters (untyped — expressions naming them are skipped) |
 | Navigation binding pairs | same |
 | `use` override expressions | the enclosing view's params; expected type from the module input's `type_ref` |
 
+Every body that declares parameters binds them two ways: as bare idents
+(`customerId`) and through the **`params` record** (`params.customerId`) —
+the docs-promoted spelling (`navigate("CustomerEdit", { customerId:
+params.customerId })`) type-checks: the record is a synthetic class whose
+features are the body's typed params (a checking device, not a domain
+type; the next parameterized body overwrites it). A param whose type maps
+to nothing gets no feature (`params.<field>` defers like the bare ident),
+and a param literally named `params` shadows the record — the bare
+binding wins. The record exists for view/container/module bodies; command
+expressions bind their arguments and options as bare names.
+
 `type_ref` mapping for checking (one shared alias table in
-`crates/rex-ifml/src/check.rs`, used by both the checker and the
+`crates/rex-ifml/src/check/domains.rs`, used by both the checker and the
 resolver's override check): `String`/`Uuid` → string, `Int` → int,
 `Float` → float, `Boolean` → boolean, `DateTime` → the expression
 language's calendar `date` (a checking alias — no time-of-day
 reasoning). Generic (identifier) input types stay deferred — expressions
-relying on them are skipped, not errors. Constructs the shared
-expression language cannot type (bare calls other than
-`date("YYYY-MM-DD")`, `%`, the `~=`/`!~` regex operators, array/object
-values) are also skipped silently: evaluation stays deferred to
-generation time, as below. Diagnostics `E0100`–`E0103` (unknown data
+relying on them are skipped, not errors. Bare calls (`today()`,
+`score(...)`) type-check against the domain's `Package::functions`
+(unknown or ambiguous names are `E0102` diagnostics;
+`date("YYYY-MM-DD")` stays the calendar-date constructor), while a call
+with an otherwise-untypeable argument stays silently skipped.
+Constructs the shared expression language cannot type (`%`, the
+`~=`/`!~` regex operators, array/object values) are also skipped
+silently: evaluation stays deferred to generation time, as below. Diagnostics `E0100`–`E0103` (unknown data
 entity, type mismatch, unknown feature, unknown name) name the site:
-`view 'X' component 'orders': …`. With `domains: None` the checker is a
-no-op.
+`view 'X' component 'orders': …`. With `domains: None` expression
+checking is off; the interaction cross-reference pass below still runs.
+
+### Interaction References
+
+Every interaction reference resolves against declarations, union-wide
+across the compilation (the main file plus its `.ifml` imports — the same
+name scope `data:` entities resolve in), regardless of whether a domain
+model is available:
+
+| Reference | Must resolve to | Diagnostic |
+|---|---|---|
+| `action("X")` | an `action "X" { target: …; }` declaration | `E0104` — `action 'X' is not declared — add action "X" { target: <Entity>; }` |
+| `navigate("X")` | a `view "X"` **or container** declaration | `E0105` — `navigate target 'X' is not a declared view or container` |
+| `refresh("X")` | a component declaration (any body, imported files included) | `E0106` — `refresh target 'X' is not a declared component` |
+| a declaration's `target:` | exactly one class of the domain model (`E0109` — `unknown target entity 'X'` / `ambiguous target entity 'X'`; skipped when no domain model is available) |
+
+Action invocations cannot be inferred from their references: declarations
+carry the `target` the lowering needs, so a dangling `action("X")` would
+silently lower to neither a UI control nor a route — hence an error, not
+a synthesized declaration. Container targets are what make wizard-style
+patterns expressible: a module's steps navigate between the module's own
+containers. Sites on **instantiated** files are diagnosed — the entry
+file instantiates a module by `use`-ing it (transitively through module
+composition), and a used module's body references are the app's surface,
+so their dangling names are errors with spans in the imported file.
+Sibling modules of the same imported file that the app never uses stay
+inert: their references belong to their own compilation's report. The
+diagnostic span is the referenced string token itself, so editor
+squiggles land on the name; the LSP publishes these like every other
+checker diagnostic. This is verification register row
+**V11** ("interaction references always resolve to declarations",
+`docs/VERIFICATION.md`) — `tested`, enforced through both the checker and
+the manifest artifact boundary (below), with the graph-level proof
+staged behind the kernel gaining node metadata.
+
+### Authorization References
+
+`check_ifml_with_actors(&compilation, domains, actors)` adds the
+authorization dimension: every `requires:`/`roles:` name in the main
+file — view-level properties and event-level `requires:` prefixes —
+resolves bare-name union-wide against the capability and actor tables
+of the actor models the host provides:
+
+| Site | Must resolve to | Diagnostic |
+|---|---|---|
+| `requires: [X, …]` (view property or event prefix) | a `capability X on …` in any provided actors block | `E0107` — `capability 'X' is not declared — add "capability X on <Class>;" to an actors block` |
+| `roles: [r, …]` (view property) | an `actor r` in any provided actors block | `E0108` — `role 'r' is not declared — add "actor r;" to an actors block` |
+
+An empty actor slice skips the pass entirely — the same contract as
+`domains: None` for expressions. Hosts gather the flow's `.actor`
+imports when they exist: the CLI resolves them relative to the
+importing file and compiles them like `rexlang check` on the policy (a
+missing or non-compiling policy is a clean error naming the resolved
+path), the LSP does the same with open documents winning over disk and
+degrades to no authorization checking in incomplete workspaces. The
+same instantiation rule as the interaction pass applies: a module the
+app `use`s contributes its `requires:`/`roles:` sites to the app's
+surface; uninstantiated modules keep their names to their own
+compilation's report. Spans land on the name tokens, and a view gated
+on a capability no policy declares can no longer compile clean — the
+#112 defect class one level up. The conformance fixture pair
+`tests/conformance/ifml/rexlang/auth.{mox,actor}` makes `app.ifml`'s
+`import "rexlang/auth.actor"` load-bearing.
+
+### Warnings and Lints
+
+Every diagnostic carries a severity class. The resolver and checker
+bands (`E0001`–`E0009`, `E0100`–`E0109`) are **errors**: they fail
+`rexlang check`/`ir`/`build`/`manifest` and the LSP publishes them as
+errors. The lint pass (`check_ifml_with_actors`, after the
+authorization pass) adds the `ifml.lints` band — **warnings**
+(`W0150`–`W0199`) that render but never fail a compilation; the carrier
+decides what they mean (`rexlang check --deny-warnings` turns them into
+failures, per-file and in the union integrity pass whose lint channel
+they join). Every lint judges **only the main file's** declarations —
+imported pattern libraries declare unused modules and actions by
+design — while references count anywhere in the compilation (an
+uninstantiated module's `action("X")` is still live intent):
+
+| Code | Warns when |
+|---|---|
+| `W0150` | a main-file `action "X"` declaration no `action("X")` invocation names — `action 'X' is declared but never invoked` |
+| `W0151` | a main-file view that is not the entry view (first by position), not `landmark: true`, reached by no `navigate` target, and carries no body content — the empty shell nothing routes to (a content view is intentionally routable: the manifest exports every view as a route) |
+| `W0152` | a main-file module declaration shadows an imported module of the same name — resolution deliberately lets the main file win silently; the warning documents it at the winning declaration |
+| `W0153` | a main-file component with no `data:` binding that also declares no events, carries no chart, and spells no explicit `Entity.field` table column — a fully static placeholder |
+| `W0154` | a main-file view with no domain tie at all — no `data:` binding or explicit entity columns in its body, no `params`, no module composition, no event handlers, no `roles:`/`requires:` gate |
+
+The canonical fixtures, examples, and pattern library are all
+warning-silent (`rexlang check` on them renders nothing); `rexlang
+explain W0150` renders one entry, and `docs/DIAGNOSTICS.md` is the
+generated code table.
+
+### Control/Route Manifest
+
+`rexlang manifest <file.ifml> [-o out.json]` exports the **control/route
+manifest** (`rex_ir::ifml_manifest::IfmlManifest`, versioned
+independently via `IFML_MANIFEST_FORMAT_VERSION`) — the positive artifact
+for what the interaction model lowers to, derived from the compilation
+*after* resolution and checking:
+
+- **routes** (`views`): each view with its flags (`landmark`/`xor`/
+  `modal`), params, `roles:`/`requires:` gates, and condition;
+- **controls**: one entry per component on the **expanded** view tree
+  (module `use` sites inlined, overrides applied — pattern-contributed UI
+  is indistinguishable from app-authored UI), flattened with its
+  container path, carrying the component type, the `data:` entity as
+  written plus its resolved `(package, class)` when the host provides
+  the domain union, and the form fields / table columns;
+- **edges**: every `navigate` / `refresh` / `action(...)` invocation with
+  its trigger event, `if` guard, `requires:` gates, and binding pairs;
+  nested action-body handlers (`on success`/`on error`) become their own
+  edges on the same source; command handlers are edges sourced by the
+  invocation path;
+- **actions**: the declaration-backed actions with their `target:`
+  entities (resolved `(package, class)` included);
+- **commands**: the CLI vocabulary flattened to invocation paths
+  (`tickets.show`), with typed arguments, options and prompts (defaults
+  included), `requires:` gates, and descriptions.
+
+The derivation contract is the manifest's reason to exist: **every edge's
+target is declaration-backed by construction**. The checker
+(`E0104`–`E0106`, instantiated modules included) gates emission, so a
+dangling reference is an error before any manifest can exist — consumers
+ingest the manifest without re-deriving resolution and without
+synthesizing endpoints (the #112 ingest-defect class is structurally
+impossible at this boundary; verification row **V11** names it as
+enforcement). Emission is deterministic (source order throughout) and
+the wire follows the house discipline: camelCase, adjacent tagging,
+`#[serde(default)]` + `skip_serializing_if` everywhere — an empty model
+serializes as exactly `{"formatVersion":1}`. Golden manifests pin the
+semantic product: `tests/conformance/ifml/{app,cli}.manifest.json` and
+`examples/artifacts/{cli,ecommerce,support}.manifest.json` (the
+`examples_artifacts` precedent).
+
+Declarations resolve one step further, across surfaces: `rexlang check
+<dir>` runs the union integrity pass (`rex_driver::check_integrity`,
+register row **V12**) over the import-connected application and errors
+when a declared action's name binds to no service operation
+(ASCII-case-insensitive verb equality — `ApproveRefund` ↔
+`approveRefund`), or when a `requires:` name is neither a declared
+capability nor a declared actor, or a `roles:` name is not a declared
+actor. Checking a flow alone stays per-surface and silent.
 
 ### Reference Pattern Library
 
@@ -449,6 +737,20 @@ view "Storefront" {
 }
 ```
 
+Instantiation makes the pattern's body the app's surface: every
+reference inside a used module resolves like app-authored code
+(`navigate("ItemDetail")` needs the app to declare that view or
+container; `action("AddToCart")` needs the action — the
+instantiation rule of E0104–E0106 above). App-facing targets stay
+deliberately undeclared in the library: declaring what you back is the
+consumer's job, and the reference consumers
+(`examples/ecommerce.ifml`, `examples/support.ifml`) show the
+declaration blocks. The library's own wiring resolves internally —
+`Wizard`'s steps navigate its own containers, `SearchPanel` refreshes
+its own `results` component — and the presentational modules carry no
+interaction references at all (`Pagination`'s pager binds page state;
+paging is not navigation).
+
 `examples/ecommerce.ifml` and `examples/support.ifml` are the reference
 consumers.
 
@@ -458,15 +760,15 @@ consumers.
 
 The IFML DSL is designed to feel like a *companion* to the `.mox` domain model:
 
-```ifml
+```text
 // The domain model defines "Customer" with features: name, email, phone, status
-// The IFML DSL references these by name:
+// The IFML DSL references these by name (an excerpt, not a whole file):
 
 component "grid" {
     type: list;
-    data: Customer;           // references the domain class
+    data: Customer;                // references the domain class
     fields: [name, email, phone];  // references features on Customer
-    filter: status == "active";     // expression validated against field types
+    filter: status == "active";    // expression validated against field types
 }
 ```
 

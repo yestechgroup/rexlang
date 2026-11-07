@@ -11,10 +11,16 @@
 //!   `byte` → `Long`, `float`/`double` → `Double`, `boolean` → `Boolean`).
 //!   Refs, containments, enums, datatypes, and derived features are not
 //!   attributes. One action per capability; `principalTypes` are the actors
-//!   appearing in any grant entry (permit *or* forbid) for the capability,
-//!   in actor declaration order — empty when nothing grants it.
-//! - **Policies**: one policy per effect entry, IR source order, fully
-//!   parenthesized `when { ... }` conditions over `resource.<feature>`.
+//!   whose authority reaches the action — a direct grant entry (permit or
+//!   forbid), a grant inherited along the `extends` chain, or a delegation
+//!   binding addressed to the actor or an ancestor (rexlang#132) — in actor
+//!   declaration order, empty when none does.
+//! - **Policies**: one policy per effect entry per actor holding the
+//!   entry's authority — the granted actor plus every `extends` descendant
+//!   (Cedar's `is` is an exact-type match, so inherited authority must be
+//!   addressed by type) — IR entry order, declaration order within an
+//!   entry, fully parenthesized `when { ... }` conditions over
+//!   `resource.<feature>`.
 //!   Conditions are restricted to a decidable subset: literals, bare names
 //!   (primitive attributes only), unary/binary operators, parentheses.
 //!   Anything else (`let`, `if`, lambdas, collection algebra, `?.`, `?:`,
@@ -36,10 +42,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use rex_backend_common::canonical_key_order;
 use rex_expr::{Expr, ExprKind, UnOp};
 use rex_ir::{
-    ActorModel, ActorsDef, ClassDef, Feature, FeatureKind, GrantEffect, Model, PrimitiveType,
-    TypeRef,
+    ActorDef, ActorModel, ActorsDef, ClassDef, Feature, FeatureKind, GrantEffect, Model,
+    PrimitiveType, TypeRef,
 };
 
 /// Generates Cedar policies and schemas for the actor-policy artifact
@@ -83,14 +90,7 @@ pub fn generate_for_model(model: &Model) -> anyhow::Result<BTreeMap<String, Stri
 /// Generates Cedar output for the pair and writes it into `out_dir`.
 pub fn generate_to_dir(actors: &ActorModel, model: &Model, out_dir: &Path) -> anyhow::Result<()> {
     let files = generate(actors, model)?;
-    for (relative, contents) in &files {
-        let path = out_dir.join(relative);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(path, contents)?;
-    }
-    Ok(())
+    rex_backend_common::write_files(&files, out_dir)
 }
 
 /// The two-line banner every generated policy file starts with.
@@ -114,36 +114,43 @@ fn policy_set(actors: &ActorsDef, model: &Model) -> anyhow::Result<String> {
                 Some(text) => paragraphs.push(text.clone()),
                 None => {
                     let class = capability_class(actors, model, &entry.capability)?;
-                    let mut paragraph = String::new();
-                    // One `@obligation` annotation per policy: Cedar
-                    // annotations carry exactly one string value and reject
-                    // duplicate keys, so multiple obligations on one entry
-                    // join into a single comma-separated value (names are
-                    // identifiers, so no comma can occur).
-                    if !entry.obligations.is_empty() {
-                        let joined = cedar_string_literal(&entry.obligations.join(","));
-                        paragraph.push_str(&format!("@obligation({joined})\n"));
-                    }
-                    paragraph.push_str(&format!(
-                        "{effect}(principal is {namespace}::{actor}, action == \
-                         {namespace}::Action::{capability}, resource is \
-                         {namespace}::{class})",
-                        effect = match entry.effect {
-                            GrantEffect::Permit => "permit",
-                            GrantEffect::Forbid => "forbid",
-                        },
-                        actor = grant.actor,
-                        capability = cedar_string_literal(&entry.capability),
-                        class = class.name,
-                    ));
-                    if let Some(when) = &entry.when {
+                    // Extends confers grant inheritance (the same
+                    // effective-permit rule the driver's delegation
+                    // containment and `gen tools` use), and Cedar's `is` is
+                    // an exact-type match — so every actor type holding the
+                    // authority gets its own policy, in declaration order.
+                    for principal in actors_inheriting(actors, &grant.actor) {
+                        let mut paragraph = String::new();
+                        // One `@obligation` annotation per policy: Cedar
+                        // annotations carry exactly one string value and
+                        // reject duplicate keys, so multiple obligations on
+                        // one entry join into a single comma-separated value
+                        // (names are identifiers, so no comma can occur).
+                        if !entry.obligations.is_empty() {
+                            let joined = cedar_string_literal(&entry.obligations.join(","));
+                            paragraph.push_str(&format!("@obligation({joined})\n"));
+                        }
                         paragraph.push_str(&format!(
-                            " when {{ {} }}",
-                            condition_text(&entry.capability, class, when)?
+                            "{effect}(principal is {namespace}::{actor}, action == \
+                             {namespace}::Action::{capability}, resource is \
+                             {namespace}::{class})",
+                            effect = match entry.effect {
+                                GrantEffect::Permit => "permit",
+                                GrantEffect::Forbid => "forbid",
+                            },
+                            actor = principal.name,
+                            capability = cedar_string_literal(&entry.capability),
+                            class = class.name,
                         ));
+                        if let Some(when) = &entry.when {
+                            paragraph.push_str(&format!(
+                                " when {{ {} }}",
+                                condition_text(&entry.capability, class, when)?
+                            ));
+                        }
+                        paragraph.push(';');
+                        paragraphs.push(paragraph);
                     }
-                    paragraph.push(';');
-                    paragraphs.push(paragraph);
                 }
             }
         }
@@ -225,7 +232,7 @@ fn schema_json(actors: &ActorsDef, model: &Model) -> anyhow::Result<String> {
         let principals: Vec<String> = actors
             .actors
             .iter()
-            .filter(|actor| block_grants_capability(actors, &actor.name, &capability.name))
+            .filter(|actor| reaches_capability(actors, &actor.name, &capability.name))
             .map(|actor| format!("{namespace}::{}", actor.name))
             .collect();
         actions.insert(
@@ -258,25 +265,6 @@ fn schema_json(actors: &ActorsDef, model: &Model) -> anyhow::Result<String> {
     ))?)
 }
 
-/// Recursively re-inserts object keys in alphabetical order, so the emitted
-/// bytes are pinned no matter which key order `serde_json::Map` uses (it is
-/// a `BTreeMap` unless some crate in the build graph enables the
-/// `preserve_order` feature, which flips it to insertion order).
-fn canonical_key_order(value: serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Object(map) => {
-            let mut entries: Vec<(String, serde_json::Value)> = map.into_iter().collect();
-            entries.sort_by(|left, right| left.0.cmp(&right.0));
-            entries
-                .into_iter()
-                .map(|(key, value)| (key, canonical_key_order(value)))
-                .collect::<serde_json::Map<String, serde_json::Value>>()
-                .into()
-        }
-        other => other,
-    }
-}
-
 /// `true` if any grant naming `actor` carries an effect entry (permit or
 /// forbid) on `capability`. Verbatim cedar entries never contribute.
 fn block_grants_capability(actors: &ActorsDef, actor: &str, capability: &str) -> bool {
@@ -287,6 +275,84 @@ fn block_grants_capability(actors: &ActorsDef, actor: &str, capability: &str) ->
                 .iter()
                 .any(|entry| entry.cedar.is_none() && entry.capability == capability)
     })
+}
+
+/// `true` if a delegation binding hands `capability` to `actor` (the
+/// delegation's `to` side carries a non-spliced entry on it). Verbatim
+/// cedar entries never contribute.
+fn delegation_reaches_capability(actors: &ActorsDef, actor: &str, capability: &str) -> bool {
+    actors.delegations.iter().any(|delegation| {
+        delegation.to == actor
+            && delegation
+                .entries
+                .iter()
+                .any(|entry| entry.cedar.is_none() && entry.capability == capability)
+    })
+}
+
+/// `true` if the capability's authority reaches `actor` (rexlang#132): the
+/// actor or one of its `extends` ancestors holds a direct grant entry
+/// (permit or forbid) on the capability, or a delegation addresses one of
+/// them. This mirrors the policy set's hierarchy semantics —
+/// `principal is <granted actor>` matches every descendant the schema
+/// already declares via `memberOfTypes` — so strict request validation must
+/// admit those principals instead of rejecting them before evaluation. The
+/// driver guarantees the extends graph is acyclic; the seen set keeps the
+/// walk safe regardless.
+fn reaches_capability(actors: &ActorsDef, actor: &str, capability: &str) -> bool {
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    let mut current = Some(actor);
+    while let Some(name) = current {
+        if !seen.insert(name) {
+            return false;
+        }
+        if block_grants_capability(actors, name, capability)
+            || delegation_reaches_capability(actors, name, capability)
+        {
+            return true;
+        }
+        current = parent_of(actors, name);
+    }
+    false
+}
+
+/// The `extends` parent of an actor name, if any.
+fn parent_of<'a>(actors: &'a ActorsDef, actor: &str) -> Option<&'a str> {
+    actors
+        .actors
+        .iter()
+        .find(|candidate| candidate.name == actor)
+        .and_then(|candidate| candidate.extends.as_deref())
+}
+
+/// Whether `ancestor` lies on `actor`'s `extends` chain (an actor is on its
+/// own chain). Cycle-guarded; the driver rejects extends cycles at compile
+/// time.
+fn lineage_contains(actors: &ActorsDef, actor: &str, ancestor: &str) -> bool {
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    let mut current = Some(actor);
+    while let Some(name) = current {
+        if !seen.insert(name) {
+            return false;
+        }
+        if name == ancestor {
+            return true;
+        }
+        current = parent_of(actors, name);
+    }
+    false
+}
+
+/// Every actor holding the named actor's authority: the actor itself plus
+/// every descendant whose `extends` chain passes through it, in declaration
+/// order. Extends confers grant inheritance (the same effective-permit rule
+/// the driver's delegation containment and `gen tools` use).
+fn actors_inheriting<'a>(actors: &'a ActorsDef, actor: &str) -> Vec<&'a ActorDef> {
+    actors
+        .actors
+        .iter()
+        .filter(|candidate| lineage_contains(actors, &candidate.name, actor))
+        .collect()
 }
 
 /// The class definition a capability of `actors` is granted on, resolved
@@ -433,6 +499,7 @@ fn emit_condition(expr: &Expr, capability: &str, class: &ClassDef) -> anyhow::Re
         }
         ExprKind::Coalesce { .. } => Err(reject("`?:`")),
         ExprKind::Call { .. } => Err(reject("an operation call")),
+        ExprKind::FunctionCall { .. } => Err(reject("a free-function call")),
         ExprKind::Algebra { kind, .. } => Err(reject(&format!("collection algebra `{kind}`"))),
         ExprKind::If { .. } => Err(reject("`if`")),
         ExprKind::Let { .. } => Err(reject("`let`")),
@@ -683,8 +750,9 @@ mod tests {
     #[test]
     fn principal_types_follow_actor_declaration_order_and_count_forbids() {
         // Grants appear in reverse declaration order; the forbid on Manager
-        // must still place Manager after Customer (declaration order), and
-        // Agent, granted nothing on ReadTicket, is omitted.
+        // must still place Manager after Customer (declaration order). Agent
+        // is granted nothing directly, but extends Customer — whose permit
+        // reaches it through the extends chain (rexlang#132).
         let actors = fixture_actors(vec![
             grant("Manager", vec![GrantEntry::forbid("ReadTicket")]),
             grant("Customer", vec![GrantEntry::permit("ReadTicket")]),
@@ -693,8 +761,8 @@ mod tests {
         let applies_to = &schema["Support"]["actions"]["ReadTicket"]["appliesTo"];
         assert_eq!(
             applies_to["principalTypes"],
-            serde_json::json!(["Support::Customer", "Support::Manager"]),
-            "declaration order, forbid counts, non-granting actor omitted"
+            serde_json::json!(["Support::Customer", "Support::Agent", "Support::Manager"]),
+            "declaration order, forbid counts, inherited permits widen"
         );
         assert_eq!(
             applies_to["resourceTypes"],
@@ -703,6 +771,90 @@ mod tests {
         assert_eq!(
             applies_to["context"],
             serde_json::json!({"type": "Record", "attributes": {}})
+        );
+    }
+
+    #[test]
+    fn inherited_grants_widen_action_principal_types() {
+        // The rexlang#132 repro: only the root actor carries a grant, yet the
+        // agent's inherited authority makes its principal type valid for the
+        // action — strict request validation must not reject it before the
+        // policy set (`principal is Customer`) gets to match it via the
+        // memberOf hierarchy the same schema declares.
+        let actors = fixture_actors(vec![grant(
+            "Customer",
+            vec![GrantEntry::permit("ReadTicket")],
+        )]);
+        let schema = schema_of(&fixture_pair(actors));
+        assert_eq!(
+            schema["Support"]["actions"]["ReadTicket"]["appliesTo"]["principalTypes"],
+            serde_json::json!(["Support::Customer", "Support::Agent"]),
+            "the agent inherits the permit along its extends chain"
+        );
+    }
+
+    #[test]
+    fn an_extends_chain_widens_principal_types_transitively() {
+        let mut actors = ActorsDef::new("Support");
+        actors = actors.actor(ActorDef::new("Root"));
+        actors = actors.actor(ActorDef::new("Agent").extends("Root"));
+        actors = actors.actor(ActorDef::new("Agent2").extends("Agent"));
+        actors = actors.capability(CapabilityDef::new(
+            "ReadTicket",
+            class_ref("demo", "Ticket"),
+        ));
+        actors = actors.grant(grant("Root", vec![GrantEntry::permit("ReadTicket")]));
+        let schema = schema_of(&fixture_pair(actors));
+        assert_eq!(
+            schema["Support"]["actions"]["ReadTicket"]["appliesTo"]["principalTypes"],
+            serde_json::json!(["Support::Root", "Support::Agent", "Support::Agent2"]),
+            "every descendant along the extends chain inherits the grant"
+        );
+    }
+
+    #[test]
+    fn a_delegation_to_an_actor_widens_principal_types() {
+        // Delegation bindings are authority too: the `to` actor's principal
+        // type must validate for the delegated capability even without a
+        // direct grant (the delegator itself gains nothing here — it holds
+        // no grant of its own).
+        let mut actors = ActorsDef::new("Support");
+        actors = actors.actor(ActorDef::new("Customer"));
+        actors = actors.actor(ActorDef::new("Triage"));
+        actors = actors.capability(CapabilityDef::new(
+            "ReadTicket",
+            class_ref("demo", "Ticket"),
+        ));
+        actors = actors.delegation(delegation(
+            "Intake",
+            "Customer",
+            "Triage",
+            vec![GrantEntry::permit("ReadTicket")],
+        ));
+        let schema = schema_of(&fixture_pair(actors));
+        assert_eq!(
+            schema["Support"]["actions"]["ReadTicket"]["appliesTo"]["principalTypes"],
+            serde_json::json!(["Support::Triage"]),
+            "the delegation's `to` actor reaches the action"
+        );
+    }
+
+    #[test]
+    fn an_inherited_forbid_still_counts_for_principal_types() {
+        // Forbid entries bound an actor to the action as much as permits do
+        // (the schema documents who may appear in requests); inheritance
+        // propagates that binding down the extends chain. Manager is
+        // unconnected in this fixture — no extends, no grant — and stays
+        // excluded.
+        let actors = fixture_actors(vec![grant(
+            "Customer",
+            vec![GrantEntry::forbid("ReadTicket")],
+        )]);
+        let schema = schema_of(&fixture_pair(actors));
+        assert_eq!(
+            schema["Support"]["actions"]["ReadTicket"]["appliesTo"]["principalTypes"],
+            serde_json::json!(["Support::Customer", "Support::Agent"]),
+            "the forbid binding reaches the extends descendant"
         );
     }
 
@@ -996,6 +1148,36 @@ mod tests {
         assert!(!cedar.ends_with("\n\n"), "exactly one trailing newline");
     }
 
+    #[test]
+    fn inherited_authority_emits_a_policy_per_principal_type() {
+        // Cedar's `is` is an exact-type match, so an actor whose extends
+        // chain carries the grant needs its own policy — otherwise the
+        // widened `principalTypes` admit the agent's request at validation
+        // and the policy set would still deny it at evaluation (rexlang#132).
+        let actors = fixture_actors(vec![grant(
+            "Customer",
+            vec![GrantEntry::permit("ReadTicket")],
+        )]);
+        let cedar = cedar_of(&fixture_pair(actors));
+        assert!(
+            cedar.contains(
+                "permit(principal is Support::Customer, action == \
+                 Support::Action::\"ReadTicket\", resource is Support::Ticket);"
+            ),
+            "{cedar}"
+        );
+        assert!(
+            cedar.contains(
+                "permit(principal is Support::Agent, action == \
+                 Support::Action::\"ReadTicket\", resource is Support::Ticket);"
+            ),
+            "the agent inherits the grant and gets its own policy: {cedar}"
+        );
+        // Manager is unconnected in this fixture — no extends, no grant —
+        // so no policy of its own.
+        assert!(!cedar.contains("principal is Support::Manager"), "{cedar}");
+    }
+
     // -- delegation evidence --------------------------------------------------
 
     #[test]
@@ -1011,8 +1193,12 @@ mod tests {
              // default-deny: anything not permitted is forbidden\n\
              \n\
              permit(principal is Support::Customer, action == \
+             Support::Action::\"ReadTicket\", resource is Support::Ticket);\n\
+             \n\
+             permit(principal is Support::Agent, action == \
              Support::Action::\"ReadTicket\", resource is Support::Ticket);\n",
-            "no delegation evidence may appear when the block has none"
+            "no delegation evidence may appear when the block has none; the \
+             Customer grant also emits the inheriting Agent's policy"
         );
     }
 
@@ -1038,6 +1224,9 @@ mod tests {
              // default-deny: anything not permitted is forbidden\n\
              \n\
              permit(principal is Support::Customer, action == \
+             Support::Action::\"ReadTicket\", resource is Support::Ticket);\n\
+             \n\
+             permit(principal is Support::Agent, action == \
              Support::Action::\"ReadTicket\", resource is Support::Ticket);\n\
              \n\
              // delegation CustomerToAgent: Customer -> Agent (2 capabilities)\n",
@@ -1162,6 +1351,9 @@ mod tests {
              // default-deny: anything not permitted is forbidden\n\
              \n\
              permit(principal is Support::Customer, action == \
+             Support::Action::\"ReadTicket\", resource is Support::Ticket);\n\
+             \n\
+             permit(principal is Support::Agent, action == \
              Support::Action::\"ReadTicket\", resource is Support::Ticket);\n\
              \n\
              // delegation CustomerToAgent: Customer -> Agent \

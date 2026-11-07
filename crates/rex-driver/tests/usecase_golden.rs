@@ -179,11 +179,13 @@ fn conformance_usecase_file_matches_golden_artifact() {
     );
 
     // Iteration 3: steps carry operations and requirements, the event
-    // payload binds, and the realizes binding survives as authored.
+    // payload binds, and the realizes binding survives as authored. The
+    // release step's guard lowers as the verbatim condition text.
     let fourth = &model.use_cases[3];
     let subject = fourth.subject.as_ref().expect("subject");
     assert_eq!(subject.steps[0].operation, "verifyRecipient");
     assert_eq!(subject.steps[1].requires, ["ReleaseParcel"]);
+    assert_eq!(subject.steps[1].when.as_deref(), Some("parcelSecured"));
     let messages: Vec<_> = fourth
         .messages
         .iter()
@@ -434,6 +436,257 @@ fn unknown_step_operation_is_an_error() {
     expect_diagnostic(
         &compilation,
         "unknown operation 'nope' on class 'Drone' in use case 'U'",
+    );
+}
+
+// --- step guards ------------------------------------------------------------
+//
+// The guard domain: `Drone` with a boolean and a string feature, so guards
+// are typeable (positive) and typeable-but-wrong (negative).
+
+const GUARD_DOMAIN_TEXT: &str = concat!(
+    "package nz.example.delivery\n",
+    "\n",
+    "class Drone {\n",
+    "    boolean armed\n",
+    "    String label\n",
+    "    op boolean signal()\n",
+    "}\n",
+);
+
+fn guard_domain_pair() -> (String, String) {
+    ("domain.mox".to_string(), GUARD_DOMAIN_TEXT.to_string())
+}
+
+/// Finds the one `bad.uc` diagnostic matching `help` and returns its
+/// message (guard diagnostics are pinned by help, whose rex-expr message
+/// half is the checker's wording).
+fn guard_diagnostic_message(compilation: &rex_driver::UseCaseCompilation, help: &str) -> String {
+    let matches: Vec<_> = compilation
+        .diagnostics
+        .iter()
+        .filter(|(path, diagnostic)| path == "bad.uc" && diagnostic.help.as_deref() == Some(help))
+        .collect();
+    assert_eq!(
+        matches.len(),
+        1,
+        "expected exactly one diagnostic with help {help:?}, got {:?}",
+        compilation.diagnostics
+    );
+    matches[0].1.message.clone()
+}
+
+fn guard_help(step: &str) -> String {
+    format!("in the `when` of step '{step}' in use case 'U'")
+}
+
+#[test]
+fn a_boolean_guard_compiles_into_the_artifact() {
+    let source = concat!(
+        "import \"domain.mox\"\n",
+        "\n",
+        "usecase U {\n",
+        "    subject D: Drone {\n",
+        "        perform x: signal when (armed);\n",
+        "        perform y: signal;\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile_uc(source, &[], &[], &[], &[guard_domain_pair()]);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "the boolean guard must compile clean: {:?}",
+        compilation.diagnostics
+    );
+    let model = compilation.model.expect("artifact");
+    let steps = &model.use_cases[0].subject.as_ref().expect("subject").steps;
+    assert_eq!(
+        steps[0].when.as_deref(),
+        Some("armed"),
+        "the guard lowers as the verbatim trimmed interior text"
+    );
+    assert_eq!(steps[1].when, None);
+}
+
+#[test]
+fn a_non_boolean_guard_is_an_error() {
+    let source = concat!(
+        "import \"domain.mox\"\n",
+        "\n",
+        "usecase U {\n",
+        "    subject D: Drone {\n",
+        "        perform x: signal when (label);\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile_uc(source, &[], &[], &[], &[guard_domain_pair()]);
+    assert!(compilation.model.is_none(), "the artifact must be dropped");
+    let message = guard_diagnostic_message(&compilation, &guard_help("x"));
+    assert!(
+        message.starts_with("step guard condition must be boolean, found "),
+        "got {message:?}"
+    );
+    assert!(
+        message.ends_with("string"),
+        "the found type is named: {message:?}"
+    );
+}
+
+#[test]
+fn an_unknown_guard_name_is_an_error() {
+    let source = concat!(
+        "import \"domain.mox\"\n",
+        "\n",
+        "usecase U {\n",
+        "    subject D: Drone {\n",
+        "        perform x: signal when (nope);\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile_uc(source, &[], &[], &[], &[guard_domain_pair()]);
+    assert!(compilation.model.is_none(), "the artifact must be dropped");
+    let message = guard_diagnostic_message(&compilation, &guard_help("x"));
+    assert!(
+        message.contains("nope"),
+        "the unknown name is named: {message:?}"
+    );
+}
+
+#[test]
+fn an_unparseable_guard_is_an_error() {
+    let source = concat!(
+        "import \"domain.mox\"\n",
+        "\n",
+        "usecase U {\n",
+        "    subject D: Drone {\n",
+        "        perform x: signal when (armed &&);\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile_uc(source, &[], &[], &[], &[guard_domain_pair()]);
+    assert!(compilation.model.is_none(), "the artifact must be dropped");
+    let message = guard_diagnostic_message(&compilation, &guard_help("x"));
+    assert!(
+        message.starts_with("invalid step guard condition:"),
+        "got {message:?}"
+    );
+}
+
+#[test]
+fn guard_diagnostics_follow_the_operation_checks_in_step_order() {
+    let source = concat!(
+        "import \"domain.mox\"\n",
+        "\n",
+        "usecase U {\n",
+        "    subject D: Drone {\n",
+        "        perform bad: nope;\n",
+        "        perform x: signal when (label);\n",
+        "        perform worse: nope2 when (armed);\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile_uc(source, &[], &[], &[], &[guard_domain_pair()]);
+    let messages: Vec<&str> = compilation
+        .diagnostics
+        .iter()
+        .filter(|(path, _)| path == "bad.uc")
+        .map(|(_, diagnostic)| diagnostic.message.as_str())
+        .collect();
+    let operation_bad = messages
+        .iter()
+        .position(|m| m.contains("unknown operation 'nope'"))
+        .expect("the step 1 operation diagnostic");
+    let guard = messages
+        .iter()
+        .position(|m| m.starts_with("step guard condition must be boolean"))
+        .expect("the step 2 guard diagnostic");
+    let operation_worse = messages
+        .iter()
+        .position(|m| m.contains("unknown operation 'nope2'"))
+        .expect("the step 3 operation diagnostic");
+    assert!(
+        operation_bad < guard && guard < operation_worse,
+        "guard diagnostics fire in step order, right after each step's operation check: {messages:?}"
+    );
+    assert_eq!(compilation.model, None);
+}
+
+#[test]
+fn a_guard_on_a_sigil_typed_subject_still_errors_on_the_step_only() {
+    // Guards are unreachable for sigil-typed subjects: the step itself is
+    // the documented error, and the guard adds no diagnostic of its own.
+    let mox = std::fs::read_to_string(fixture_path("tests/conformance/sigil/funcs.mox"))
+        .expect("read funcs.mox");
+    let rosetta = std::fs::read_to_string(fixture_path("tests/conformance/sigil/funcs.rosetta"))
+        .expect("read funcs.rosetta");
+    let domains = [("funcs.mox".to_string(), mox)];
+    let imports = rex_driver::DomainImports {
+        sigil: rex_driver::SigilImports::new().provide("funcs.mox", "funcs.rosetta", rosetta),
+        ..rex_driver::DomainImports::default()
+    };
+    let source = concat!(
+        "import \"funcs.mox\"\n",
+        "\n",
+        "usecase U {\n",
+        "    subject R: RateType {\n",
+        "        perform fix: nope when (true);\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile_usecase_str("bad.uc", source, &domains, &imports, &[], &[], &[]);
+    expect_diagnostic(
+        &compilation,
+        "subject 'R' in use case 'U' must be class-typed to perform steps",
+    );
+    assert!(
+        !compilation
+            .diagnostics
+            .iter()
+            .any(|(_, diagnostic)| diagnostic.help.as_deref()
+                == Some("in the `when` of step 'fix' in use case 'U'")),
+        "the sigil-typed subject's guard must not be checked: {:?}",
+        compilation.diagnostics
+    );
+}
+
+/// A sigil-typed subject keeps the documented step contract: the lowered
+/// `RateType` enum is not a class, so a step on it produces the exact
+/// must-be-class-typed diagnostic with the exact help — steps never
+/// resolve the package functions sigil lowering also produces.
+#[test]
+fn a_step_on_a_sigil_typed_subject_still_errors_with_the_documented_help() {
+    let mox = std::fs::read_to_string(fixture_path("tests/conformance/sigil/funcs.mox"))
+        .expect("read funcs.mox");
+    let rosetta = std::fs::read_to_string(fixture_path("tests/conformance/sigil/funcs.rosetta"))
+        .expect("read funcs.rosetta");
+    let domains = [("funcs.mox".to_string(), mox)];
+    let imports = rex_driver::DomainImports {
+        sigil: rex_driver::SigilImports::new().provide("funcs.mox", "funcs.rosetta", rosetta),
+        ..rex_driver::DomainImports::default()
+    };
+    let source = concat!(
+        "import \"funcs.mox\"\n",
+        "\n",
+        "usecase U {\n",
+        "    subject R: RateType {\n",
+        "        perform fix: nope;\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile_usecase_str("bad.uc", source, &domains, &imports, &[], &[], &[]);
+    expect_diagnostic(
+        &compilation,
+        "subject 'R' in use case 'U' must be class-typed to perform steps",
+    );
+    let diagnostic = compilation
+        .diagnostics
+        .iter()
+        .find(|(path, _)| path == "bad.uc")
+        .map(|(_, diagnostic)| diagnostic)
+        .expect("the step diagnostic");
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("steps invoke operations, which only classes declare")
     );
 }
 

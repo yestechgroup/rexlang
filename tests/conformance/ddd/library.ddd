@@ -10,7 +10,7 @@ application Library {
             inject PersonService;
             inject MediaSearch;
             boolean borrow(String mediaId, Person borrower) capability BorrowMedia;
-            PhysicalMedia registerMedia(String status);
+            PhysicalMedia registerMedia(MediaStatus status);
             protected save => PhysicalMediaRepository.save;
             registerBorrower => PersonService.register;
             findMedia => MediaSearch.search;
@@ -37,7 +37,7 @@ application Library {
             findAll;
             save;
             delete;
-            PhysicalMedia findByStatus(String status);
+            PhysicalMedia findByStatus(MediaStatus status);
         }
         /// Full-text search over the movie catalogue.
         search MediaSearch {
@@ -70,6 +70,8 @@ application Library {
         /// Keeps the member register current.
         service PersonService {
             inject PersonRepository;
+            Person updateCustomer(String customerId) capability ManageCustomer;
+            boolean approveCustomer(String customerId) capability ApproveCustomer;
             register => PersonRepository.save;
             findByName => PersonRepository.findByName;
         }

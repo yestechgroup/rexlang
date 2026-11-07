@@ -118,8 +118,8 @@
 //!     wire (instance JSON) as ISO-8601 `YYYY-MM-DD` strings.
 //! 14. **Equality policy.** Every artifact root — [`Model`],
 //!     [`ActorModel`], [`ddd::DddModel`], [`events::EventModel`],
-//!     [`deploy::DeployModel`], [`ifml::IfmlModel`], and
-//!     [`usecases::UseCaseModel`] — and every type
+//!     [`deploy::DeployModel`], [`ifml::IfmlModel`],
+//!     [`usecases::UseCaseModel`], and [`cmmn::CmmnModel`] — and every type
 //!     nested inside them derives
 //!     [`Eq`] (structural value equality). The artifacts' only floating-point
 //!     values are wrapped in ordered newtypes: [`ddd::Boost`] (the
@@ -137,9 +137,10 @@
 //!     artifacts for function-less models are byte-identical to earlier
 //!     output. The one verbatim body target [`Operation::bodies`] may carry
 //!     beyond codegen targets is **`"rosetta"`**: the declaration's complete
-//!     Rune source text, embedded verbatim — the IR never parses or
-//!     reformats it, and backends never emit it (they skip body targets they
-//!     do not own).
+//!     Rune source text, embedded ends-trimmed verbatim (the declaration's
+//!     text without trailing whitespace, like `when` conditions and `cedar`
+//!     policy bodies) — the IR never parses or reformats it, and backends
+//!     never emit it (they skip body targets they do not own).
 //!
 //! [rexlang]: https://github.com/anton-makes/rexlang
 
@@ -148,11 +149,14 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+pub mod cmmn;
 pub mod ddd;
 pub mod deploy;
 pub mod events;
 pub mod ifml;
+pub mod ifml_manifest;
 pub mod usecases;
+mod wire;
 
 /// The artifact format version this crate writes and accepts.
 ///
@@ -219,12 +223,12 @@ impl Model {
 
     /// Serializes the model to pretty-printed (2-space indent) JSON.
     pub fn to_json_pretty(&self) -> Result<String, IrError> {
-        Ok(serde_json::to_string_pretty(self)?)
+        wire::to_json_pretty(self)
     }
 
     /// Serializes the model to compact JSON.
     pub fn to_json(&self) -> Result<String, IrError> {
-        Ok(serde_json::to_string(self)?)
+        wire::to_json(self)
     }
 
     /// Deserializes a model from JSON, rejecting artifacts whose
@@ -232,19 +236,12 @@ impl Model {
     ///
     /// Unknown fields are ignored for forward compatibility.
     pub fn from_json(json: &str) -> Result<Self, IrError> {
-        let value: serde_json::Value = serde_json::from_str(json)?;
-        let found = value
-            .get("formatVersion")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or_default() as u32;
-        if found != FORMAT_VERSION {
-            return Err(IrError::UnsupportedFormatVersion {
-                found,
-                expected: FORMAT_VERSION,
-            });
-        }
-        Ok(serde_json::from_value(value)?)
+        wire::from_json(json)
     }
+}
+
+impl wire::VersionedArtifact for Model {
+    const FORMAT_VERSION: u32 = FORMAT_VERSION;
 }
 
 impl Default for Model {
@@ -607,6 +604,12 @@ impl ClassDef {
     /// inserting, removing, or reordering features) — never on a model that
     /// has been serialized for or by consumers, since reordering features
     /// invalidates previously published ids.
+    ///
+    /// Formally specified as register row V10 in `docs/VERIFICATION.md`:
+    /// the proof lives in `rex-verify::feature_ids` (spec mirror — in-crate
+    /// proofs are blocked by upstream creusot-std derive gaps, see the
+    /// register), and the `feature_ids` characterization tests pin this
+    /// executable to the proved shape.
     pub fn assign_feature_ids(&mut self) {
         for (index, feature) in self.features.iter_mut().enumerate() {
             feature.id = index as u32;
@@ -788,11 +791,9 @@ pub struct FeatureConstraints {
     pub unique: bool,
 }
 
-/// `skip_serializing_if` helper for additive `bool` fields: `false` adds no
-/// bytes to the wire format.
-fn is_false(value: &bool) -> bool {
-    !*value
-}
+// The `skip_serializing_if` path above resolves `is_false` in this
+// module's scope; the shared predicate lives in `wire`.
+use crate::wire::is_false;
 
 impl FeatureConstraints {
     /// `true` when no constraint is set (the field is omitted on serialize).
@@ -1070,6 +1071,11 @@ pub struct ActorsDef {
     /// absent for blocks without purposes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub purposes: Vec<String>,
+    /// Declared obligations, in source order: the named follow-through
+    /// actions grant and delegation entries may attach. Additive (wire
+    /// contract rule 9): absent for blocks without obligations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub obligations: Vec<String>,
     /// Declared grants, in source order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub grants: Vec<GrantDef>,
@@ -1089,6 +1095,7 @@ impl ActorsDef {
             actors: Vec::new(),
             capabilities: Vec::new(),
             purposes: Vec::new(),
+            obligations: Vec::new(),
             grants: Vec::new(),
             delegations: Vec::new(),
             never_both: Vec::new(),
@@ -1110,6 +1117,12 @@ impl ActorsDef {
     /// Chainable setter appending a purpose name.
     pub fn purpose(mut self, name: impl Into<String>) -> Self {
         self.purposes.push(name.into());
+        self
+    }
+
+    /// Chainable setter appending an obligation name.
+    pub fn obligation(mut self, name: impl Into<String>) -> Self {
+        self.obligations.push(name.into());
         self
     }
 
@@ -1428,12 +1441,12 @@ impl ActorModel {
 
     /// Serializes the artifact to pretty-printed (2-space indent) JSON.
     pub fn to_json_pretty(&self) -> Result<String, IrError> {
-        Ok(serde_json::to_string_pretty(self)?)
+        wire::to_json_pretty(self)
     }
 
     /// Serializes the artifact to compact JSON.
     pub fn to_json(&self) -> Result<String, IrError> {
-        Ok(serde_json::to_string(self)?)
+        wire::to_json(self)
     }
 
     /// Deserializes an actor-policy artifact from JSON, rejecting artifacts
@@ -1441,19 +1454,12 @@ impl ActorModel {
     ///
     /// Unknown fields are ignored for forward compatibility.
     pub fn from_json(json: &str) -> Result<Self, IrError> {
-        let value: serde_json::Value = serde_json::from_str(json)?;
-        let found = value
-            .get("formatVersion")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or_default() as u32;
-        if found != ACTOR_MODEL_FORMAT_VERSION {
-            return Err(IrError::UnsupportedFormatVersion {
-                found,
-                expected: ACTOR_MODEL_FORMAT_VERSION,
-            });
-        }
-        Ok(serde_json::from_value(value)?)
+        wire::from_json(json)
     }
+}
+
+impl wire::VersionedArtifact for ActorModel {
+    const FORMAT_VERSION: u32 = ACTOR_MODEL_FORMAT_VERSION;
 }
 
 impl Default for ActorModel {

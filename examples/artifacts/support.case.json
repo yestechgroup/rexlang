@@ -1,0 +1,360 @@
+{
+  "id": "RefundDesk",
+  "name": "RefundDesk",
+  "case_file_model": {
+    "items": {
+      "decision": {
+        "id": "decision",
+        "name": "decision",
+        "multiplicity": "ZeroOrOne",
+        "children": [],
+        "properties": [
+          {
+            "name": "decisionId",
+            "type_name": "string"
+          },
+          {
+            "name": "cents",
+            "type_name": "number"
+          },
+          {
+            "name": "approved",
+            "type_name": "boolean"
+          }
+        ]
+      },
+      "ticket": {
+        "id": "ticket",
+        "name": "ticket",
+        "multiplicity": "One",
+        "children": [],
+        "properties": [
+          {
+            "name": "ticketNo",
+            "type_name": "string"
+          },
+          {
+            "name": "title",
+            "type_name": "string"
+          },
+          {
+            "name": "internal",
+            "type_name": "boolean"
+          },
+          {
+            "name": "refundCents",
+            "type_name": "number"
+          },
+          {
+            "name": "state",
+            "type_name": "nz.example.support::TicketState"
+          },
+          {
+            "name": "needsRefund",
+            "type_name": "boolean"
+          }
+        ]
+      }
+    },
+    "children": [
+      "ticket",
+      "decision"
+    ]
+  },
+  "plan_model": {
+    "id": "RefundDesk_plan",
+    "name": "RefundDesk",
+    "plan_items": {
+      "ApproveRefund": {
+        "id": "ApproveRefund",
+        "name": "ApproveRefund",
+        "kind": {
+          "Task": {
+            "task_type": "User",
+            "required_role": "finance",
+            "planning_mode": "Automatic",
+            "composition": null
+          }
+        },
+        "entry_criteria": [
+          {
+            "id": "crit_ApproveRefund_entry_0",
+            "sentry_ref": "sentry_ApproveRefund_entry_0"
+          }
+        ],
+        "exit_criteria": [],
+        "control": null
+      },
+      "AssessRefund": {
+        "id": "AssessRefund",
+        "name": "AssessRefund",
+        "kind": {
+          "Task": {
+            "task_type": "Process",
+            "required_role": null,
+            "planning_mode": "None",
+            "composition": {
+              "Process": {
+                "process_ref": "support.TicketService.raiseRefund",
+                "is_blocking": true,
+                "mappings": []
+              }
+            }
+          }
+        },
+        "entry_criteria": [
+          {
+            "id": "crit_AssessRefund_entry_0",
+            "sentry_ref": "sentry_AssessRefund_entry_0"
+          }
+        ],
+        "exit_criteria": [],
+        "control": {
+          "manual_activation_rule": null,
+          "required_rule": {
+            "condition": null
+          },
+          "repetition_rule": null
+        }
+      },
+      "Assessment": {
+        "id": "Assessment",
+        "name": "Assessment",
+        "kind": {
+          "Stage": {
+            "children": [
+              "ReviewTicket",
+              "AssessRefund",
+              "RefundSettled",
+              "CloseTicket"
+            ],
+            "auto_complete": false
+          }
+        },
+        "entry_criteria": [
+          {
+            "id": "crit_Assessment_entry_0",
+            "sentry_ref": "sentry_Assessment_entry_0"
+          }
+        ],
+        "exit_criteria": [],
+        "control": null
+      },
+      "CloseTicket": {
+        "id": "CloseTicket",
+        "name": "CloseTicket",
+        "kind": {
+          "Task": {
+            "task_type": "User",
+            "required_role": "triage",
+            "planning_mode": "None",
+            "composition": null
+          }
+        },
+        "entry_criteria": [
+          {
+            "id": "crit_CloseTicket_entry_0",
+            "sentry_ref": "sentry_CloseTicket_entry_0"
+          }
+        ],
+        "exit_criteria": [
+          {
+            "id": "crit_CloseTicket_exit_0",
+            "sentry_ref": "sentry_CloseTicket_exit_0"
+          }
+        ],
+        "control": {
+          "manual_activation_rule": null,
+          "required_rule": {
+            "condition": null
+          },
+          "repetition_rule": null
+        }
+      },
+      "Escalate": {
+        "id": "Escalate",
+        "name": "Escalate",
+        "kind": {
+          "Task": {
+            "task_type": "User",
+            "required_role": "escalation",
+            "planning_mode": "Automatic",
+            "composition": null
+          }
+        },
+        "entry_criteria": [],
+        "exit_criteria": [],
+        "control": null
+      },
+      "RefundDesk_plan": {
+        "id": "RefundDesk_plan",
+        "name": "RefundDesk",
+        "kind": {
+          "Stage": {
+            "children": [
+              "Assessment"
+            ],
+            "auto_complete": true
+          }
+        },
+        "entry_criteria": [],
+        "exit_criteria": [],
+        "control": null
+      },
+      "RefundSettled": {
+        "id": "RefundSettled",
+        "name": "RefundSettled",
+        "kind": {
+          "Milestone": {}
+        },
+        "entry_criteria": [
+          {
+            "id": "crit_RefundSettled_entry_0",
+            "sentry_ref": "sentry_RefundSettled_entry_0"
+          }
+        ],
+        "exit_criteria": [],
+        "control": null
+      },
+      "ReviewTicket": {
+        "id": "ReviewTicket",
+        "name": "ReviewTicket",
+        "kind": {
+          "Task": {
+            "task_type": "User",
+            "required_role": "triage",
+            "planning_mode": "None",
+            "composition": null
+          }
+        },
+        "entry_criteria": [],
+        "exit_criteria": [],
+        "control": null
+      }
+    },
+    "sentries": {
+      "sentry_ApproveRefund_entry_0": {
+        "id": "sentry_ApproveRefund_entry_0",
+        "on_parts": [
+          {
+            "PlanItem": {
+              "source": "AssessRefund",
+              "event": "Complete"
+            }
+          }
+        ],
+        "if_part": null
+      },
+      "sentry_AssessRefund_entry_0": {
+        "id": "sentry_AssessRefund_entry_0",
+        "on_parts": [
+          {
+            "PlanItem": {
+              "source": "ReviewTicket",
+              "event": "Complete"
+            }
+          }
+        ],
+        "if_part": {
+          "language": "Feel",
+          "source": "decision = null"
+        }
+      },
+      "sentry_Assessment_entry_0": {
+        "id": "sentry_Assessment_entry_0",
+        "on_parts": [
+          {
+            "CaseFileItem": {
+              "source": "ticket",
+              "transition": "Create"
+            }
+          }
+        ],
+        "if_part": null
+      },
+      "sentry_CloseTicket_entry_0": {
+        "id": "sentry_CloseTicket_entry_0",
+        "on_parts": [
+          {
+            "PlanItem": {
+              "source": "RefundSettled",
+              "event": "Occur"
+            }
+          }
+        ],
+        "if_part": null
+      },
+      "sentry_CloseTicket_exit_0": {
+        "id": "sentry_CloseTicket_exit_0",
+        "on_parts": [
+          {
+            "CaseFileItem": {
+              "source": "decision",
+              "transition": "Create"
+            }
+          }
+        ],
+        "if_part": null
+      },
+      "sentry_RefundSettled_entry_0": {
+        "id": "sentry_RefundSettled_entry_0",
+        "on_parts": [
+          {
+            "PlanItem": {
+              "source": "AssessRefund",
+              "event": "Complete"
+            }
+          }
+        ],
+        "if_part": null
+      }
+    },
+    "planning_tables": {
+      "planning_Assessment": {
+        "id": "planning_Assessment",
+        "name": "Assessment planning",
+        "context": {
+          "Stage": "Assessment"
+        },
+        "items": [
+          "disc_ApproveRefund",
+          "disc_Escalate"
+        ],
+        "applicability_rules": [],
+        "authorized_roles": []
+      }
+    },
+    "discretionary_items": {
+      "disc_ApproveRefund": {
+        "id": "disc_ApproveRefund",
+        "name": "ApproveRefund",
+        "definition_ref": "ApproveRefund",
+        "authorized_roles": [],
+        "applicability_rules": []
+      },
+      "disc_Escalate": {
+        "id": "disc_Escalate",
+        "name": "Escalate",
+        "definition_ref": "Escalate",
+        "authorized_roles": [],
+        "applicability_rules": []
+      }
+    },
+    "applicability_rules": {},
+    "auto_complete": true
+  },
+  "roles": {
+    "escalation": {
+      "id": "escalation",
+      "name": "escalation"
+    },
+    "finance": {
+      "id": "finance",
+      "name": "finance"
+    },
+    "triage": {
+      "id": "triage",
+      "name": "triage"
+    }
+  }
+}

@@ -1,6 +1,7 @@
 package nz.example.delivery
 
 class DeliveryDrone {
+    boolean parcelSecured
     op HandoverPrompt verifyRecipient()
     op DeliveryCode releaseParcel()
 }

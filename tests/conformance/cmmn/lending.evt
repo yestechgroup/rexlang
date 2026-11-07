@@ -1,0 +1,9 @@
+import "lending.mox"
+
+event FinancialStatementsReceived {
+    statements: FinancialStatements;
+}
+
+event LoanApplicationSubmitted {
+    borrower: Borrower;
+}

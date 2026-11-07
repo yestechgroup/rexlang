@@ -1,0 +1,548 @@
+{
+  "formatVersion": 1,
+  "views": [
+    {
+      "name": "Inbox",
+      "label": "Support Inbox",
+      "isLandmark": true,
+      "isXor": false,
+      "isModal": false,
+      "params": [
+        {
+          "name": "tickets",
+          "typeRef": "Ticket",
+          "default": null
+        },
+        {
+          "name": "folders",
+          "typeRef": "Ticket",
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "Queue",
+      "label": "Approval Queue",
+      "isLandmark": false,
+      "isXor": false,
+      "isModal": false,
+      "params": [
+        {
+          "name": "queue",
+          "typeRef": "Ticket",
+          "default": null
+        },
+        {
+          "name": "agent",
+          "typeRef": "User",
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "Folder",
+      "isLandmark": false,
+      "isXor": false,
+      "isModal": false,
+      "params": [
+        {
+          "name": "id",
+          "typeRef": "Uuid",
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "ItemDetail",
+      "isLandmark": false,
+      "isXor": false,
+      "isModal": false,
+      "params": [
+        {
+          "name": "id",
+          "typeRef": "Uuid",
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "WorkItem",
+      "isLandmark": false,
+      "isXor": false,
+      "isModal": false,
+      "params": [
+        {
+          "name": "id",
+          "typeRef": "Uuid",
+          "default": null
+        }
+      ]
+    }
+  ],
+  "controls": [
+    {
+      "view": "Inbox",
+      "name": "escalations",
+      "componentType": {
+        "type": "list"
+      },
+      "data": "Ticket",
+      "resolvedData": {
+        "package": "nz.example.support",
+        "name": "Ticket"
+      }
+    },
+    {
+      "view": "Inbox",
+      "name": "folderList",
+      "componentType": {
+        "type": "menu"
+      },
+      "data": "Item"
+    },
+    {
+      "view": "Inbox",
+      "name": "readingPane",
+      "componentType": {
+        "type": "details"
+      },
+      "data": "Item"
+    },
+    {
+      "view": "Inbox",
+      "name": "panel",
+      "componentType": {
+        "type": "search"
+      }
+    },
+    {
+      "view": "Inbox",
+      "name": "results",
+      "componentType": {
+        "type": "list"
+      },
+      "data": "Item"
+    },
+    {
+      "view": "Inbox",
+      "name": "list",
+      "componentType": {
+        "type": "list"
+      },
+      "data": "Item"
+    },
+    {
+      "view": "Queue",
+      "name": "refunds",
+      "componentType": {
+        "type": "table"
+      },
+      "data": "Ticket",
+      "resolvedData": {
+        "package": "nz.example.support",
+        "name": "Ticket"
+      },
+      "columns": [
+        {
+          "type": "expression",
+          "value": {
+            "label": "Refund",
+            "expr": {
+              "type": "binOp",
+              "value": {
+                "left": {
+                  "type": "ident",
+                  "value": "refundCents"
+                },
+                "op": "div",
+                "right": {
+                  "type": "numLit",
+                  "value": 100.0
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "view": "Queue",
+      "name": "intake",
+      "componentType": {
+        "type": "form"
+      },
+      "data": "Ticket",
+      "resolvedData": {
+        "package": "nz.example.support",
+        "name": "Ticket"
+      },
+      "condition": {
+        "type": "binOp",
+        "value": {
+          "left": {
+            "type": "ident",
+            "value": "refundCents"
+          },
+          "op": "gt",
+          "right": {
+            "type": "numLit",
+            "value": 0.0
+          }
+        }
+      }
+    },
+    {
+      "view": "Queue",
+      "name": "decision",
+      "componentType": {
+        "type": "form"
+      }
+    },
+    {
+      "view": "Queue",
+      "name": "backlog",
+      "componentType": {
+        "type": "table"
+      },
+      "data": "Item",
+      "columns": [
+        {
+          "type": "field",
+          "value": {
+            "label": "Name",
+            "field": {
+              "entity": "Item",
+              "property": "name"
+            }
+          }
+        },
+        {
+          "type": "field",
+          "value": {
+            "label": "Status",
+            "field": {
+              "entity": "Item",
+              "property": "status"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "Inbox",
+          "component": "escalations"
+        }
+      },
+      "trigger": {
+        "type": "select"
+      },
+      "kind": "navigate",
+      "target": "Queue",
+      "bindings": [
+        [
+          "ticket",
+          {
+            "type": "fieldExpr",
+            "value": {
+              "object": {
+                "type": "ident",
+                "value": "row"
+              },
+              "field": "ticketNo"
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "Inbox",
+          "component": "folderList"
+        }
+      },
+      "trigger": {
+        "type": "select"
+      },
+      "kind": "navigate",
+      "target": "Folder",
+      "bindings": [
+        [
+          "id",
+          {
+            "type": "fieldExpr",
+            "value": {
+              "object": {
+                "type": "ident",
+                "value": "folder"
+              },
+              "field": "id"
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "Inbox",
+          "component": "readingPane"
+        }
+      },
+      "trigger": {
+        "type": "select"
+      },
+      "condition": {
+        "type": "binOp",
+        "value": {
+          "left": {
+            "type": "fieldExpr",
+            "value": {
+              "object": {
+                "type": "ident",
+                "value": "message"
+              },
+              "field": "unread"
+            }
+          },
+          "op": "eq",
+          "right": {
+            "type": "boolLit",
+            "value": true
+          }
+        }
+      },
+      "kind": "action",
+      "target": "MarkRead"
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "Inbox",
+          "component": "panel"
+        }
+      },
+      "trigger": {
+        "type": "submit"
+      },
+      "kind": "refresh",
+      "target": "results",
+      "bindings": [
+        [
+          "query",
+          {
+            "type": "fieldExpr",
+            "value": {
+              "object": {
+                "type": "ident",
+                "value": "values"
+              },
+              "field": "query"
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "Inbox",
+          "component": "list"
+        }
+      },
+      "trigger": {
+        "type": "select"
+      },
+      "kind": "navigate",
+      "target": "ItemDetail",
+      "bindings": [
+        [
+          "id",
+          {
+            "type": "fieldExpr",
+            "value": {
+              "object": {
+                "type": "ident",
+                "value": "row"
+              },
+              "field": "id"
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "Queue",
+          "component": "refunds"
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "approve"
+      },
+      "condition": {
+        "type": "fieldExpr",
+        "value": {
+          "object": {
+            "type": "ident",
+            "value": "agent"
+          },
+          "field": "active"
+        }
+      },
+      "kind": "action",
+      "target": "ApproveRefund"
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "Queue",
+          "component": "intake"
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "raise"
+      },
+      "kind": "action",
+      "target": "RaiseRefund"
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "Queue",
+          "component": "decision"
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "approve"
+      },
+      "kind": "action",
+      "target": "Approve"
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "Queue",
+          "component": "decision"
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "reject"
+      },
+      "kind": "action",
+      "target": "Reject"
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "Queue",
+          "component": "backlog"
+        }
+      },
+      "trigger": {
+        "type": "select"
+      },
+      "kind": "navigate",
+      "target": "WorkItem",
+      "bindings": [
+        [
+          "id",
+          {
+            "type": "fieldExpr",
+            "value": {
+              "object": {
+                "type": "ident",
+                "value": "row"
+              },
+              "field": "id"
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "Queue",
+          "component": "backlog"
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "assign"
+      },
+      "kind": "action",
+      "target": "Assign"
+    }
+  ],
+  "actions": [
+    {
+      "name": "MarkRead",
+      "target": "Ticket",
+      "resolvedTarget": {
+        "package": "nz.example.support",
+        "name": "Ticket"
+      }
+    },
+    {
+      "name": "Assign",
+      "target": "Ticket",
+      "resolvedTarget": {
+        "package": "nz.example.support",
+        "name": "Ticket"
+      }
+    },
+    {
+      "name": "Approve",
+      "target": "Ticket",
+      "resolvedTarget": {
+        "package": "nz.example.support",
+        "name": "Ticket"
+      }
+    },
+    {
+      "name": "Reject",
+      "target": "Ticket",
+      "resolvedTarget": {
+        "package": "nz.example.support",
+        "name": "Ticket"
+      }
+    },
+    {
+      "name": "ApproveRefund",
+      "target": "Ticket",
+      "resolvedTarget": {
+        "package": "nz.example.support",
+        "name": "Ticket"
+      }
+    },
+    {
+      "name": "RaiseRefund",
+      "target": "Ticket",
+      "resolvedTarget": {
+        "package": "nz.example.support",
+        "name": "Ticket"
+      }
+    }
+  ]
+}

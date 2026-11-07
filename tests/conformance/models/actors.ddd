@@ -1,0 +1,8 @@
+application Support {
+    module desk {
+        service TicketService {
+            boolean escalate() capability EscalateTicket, ReadTicket;
+            boolean refund() capability RaiseRefund, ResolveTicket, ApproveRefund;
+        }
+    }
+}

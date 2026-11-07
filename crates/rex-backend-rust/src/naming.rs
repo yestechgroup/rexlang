@@ -22,31 +22,10 @@ pub fn rust_ident(name: &str) -> String {
 /// Converts a `.mox` identifier (usually camelCase) to snake_case.
 ///
 /// `getBook` -> `get_book`, `URLCount` -> `url_count`, `books` -> `books`.
-pub fn snake_case(name: &str) -> String {
-    let chars: Vec<char> = name.chars().collect();
-    let mut out = String::with_capacity(name.len() + 4);
-    for (index, ch) in chars.iter().copied().enumerate() {
-        if ch.is_ascii_uppercase() {
-            let prev_lower_or_digit = index
-                .checked_sub(1)
-                .map(|p| chars[p].is_ascii_lowercase() || chars[p].is_ascii_digit())
-                .unwrap_or(false);
-            let next_lower = chars
-                .get(index + 1)
-                .map(|n| n.is_ascii_lowercase())
-                .unwrap_or(false);
-            let starts_run_after_word = prev_lower_or_digit;
-            let starts_short_run = index > 0 && next_lower;
-            if starts_run_after_word || starts_short_run {
-                out.push('_');
-            }
-            out.extend(ch.to_lowercase());
-        } else {
-            out.push(ch);
-        }
-    }
-    out
-}
+///
+/// Shared with the JSON Schema backend (which validates the resulting
+/// instance ids) via `rex-backend-common`.
+pub use rex_backend_common::snake_case;
 
 /// Naive English pluralization for slotmap field names (`Book` -> `books`,
 /// `Box` -> `boxes`, `Category` -> `categories`).

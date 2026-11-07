@@ -6,8 +6,8 @@ A Sculptor-style domain-driven-design layer over `.mox` domain models. The
 domain model defines the data (entities, features, constraints); the `.ddd`
 design defines the application architecture on top of it: the application,
 its modules, the application services with their use-case operations, and
-per-class design decisions (stereotype, flags, repository, delegation
-targets). Parsed by **rex-syntax** (`parse_ddd`, the chumsky parser) at
+per-class design decisions (stereotype, flags, repository, state machine,
+delegation targets). Parsed by **rex-syntax** (`parse_ddd`, the chumsky parser) at
 compile time, lowered and validated by **rex-driver**
 (`compile_ddd_str`) against the imported domains, and emitted as the
 versioned `rex_ir::ddd::DddModel` artifact (the rex-ir crate).
@@ -80,10 +80,10 @@ let model = rex_ir::ddd::DddModel::from_json(&json)?;    // version-gated reload
 The normative EBNF for the `.ddd` surface lives exactly once, in the parser
 module docs under [*`.ddd` design
 sources*](https://docs.rs/rex-syntax/latest/rex_syntax/parser/index.html)
-(`crates/rex-syntax/src/parser.rs`) — the single authority for `ddd_file`,
+(`crates/rex-syntax/src/parser/mod.rs`) — the single authority for `ddd_file`,
 `application_decl`, `module_decl`, `service_decl`, `design_decl`,
-`repository_decl`, and `search_decl`; this page keeps only the
-language-level rules. The `.ddd` keyword tables in
+`repository_decl`, `machine_decl`, and `search_decl`; this page keeps only
+the language-level rules. The `.ddd` keyword tables in
 `crates/rex-syntax/src/ddd.rs` are the keyword authority the parser and the
 formatter share.
 
@@ -104,9 +104,14 @@ Lexical and structural rules:
 - Delegated operations (`name => target.operation`) copy the target's
   signature conceptually and declare none of their own; a delegated op may
   be named `save` (contextual keywords). Declared service operations may
-  carry a `capability a, b` clause; declared repository operations take
-  none (the wire artifact's repository operations carry no capabilities, so
-  accepting one would silently drop data).
+  carry a `capability a, b` clause and an `emits A, B` clause; delegated
+  service operations may carry both clauses too (they are service
+  operations), while declared repository operations take neither (the wire
+  artifact's repository operations carry no capabilities or emissions, so
+  accepting one would silently drop data). A service operation's clauses
+  are fixed in the canonical order `capability? emits? when?` — the order
+  the formatter emits, so a source writing `when` before `emits` is a
+  syntax error, not a formatting opportunity.
 - A service or repository operation may carry a leading `protected`
   modifier (Sculptor's visibility): the operation stays off the public
   interface. `protected` is contextual — in leading position it is the
@@ -220,6 +225,128 @@ consumers resolve against the domain model.
     imply the service), and the artifact stays validation-only — nothing is
     synthesized — so the author declares the repository the scaffolding
     would hang off. The service remains the author's to declare.
+15. **dto-with-ops warning** — a `dto` design whose class carries `ops`
+    warns once per op, naming the design and the op: a dto is a transfer
+    record, and behavior on it is almost always a modeling mistake (see
+    the layering heuristic under "Domain operations vs service
+    operations"). Warning-severity: the artifact is unaffected, and the
+    check runs only against a fully lowered union.
+16. **Typed status fields** — an entity design whose class carries a
+    feature named `status` or `state` typed as a bare `String` is an
+    error: a status-like field is a lifecycle, and the bare-`String`
+    shape is the silent no-machine case. Declare an enum in the domain
+    model and a `machine '<field>: <Enum>'` on the design. Value objects
+    and dtos are exempt (the check is entity semantics, the machine
+    rule's scope), and enum-typed fields stay legal — an enum without a
+    machine is a legitimate modeling choice (the canonical fixture's
+    `MediaStatus status` field is the shape).
+
+## State machines
+
+An entity design may carry one lifecycle state machine — a
+`machine <field>: <Enum>` block, written after the optional repository
+block (the formatter's canonical order; one per design). `machine`,
+`initial`, `terminal`, and `via` are contextual words like every `.ddd`
+word. The normative grammar (`machine_decl`, `machine_member`,
+`transition`, `guard_clause`) lives in the parser module docs
+(`crates/rex-syntax/src/parser/mod.rs`); the canonical fixture's machine gives
+the shape:
+
+```
+machine status: PayRunStatus {
+    initial Draft;
+    Draft -> Calculating via Calculate;
+    Calculating -> AwaitingApproval via Submit;
+    AwaitingApproval -> Approved via Approve when (total > 0);
+    Approved -> Processing via Schedule;
+    Processing -> Posted via Post;
+    Draft -> Reversed;
+    terminal Reversed;
+    terminal Posted;
+}
+```
+
+The driver validates the machine before it lowers (`lower_design_machine`
+in `crates/rex-driver/src/ddd.rs`; behavior pinned by
+`crates/rex-driver/tests/ddd_machines.rs`):
+
+- Only an **entity** design carries a machine — a value object is
+  immutable and a dto is a transfer record; neither moves through states.
+- The machine's type must resolve to an **enum**, and the bound feature
+  (`<field>`) must exist on the designed class and carry exactly that enum
+  type.
+- **Closed over the enum** — every state name (the `initial`, a `terminal`,
+  and every transition endpoint) must be a literal of that enum: a typo'd
+  endpoint is an error naming the enum and its declared literals, never a
+  new state. The enum's literal list is the single vocabulary of the
+  lifecycle.
+- Guards are predicates: a `when` condition on a transition — and on any
+  service or repository operation — must type as `boolean` (the actor,
+  deploy, and cmmn conditions' rule).
+- Exactly one `initial` state. Duplicate terminal declarations and
+  duplicate identical edges are rejected.
+- **Determinism** — one trigger name may leave a state for at most one
+  target (the statechart event rule).
+- **Terminal states take no outgoing transitions**; every non-terminal
+  state takes at least one (no dead ends — declare it `terminal` or add an
+  outgoing edge).
+- **Reachability** — every state is reachable from the initial state
+  (breadth-first over the edges).
+- Edge guards and operation `when` conditions type-check through the shared
+  expression language (rex-expr) with the designed class as the implicit
+  `self` — and guard literals against the machine field must be machine
+  states: only the declared states bind as names, so a member of the bound
+  enum that the machine never declares is a type error (it can never hold
+  on this machine).
+
+**Condition binding.** Machine states bind as enum-typed *names* — guards
+read `status == AwaitingApproval`, never `status == "AwaitingApproval"`.
+The string literal is a type error under the same-type equality rule (R2 of
+`docs/EXPRESSIONS.md`); the anti-magic-strings stance is deliberate. Edge
+guards bind only the machine's own states (a foreign machine's states are
+unbound — cross-entity state references are a type error). A service
+operation is not aggregate-scoped, so its condition requires the module to
+have **exactly one** machine-bearing design, and that design's class is the
+condition's `self` scope. Two machines in one module declaring the same
+state name is an ambiguous-binding error: the name stops binding, with one
+error saying so. The same binding is the membership check on guard
+literals: an equality against the machine's field must name a declared
+state — an enum member the machine never declares is unbound (a type
+error), because a state this machine can never hold is a modeling defect,
+not a value. Comparisons against other features are not machine-checked:
+their name operands resolve as features.
+
+**Artifact shape.** The machine lowers to `machine` on the design (a
+`rex_ir::ddd::StateMachine`): the bound `field`, the enum `TypeRef`, the
+`initial` state, the `terminals`, and the `transitions` — the `via` trigger
+(`None` for a bare arrow) and the guard as the verbatim source text between
+the parentheses (the `when`-condition rule). The state set is **derived**,
+never serialized as a separate list: `StateMachine::states()` is the
+initial state, then the terminals, then the remaining transition endpoints
+in first-appearance order; terminalness is membership in `terminals`.
+
+**xstate-ir lowering.** `rex_driver::machines::lower_design_machines` maps
+every designed machine onto the
+[restingstate](https://github.com/yestechgroup/restingstate) toolchain's
+language-neutral `xstate_ir::Machine` (rev-pinned as `xstate-ir` in the
+workspace `Cargo.toml`; the sigil precedent). The mapping is total and
+lossless for the v1 surface: `id` is the design class name; `context` is
+one field (the bound feature, typed by the enum's qualified name, default
+the initial state); states follow `StateMachine::states()` with terminals
+as `final` nodes and the rest `atomic`; transitions attach to their source
+in artifact order, and the guard maps to a named guard whose name is the
+condition's source text. A bare arrow's event is **derived**: the lowerCamel
+of the target state (`Posted` → `posted`, `AwaitingApproval` →
+`awaitingApproval`). The committed goldens pin both forms —
+`tests/conformance/ddd/payrun.ddd.json` (the design artifact) and
+`tests/conformance/ddd/payrun.xstate.json` (the lowered machine);
+regenerate with `REX_UPDATE_FIXTURES=1 cargo test -p rex-driver --test
+ddd_machine_golden`.
+
+**Derived events.** Every designed machine derives the `state_changed` event
+contract (entity + field — `rex_driver::machines::derived_events`), which
+is what makes the push plane's `state_changed` vocabulary reachable for a
+plain CRUD model once its lifecycle is modeled.
 
 ## Aggregate derivation
 
@@ -232,15 +359,96 @@ declare a repository. The closure is computed only when every imported
 domain lowered (a failed domain may hide containments, and a wrong
 non-root verdict is worse than none).
 
+## Domain operations vs service operations
+
+Mox class `op`s and `.ddd` service operations are deliberately different
+layers, and the split is the layering heuristic:
+
+- **Behavior confined to one aggregate stays a class `op`.** It lives in
+  the domain layer, is owned by the aggregate's class, and generates as an
+  instance method regardless of the class's stereotype.
+- **Behavior spanning aggregates, needing a transaction, or sitting at an
+  entry point is the cue for a `.ddd` service operation.** The service
+  operation delegates down to the aggregate-owned ops; it never
+  re-implements them.
+- **Authorization attaches at the service-operation/capability boundary**
+  (the `.actor` dimension). A domain `op` is not an entry point, so ops
+  never take `capability` clauses — guarding a domain method would bypass
+  the service boundary the policy dimension is defined over.
+
+A `dto`-designed class carrying `ops` is therefore flagged by validation
+rule 15 (a warning per op): transfer records carry data between layers, and
+behavior declared on them is almost always behavior that belongs on the
+aggregate's class or on a service. The escape hatch is unchanged: a
+body-less `op` stays the abstract hook implemented by hand in target code
+(the "Gap classes" divergence below).
+
 ## Capabilities and the actor dimension
 
 A service operation's `capability` clause names actor capabilities. Only
 the library entry point `compile_ddd_str_with_actors` validates the names
-against a caller-provided `ActorModel`; the CLI compiles with the plain
-`compile_ddd_str`, which records them unvalidated — the documented
-loose-mapping contract. Nothing in the design artifact constructs policy:
+against a caller-provided actor-model **slice**; capability names pool
+across every model, so a host passes all of the application's `.actor`
+artifacts. An empty slice is the plain `compile_ddd_str` behavior (the
+records-unvalidated loose-mapping contract). Since rexlang#128 the CLI
+project pipeline and the LSP pass the sibling artifacts, so the check is a
+compile-time language error — spanned on the capability clause, with the
+`unknownCapability` code carrying the did-you-mean closest declared name
+(a case-variant match wins outright; otherwise the nearest name within an
+edit budget). Nothing in the design artifact constructs policy:
 authorization remains the `.actor` dimension's job (see the actor-policy
 section of the language reference).
+
+Both directions of the design↔actor wiring resolve at **compile time**
+(rexlang#128): the CLI project pipeline and the LSP resolve every
+capability clause against the pooled actor artifacts (existence, rule 10
+above) and every grant against the pooled design artifacts (coverage —
+`compile_actors_str_with_designs`, the actor engine's coverage pass
+diagnosing `capability 'X' is granted but no operation or search carries
+it` spanned on the grant entry, code `grantedCapabilityUncarried`). The
+union integrity pass (`rex_driver::check_integrity`, register row
+**V12**) keeps both findings as its **lint channel** (warning severity)
+for hosts that gather artifacts without compiling — the compiler's
+diagnostics are the errors; `rexlang check <dir>` prints the lint only
+for files phase 1 checked clean. Checking a design or policy alone stays
+per-surface and silent.
+
+## Events and the event-contract dimension
+
+A service operation's `emits` clause names the events the operation
+produces — the production-side counterpart of the `.evt` layer's
+contracts, channels, and subscriptions (a fragment, in the position the
+grammar fixes for it — after the `capability` clause, before the `when`
+guard):
+
+```
+service PayRunService {
+    boolean approve() capability ApprovePayRun emits PayRunStateChanged when (status == AwaitingApproval);
+}
+```
+
+Like `capability` names, emitted event names are **loosely coupled**: the
+names lower into the artifact exactly as authored, and a plain
+`compile_ddd_str` never validates them — the `.ddd` compile has no `.evt`
+bucket. Both directions of the design↔event wiring are enforced by the
+union integrity pass (`rex_driver::check_integrity`, register row
+**V12**):
+
+- **Emission existence** — every emitted event name on every service
+  operation must name an event declared in some provided `.evt` contract:
+  `operation 'approve' of service 'PayRunService' emits unknown event
+  'PayRunStateChanged'`, help listing the declared event names.
+- **Emission coverage** — every declared event must be emitted by at
+  least one service operation across the designs: `event 'E' is declared
+  but no operation emits it`. Channel `publishes` entries and
+  subscription `events [...]` lists are **consumption-side** wiring — they
+  route events to consumers and never satisfy production.
+
+Checking a design alone (or a contract alone) stays per-surface and
+silent: an `emits` clause in a cluster without `.evt` artifacts is not an
+error, and a contract in a cluster without designs is not either — the
+checks fire only when the counterpart surface is present in the checked
+union (`rexlang check <dir>`).
 
 ---
 
@@ -331,16 +539,27 @@ Sculptor concepts rexlang intentionally does not carry, and why:
   a class designed `value` (rule 12 then requires its features
   `readonly`); a true embeddable datatype awaits a deliberate `.mox`
   language extension.
+- **Multi-target arrows (`A -> B, C`)** — deliberately excluded from the
+  machine surface: an unguarded external choice is not a deterministic
+  machine; write one edge per transition.
+- **Transition entry/exit actions and timers** — v1 transitions carry only
+  trigger, guard, and target; domains.toml approval chains and timers are
+  downstream concerns.
+- **`.actor` guards binding machine states** — the actor dimension cannot
+  yet reference a design's machine states cross-file (a fast-follow);
+  today only `.ddd`-internal conditions bind them.
 
 ---
 
 ## Worked example
 
 `tests/conformance/ddd/library.ddd`, the canonical fixture, designs a
-library application over `tests/conformance/ddd/library.mox`:
+library application over `tests/conformance/ddd/library.mox`. The fence
+below is the fixture verbatim, its import repointed so it compiles from
+this document (the docs fences are compiled by CI):
 
-```
-import "library.mox";
+```ddd
+import "../tests/conformance/ddd/library.mox";
 
 application Library {
     base nz.example.library
@@ -352,7 +571,7 @@ application Library {
             inject PersonService;
             inject MediaSearch;
             boolean borrow(String mediaId, Person borrower) capability BorrowMedia;
-            PhysicalMedia registerMedia(String status);
+            PhysicalMedia registerMedia(MediaStatus status);
             protected save => PhysicalMediaRepository.save;
             registerBorrower => PersonService.register;
             findMedia => MediaSearch.search;
@@ -379,7 +598,7 @@ application Library {
             findAll;
             save;
             delete;
-            PhysicalMedia findByStatus(String status);
+            PhysicalMedia findByStatus(MediaStatus status);
         }
         /// Full-text search over the movie catalogue.
         search MediaSearch {
@@ -465,3 +684,17 @@ byte-compares the compiled artifact, the CLI fmt gate enforces the
 canonical formatting, and `rexlang artifact check` classifies the artifact
 as a DDD design. Regenerate goldens with `REX_UPDATE_FIXTURES=1 cargo test
 --workspace`.
+
+The machine-bearing pair `payrun.mox`/`payrun.ddd` (formatter-canonical)
+commits two goldens: `payrun.ddd.json` (the design artifact) and
+`payrun.xstate.json` (the lowered xstate-ir machine), byte-compared by
+`crates/rex-driver/tests/ddd_machine_golden.rs`; the machine validation
+rules are pinned by `crates/rex-driver/tests/ddd_machines.rs`.
+
+The `examples/` side ships `support.ddd` (entity/value/dto designs,
+searches, capabilities validated against `support.actor` through
+`compile_ddd_str_with_actors`) and `orders.ddd` (the aggregate-derivation
+rule over `ecommerce.mox`), byte-pinned against `examples/artifacts/` by
+`crates/rex-driver/tests/examples_artifacts.rs`. Note that
+`examples/library.mox` itself is *not* designable: its `Writer.books`
+cross reference escapes the Library aggregate (rule 13).

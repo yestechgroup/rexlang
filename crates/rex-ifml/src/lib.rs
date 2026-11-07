@@ -63,16 +63,18 @@ mod check;
 mod expand;
 mod fmt;
 mod index;
+mod manifest;
 mod parser;
 mod resolve;
 
-pub use check::check_ifml;
+pub use check::{check_ifml, check_ifml_with_actors};
 pub use expand::expand_ifml;
 pub use fmt::format_ifml;
 pub use index::{
-    parse_ifml_indexed, AtSite, IfmlIndex, IndexFile, IndexParam, LiteralKind, ModuleDeclSite,
-    ModuleUseSite, NamedSite, TargetSite, UseOverride,
+    parse_ifml_indexed, AtSite, AuthKind, AuthSite, IfmlIndex, IndexFile, IndexParam, LiteralKind,
+    ModuleDeclSite, ModuleUseSite, NamedSite, TargetSite, UseOverride,
 };
+pub use manifest::manifest_ifml;
 pub use parser::*;
 pub use resolve::{
     compile_ifml_lenient, compile_ifml_str, walk_ifml_imports, IfmlCompilation, IfmlDiagnostic,
@@ -80,4 +82,6 @@ pub use resolve::{
     E_IMPORT_NOT_PROVIDED, E_INPUT_TYPE, E_MISSING_INPUT, E_PARSE, E_UNKNOWN_INPUT,
     E_UNKNOWN_MODULE,
 };
+pub use rex_diagnostics::{ifml_check, ifml_lints, ifml_resolver, Severity};
 pub use rex_ir::ifml::*;
+pub use rex_ir::ifml_manifest::{IfmlManifest, IFML_MANIFEST_FORMAT_VERSION};

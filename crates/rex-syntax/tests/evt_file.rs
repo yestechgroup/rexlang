@@ -222,6 +222,119 @@ fn duplicate_imports_are_syntactically_legal() {
     assert!(file.events.is_empty());
 }
 
+#[test]
+fn channel_scope_clause_parses() {
+    // The `of <scope>` clause names the channel's scoping dimension (an
+    // opaque topic-template label; the driver stores it verbatim).
+    let source = "channel trades of accounts { publishes Trade; }";
+    let result = parse_evt(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let channel = expect_channel(&file, "trades");
+    let scope = channel.scope.as_ref().expect("expected a scope clause");
+    assert_eq!(scope.text, "accounts");
+    assert!(!scope.escaped);
+    assert_eq!(span_text(source, scope.span), "accounts");
+    assert_eq!(channel.publishes.len(), 1);
+}
+
+#[test]
+fn subscription_scope_clause_parses() {
+    // The `scope <name>` binding names the slice of the topic family the
+    // consumer subscribes to.
+    let source = "subscription watch { events [ Trade ] consumer web scope accounts }";
+    let result = parse_evt(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let subscription = expect_subscription(&file, "watch");
+    let scope = subscription
+        .scope
+        .as_ref()
+        .expect("expected a scope clause");
+    assert_eq!(scope.text, "accounts");
+    assert_eq!(subscription.consumer.text, "web");
+}
+
+#[test]
+fn declarations_without_scope_clauses_parse_to_none() {
+    let result = parse_evt(concat!(
+        "channel orders { publishes Ping; } ",
+        "subscription watch { events [ Ping ] consumer watcher }",
+    ));
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    assert!(expect_channel(&file, "orders").scope.is_none());
+    assert!(expect_subscription(&file, "watch").scope.is_none());
+}
+
+#[test]
+fn scope_clauses_are_contextual_words() {
+    // `of` and `scope` are ordinary identifiers outside their grammar
+    // positions: an event named `scope`, a channel named `of`, a publishes
+    // entry named `scope`, a subscription named `of`, an event named `of`
+    // in the list, and a consumer named `scope` all parse.
+    let result = parse_evt(concat!(
+        "event scope { } ",
+        "channel of { publishes scope; } ",
+        "subscription of { events [ scope of ] consumer scope }",
+    ));
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    assert_eq!(file.events[0].name.text, "scope");
+    assert_eq!(file.channels[0].name.text, "of");
+    assert_eq!(file.channels[0].publishes[0].event.text, "scope");
+    assert_eq!(file.subscriptions[0].name.text, "of");
+    assert_eq!(file.subscriptions[0].events[0].text, "scope");
+    assert_eq!(file.subscriptions[0].events[1].text, "of");
+    assert_eq!(file.subscriptions[0].consumer.text, "scope");
+    assert!(file.channels[0].scope.is_none());
+    assert!(file.subscriptions[0].scope.is_none());
+}
+
+#[test]
+fn escaped_scope_names_parse_as_names() {
+    // Escaped forms are never the contextual keyword, but they are legal
+    // names — including in the keyword positions themselves.
+    let result = parse_evt(concat!(
+        "channel ^of of ^scope { } ",
+        "subscription s { events [ ^scope ] consumer ^scope scope ^of }",
+    ));
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let channel = expect_channel(&file, "of");
+    let scope = channel.scope.as_ref().expect("expected a scope clause");
+    assert_eq!(scope.text, "scope");
+    assert!(scope.escaped);
+    let subscription = expect_subscription(&file, "s");
+    assert_eq!(subscription.consumer.text, "scope");
+    let scope = subscription
+        .scope
+        .as_ref()
+        .expect("expected a scope clause");
+    assert_eq!(scope.text, "of");
+    assert!(scope.escaped);
+}
+
 // --- error cases -------------------------------------------------------------
 
 #[test]
@@ -388,6 +501,59 @@ fn junk_regions_recover_to_the_next_declaration() {
 }
 
 #[test]
+fn scope_clause_errors_are_reported_and_recovered() {
+    // A committed `of` with a missing scope name.
+    let result = parse_evt("channel trades of { publishes Trade; }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "expected a scope name after `of`"),
+        "expected the missing-scope error, got {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected a recovered AST");
+    let channel = expect_channel(&file, "trades");
+    assert!(channel.scope.is_none());
+    assert_eq!(channel.publishes.len(), 1);
+
+    // A committed `scope` with a missing scope name.
+    let result = parse_evt("subscription watch { events [ Trade ] consumer web scope }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "expected a scope name after `scope`"),
+        "expected the missing-scope error, got {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected a recovered AST");
+    let subscription = expect_subscription(&file, "watch");
+    assert!(subscription.scope.is_none());
+    assert_eq!(subscription.consumer.text, "web");
+
+    // A stray name without the leading `of`/`scope` word is an error, not a
+    // silently swallowed token.
+    let result = parse_evt("channel trades accounts { }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "expected `of` or `{` after the channel name"),
+        "expected the stray-name error, got {:?}",
+        result.errors
+    );
+    let result = parse_evt("subscription s { events [ Trade ] consumer web accounts }");
+    assert!(
+        result.errors.iter().any(|error| {
+            error.message == "expected `scope`, `when`, `delivery`, or `}` after the consumer name"
+        }),
+        "expected the stray-name error, got {:?}",
+        result.errors
+    );
+}
+
+#[test]
 fn adversarial_inputs_do_not_panic() {
     let nasty = [
         "",
@@ -408,6 +574,10 @@ fn adversarial_inputs_do_not_panic() {
         "channel C {",
         "channel C { publishes",
         "channel C { publishes ; }",
+        "channel C of",
+        "channel C of {",
+        "channel C of accounts",
+        "channel C of accounts {",
         "subscription",
         "subscription S",
         "subscription S {",
@@ -415,6 +585,9 @@ fn adversarial_inputs_do_not_panic() {
         "subscription S { events [",
         "subscription S { events [ ]",
         "subscription S { events [ ] consumer",
+        "subscription S { events [ ] consumer C scope",
+        "subscription S { events [ ] consumer C scope }",
+        "subscription S { events [ A ] scope accounts }",
         "subscription S { consumer C events [ A ] }",
         "subscription S { events [ A ] consumer C extra",
         "subscription S { events [ A ] consumer C } } }",
@@ -423,6 +596,27 @@ fn adversarial_inputs_do_not_panic() {
         "^event ^E { } ^channel ^C { }",
         "event E { ^seq: ^int",
         "channel C { publishes ^publishes ^publishes; }",
+        "event E { cloudEvents",
+        "event E { cloudEvents {",
+        "event E { cloudEvents { type",
+        "event E { cloudEvents { type \"t\"",
+        "event E { cloudEvents { type \"t\" source",
+        "event E { cloudEvents { type \"t\" source \"s\" subject",
+        "event E { owner",
+        "event E { classification",
+        "event E { retention",
+        "event E { pii [",
+        "event E { pii [ a",
+        "event E { pii [ a ]",
+        "subscription S { events [ A ] consumer C when",
+        "subscription S { events [ A ] consumer C when (",
+        "subscription S { events [ A ] consumer C delivery",
+        "subscription S { events [ A ] consumer C delivery {",
+        "subscription S { events [ A ] consumer C delivery { mode",
+        "subscription S { events [ A ] consumer C delivery { mode at_least_once",
+        "subscription S { events [ A ] consumer C delivery { mode at_least_once; maxAttempts",
+        "subscription S { events [ A ] consumer C delivery { mode at_least_once; backoffSeconds 1; timeoutSeconds 2; deadLetter",
+        "subscription S { events [ A ] consumer C delivery { mode ^at_least_once; }",
     ];
     for input in nasty {
         let result = parse_evt(input);
@@ -431,7 +625,364 @@ fn adversarial_inputs_do_not_panic() {
     }
 }
 
-// --- formatting --------------------------------------------------------------
+// --- slice 2: delivery model & governance ------------------------------------
+
+#[test]
+fn cloud_events_block_parses() {
+    // The `cloudEvents` block declares the CloudEvents `type`/`source`
+    // attributes (both required once the block is present) and the optional
+    // `subject`.
+    let source = concat!(
+        "event OrderPlaced {\n",
+        "    orderId: String;\n",
+        "    cloudEvents {\n",
+        "        type \"com.example.orderplaced.v1\"\n",
+        "        source \"/orders\"\n",
+        "        subject \"{orderId}\"\n",
+        "    }\n",
+        "}\n",
+    );
+    let result = parse_evt(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let cloud = file.events[0]
+        .cloud_events
+        .as_ref()
+        .expect("expected a cloudEvents block");
+    assert_eq!(cloud.r#type, "com.example.orderplaced.v1");
+    assert_eq!(cloud.source, "/orders");
+    assert_eq!(cloud.subject.as_deref(), Some("{orderId}"));
+
+    // `subject` is optional.
+    let result = parse_evt("event P { cloudEvents { type \"t\" source \"s\" } }");
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let cloud = file.events[0].cloud_events.as_ref().unwrap();
+    assert_eq!(cloud.r#type, "t");
+    assert_eq!(cloud.source, "s");
+    assert!(cloud.subject.is_none());
+}
+
+#[test]
+fn governance_lines_parse() {
+    let source = concat!(
+        "event OrderPlaced {\n",
+        "    orderId: String;\n",
+        "    owner order_team;\n",
+        "    classification confidential;\n",
+        "    retention \"7y\";\n",
+        "    pii [ orderId ];\n",
+        "}\n",
+    );
+    let result = parse_evt(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let event = &file.events[0];
+    assert_eq!(event.owner.as_ref().unwrap().text, "order_team");
+    assert_eq!(event.classification.as_ref().unwrap().text, "confidential");
+    assert_eq!(event.retention.as_deref(), Some("7y"));
+    assert_eq!(
+        event
+            .pii
+            .iter()
+            .map(|name| name.text.as_str())
+            .collect::<Vec<_>>(),
+        ["orderId"]
+    );
+}
+
+#[test]
+fn subscription_when_and_delivery_parse() {
+    let source = concat!(
+        "subscription billing {\n",
+        "    events [ OrderPlaced OrderCancelled ]\n",
+        "    consumer billing_service\n",
+        "    when (orderId != \"\")\n",
+        "    delivery {\n",
+        "        mode at_least_once;\n",
+        "        maxAttempts 5;\n",
+        "        backoffSeconds 10;\n",
+        "        timeoutSeconds 30;\n",
+        "        deadLetter orders;\n",
+        "    }\n",
+        "}\n",
+    );
+    let result = parse_evt(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let subscription = &file.subscriptions[0];
+    let when = subscription.when.expect("expected a when clause");
+    // The span covers the raw parens; the interior slices out verbatim.
+    assert_eq!(span_text(source, when), "(orderId != \"\")");
+    let delivery = subscription
+        .delivery
+        .as_ref()
+        .expect("expected a delivery block");
+    assert_eq!(delivery.mode.as_ref().unwrap().text, "at_least_once");
+    assert_eq!(delivery.max_attempts, Some(5));
+    assert_eq!(delivery.backoff_seconds, Some(10));
+    assert_eq!(delivery.timeout_seconds, Some(30));
+    assert_eq!(delivery.dead_letter.as_ref().unwrap().text, "orders");
+}
+
+#[test]
+fn when_clause_spans_the_raw_parens() {
+    // The `when` interior is verbatim — spacing and operators ride through
+    // unsanitized for the driver to slice.
+    let source = "subscription s { events [ E ] consumer c when (  a  !=  b  ) }";
+    let result = parse_evt(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let when = file.subscriptions[0].when.expect("expected a when clause");
+    assert_eq!(span_text(source, when), "(  a  !=  b  )");
+}
+
+#[test]
+fn type_still_parses_as_a_payload_field_name() {
+    // `type` is special only inside the `cloudEvents` block (the
+    // qname-segment rule for keyword lookalikes); as an event payload field
+    // it is an ordinary name.
+    for source in [
+        "event E { type: String; }",
+        "event E { type: String; cloudEvents { type \"t\" source \"s\" } }",
+    ] {
+        let result = parse_evt(source);
+        assert!(
+            result.errors.is_empty(),
+            "{source:?}: unexpected errors: {:?}",
+            result.errors
+        );
+        let file = result.ast.expect("expected an AST");
+        assert_eq!(file.events[0].fields[0].name.text, "type");
+    }
+}
+
+#[test]
+fn slice2_words_remain_usable_as_escaped_names() {
+    // Every new word keeps the `^` escape discipline: `^delivery` as an
+    // event name, `^type` as a field name and a `pii` entry, `^mode` as a
+    // consumer, `^cloudEvents` as a subscription name.
+    let result = parse_evt(concat!(
+        "event ^delivery { ^type: int; } ",
+        "subscription ^cloudEvents { events [ ^type ] consumer ^mode when (^type != \"\") }",
+    ));
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    assert_eq!(file.events[0].name.text, "delivery");
+    assert_eq!(file.events[0].fields[0].name.text, "type");
+    assert_eq!(file.subscriptions[0].name.text, "cloudEvents");
+    assert_eq!(file.subscriptions[0].events[0].text, "type");
+    assert_eq!(file.subscriptions[0].consumer.text, "mode");
+    assert!(file.subscriptions[0].when.is_some());
+}
+
+#[test]
+fn slice2_clause_errors_are_reported_and_recovered() {
+    // `cloudEvents` committed: missing strings are reported per clause.
+    let result = parse_evt("event E { cloudEvents { type source \"s\" } }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "expected a type string after `type`"),
+        "expected the missing-type error, got {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected a recovered AST");
+    assert!(file.events[0].cloud_events.is_some());
+
+    // Missing `source` string.
+    let result = parse_evt("event E { cloudEvents { type \"t\" source } }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "expected a source string after `source`"),
+        "expected the missing-source error, got {:?}",
+        result.errors
+    );
+
+    // Missing `{` after the `cloudEvents` word.
+    let result = parse_evt("event E { cloudEvents }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "expected `{` after `cloudEvents`"),
+        "expected the missing-brace error, got {:?}",
+        result.errors
+    );
+
+    // Governance lines committed: missing name / string / `;`.
+    let result = parse_evt("event E { owner }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "expected a name after `owner`"),
+        "expected the missing-owner error, got {:?}",
+        result.errors
+    );
+    let result = parse_evt("event E { retention }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "expected a retention string after `retention`"),
+        "expected the missing-retention error, got {:?}",
+        result.errors
+    );
+    let result = parse_evt("event E { pii }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "expected `[` after `pii`"),
+        "expected the missing-bracket error, got {:?}",
+        result.errors
+    );
+
+    // `delivery` committed: `mode` required first, entries need their
+    // values and `;`.
+    let result = parse_evt("subscription s { events [ E ] consumer c delivery { } }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "expected a `mode` entry in the `delivery` block"),
+        "expected the missing-mode error, got {:?}",
+        result.errors
+    );
+    let result =
+        parse_evt("subscription s { events [ E ] consumer c delivery { maxAttempts 5; } }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "expected a `mode` entry in the `delivery` block"),
+        "expected the missing-mode error, got {:?}",
+        result.errors
+    );
+    let result = parse_evt("subscription s { events [ E ] consumer c delivery { mode } }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "expected a delivery mode after `mode`"),
+        "expected the missing-mode-value error, got {:?}",
+        result.errors
+    );
+    let result = parse_evt(
+        "subscription s { events [ E ] consumer c delivery { mode at_least_once maxAttempts 5; } }",
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "expected `;` after the `mode` entry"),
+        "expected the missing-semicolon error, got {:?}",
+        result.errors
+    );
+    let result = parse_evt(
+        "subscription s { events [ E ] consumer c delivery { mode at_least_once; maxAttempts; } }",
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "expected an int after `maxAttempts`"),
+        "expected the missing-int error, got {:?}",
+        result.errors
+    );
+
+    // `when` committed: missing parens.
+    let result = parse_evt("subscription s { events [ E ] consumer c when }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message == "expected a `(...)` condition after `when`"),
+        "expected the missing-parens error, got {:?}",
+        result.errors
+    );
+
+    // Every broken case still recovers a subscription AST.
+    let result = parse_evt(
+        "subscription s { events [ E ] consumer c when delivery { mode at_least_once; } }",
+    );
+    assert!(result.ast.is_some());
+}
+
+#[test]
+fn slice2_clauses_format_canonically() {
+    let messy = concat!(
+        "subscription b { events [ P ] consumer c when ( a != b ) delivery { deadLetter q; mode at_least_once; maxAttempts 3; } }\n",
+        "event E { cloudEvents { subject \"x\" source \"/e\" type \"t\" } pii [ p ]; retention \"7y\"; classification confidential; owner team; f : int }\n",
+    );
+    let canonical = concat!(
+        "event E {\n",
+        "    f: int;\n",
+        "    owner team;\n",
+        "    classification confidential;\n",
+        "    retention \"7y\";\n",
+        "    pii [ p ];\n",
+        "    cloudEvents {\n",
+        "        type \"t\"\n",
+        "        source \"/e\"\n",
+        "        subject \"x\"\n",
+        "    }\n",
+        "}\n",
+        "\n",
+        "subscription b {\n",
+        "    events [ P ]\n",
+        "    consumer c\n",
+        "    when (a != b)\n",
+        "    delivery {\n",
+        "        mode at_least_once;\n",
+        "        maxAttempts 3;\n",
+        "        deadLetter q;\n",
+        "    }\n",
+        "}\n",
+    );
+    assert_eq!(fmt_evt(messy), canonical);
+    // Idempotence: the canonical output is a fixpoint.
+    assert_eq!(fmt_evt(canonical), canonical);
+}
+
+#[test]
+fn when_interiors_format_verbatim() {
+    // The `when` interior is raw text: odd spacing survives unwrapped (ends
+    // trimmed, the `when`-condition rule).
+    let source = "subscription s { events [ E ] consumer c when (  a   !=   b  ) }";
+    let canonical =
+        "subscription s {\n    events [ E ]\n    consumer c\n    when (a   !=   b)\n}\n";
+    assert_eq!(fmt_evt(source), canonical);
+    assert_eq!(fmt_evt(canonical), canonical);
+}
 
 fn fmt_evt(source: &str) -> String {
     format_evt(source).expect("format succeeds")

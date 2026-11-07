@@ -27,17 +27,13 @@
 //!
 //! # Diagnostic codes
 //!
-//! | Code | Meaning |
-//! |------|---------|
-//! | `E0001` | An `.ifml` import has no content in the [`IfmlImports`] bundle (`imported ifml '<path>' was not provided`). |
-//! | `E0002` | A file (main or imported) failed to parse; the message carries the parse error. |
-//! | `E0003` | A circular `.ifml` import (`circular ifml import involving '<path>'`). |
-//! | `E0004` | Two distinct imported files declare the same module name (`ambiguous module '<name>' ...`). |
-//! | `E0005` | One file declares the same module name twice (`duplicate module '<name>'`). |
-//! | `E0006` | A `use` targets no declared module (`unknown module '<name>'`). |
-//! | `E0007` | An override matches neither an input parameter nor a module property (`unknown input '<p>' for module '<m>'`). |
-//! | `E0008` | An input without a default receives no override (`module '<m>' requires input '<p>'`). |
-//! | `E0009` | A literal override's type contradicts the input's declared type (`input '<p>' of module '<m>' expects <ty>`). Structural check only: string literals suit `String`/`Uuid`/custom-identifier types, numbers suit `Int`/`Float`, booleans suit `Boolean`. Full expression typing is a later phase. |
+//! The resolver's diagnostic codes (`E0001`–`E0009`) are allocated in the
+//! central registry — the `rex-diagnostics` crate's `ifml_resolver` band,
+//! re-exported below — and their meanings, fixes, and the allocation
+//! ledger live in
+//! [docs/DIAGNOSTICS.md](https://github.com/yestechgroup/rexlang/blob/main/docs/DIAGNOSTICS.md)
+//! (`rexlang explain E0004` renders one). A new code is a table row
+//! there, never a local constant.
 //!
 //! `compile_ifml_str` over a file with no imports and no uses produces zero
 //! diagnostics.
@@ -50,24 +46,11 @@ use crate::index::{
     parse_ifml_indexed_with_path, IfmlIndex, LiteralKind, ModuleDeclSite, UseOverride,
 };
 
-/// An `.ifml` import has no content in the bundle.
-pub const E_IMPORT_NOT_PROVIDED: &str = "E0001";
-/// A file (main or imported) failed to parse.
-pub const E_PARSE: &str = "E0002";
-/// A circular `.ifml` import.
-pub const E_CIRCULAR: &str = "E0003";
-/// Two distinct imported files declare the same module name.
-pub const E_AMBIGUOUS_MODULE: &str = "E0004";
-/// One file declares the same module name twice.
-pub const E_DUPLICATE_MODULE: &str = "E0005";
-/// A `use` targets no declared module.
-pub const E_UNKNOWN_MODULE: &str = "E0006";
-/// An override matches neither an input parameter nor a module property.
-pub const E_UNKNOWN_INPUT: &str = "E0007";
-/// An input without a default receives no override.
-pub const E_MISSING_INPUT: &str = "E0008";
-/// A literal override's type contradicts the input's declared type.
-pub const E_INPUT_TYPE: &str = "E0009";
+pub use rex_diagnostics::ifml_resolver::{
+    E_AMBIGUOUS_MODULE, E_CIRCULAR, E_DUPLICATE_MODULE, E_IMPORT_NOT_PROVIDED, E_INPUT_TYPE,
+    E_MISSING_INPUT, E_PARSE, E_UNKNOWN_INPUT, E_UNKNOWN_MODULE,
+};
+pub use rex_diagnostics::Severity;
 
 /// The import content provided to a compilation: the `.ifml` source of every
 /// import, keyed `(importing-file path, import path as written)`. The
@@ -124,6 +107,8 @@ impl IfmlImports {
 /// table), a human message, the byte-offset span it points at, and the file
 /// (compilation path key) the span indexes into. Import-level diagnostics
 /// that have no natural span carry `(0, 0)` and the importing file's path.
+/// Every diagnostic carries a [`Severity`] class: resolver and checker
+/// diagnostics are errors, the lint pass's findings are warnings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IfmlDiagnostic {
     /// Stable diagnostic code (`E0001` .. `E0009`).
@@ -134,6 +119,44 @@ pub struct IfmlDiagnostic {
     pub span: (usize, usize),
     /// The file the span belongs to (path as the compilation keys it).
     pub file: String,
+    /// How severe the diagnostic is.
+    pub severity: Severity,
+}
+
+impl IfmlDiagnostic {
+    /// An error-severity diagnostic — the class every resolver and checker
+    /// code carries.
+    pub fn error(
+        code: &'static str,
+        message: impl Into<String>,
+        span: (usize, usize),
+        file: impl Into<String>,
+    ) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            span,
+            file: file.into(),
+            severity: Severity::Error,
+        }
+    }
+
+    /// A warning-severity diagnostic — the lint band (`W0150`–`W0199`).
+    /// Warnings render but never fail a compilation.
+    pub fn warning(
+        code: &'static str,
+        message: impl Into<String>,
+        span: (usize, usize),
+        file: impl Into<String>,
+    ) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            span,
+            file: file.into(),
+            severity: Severity::Warning,
+        }
+    }
 }
 
 /// A one-shot `.ifml` compilation: the main file's parsed model (unchanged,
@@ -164,21 +187,35 @@ pub struct IfmlImportWalk {
 /// the shared traversal behind every host that gathers `.ifml` sources
 /// (the CLI's disk reader, test harnesses, the LSP). `fetch` is called for
 /// **every** `import "..."` statement with the importing file's identity
-/// and the import string as written; returning `Some` text recurses into
-/// it as an `.ifml` file, returning `None` skips it (non-`.ifml` imports
-/// and unreadable files are host concerns — collect `.mox` domains through
-/// the same callback's side effects). The walk is depth-first in source
-/// order; an identity already fully processed is skipped and an identity
-/// re-entering the active path is a cycle the resolver will diagnose —
-/// both mirror [`compile_ifml_str`]'s semantics, so bundle keys built from
-/// this walk always match what the resolver looks up.
+/// and the import string as written; returning `Some((key, text))`
+/// recurses into it as an `.ifml` file, returning `None` skips it
+/// (non-`.ifml` imports and unreadable files are host concerns — collect
+/// `.mox` domains through the same callback's side effects). The walk is
+/// depth-first in source order; an identity already fully processed is
+/// skipped and an identity re-entering the active path is a cycle the
+/// resolver will diagnose — both mirror [`compile_ifml_str`]'s semantics,
+/// so bundle keys built from this walk always match what the resolver
+/// looks up.
+///
+/// The fetch returns the **host-resolved key** alongside the text — the
+/// identity the host actually resolved the import under (a disk path, a
+/// document URI). The walker itself only uses the text for recursion and
+/// [`IfmlImportWalk::sources`]; importer identities stay the as-written
+/// import strings, so bundle keys are unchanged. But hosts must uphold one
+/// obligation for every resolved key they hand out: **a later fetch call
+/// may use that resolved key as the importer identity** — nested gathering
+/// (an imported `.actor` policy's own `.mox` imports, a deploy flow's
+/// bridged walk) resolves relative to what the host handed back, so hosts
+/// must map every key they hand out the same way they map the entry
+/// identity. A host that cannot resolve an importer identity returns
+/// `None`, and the gathering layer records the import as unresolved.
 ///
 /// ```
 /// use rex_ifml::walk_ifml_imports;
 ///
 /// let walk = walk_ifml_imports("app.ifml", "import \"pager.ifml\";", &mut |importer, import| {
 ///     if importer == "app.ifml" && import == "pager.ifml" {
-///         Some("view \"Pager\" {}".to_string())
+///         Some(("pager.ifml".to_string(), "view \"Pager\" {}".to_string()))
 ///     } else {
 ///         None
 ///     }
@@ -187,10 +224,11 @@ pub struct IfmlImportWalk {
 /// assert_eq!(walk.sources[0].0, "app.ifml");
 /// assert_eq!(walk.sources[1].0, "pager.ifml");
 /// ```
+#[allow(clippy::type_complexity)]
 pub fn walk_ifml_imports(
     entry_identity: &str,
     entry_source: &str,
-    fetch: &mut dyn FnMut(&str, &str) -> Option<String>,
+    fetch: &mut dyn FnMut(&str, &str) -> Option<(String, String)>,
 ) -> IfmlImportWalk {
     let mut walk = IfmlImportWalk::default();
     let mut visited: BTreeSet<String> = BTreeSet::new();
@@ -206,10 +244,11 @@ pub fn walk_ifml_imports(
     walk
 }
 
+#[allow(clippy::type_complexity)]
 fn walk_file(
     identity: &str,
     source: &str,
-    fetch: &mut dyn FnMut(&str, &str) -> Option<String>,
+    fetch: &mut dyn FnMut(&str, &str) -> Option<(String, String)>,
     walk: &mut IfmlImportWalk,
     visited: &mut BTreeSet<String>,
     active: &mut Vec<String>,
@@ -225,7 +264,10 @@ fn walk_file(
         .map(|model| model.imports)
         .unwrap_or_default();
     for import in imports {
-        if let Some(text) = fetch(identity, &import) {
+        // The host-resolved key is information for the gathering layer
+        // (dedup, nested resolution); the walker itself needs only the
+        // text, and identities stay the as-written import strings.
+        if let Some((_resolved_key, text)) = fetch(identity, &import) {
             walk_file(&import, &text, fetch, walk, visited, active);
         }
     }
@@ -278,12 +320,12 @@ pub fn compile_ifml_lenient(
                     model: IfmlModel::default(),
                     index: IfmlIndex::single_file(path, text),
                 },
-                vec![IfmlDiagnostic {
-                    code: E_PARSE,
-                    message: error.to_string(),
-                    span: (0, 0),
-                    file: path.to_string(),
-                }],
+                vec![IfmlDiagnostic::error(
+                    E_PARSE,
+                    error.to_string(),
+                    (0, 0),
+                    path.to_string(),
+                )],
             );
         }
     };
@@ -323,36 +365,36 @@ fn resolve_imports(
             continue;
         }
         if active.iter().any(|seen| seen == import_path) {
-            diags.push(IfmlDiagnostic {
-                code: E_CIRCULAR,
-                message: format!("circular ifml import involving '{import_path}'"),
-                span: (0, 0),
-                file: importing_path.to_string(),
-            });
+            diags.push(IfmlDiagnostic::error(
+                E_CIRCULAR,
+                format!("circular ifml import involving '{import_path}'"),
+                (0, 0),
+                importing_path.to_string(),
+            ));
             continue;
         }
         if visited.contains(import_path) {
             continue;
         }
         let Some(import_text) = imports.get(importing_path, import_path) else {
-            diags.push(IfmlDiagnostic {
-                code: E_IMPORT_NOT_PROVIDED,
-                message: format!("imported ifml '{import_path}' was not provided"),
-                span: (0, 0),
-                file: importing_path.to_string(),
-            });
+            diags.push(IfmlDiagnostic::error(
+                E_IMPORT_NOT_PROVIDED,
+                format!("imported ifml '{import_path}' was not provided"),
+                (0, 0),
+                importing_path.to_string(),
+            ));
             continue;
         };
         let (import_model, import_index) =
             match parse_ifml_indexed_with_path(import_path, import_text) {
                 Ok(parsed) => parsed,
                 Err(error) => {
-                    diags.push(IfmlDiagnostic {
-                        code: E_PARSE,
-                        message: error.to_string(),
-                        span: (0, 0),
-                        file: import_path.to_string(),
-                    });
+                    diags.push(IfmlDiagnostic::error(
+                        E_PARSE,
+                        error.to_string(),
+                        (0, 0),
+                        import_path.to_string(),
+                    ));
                     continue;
                 }
             };
@@ -395,12 +437,12 @@ fn resolve_module_uses(index: &mut IfmlIndex, diags: &mut Vec<IfmlDiagnostic>) {
         for (position, &global) in globals.iter().enumerate() {
             let name = index.module_decls[global].name.clone();
             if !seen.insert(name.clone()) {
-                diags.push(IfmlDiagnostic {
-                    code: E_DUPLICATE_MODULE,
-                    message: format!("duplicate module '{name}'"),
-                    span: index.module_decls[global].span,
-                    file: index.files[file].path.clone(),
-                });
+                diags.push(IfmlDiagnostic::error(
+                    E_DUPLICATE_MODULE,
+                    format!("duplicate module '{name}'"),
+                    index.module_decls[global].span,
+                    index.files[file].path.clone(),
+                ));
                 continue;
             }
             if file == 0 {
@@ -413,15 +455,15 @@ fn resolve_module_uses(index: &mut IfmlIndex, diags: &mut Vec<IfmlDiagnostic>) {
                 continue;
             } else if let Some(&(first_file, _)) = table.get(&name) {
                 let first_path = index.files[first_file].path.clone();
-                diags.push(IfmlDiagnostic {
-                    code: E_AMBIGUOUS_MODULE,
-                    message: format!(
+                diags.push(IfmlDiagnostic::error(
+                    E_AMBIGUOUS_MODULE,
+                    format!(
                         "ambiguous module '{name}' (declared in '{first_path}' and '{}')",
                         index.files[file].path
                     ),
-                    span: index.module_decls[global].span,
-                    file: index.files[file].path.clone(),
-                });
+                    index.module_decls[global].span,
+                    index.files[file].path.clone(),
+                ));
                 table.remove(&name);
                 ambiguous.insert(name);
             } else {
@@ -449,12 +491,12 @@ fn resolve_module_uses(index: &mut IfmlIndex, diags: &mut Vec<IfmlDiagnostic>) {
         }
         let Some(&(decl_file, decl_position)) = table.get(&target) else {
             if use_file == 0 {
-                diags.push(IfmlDiagnostic {
-                    code: E_UNKNOWN_MODULE,
-                    message: format!("unknown module '{target}'"),
+                diags.push(IfmlDiagnostic::error(
+                    E_UNKNOWN_MODULE,
+                    format!("unknown module '{target}'"),
                     span,
-                    file: main_path.clone(),
-                });
+                    main_path.clone(),
+                ));
             }
             continue;
         };
@@ -490,39 +532,39 @@ fn validate_use(
                 .iter()
                 .any(|name| name == &override_item.name)
         {
-            diags.push(IfmlDiagnostic {
-                code: E_UNKNOWN_INPUT,
-                message: format!(
+            diags.push(IfmlDiagnostic::error(
+                E_UNKNOWN_INPUT,
+                format!(
                     "unknown input '{}' for module '{target}'",
                     override_item.name
                 ),
-                span: override_item.span,
-                file: main_path.to_string(),
-            });
+                override_item.span,
+                main_path.to_string(),
+            ));
             continue;
         }
         if let (Some(param), Some(literal)) = (input, override_item.literal) {
             if !literal_suits_type(&param.type_ref, literal) {
-                diags.push(IfmlDiagnostic {
-                    code: E_INPUT_TYPE,
-                    message: format!(
+                diags.push(IfmlDiagnostic::error(
+                    E_INPUT_TYPE,
+                    format!(
                         "input '{}' of module '{target}' expects {}",
                         override_item.name, param.type_ref
                     ),
-                    span: override_item.span,
-                    file: main_path.to_string(),
-                });
+                    override_item.span,
+                    main_path.to_string(),
+                ));
             }
         }
     }
     for param in &decl.input_params {
         if !param.has_default && !overrides.iter().any(|o| o.name == param.name) {
-            diags.push(IfmlDiagnostic {
-                code: E_MISSING_INPUT,
-                message: format!("module '{target}' requires input '{}'", param.name),
-                span: use_span,
-                file: main_path.to_string(),
-            });
+            diags.push(IfmlDiagnostic::error(
+                E_MISSING_INPUT,
+                format!("module '{target}' requires input '{}'", param.name),
+                use_span,
+                main_path.to_string(),
+            ));
         }
     }
 }
@@ -535,8 +577,9 @@ fn validate_use(
 /// builtins go through the shared alias table (`crate::check::builtin_type`)
 /// so the resolver and the expression checker can never disagree; any other
 /// `type_ref` is a custom-identifier type, whose only literal shape is a
-/// string (entity handles are opaque text).
-fn literal_suits_type(type_ref: &str, literal: LiteralKind) -> bool {
+/// string (entity handles are opaque text). Shared with the checker's
+/// command option-default rule, which is the same literal-vs-type question.
+pub(crate) fn literal_suits_type(type_ref: &str, literal: LiteralKind) -> bool {
     match crate::check::builtin_type(type_ref) {
         Some(builtin) => builtin.suits(literal),
         None => literal == LiteralKind::Str,
@@ -573,9 +616,11 @@ mod tests {
             "app.ifml",
             "import \"a.ifml\";\nimport \"b.ifml\";",
             &mut |importer, import| match (importer, import) {
-                ("app.ifml", "a.ifml") => Some("import \"c.ifml\";".to_string()),
-                ("a.ifml", "c.ifml") => Some("view \"C\" {}".to_string()),
-                ("app.ifml", "b.ifml") => Some("view \"B\" {}".to_string()),
+                ("app.ifml", "a.ifml") => {
+                    Some(("a.ifml".to_string(), "import \"c.ifml\";".to_string()))
+                }
+                ("a.ifml", "c.ifml") => Some(("c.ifml".to_string(), "view \"C\" {}".to_string())),
+                ("app.ifml", "b.ifml") => Some(("b.ifml".to_string(), "view \"B\" {}".to_string())),
                 _ => None,
             },
         );
@@ -589,11 +634,12 @@ mod tests {
             "app.ifml",
             "import \"a.ifml\";\nimport \"b.ifml\";",
             &mut |importer, import| match (importer, import) {
-                ("app.ifml", "a.ifml") | ("app.ifml", "b.ifml") => {
-                    Some("import \"shared.ifml\";".to_string())
-                }
+                ("app.ifml", "a.ifml") | ("app.ifml", "b.ifml") => Some((
+                    "shared.ifml".to_string(),
+                    "import \"shared.ifml\";".to_string(),
+                )),
                 ("a.ifml", "shared.ifml") | ("b.ifml", "shared.ifml") => {
-                    Some("view \"S\" {}".to_string())
+                    Some(("shared.ifml".to_string(), "view \"S\" {}".to_string()))
                 }
                 _ => None,
             },
@@ -611,7 +657,9 @@ mod tests {
             "app.ifml",
             "import \"loop.ifml\";",
             &mut |importer, import| match (importer, import) {
-                ("app.ifml", "loop.ifml") => Some("import \"app.ifml\";".to_string()),
+                ("app.ifml", "loop.ifml") => {
+                    Some(("loop.ifml".to_string(), "import \"app.ifml\";".to_string()))
+                }
                 _ => None,
             },
         );

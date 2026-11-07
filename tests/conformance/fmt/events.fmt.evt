@@ -2,6 +2,19 @@
 event OrderPlaced version "1.0.0" {
     orderId: String;
     total: int;
+    owner order_team;
+    classification confidential;
+    retention "7y";
+    pii [ orderId ];
+    cloudEvents {
+        type "com.example.orderplaced.v1"
+        source "/orders"
+        subject "{orderId}"
+    }
+}
+
+event AccountTradeUpdate {
+    accountId: String;
 }
 
 event OrderCancelled {}
@@ -11,7 +24,22 @@ channel orders {
     publishes OrderCancelled;
 }
 
+channel accountTrades of accounts {
+    publishes AccountTradeUpdate;
+}
+
 subscription billing {
     events [ OrderPlaced OrderCancelled ]
     consumer billing_service
+}
+
+subscription account_feed {
+    events [ AccountTradeUpdate ]
+    consumer trader_ui scope accounts
+    when (accountId  !=  "")
+    delivery {
+        mode at_least_once;
+        timeoutSeconds 30;
+        deadLetter orders;
+    }
 }

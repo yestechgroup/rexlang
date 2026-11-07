@@ -11,9 +11,11 @@ docs](https://docs.rs/rex-ir)** (also rendered by `cargo doc -p rex-ir`).
 ## The boundary
 
 - A backend consumes **only** `rex_ir::Model` (plus `rex_ir::ActorModel` if
-  it deals with the authorization dimension) or the serialized artifact.
-  Never the AST: parsing, name resolution, validation, and lowering into the
-  IR happen upstream in `rex-driver`.
+  it deals with the authorization dimension, or the standalone artifact its
+  surface emits — `rex_ir::cmmn::CmmnModel` for the case-management
+  backend) or the serialized artifact. Never the AST: parsing, name
+  resolution, validation, and lowering into the IR happen upstream in
+  `rex-driver`.
 - Backends **register nothing and emit anything** — Rust code, JSON Schema,
   Cedar policies, documents, tables.
 - Two integration modes:
@@ -24,8 +26,10 @@ docs](https://docs.rs/rex-ir)** (also rendered by `cargo doc -p rex-ir`).
      JSON. A `.mox` compile emits the `Model` artifact; a `.actor` compile
      emits the standalone `ActorModel` artifact.
 - The in-tree backends (`rex-backend-rust`, `rex-backend-jsonschema`,
-  `rex-backend-cedar`) are reference implementations of exactly this
-  discipline; reading them is the fastest way to learn the shapes.
+  `rex-backend-cedar`, `rex-backend-cmmn` — the last lowering
+  `CmmnModel` + domain model to the cmmn-rs engine's `CaseDefinition`
+  JSON) are reference implementations of exactly this discipline; reading
+  them is the fastest way to learn the shapes.
 
 ## The serialized-artifact contract (summary)
 
@@ -35,7 +39,17 @@ Root shapes, as actually serialized:
 | --- | --- |
 | Domain IR (`Model`) | `{"formatVersion": N, "rexVersion"?: "…", "packages": […]}` |
 | Actor policy (`ActorModel`) | `{"formatVersion": N, "blocks"?: […]}` — block-less serializes as exactly `{"formatVersion": N}` |
+| DDD design (`ddd::DddModel`) | `{"formatVersion": N, "applications"?: […], "modules"?: […]}` (both omitted when empty) |
+| Event contract (`events::EventModel`) | `{"formatVersion": N, "events"?: […], "channels"?: […], "subscriptions"?: […]}` (all omitted when empty) |
+| Deployment (`deploy::DeployModel`) | `{"formatVersion": N, "applications"?: […], "profiles"?: […], "deployments"?: […]}` (all omitted when empty) |
+| Use case (`usecases::UseCaseModel`) | `{"formatVersion": N, "useCases"?: […]}` (omitted when empty) |
+| Case management (`cmmn::CmmnModel`) | `{"formatVersion": N, "cases"?: […]}` (omitted when empty) |
 | Canonical instance | `{"$type": "rex.instance", "formatVersion": N, "model": "…", "objects": […]}` |
+
+Every standalone root carries its own `*_FORMAT_VERSION` marker (all `1`
+today); `rexlang artifact check` classifies non-empty roots by their
+disjoint section keys and falls back to the actor reading for the shared
+minimal `{"formatVersion": N}` bytes.
 
 - **Casing.** All field names and bare enum tags are `camelCase`
   (`formatVersion`, `isReadOnly`, `"crossReference"`). Note that `$type` /
@@ -55,9 +69,12 @@ Root shapes, as actually serialized:
   ignored on read, never denied.
 - **Functions and unknown body targets.** `Package.functions` carries
   sigil-lowered Rune functions as signature-only `Operation`s whose only
-  body is the verbatim `"rosetta"` target (wire contract rule 15). Backends
-  skip body targets they do not own — the `rosetta` text is never emitted
-  as code.
+  body is the ends-trimmed verbatim `"rosetta"` target (wire contract
+  rule 15). Backends skip body targets they do not own — the `rosetta`
+  text is never emitted as code. The Rust backend emits each lowered
+  function as a free function in the flattened module: a `rust` body
+  verbatim, anything else a `todo!()` stub named after the function. Bare
+  `expr`-body calls (issue #63) lower to exactly those emitted stubs.
 - **Stable feature ids.** `Feature::id` equals its 0-based declaration index
   at publication time and is frozen for wire formats; backends key on it.
 - **Golden byte-identity.** The goldens under `tests/conformance/` are the
@@ -73,9 +90,10 @@ order. `cedar-policy` (a dev-dependency of `rex-backend-cedar`) enables it,
 so a workspace that pulls in Cedar codegen inherits insertion order
 everywhere. Emitters that rely on implicit map ordering will emit keys in
 whatever order that build happened to produce. **Canonicalize key order
-yourself before serializing** — see `canonical_key_order` in
-`crates/rex-backend-jsonschema/src/lib.rs`, which recursively re-inserts
-keys in a pinned order.
+yourself before serializing** — `canonical_key_order` in
+`crates/rex-backend-common` recursively re-inserts
+keys in a pinned order; the JSON Schema and Cedar backends both run it
+over their emitted documents.
 
 ## Semver and `formatVersion` policy
 
@@ -113,7 +131,9 @@ Per file it checks the invariants below, prints `OK <path>`, and exits `1`
 naming the file and violation when anything fails:
 
 - the root shape matches a known artifact kind (IR artifact, actor
-  artifact, or `$type: "rex.instance"` canonical instance);
+  artifact, DDD design, event contract, deployment, use-case, or
+  case-management artifact, or `$type: "rex.instance"` canonical
+  instance);
 - `formatVersion` is present, an unsigned integer, and supported — a higher
   version is rejected with an error naming it;
 - structural keys are camelCase (a snake_case spelling of a known key is

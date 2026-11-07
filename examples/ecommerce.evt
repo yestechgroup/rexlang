@@ -1,0 +1,42 @@
+// Shop event contracts over ecommerce.mox: the order-lifecycle events,
+// including a vocabulary-typed payload field (currency: Currency resolves
+// against the iso:4217 vocabulary the domain imports).
+import "ecommerce.mox"
+
+event OrderPlaced version "1.0.0" {
+    orderNo: String;
+    customer: String;
+    currency: Currency;
+    total: int;
+}
+
+event OrderLineShipped version "1.0.0" {
+    orderNo: String;
+    sku: String;
+    quantity: int;
+}
+
+event OrderCancelled version "1.1.0" {
+    orderNo: String;
+    reason: String;
+}
+
+channel orders {
+    publishes OrderPlaced;
+    publishes OrderLineShipped;
+    publishes OrderCancelled;
+}
+
+channel fulfilment {
+    publishes OrderLineShipped;
+}
+
+subscription billing {
+    events [ OrderPlaced OrderCancelled ]
+    consumer billing_service
+}
+
+subscription warehouse {
+    events [ OrderLineShipped ]
+    consumer warehouse_system
+}

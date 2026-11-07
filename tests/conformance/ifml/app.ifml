@@ -67,6 +67,10 @@ view "CustomerEdit" {
     }
 }
 
+view "CustomerDetail" {
+    params { customerId: Uuid };
+}
+
 view "Report" {
     xor: true;
 
@@ -120,5 +124,5 @@ view "Dashboard" {
 }
 
 action "UpdateCustomer" {
-    target: Customer;
+    target: Person;
 }

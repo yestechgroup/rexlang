@@ -13,7 +13,15 @@ use std::sync::OnceLock;
 use rex_backend_jsonschema::{generate, Profile};
 use rex_driver::compile_str;
 
-const EXAMPLES: [&str; 6] = ["library", "ecommerce", "org", "iot", "shapes", "support"];
+const EXAMPLES: [&str; 7] = [
+    "library",
+    "ecommerce",
+    "org",
+    "iot",
+    "shapes",
+    "support",
+    "pricing",
+];
 
 fn workspace_root() -> &'static Path {
     static ROOT: OnceLock<PathBuf> = OnceLock::new();
@@ -50,10 +58,22 @@ fn example_source(name: &str) -> String {
 
 fn compile_example(name: &str) -> rex_ir::Model {
     let path = example_path(name);
+    // The `import sigil` content (the pricing example) gathers through the
+    // CLI collector, scoped to the example's own directory; examples
+    // without sigil imports yield an empty bundle.
+    let sources = [(
+        path.to_str().expect("utf-8 example path").to_string(),
+        example_source(name),
+    )];
+    let sigil = rex_driver::workspace_imports::collect_sigil_imports(&sources)
+        .expect("gather sigil imports for the example");
     let compilation = compile_str(
         path.to_str().expect("utf-8 example path"),
         &example_source(name),
-        &rex_driver::DomainImports::default(),
+        &rex_driver::DomainImports {
+            schemas: rex_driver::SchemaImports::new(),
+            sigil: sigil.imports,
+        },
     );
     assert!(
         compilation.diagnostics.is_empty(),

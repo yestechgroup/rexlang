@@ -4,8 +4,8 @@ application Handover {
     base nz.example.delivery
     module handover {
         service HandoverService {
-            HandoverPrompt verifyRecipient();
-            DeliveryCode releaseParcel();
+            HandoverPrompt verifyRecipient() emits PromptIssued;
+            DeliveryCode releaseParcel() capability ReleaseParcel;
         }
     }
 }

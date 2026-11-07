@@ -11,12 +11,15 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+rex-diagnostics = { workspace = true }
 rex-syntax = { workspace = true }
+rex-ifml = { workspace = true }
 sigil-diag = { workspace = true }
 sigil-model = { workspace = true }
 sigil-resolve = { workspace = true }
 sigil-syntax = { workspace = true }
 rex-ir = { workspace = true }
+rex-verify = { workspace = true }
 rex-expr = { workspace = true }
 rex-vocab = { workspace = true }
 salsa = { workspace = true }
@@ -24,6 +27,4 @@ ariadne = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 serde_json = { workspace = true }
-
-[dev-dependencies]
-rex-ifml = { workspace = true }
+xstate-ir = { workspace = true }

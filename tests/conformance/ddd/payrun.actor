@@ -1,0 +1,10 @@
+import "payrun.mox"
+
+actors PayrunOps {
+    actor Manager
+    capability ApprovePayRun on PayRun
+
+    grant Manager {
+        permit ApprovePayRun
+    }
+}

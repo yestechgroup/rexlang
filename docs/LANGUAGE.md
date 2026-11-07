@@ -7,10 +7,12 @@ reference; crate docs cover implementation.
 
 **Grammar authority.** The normative EBNF for every rexlang surface lives
 exactly once, in the parser module docs
-(`crates/rex-syntax/src/parser.rs`, rendered as
+(`crates/rex-syntax/src/parser/mod.rs`, rendered as
 [`rex_syntax::parser`](https://docs.rs/rex-syntax/latest/rex_syntax/parser/) —
 sections: *`.mox` model sources*, *the shared `actors_block`*, *`.actor`
-policy files*, *`.ddd` design sources*, *`.evt` event-contract sources*).
+policy files*, *`.ddd` design sources*, *`.evt` event-contract sources*,
+*`.deploy` deployment sources*, *`.uc` use case sources*, and *`.cmmn`
+case management sources*).
 The sections below link to it
 instead of restating the grammar; when this page and the parser disagree,
 the parser wins. The `.ifml` surface's authority is its Pest grammar file
@@ -145,8 +147,8 @@ A `.mox` package can import JSON Schema types into its namespace — the
 ```mox
 package nz.example.todos
 
-import schema "schemas/todo_item.json" as TodoItem
-import schema "schemas/todo_list.json"
+import schema "../tests/conformance/models/import_schema/todo_item.json" as TodoItem
+import schema "../tests/conformance/models/import_schema/todo_list.json"
 
 /// The aggregate root, referring to two imported schema types.
 class TodoList {
@@ -206,13 +208,18 @@ lower into synthetic rexlang packages — the `import_sigil_decl` production
 of the grammar authority (`import sigil "<path>"`, no alias):
 
 ```mox
-package nz.example.trading
+package nz.example.pricing
 
-import sigil "rosetta/trade.rosetta"
+import sigil "../examples/pricing.rosetta"
 
-/// The lowered `oracle.basic.Trade` class is ordinary rexlang content.
-class Book {
-    refers oracle.basic.Trade about
+/// The lowered `pricing.model` package carries the Rune namespace's
+/// functions (signature-only operations with verbatim `"rosetta"` bodies);
+/// the `zonedDateTime` reference pulls in the `com.rosetta.model` builtin
+/// package. See `examples/pricing.mox` — the canonical example this fence
+/// mirrors.
+class Quote {
+    String symbol
+    double notional
 }
 ```
 
@@ -253,10 +260,14 @@ convention), the `output` → the return type, the `definition` string → the
 description, and a `library function`'s array parameters carry a `0..*`
 multiplicity. A func without an `output` cannot become an operation (rexlang
 operations always return) and is skipped with a warning naming it. The
-declaration's complete Rune source is embedded **verbatim** as the
+declaration's complete Rune source is embedded **ends-trimmed verbatim**
+(the declaration's text without trailing whitespace — sigil spans consume
+trailing blank lines; interior indentation is never reformatted) as the
 operation's `"rosetta"` body target — dispatch heads, conditions,
 post-conditions, aliases, and `set`/`add` statements survive only inside
-that text, and nothing in rexlang parses or executes them yet. Functions are
+that text, and nothing in rexlang parses or executes them yet (making them
+executable is the Rune body translation design, [`docs/RUNE-BODIES.md`](RUNE-BODIES.md);
+until then the Rust backend emits `todo!()` stubs). Functions are
 not types: they never join the `.mox`-side resolution namespace (an
 attribute typed by a function stays an error), and builtin
 `com.rosetta.model` functions stay implicit.
@@ -449,7 +460,22 @@ capability.
 `agent` declares an autonomous LLM agent; the plain `actor` remains the
 human principal. Both take the same optional `extends` clause, and a
 declared kind is inherited: an actor that declares no kind takes the
-nearest ancestor's declared kind, defaulting to human.
+nearest ancestor's declared kind, defaulting to human. `extends` confers
+authority: an agent's effective permits are its own grants plus its
+ancestors' (the same rule `gen tools` and the delegation containment
+check use), so generated Cedar output addresses every holder — the
+action's `principalTypes` list the actors whose effective permits (or
+forbid bindings) reach it, and each grant entry emits one policy per
+holding actor, because Cedar's `is` matches the exact principal type and
+hierarchy membership (`memberOfTypes`) alone would leave an agent's
+request validated but unauthorized.
+
+Blocks declare obligations with `obligation <name>` lines — the named
+follow-through actions entries attach — under the same discipline as
+purposes: several per block, duplicates within a block are errors, and the
+declared set pools union-wide across blocks. Grant and delegation entries
+may only name declared obligations; an undeclared name is a compile error
+naming the grant (by actor) or delegation and the obligation.
 
 A `delegation` is a named transfer of authority from one actor to another:
 `from` and `to` are required, in that order, and the body holds only effect
@@ -512,8 +538,9 @@ is a tested property, not an aspiration.
 
 | Command | Purpose |
 |---|---|
-| `rexlang check <file>...` | validate; ariadne-rendered diagnostics grouped per file (`.mox`, `.actor`, `.ddd`, and `.evt`; each input may be a directory, scanned recursively for `*.mox`) |
-| `rexlang ir <file>... -o <out>` | emit the Core IR artifact (`.actor`: the ActorModel artifact; `.ddd`: the DDD design artifact; `.evt`: the EventModel artifact; several `.mox`: one multi-package model) |
+| `rexlang check <file>...` | validate; ariadne-rendered diagnostics grouped per file (every surface: `.mox`, `.actor`, `.ddd`, `.evt`, `.deploy`, `.uc`, `.cmmn`, `.ifml`; a directory argument enters **project mode**: every supported surface under it is gathered into one snapshot and checked independently, each file's imports resolving map-first from the snapshot and sibling artifacts reused compile-once) |
+| `rexlang ir <file>... -o <out>` | emit the Core IR artifact (`.actor`: the ActorModel artifact; `.ddd`: the DDD design artifact; `.evt`: the EventModel artifact; `.uc`/`.cmmn`: the standalone artifact; several `.mox`: one multi-package model) |
+| `rexlang build <paths>... -o <dir>` | one JSON artifact per supported input file at `<dir>/<input path>.json` — the `rexlang ir` artifact for that surface; the output directory defaults to `target/rex`; directories enter project mode like `check`; exits `1` when any file fails, while compiling files still emit |
 | `rexlang gen rust <file>... -o <dir>` | arena-based Rust models |
 | `rexlang gen json-schema <file>... --profile wire\|api -o <dir>` | JSON Schema |
 | `rexlang gen cedar <file>... -o <dir>` | Cedar policies + schema (`.mox`: inline blocks; `.actor`: file + imported domains) |
@@ -522,10 +549,30 @@ is a tested property, not an aspiration.
 | `rexlang fmt [--check] <files>\|-` | canonical formatting (comments kept) |
 | `rexlang lsp` | language server (stdio) |
 
-`.ddd` files are a separate design surface — a Sculptor-style DDD design
-layer compiled against the domain models they import; `check`, `ir`, and
-`fmt` dispatch on the `.ddd` extension. See [docs/DDD.md](DDD.md). `.evt`
-files are a separate event-contract surface — events, channels, and
-subscriptions compiled against the domain models they import; `check`,
-`ir`, and `fmt` dispatch on the `.evt` extension. See
-[docs/EVENTS.md](EVENTS.md).
+## Surfaces beyond this reference
+
+Every surface follows the same pipeline — `check`, `ir`, and `fmt` dispatch
+on its extension; each compiles to its own versioned artifact consumed by
+downstream tools. This page is the `.mox`/`.actor` reference; the others:
+
+- **`.ddd`** — a Sculptor-style DDD design layer (applications, modules,
+  services, repositories, searches, and entity state machines) compiled
+  against the domain models it imports. See [docs/DDD.md](DDD.md).
+- **`.evt`** — event contracts: versioned events, the channels that
+  publish them, and the subscriptions that deliver them, typed against the
+  imported domains. See [docs/EVENTS.md](EVENTS.md).
+- **`.deploy`** — deployment projections: one logical application bound to
+  its designs and flows, projected onto capability-described targets
+  through profiles and policies. See [docs/DEPLOY.md](DEPLOY.md).
+- **`.uc`** — SysML v2 use case patterns: subjects, actors, anchored
+  messages, performed steps, and successions, composed across all four
+  import buckets. See [docs/USECASES.md](USECASES.md).
+- **`.cmmn`** — CMMN 1.1 case management: cases, typed case files, plans,
+  and sentry criteria, lowered by `rex-backend-cmmn` to the cmmn-rs
+  engine's `CaseDefinition` JSON. See [docs/CMMN.md](CMMN.md).
+- **`.ifml`** — interaction flows over the reference pattern library,
+  type-checked against the imported domains. See [docs/IFML.md](IFML.md).
+
+The examples directory (`examples/`, see its README) carries a canonical
+example for every surface — the support-desk stack exercises seven of them
+over one domain.

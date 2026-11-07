@@ -47,6 +47,7 @@ fn borrowing_model() -> UseCaseModel {
                         name: "checkCard".into(),
                         operation: "verifyMember".into(),
                         requires: vec!["VerifyMember".into()],
+                        when: None,
                     }],
                 },
             ],
@@ -327,6 +328,42 @@ fn from_json_tolerates_unknown_fields_in_and_around_entries() {
     let sparse = UseCaseModel::from_json(r#"{ "formatVersion": 1, "bogus": true }"#)
         .expect("sparse artifact");
     assert!(sparse.use_cases.is_empty());
+}
+
+/// A step's optional `when` guard serializes as the verbatim condition
+/// string; a step without one keeps the exact pre-guard JSON shape (the
+/// additive-field rule: `#[serde(default)]` + `skip_serializing_if`).
+#[test]
+fn step_guard_serializes_and_absence_keeps_the_old_shape() {
+    let guarded = Step {
+        name: "release".into(),
+        operation: "releaseParcel".into(),
+        requires: vec!["ReleaseParcel".into()],
+        when: Some("parcelSecured && recipientVerified".into()),
+    };
+    let plain = Step {
+        name: "verify".into(),
+        operation: "verifyRecipient".into(),
+        requires: Vec::new(),
+        when: None,
+    };
+    let guarded_json = serde_json::to_string(&guarded).expect("serialize guarded step");
+    assert_eq!(
+        guarded_json,
+        r#"{"name":"release","operation":"releaseParcel","requires":["ReleaseParcel"],"when":"parcelSecured && recipientVerified"}"#
+    );
+    let plain_json = serde_json::to_string(&plain).expect("serialize plain step");
+    assert_eq!(
+        plain_json, r#"{"name":"verify","operation":"verifyRecipient"}"#,
+        "a guard-less step must serialize byte-identically to the pre-guard shape"
+    );
+    let parsed = UseCaseModel::from_json(&format!(
+        r#"{{"formatVersion":1,"useCases":[{{"name":"U","subject":{{"name":"L","steps":[{guarded_json},{plain_json}]}}}}]}}"#
+    ))
+    .expect("round trip");
+    let steps = &parsed.use_cases[0].subject.as_ref().expect("subject").steps;
+    assert_eq!(steps[0], guarded);
+    assert_eq!(steps[1], plain);
 }
 
 /// The artifact carries its own version marker: the constant is 1 and

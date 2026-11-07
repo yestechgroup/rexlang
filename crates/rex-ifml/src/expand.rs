@@ -18,6 +18,12 @@
 //!   property defaults lose); unmatched overrides are dropped — inputs are
 //!   consumed by the spliced tree, everything else is a slot with no
 //!   default to fill.
+//! - `use` statements inside `command` bodies stay references: a command
+//!   carries no containers/components to splice a module's contents into,
+//!   and inventing a lossy events-only splice now would constrain the CLI
+//!   pattern-composition design (tracked as a follow-up of #76/#77). The
+//!   resolver still resolves and validates those uses; only expansion
+//!   defers.
 //!
 //! The expansion is structural only: nothing is renamed or qualified, and
 //! the wire format is untouched (`formatVersion: 1`).

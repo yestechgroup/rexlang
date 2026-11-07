@@ -138,6 +138,58 @@ fn non_ifml_import_passes_through_untouched() {
 }
 
 #[test]
+fn command_use_sites_resolve_and_validate() {
+    let imports = bundle(&[("app.ifml", "pager.ifml", PAGER_IFML)]);
+    let source = r#"
+import "pager.ifml";
+
+command "customers" {
+    use "Pagination" as pager {
+        page: 2;
+        pageSize: 25;
+    };
+
+    command "list" {
+        output: table;
+    }
+}
+"#;
+    let compilation = compile_ok("app.ifml", source, &imports);
+    assert_eq!(compilation.index.commands.len(), 2);
+    assert_eq!(compilation.index.module_uses.len(), 1);
+    assert_eq!(
+        compilation.index.module_uses[0].resolved_module,
+        Some((1, 0)),
+        "a use inside a command body resolves like any other"
+    );
+
+    // Validation applies too: a default-less input missing its override,
+    // and an unknown target, are the same E-codes as in views.
+    let missing = source.replace("pageSize: 25;", "");
+    let diagnostics = compile_ifml_str("app.ifml", &missing, &imports)
+        .expect_err("the missing pageSize override must be diagnosed");
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == E_MISSING_INPUT),
+        "{diagnostics:?}"
+    );
+
+    let unknown = compile_ifml_str(
+        "app.ifml",
+        "command \"c\" {\n    use \"NoSuch\";\n}",
+        &IfmlImports::default(),
+    )
+    .expect_err("an unknown target must be diagnosed");
+    assert!(
+        unknown
+            .iter()
+            .any(|diagnostic| diagnostic.code == E_UNKNOWN_MODULE),
+        "{unknown:?}"
+    );
+}
+
+#[test]
 fn unknown_module() {
     let text = r#"
 view "Home" {

@@ -844,6 +844,11 @@ const GOLDENS: &[(&str, &str, Formatter)] = &[
         "tests/conformance/fmt/usecases.fmt.uc",
         rex_syntax::fmt::format_usecases,
     ),
+    (
+        "tests/conformance/models/cmmn.cmmn",
+        "tests/conformance/fmt/cmmn.fmt.cmmn",
+        rex_syntax::fmt::format_cmmn,
+    ),
 ];
 
 /// Workspace root (two levels above the rex-syntax crate).

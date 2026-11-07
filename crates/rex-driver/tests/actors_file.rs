@@ -2,7 +2,9 @@
 //! salsa-tracked compilation of an actor file against one or more imported
 //! domain models, producing the standalone `rex_ir::ActorModel`.
 
-use rex_driver::{compile_actors_str, ActorCompilation, Diagnostic, Severity};
+use rex_driver::{
+    compile_actors_str, compile_actors_str_with_designs, ActorCompilation, Diagnostic, Severity,
+};
 use rex_ir::{GrantEffect, TypeRef, ACTOR_MODEL_FORMAT_VERSION};
 
 /// A support-style domain: classes to resolve capabilities and conditions
@@ -45,6 +47,7 @@ actors Support {
 
     capability ReadTicket on Ticket
     capability RaiseRefund on rex.support.domain.Ticket
+    obligation audit
 
     grant Customer {
         permit ReadTicket
@@ -1347,4 +1350,246 @@ actors ResolvePolicies {
     );
     assert!(compilation.model.is_some());
     assert!(compilation.domains_model.is_some());
+}
+
+// --- capability coverage (rexlang#128: J4 promoted to compile time) ---------
+
+/// A design whose one operation carries `AutoAssign` — the carrier set the
+/// coverage check pools across every provided design.
+const DESK_DESIGN: &str = r#"
+application Desk {
+    module desk {
+        service TicketService {
+            boolean autoAssign() capability AutoAssign;
+        }
+    }
+}
+"#;
+
+/// A design whose one operation carries `ReadTicket`.
+const READ_DESIGN: &str = r#"
+application Desk {
+    module desk {
+        service TicketService {
+            boolean read() capability ReadTicket;
+        }
+    }
+}
+"#;
+
+/// A design whose one operation carries `RaiseRefund`.
+const REFUND_DESIGN: &str = r#"
+application Desk {
+    module desk {
+        service RefundService {
+            boolean raise() capability RaiseRefund;
+        }
+    }
+}
+"#;
+
+/// Compiles the actor source against designs compiled standalone (no
+/// imports — capability clauses are plain names the design records
+/// unvalidated without an actor model).
+fn compile_with_designs(
+    actor_source: &str,
+    domains: &[(&str, &str)],
+    designs: &[&str],
+) -> ActorCompilation {
+    let domains: Vec<(String, String)> = domains
+        .iter()
+        .map(|(path, source)| (path.to_string(), source.to_string()))
+        .collect();
+    let models: Vec<rex_ir::ddd::DddModel> = designs
+        .iter()
+        .map(|source| {
+            rex_driver::compile_ddd_str(
+                "design.ddd",
+                source,
+                &[],
+                &rex_driver::DomainImports::default(),
+            )
+            .model
+            .expect("standalone design compiles")
+        })
+        .collect();
+    compile_actors_str_with_designs(
+        "support.actor",
+        actor_source,
+        &domains,
+        &rex_driver::DomainImports::default(),
+        &models,
+    )
+}
+
+#[test]
+fn granted_capability_with_no_designs_stays_silent() {
+    let compilation = compile_with_designs(ACTOR, &[("domain.mox", DOMAIN)], &[]);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "no designs: coverage is silent (opt-in house style): {:?}",
+        compilation.diagnostics
+    );
+}
+
+#[test]
+fn granted_capability_carried_by_an_operation_passes() {
+    let compilation = compile_with_designs(
+        ACTOR,
+        &[("domain.mox", DOMAIN)],
+        &[DESK_DESIGN, READ_DESIGN, REFUND_DESIGN],
+    );
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "every granted capability has a carrier across the designs: {:?}",
+        compilation.diagnostics
+    );
+}
+
+#[test]
+fn granted_capability_uncarried_errors_on_the_grant_entry() {
+    let source = concat!(
+        "import \"domain.mox\"\n",
+        "\n",
+        "actors Support {\n",
+        "    actor Customer\n",
+        "    capability ReadTicket on Ticket\n",
+        "\n",
+        "    grant Customer {\n",
+        "        permit ReadTicket\n",
+        "    }\n",
+        "}\n",
+    );
+    // The desk design carries only AutoAssign — ReadTicket dangles.
+    let compilation = compile_with_designs(source, &[("domain.mox", DOMAIN)], &[DESK_DESIGN]);
+    let (path, diagnostic) = single(
+        &compilation,
+        "is granted but no operation or search carries it",
+    );
+    assert_eq!(path, "support.actor");
+    assert!(
+        diagnostic.message.contains("capability 'ReadTicket'"),
+        "the message names the dangling capability: {:?}",
+        diagnostic.message
+    );
+    let span = span_of(source, "permit ReadTicket", 0);
+    let grant_span = {
+        let start = span.start + "permit ".len();
+        (start..start + "ReadTicket".len()).into()
+    };
+    assert_eq!(
+        diagnostic.span,
+        Some(grant_span),
+        "the span lands on the grant entry's capability reference"
+    );
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("declare the capability on an operation or search of a design, or drop the grant"),
+    );
+    let code = diagnostic.code.as_ref().expect("carries a code");
+    assert_eq!(code.name(), "grantedCapabilityUncarried");
+    let json = serde_json::to_value(code).expect("the code serializes");
+    let grant_span: rex_driver::Span = grant_span;
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "grantedCapabilityUncarried": {
+                "capability": "ReadTicket",
+                "span": [grant_span.start, grant_span.end]
+            }
+        })
+    );
+    assert!(compilation.model.is_none(), "errors block the artifact");
+}
+
+#[test]
+fn delegated_capability_uncarried_errors_like_a_grant() {
+    let source = concat!(
+        "import \"domain.mox\"\n",
+        "\n",
+        "actors Support {\n",
+        "    actor Customer\n",
+        "    agent Runner\n",
+        "    capability AuditTrail on Ticket\n",
+        "\n",
+        "    grant Runner {\n",
+        "        permit AuditTrail\n",
+        "    }\n",
+        "\n",
+        "    delegation HandOff {\n",
+        "        from Customer to Runner\n",
+        "        permit AuditTrail\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile_with_designs(source, &[("domain.mox", DOMAIN)], &[DESK_DESIGN]);
+    let (path, diagnostic) = single(&compilation, "capability 'AuditTrail' is granted");
+    assert_eq!(path, "support.actor");
+    assert!(
+        diagnostic.span.is_some(),
+        "one deduplicated diagnostic, spanned on the (grant) reference"
+    );
+}
+
+#[test]
+fn cedar_only_grant_entries_stay_out_of_coverage() {
+    let source = concat!(
+        "import \"domain.mox\"\n",
+        "\n",
+        "actors Support {\n",
+        "    actor Customer\n",
+        "    capability ReadTicket on Ticket\n",
+        "\n",
+        "    grant Customer {\n",
+        "        cedar { permit(principal, action, resource); }\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile_with_designs(source, &[("domain.mox", DOMAIN)], &[DESK_DESIGN]);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "verbatim cedar policies name no rexlang capability: {:?}",
+        compilation.diagnostics
+    );
+}
+
+#[test]
+fn coverage_pools_carriers_across_designs() {
+    let carried = r#"
+application Desk {
+    module desk {
+        service OtherService {
+            boolean read() capability ReadTicket;
+        }
+    }
+}
+"#;
+    // ReadTicket carried by the *second* design; AutoAssign by the third;
+    // RaiseRefund by a fourth.
+    let compilation = compile_with_designs(
+        ACTOR,
+        &[("domain.mox", DOMAIN)],
+        &[READ_DESIGN, carried, DESK_DESIGN, REFUND_DESIGN],
+    );
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "any design's operation or search carries the capability: {:?}",
+        compilation.diagnostics
+    );
+}
+
+#[test]
+fn inline_domain_blocks_join_coverage_under_their_own_file() {
+    // DOMAIN's inline `actors Inbox` block grants `AutoAssign`; a design
+    // set that carries nothing leaves it dangling — tagged with the
+    // domain's path, spanned into the domain source.
+    let compilation = compile_with_designs(ACTOR, &[("domain.mox", DOMAIN)], &[READ_DESIGN]);
+    let (path, diagnostic) = single(&compilation, "capability 'AutoAssign' is granted");
+    assert_eq!(path, "domain.mox");
+    let span = diagnostic.span.expect("spanned into the mox source");
+    assert!(
+        DOMAIN[span.start..span.end].contains("AutoAssign"),
+        "the span points at the inline grant's capability: {:?}",
+        &DOMAIN[span.start..span.end]
+    );
 }

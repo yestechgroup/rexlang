@@ -4,23 +4,11 @@
 module "Pagination" {
     input { page: Int = 1, pageSize: Int = 25, total: Int = 0 }
     output { total: Int }
+    // Presentational: the pager binds page/pageSize/total state and the
+    // consuming view wires its own page transitions — paging is state,
+    // not navigation, so the module hardcodes no navigate targets.
 
-    component "pager" {
-        type: list;
-        data: Item;
-        fields: [name];
-
-        on first -> navigate("FirstPage", {
-            page: 1
-        });
-        on previous if page > 1 -> navigate("PreviousPage", {
-            page: page - 1
-        });
-        on next if page * pageSize < total -> navigate("NextPage", {
-            page: page + 1
-        });
-        on last -> navigate("LastPage");
-    }
+    component "pager" { type: list; data: Item; fields: [name]; }
 }
 
 module "Tabs" {

@@ -53,6 +53,14 @@ module "SearchPanel" {
             query: values.query
         });
     }
+
+    // The submit target: a self-contained panel refreshes its own results
+    // list (the consuming view may override it via the splice).
+
+    component "results" {
+        type: list;
+        data: Item;
+    }
 }
 
 module "Calendar" {

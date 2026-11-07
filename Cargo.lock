@@ -548,6 +548,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "creusot-std"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b019630da7e585ab18eff475d7ea820474c3fc0cd05a57706facf37f67ab2705"
+dependencies = [
+ "creusot-std-proc",
+]
+
+[[package]]
+name = "creusot-std-proc"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a21564d3da8f97ce00e03125d0c3f7c9faedfa68e5d182d88beb25c82c12d25"
+dependencies = [
+ "pearlite-syn",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "uuid",
+]
+
+[[package]]
 name = "crossbeam-deque"
 version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2007,6 +2029,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pearlite-syn"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0cada22bee420c97f91bd98f0e1effdd6ef5ab219df0561f35144dcb504ebfd"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2429,9 +2462,30 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cedar-policy",
+ "rex-backend-common",
  "rex-driver",
  "rex-expr",
  "rex-ir",
+ "serde_json",
+]
+
+[[package]]
+name = "rex-backend-cmmn"
+version = "0.1.0"
+dependencies = [
+ "rex-driver",
+ "rex-expr",
+ "rex-ir",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "rex-backend-common"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
  "serde_json",
 ]
 
@@ -2442,6 +2496,7 @@ dependencies = [
  "anyhow",
  "jsonschema",
  "proptest",
+ "rex-backend-common",
  "rex-driver",
  "rex-ir",
  "serde_json",
@@ -2453,6 +2508,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "proptest",
+ "rex-backend-common",
  "rex-driver",
  "rex-expr",
  "rex-ir",
@@ -2468,6 +2524,7 @@ dependencies = [
  "rex-backend-cedar",
  "rex-backend-jsonschema",
  "rex-backend-rust",
+ "rex-diagnostics",
  "rex-driver",
  "rex-ifml",
  "rex-ir",
@@ -2479,15 +2536,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "rex-diagnostics"
+version = "0.1.0"
+
+[[package]]
 name = "rex-driver"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "ariadne",
+ "rex-diagnostics",
  "rex-expr",
  "rex-ifml",
  "rex-ir",
  "rex-syntax",
+ "rex-verify",
  "rex-vocab",
  "salsa",
  "serde",
@@ -2497,6 +2560,7 @@ dependencies = [
  "sigil-resolve",
  "sigil-syntax",
  "thiserror",
+ "xstate-ir",
 ]
 
 [[package]]
@@ -2516,6 +2580,7 @@ dependencies = [
  "pest",
  "pest_derive",
  "proptest",
+ "rex-diagnostics",
  "rex-driver",
  "rex-expr",
  "rex-ir",
@@ -2567,6 +2632,14 @@ dependencies = [
  "chumsky 0.10.1",
  "logos 0.15.1",
  "thiserror",
+]
+
+[[package]]
+name = "rex-verify"
+version = "0.1.0"
+dependencies = [
+ "creusot-std",
+ "proptest",
 ]
 
 [[package]]
@@ -2632,9 +2705,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.44"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6725596c3f2c3a0aef021139e145d4eafe314a6623e4680ca83852b2c67ab2ba"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -2696,9 +2769,9 @@ checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.15"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -3621,6 +3694,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
+name = "uuid"
+version = "1.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a0e2d11620c50695fe12bbbfde96b3477fe606e7284c22d505c12ce51214514"
+dependencies = [
+ "getrandom 0.4.3",
+ "js-sys",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "uuid-simd"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3752,18 +3836,18 @@ dependencies = [
 
 [[package]]
 name = "webpki-root-certs"
-version = "1.0.9"
+version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b96554aa2acc8ccdb7e1c9a58a7a68dd5d13bccc69cd124cb09406db612a1c9b"
+checksum = "e49d0e65abc00c142e8f9428da991da9f1a250c39be97459901eb12b9b49f62a"
 dependencies = [
  "rustls-pki-types",
 ]
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.9"
+version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+checksum = "f5f280bbb2b287bc8e7de7e3852945a0ff50d1bbcb5ed42b6c7a568c546df171"
 dependencies = [
  "rustls-pki-types",
 ]
@@ -3929,6 +4013,15 @@ name = "writeable"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
+
+[[package]]
+name = "xstate-ir"
+version = "0.2.1"
+source = "git+https://github.com/yestechgroup/restingstate.git?rev=380580b6407f6530c6fb89e1ce87621567f009c5#380580b6407f6530c6fb89e1ce87621567f009c5"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "yansi"

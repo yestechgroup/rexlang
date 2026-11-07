@@ -1,0 +1,38 @@
+// Case-management fixtures for the lending domain.
+// (Deliberately non-canonical source: the formatter golden compares against
+// the canonical layout; do not "fix" the spacing here. The imports are real
+// so the batch check compiles this file like any model — shapes that need
+// richer cross-surface detail live in tests/conformance/cmmn/lending.cmmn
+// and the unit tests.)
+import "../cmmn/lending.mox"
+import "../cmmn/lending.evt"
+import "../cmmn/lending.actor"
+import "../cmmn/lending.ddd" as lending
+
+case CommercialLoan {
+    roles {
+        role relationship_manager as RelationshipManager;
+        role credit_analyst;
+    }
+    case_file {
+        /// Received financial statements.
+        FinancialStatements[] financials;
+        Borrower[0..1] borrower;
+    }
+    stage Intake {
+        task VerifyBorrower {
+            performer: relationship_manager;
+        }
+        milestone ApplicationReady {
+            entry on VerifyBorrower.complete;
+        }
+    }
+    stage Assessment {
+        entry on ApplicationReady.occur;
+        service ScoreApplication {
+            execute lending.CreditAssessmentService.assess;
+            entry on financials.update, FinancialStatementsReceived when (financials.size() > 0);
+            required;
+        }
+    }
+}

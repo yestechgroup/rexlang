@@ -25,6 +25,8 @@ actors Support {
     capability ApproveRefund on Ticket
 
     purpose RefundTriage
+    obligation audit
+    obligation ack
 
     grant Customer {
         permit ReadTicket
@@ -43,6 +45,8 @@ actors Support {
     grant Finance {
         permit ApproveRefund
     }
+
+    agent Auditor extends Finance
 
     delegation RefundIntake {
         from Customer

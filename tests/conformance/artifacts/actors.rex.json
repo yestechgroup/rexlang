@@ -167,6 +167,11 @@
             },
             {
               "name": "Finance"
+            },
+            {
+              "name": "Auditor",
+              "extends": "Finance",
+              "kind": "agent"
             }
           ],
           "capabilities": [
@@ -213,6 +218,10 @@
           ],
           "purposes": [
             "RefundTriage"
+          ],
+          "obligations": [
+            "audit",
+            "ack"
           ],
           "grants": [
             {

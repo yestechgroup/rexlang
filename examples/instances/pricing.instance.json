@@ -1,0 +1,13 @@
+{
+  "$type": "rex.instance",
+  "formatVersion": 1,
+  "model": "nz.example.pricing",
+  "objects": [
+    {
+      "$id": "quote/0",
+      "$type": "Quote",
+      "notional": 1250000.0,
+      "symbol": "ACME"
+    }
+  ]
+}

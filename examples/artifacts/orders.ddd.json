@@ -1,0 +1,282 @@
+{
+  "formatVersion": 1,
+  "application": {
+    "name": "Orders",
+    "base": "nz.example.shop"
+  },
+  "modules": [
+    {
+      "name": "ordering",
+      "services": [
+        {
+          "name": "OrderService",
+          "description": "Places and prices orders across the catalogue.",
+          "operations": [
+            {
+              "name": "place",
+              "returnType": {
+                "type": "class",
+                "value": {
+                  "package": "nz.example.shop",
+                  "name": "Order"
+                }
+              },
+              "params": [
+                {
+                  "name": "orderNo",
+                  "type": {
+                    "type": "primitive",
+                    "value": "string"
+                  }
+                },
+                {
+                  "name": "forCustomer",
+                  "type": {
+                    "type": "class",
+                    "value": {
+                      "package": "nz.example.shop",
+                      "name": "Customer"
+                    }
+                  }
+                },
+                {
+                  "name": "currency",
+                  "type": {
+                    "type": "vocabulary",
+                    "value": {
+                      "package": "nz.example.shop",
+                      "name": "Currency"
+                    }
+                  }
+                }
+              ],
+              "capabilities": [
+                "PlaceOrder"
+              ]
+            },
+            {
+              "name": "saveOrder",
+              "delegation": {
+                "target": "OrderRepository",
+                "operation": "save"
+              }
+            },
+            {
+              "name": "findOrders",
+              "delegation": {
+                "target": "OrderSearch",
+                "operation": "search"
+              }
+            }
+          ],
+          "dependencies": [
+            "OrderRepository",
+            "OrderSearch"
+          ]
+        }
+      ],
+      "designs": [
+        {
+          "class": "Order",
+          "stereotype": "entity",
+          "flags": {
+            "scaffold": true,
+            "auditable": true,
+            "optimisticLocking": true
+          },
+          "repository": {
+            "name": "OrderRepository",
+            "operations": [
+              {
+                "name": "findById",
+                "builtin": "findById"
+              },
+              {
+                "name": "findAll",
+                "builtin": "findAll"
+              },
+              {
+                "name": "save",
+                "builtin": "save"
+              },
+              {
+                "name": "delete",
+                "builtin": "delete"
+              },
+              {
+                "name": "findByNumber",
+                "returnType": {
+                  "type": "class",
+                  "value": {
+                    "package": "nz.example.shop",
+                    "name": "Order"
+                  }
+                },
+                "params": [
+                  {
+                    "name": "orderNo",
+                    "type": {
+                      "type": "primitive",
+                      "value": "string"
+                    }
+                  }
+                ],
+                "isProtected": true
+              }
+            ]
+          }
+        },
+        {
+          "class": "OrderLine",
+          "stereotype": "entity",
+          "flags": {
+            "auditable": true,
+            "optimisticLocking": true
+          }
+        },
+        {
+          "class": "Product",
+          "stereotype": "entity",
+          "flags": {
+            "auditable": true,
+            "optimisticLocking": true
+          },
+          "repository": {
+            "name": "ProductRepository",
+            "operations": [
+              {
+                "name": "findById",
+                "builtin": "findById"
+              },
+              {
+                "name": "findAll",
+                "builtin": "findAll"
+              },
+              {
+                "name": "findByExample",
+                "builtin": "findByExample"
+              },
+              {
+                "name": "findByKeys",
+                "builtin": "findByKeys"
+              },
+              {
+                "name": "save",
+                "builtin": "save"
+              },
+              {
+                "name": "delete",
+                "builtin": "delete"
+              }
+            ]
+          }
+        }
+      ],
+      "searches": [
+        {
+          "name": "OrderSearch",
+          "description": "Full-text search over the order book.",
+          "entity": "Order",
+          "text": [
+            {
+              "property": "orderNo",
+              "boost": 2.0
+            }
+          ],
+          "filters": [
+            {
+              "property": "currency"
+            }
+          ],
+          "sort": [
+            {
+              "property": "orderNo"
+            }
+          ],
+          "document": [
+            {
+              "name": "headline",
+              "expr": "orderNo"
+            }
+          ],
+          "pagination": {
+            "limit": 25,
+            "maxLimit": 200
+          }
+        }
+      ]
+    },
+    {
+      "name": "customers",
+      "services": [
+        {
+          "name": "CustomerService",
+          "description": "Keeps the customer register current.",
+          "operations": [
+            {
+              "name": "register",
+              "delegation": {
+                "target": "CustomerRepository",
+                "operation": "save"
+              }
+            },
+            {
+              "name": "findByName",
+              "returnType": {
+                "type": "class",
+                "value": {
+                  "package": "nz.example.shop",
+                  "name": "Customer"
+                }
+              },
+              "params": [
+                {
+                  "name": "name",
+                  "type": {
+                    "type": "primitive",
+                    "value": "string"
+                  }
+                }
+              ],
+              "isProtected": true
+            }
+          ],
+          "dependencies": [
+            "CustomerRepository"
+          ]
+        }
+      ],
+      "designs": [
+        {
+          "class": "Customer",
+          "stereotype": "entity",
+          "flags": {
+            "auditable": true,
+            "optimisticLocking": true
+          },
+          "repository": {
+            "name": "CustomerRepository",
+            "operations": [
+              {
+                "name": "findById",
+                "builtin": "findById"
+              },
+              {
+                "name": "findAll",
+                "builtin": "findAll"
+              },
+              {
+                "name": "save",
+                "builtin": "save"
+              },
+              {
+                "name": "delete",
+                "builtin": "delete"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

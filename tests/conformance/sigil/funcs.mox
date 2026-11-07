@@ -6,4 +6,7 @@ import sigil "funcs.rosetta"
 class Desk {
     refers rex.sigil.funcs.Underlier underlier
     rex.sigil.funcs.RateType defaultRateType
+    op double doubleRate(rex.sigil.funcs.Underlier u) {
+        expr { calcRate(2.0, ["leg-1"]) }
+    }
 }

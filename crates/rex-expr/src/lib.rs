@@ -3,10 +3,11 @@
 //! [docs/EXPRESSIONS.md] (the deliberate Xbase replacement).
 //!
 //! The language is deliberately small — literals, feature access, operation
-//! calls, arithmetic/comparison, `if`/`let`, and a fixed collection algebra —
-//! with the four disagreeing-language semantics pinned as rules **R1**–**R4**
-//! in the spec document (integer overflow, string equality, option/null
-//! propagation, division by zero).
+//! calls and bare package-function calls (the sigil-lowered free functions
+//! of the union's packages), arithmetic/comparison, `if`/`let`, and a fixed
+//! collection algebra — with the four disagreeing-language semantics pinned
+//! as rules **R1**–**R4** in the spec document (integer overflow, string
+//! equality, option/null propagation, division by zero).
 //!
 //! Typical use:
 //!
@@ -47,7 +48,9 @@ pub mod parser;
 pub mod types;
 
 pub use ast::{AlgebraKind, BinOp, Expr, ExprKind, Span, Spanned, UnOp};
-pub use checker::{ClassInfo, DomainTypes, TypeChecker, TypeContext};
+pub use checker::{
+    is_string_operand, ClassInfo, DomainTypes, FunctionSignature, TypeChecker, TypeContext,
+};
 pub use error::{ExprError, ParseResult};
 pub use parser::parse;
 pub use types::{NamedKind, Ty};

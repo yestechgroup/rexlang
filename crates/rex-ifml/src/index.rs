@@ -148,6 +148,32 @@ pub struct TargetSite {
     pub name_span: (usize, usize),
 }
 
+/// What an [`AuthSite`] name references.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthKind {
+    /// A `requires: [Cap, ...]` capability name.
+    Capability,
+    /// A `roles: [role, ...]` role name.
+    Role,
+}
+
+/// One `requires:`/`roles:` authorization name: a view-level
+/// `requires:`/`roles:` property or an event-level `requires:` prefix.
+/// [`crate::check_ifml_with_actors`] resolves every main-file site against
+/// the actor models the host provides; the sites are exactly the shapes
+/// the lowering extracts, so the index and the IR can never disagree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthSite {
+    /// File the site appears in (index into [`IfmlIndex::files`]).
+    pub file: usize,
+    /// What the name references.
+    pub kind: AuthKind,
+    /// The referenced capability or role name.
+    pub name: String,
+    /// Byte span of the name token itself — the editor squiggle.
+    pub name_span: (usize, usize),
+}
+
 /// What [`IfmlIndex::at`] found at a byte offset: one of the site kinds
 /// the index tracks.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,12 +202,23 @@ pub struct IfmlIndex {
     pub module_uses: Vec<ModuleUseSite>,
     /// Navigation/action string references, in compilation order.
     pub action_targets: Vec<TargetSite>,
+    /// `requires:`/`roles:` authorization names, in compilation order.
+    pub auth_sites: Vec<AuthSite>,
     /// View declaration sites.
     pub views: Vec<NamedSite>,
     /// Action declaration sites.
     pub actions: Vec<NamedSite>,
     /// Actor declaration sites.
     pub actors: Vec<NamedSite>,
+    /// Component declaration sites (view, container, and module bodies —
+    /// in compilation order, source order within a file).
+    pub components: Vec<NamedSite>,
+    /// Container declaration sites (view, container, and module bodies —
+    /// in compilation order, source order within a file).
+    pub containers: Vec<NamedSite>,
+    /// Command declaration sites (top-level and nested subcommands, in
+    /// source order — nesting flattens).
+    pub commands: Vec<NamedSite>,
 }
 
 impl IfmlIndex {
@@ -195,9 +232,13 @@ impl IfmlIndex {
             module_decls: Vec::new(),
             module_uses: Vec::new(),
             action_targets: Vec::new(),
+            auth_sites: Vec::new(),
             views: Vec::new(),
             actions: Vec::new(),
             actors: Vec::new(),
+            components: Vec::new(),
+            containers: Vec::new(),
+            commands: Vec::new(),
         }
     }
 
@@ -225,9 +266,25 @@ impl IfmlIndex {
             named.file = file;
             self.actors.push(named);
         }
+        for mut named in other.components {
+            named.file = file;
+            self.components.push(named);
+        }
+        for mut named in other.containers {
+            named.file = file;
+            self.containers.push(named);
+        }
+        for mut named in other.commands {
+            named.file = file;
+            self.commands.push(named);
+        }
         for mut target in other.action_targets {
             target.file = file;
             self.action_targets.push(target);
+        }
+        for mut site in other.auth_sites {
+            site.file = file;
+            self.auth_sites.push(site);
         }
     }
 
@@ -254,7 +311,14 @@ impl IfmlIndex {
                 );
             }
         }
-        for site in self.views.iter().chain(&self.actions).chain(&self.actors) {
+        for site in self
+            .views
+            .iter()
+            .chain(&self.actions)
+            .chain(&self.actors)
+            .chain(&self.containers)
+            .chain(&self.commands)
+        {
             if site.file == file {
                 consider_site(
                     &mut best,
@@ -379,6 +443,39 @@ fn index_pair(pair: &Pair<'_, Rule>, file: usize, index: &mut IfmlIndex) {
             }
             recurse(pair, file, index);
         }
+        Rule::component_declaration => {
+            if let Some((name, name_span)) = first_string_site(pair) {
+                index.components.push(NamedSite {
+                    file,
+                    name,
+                    name_span,
+                    span,
+                });
+            }
+            recurse(pair, file, index);
+        }
+        Rule::container_declaration => {
+            if let Some((name, name_span)) = first_string_site(pair) {
+                index.containers.push(NamedSite {
+                    file,
+                    name,
+                    name_span,
+                    span,
+                });
+            }
+            recurse(pair, file, index);
+        }
+        Rule::command_declaration => {
+            if let Some((name, name_span)) = first_string_site(pair) {
+                index.commands.push(NamedSite {
+                    file,
+                    name,
+                    name_span,
+                    span,
+                });
+            }
+            recurse(pair, file, index);
+        }
         Rule::module_declaration => {
             let (name, name_span) = first_string_site(pair).unwrap_or_default();
             let input_params = first_parameter_block(pair);
@@ -440,8 +537,73 @@ fn index_pair(pair: &Pair<'_, Rule>, file: usize, index: &mut IfmlIndex) {
                 resolved_module: None,
             });
         }
+        Rule::view_body => {
+            // View-level `roles:`/`requires:` properties — the parser
+            // extracts exactly these (direct property assignments of the
+            // view body, array form) into the IR; capture their names with
+            // spans before the generic walk strips the properties away.
+            for child in pair.clone().into_inner() {
+                if child.as_rule() == Rule::property_assignment {
+                    capture_view_auth_property(&child, file, index);
+                }
+            }
+            recurse(pair, file, index);
+        }
+        Rule::event_requires => {
+            for child in pair.clone().into_inner() {
+                if child.as_rule() == Rule::identifier {
+                    index.auth_sites.push(AuthSite {
+                        file,
+                        kind: AuthKind::Capability,
+                        name: child.as_str().to_string(),
+                        name_span: pair_span(&child),
+                    });
+                }
+            }
+        }
         _ => recurse(pair, file, index),
     }
+}
+
+/// Captures one view-level `roles:`/`requires:` property assignment as
+/// authorization sites. Only the array form counts — the lowering
+/// extracts exactly that shape (`ValueExpression::Array`), so the index
+/// and the IR can never disagree about what is an authorization site.
+fn capture_view_auth_property(pair: &Pair<'_, Rule>, file: usize, index: &mut IfmlIndex) {
+    let mut inner = pair.clone().into_inner();
+    let kind = match inner.next().map(|key| key.as_str()) {
+        Some("requires") => AuthKind::Capability,
+        Some("roles") => AuthKind::Role,
+        _ => return,
+    };
+    let Some(value) = inner.next() else {
+        return;
+    };
+    let Some(array) = descendants(&value, Rule::array_literal).into_iter().next() else {
+        return;
+    };
+    for identifier in descendants(&array, Rule::identifier) {
+        index.auth_sites.push(AuthSite {
+            file,
+            kind,
+            name: identifier.as_str().to_string(),
+            name_span: pair_span(&identifier),
+        });
+    }
+}
+
+/// Every descendant of `pair` whose rule is `rule`, depth-first in
+/// source order.
+fn descendants<'i>(pair: &Pair<'i, Rule>, rule: Rule) -> Vec<Pair<'i, Rule>> {
+    let mut found = Vec::new();
+    for child in pair.clone().into_inner() {
+        if child.as_rule() == rule {
+            found.push(child);
+        } else {
+            found.extend(descendants(&child, rule));
+        }
+    }
+    found
 }
 
 /// `at`'s merge step: keeps the narrowest containing span.
@@ -549,6 +711,84 @@ mod tests {
     use super::*;
 
     #[test]
+    fn indexes_commands_and_their_uses() {
+        let text = r#"
+command "customers" {
+    use "WorkQueue" as queue { filter: Pending; };
+
+    command "list" {
+        output: table;
+    }
+}
+
+module "WorkQueue" {
+    input { filter: String = "open" }
+    output { n: Int }
+}
+"#;
+        let (_, index) = parse_ifml_indexed(text).unwrap();
+        assert_eq!(index.commands.len(), 2, "nested commands index too");
+        assert_eq!(index.commands[0].name, "customers");
+        assert_eq!(index.commands[1].name, "list");
+        assert_eq!(
+            index.module_uses.len(),
+            1,
+            "a use inside a command body is collected"
+        );
+        assert_eq!(index.module_uses[0].target, "WorkQueue");
+        assert_eq!(index.module_uses[0].alias.as_deref(), Some("queue"));
+
+        // The command declaration is an `at` site with a name span.
+        let command = &index.commands[0];
+        assert!(
+            text[command.span.0..command.span.1].starts_with("command \"customers\""),
+            "{:?}",
+            &text[command.span.0..command.span.1]
+        );
+        let name_mid = (command.name_span.0 + command.name_span.1) / 2;
+        assert!(matches!(index.at(0, name_mid), Some(AtSite::Named(_))));
+    }
+
+    #[test]
+    fn containers_are_indexed_with_spans() {
+        let text = r#"
+view "Wizard" {
+    container "stepOne" {
+        default: true;
+        container "nested" {
+            component "entry" { type: form; }
+        }
+    }
+    container "stepTwo" {
+        component "review" { type: details; }
+    }
+}
+
+module "Pager" {
+    input { page: Int = 1 }
+    output { n: Int }
+
+    container "page" {
+        component "pager" { type: list; }
+    }
+}
+"#;
+        let (_, index) = parse_ifml_indexed(text).unwrap();
+        assert_eq!(index.containers.len(), 4, "{:?}", index.containers);
+        assert_eq!(index.containers[0].name, "stepOne");
+        assert_eq!(index.containers[1].name, "nested");
+        assert_eq!(index.containers[2].name, "stepTwo");
+        assert_eq!(index.containers[3].name, "page", "module containers too");
+        // Spans are byte offsets that slice back to the declaration.
+        for site in &index.containers {
+            let slice = &text[site.span.0..site.span.1];
+            assert!(slice.starts_with("container "), "{slice:?}");
+            let mid = (site.name_span.0 + site.name_span.1) / 2;
+            assert!(matches!(index.at(0, mid), Some(AtSite::Named(_))));
+        }
+    }
+
+    #[test]
     fn empty_source_indexes_one_file_and_no_sites() {
         let (model, index) = parse_ifml_indexed("").unwrap();
         assert_eq!(model, IfmlModel::default());
@@ -559,6 +799,8 @@ mod tests {
         assert!(index.views.is_empty());
         assert!(index.actions.is_empty());
         assert!(index.actors.is_empty());
+        assert!(index.components.is_empty());
+        assert!(index.containers.is_empty());
     }
 
     #[test]
@@ -599,6 +841,18 @@ module "Pagination" {
         assert_eq!(index.actions[0].name, "DoIt");
         assert_eq!(index.actors.len(), 1);
         assert_eq!(index.actors[0].name, "Admin");
+
+        // components across view and module bodies, in source order
+        assert_eq!(index.components.len(), 2);
+        assert_eq!(index.components[0].name, "grid");
+        assert_eq!(index.components[1].name, "pager");
+        for site in &index.components {
+            assert!(site.name_span.0 < site.name_span.1, "{site:?}");
+        }
+        assert_eq!(
+            &text[index.components[0].name_span.0..index.components[0].name_span.1],
+            "\"grid\""
+        );
 
         assert_eq!(index.module_decls.len(), 1);
         let decl = &index.module_decls[0];
@@ -644,6 +898,66 @@ module "Pagination" {
             &text[overrides[0].span.0..overrides[0].span.1],
             "page_size: 25;"
         );
+    }
+
+    #[test]
+    fn indexes_view_and_event_authorization_sites() {
+        let text = r#"
+view "Edit" {
+    requires: [ManageCustomer];
+    roles: [admin, manager];
+
+    component "form" {
+        on save(v) requires: [ApproveCustomer] -> stay;
+    }
+}
+"#;
+        let (_, index) = parse_ifml_indexed(text).unwrap();
+        assert_eq!(index.auth_sites.len(), 4, "{:?}", index.auth_sites);
+
+        assert_eq!(index.auth_sites[0].kind, AuthKind::Capability);
+        assert_eq!(index.auth_sites[0].name, "ManageCustomer");
+        assert_eq!(index.auth_sites[1].kind, AuthKind::Role);
+        assert_eq!(index.auth_sites[1].name, "admin");
+        assert_eq!(index.auth_sites[2].kind, AuthKind::Role);
+        assert_eq!(index.auth_sites[2].name, "manager");
+        assert_eq!(index.auth_sites[3].kind, AuthKind::Capability);
+        assert_eq!(index.auth_sites[3].name, "ApproveCustomer");
+
+        // spans are byte offsets onto the referenced name tokens
+        assert_eq!(
+            &text[index.auth_sites[0].name_span.0..index.auth_sites[0].name_span.1],
+            "ManageCustomer"
+        );
+        assert_eq!(
+            &text[index.auth_sites[1].name_span.0..index.auth_sites[1].name_span.1],
+            "admin"
+        );
+        assert_eq!(
+            &text[index.auth_sites[3].name_span.0..index.auth_sites[3].name_span.1],
+            "ApproveCustomer"
+        );
+    }
+
+    #[test]
+    fn properties_named_roles_outside_views_are_not_authorization_sites() {
+        // A use override or module property that happens to be named
+        // `roles`/`requires` is ordinary data — only view-level properties
+        // and event-level `requires:` prefixes are authorization sites.
+        let text = r#"view "List" {
+    use "Grid" as grid { roles: "all"; };
+}
+
+module "Grid" {
+    input { size: Int }
+    output { rows: Int }
+
+    roles: "all";
+    requires: "none";
+}
+"#;
+        let (_, index) = parse_ifml_indexed(text).unwrap();
+        assert!(index.auth_sites.is_empty(), "{:?}", index.auth_sites);
     }
 
     #[test]

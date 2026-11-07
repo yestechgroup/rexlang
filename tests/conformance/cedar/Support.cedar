@@ -3,16 +3,27 @@
 
 permit(principal is Support::Customer, action == Support::Action::"ReadTicket", resource is Support::Ticket);
 
+permit(principal is Support::Agent, action == Support::Action::"ReadTicket", resource is Support::Ticket);
+
+permit(principal is Support::Manager, action == Support::Action::"ReadTicket", resource is Support::Ticket);
+
 permit(principal is Support::Agent, action == Support::Action::"ReadTicket", resource is Support::Ticket) when { !(resource.internal) };
+
+permit(principal is Support::Manager, action == Support::Action::"ReadTicket", resource is Support::Ticket) when { !(resource.internal) };
 
 @obligation("audit")
 permit(principal is Support::Agent, action == Support::Action::"RaiseRefund", resource is Support::Ticket) when { (resource.amount <= 1000) };
+
+@obligation("audit")
+permit(principal is Support::Manager, action == Support::Action::"RaiseRefund", resource is Support::Ticket) when { (resource.amount <= 1000) };
 
 permit(principal is Support::Manager, action == Support::Action::"ReadTicket", resource is Support::Ticket);
 
 permit(principal is Support::Manager, action == Support::Action::"ResolveTicket", resource is Support::Ticket);
 
 permit(principal is Support::Finance, action == Support::Action::"ApproveRefund", resource is Support::Ticket);
+
+permit(principal is Support::Auditor, action == Support::Action::"ApproveRefund", resource is Support::Ticket);
 
 // never_both: RaiseRefund, ApproveRefund
 

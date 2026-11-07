@@ -4,14 +4,34 @@ subscription billing {
   consumer billing_service
 }
 
+subscription account_feed {
+  events [ AccountTradeUpdate ]
+  consumer trader_ui  scope accounts
+  when (  accountId  !=  ""  )
+  delivery { mode at_least_once ; timeoutSeconds 30 ; deadLetter orders ; }
+}
+
 channel orders {
   publishes  OrderPlaced ;
   publishes OrderCancelled;
 }
 
+channel accountTrades of accounts {
+  publishes AccountTradeUpdate;
+}
+
 event OrderPlaced version "1.0.0" {
+  cloudEvents { type "com.example.orderplaced.v1"  source "/orders"  subject "{orderId}" }
+  pii [ orderId ];
   orderId : String;
+  owner order_team;
+  classification confidential;
+  retention "7y";
   total : int;
+}
+
+event AccountTradeUpdate {
+  accountId : String;
 }
 
 event OrderCancelled {}

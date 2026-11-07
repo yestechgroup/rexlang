@@ -524,3 +524,254 @@ fn check_currency_instance_fixture(instance_out: &Path) {
 fn generated_vocabulary_code_compiles_and_round_trips_by_key() {
     run_currency_scratch_crate();
 }
+
+// --- sigil-lowered package functions (wire contract rule 15) ----------------
+
+const SIGIL_FUNCS_MOX: &str = "tests/conformance/sigil/funcs.mox";
+const SIGIL_FUNCS_ROSETTA: &str = "tests/conformance/sigil/funcs.rosetta";
+
+/// The conformance sigil-func pair compiled through the full `import sigil`
+/// pipeline: the mox names the rosetta file, the driver lowers its
+/// namespaces to synthetic packages carrying `Package::functions`.
+fn sigil_funcs_model() -> Model {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../")
+        .canonicalize()
+        .expect("workspace root");
+    let mox = std::fs::read_to_string(root.join(SIGIL_FUNCS_MOX)).expect("read funcs.mox");
+    let rosetta =
+        std::fs::read_to_string(root.join(SIGIL_FUNCS_ROSETTA)).expect("read funcs.rosetta");
+    let compilation = rex_driver::compile_str(
+        SIGIL_FUNCS_MOX,
+        &mox,
+        &rex_driver::DomainImports {
+            schemas: rex_driver::SchemaImports::new(),
+            sigil: rex_driver::SigilImports::new().provide(
+                SIGIL_FUNCS_MOX,
+                "funcs.rosetta",
+                rosetta,
+            ),
+        },
+    );
+    assert!(
+        compilation.diagnostics.is_empty() && compilation.sigil_diagnostics.is_empty(),
+        "the sigil funcs pair must compile clean: {:?} {:?}",
+        compilation.diagnostics,
+        compilation.sigil_diagnostics
+    );
+    compilation.model.expect("funcs.mox lowered to the Core IR")
+}
+
+/// Sigil-lowered functions generate free `todo!()` stubs named after the
+/// declarations, with the backend's multiplicity conventions in their
+/// signatures — and the verbatim `rosetta` body text is never emitted as
+/// code (wire contract rule 15).
+#[test]
+fn sigil_functions_generate_todo_stubs_without_rosetta_text() {
+    let generated = rex_backend_rust::generate(&sigil_funcs_model()).expect("generate");
+    let code = &generated["models.rs"];
+    assert!(
+        code.contains("pub fn any_active(ids: Vec<String>) -> bool"),
+        "library-function stub with the 0..* convention:\n{code}"
+    );
+    assert!(
+        code.contains("pub fn calc_rate(notional: f64, leg_ids: Vec<String>) -> f64"),
+        "func stub with mixed multiplicities:\n{code}"
+    );
+    assert_eq!(
+        code.matches("\n    todo!()").count(),
+        2,
+        "one stub body per lowered function (the header note's todo!() mention\n\
+         doesn't count):\n{code}"
+    );
+    // The verbatim Rune text stays in the IR, never in generated code.
+    assert!(!code.contains("set rate:"), "{code}");
+    assert!(!code.contains("library function anyActive"), "{code}");
+    // The header documents the stub contract (only when functions exist).
+    assert!(code.contains("sigil-lowered package functions"), "{code}");
+}
+
+/// A function stub generation-time model: one package carrying a single
+/// signature-only function with the given name.
+fn one_function_model(package: &str, function: &str) -> Model {
+    let mut model = Model::new();
+    let mut package = Package::new(package);
+    package.functions.push(Operation::new(
+        function,
+        TypeRef::Primitive(PrimitiveType::Boolean),
+        vec![],
+    ));
+    model.packages.push(package);
+    model
+}
+
+/// `fooBar` and `foo_bar` (or two same-named functions in different
+/// packages) collide once snake_cased into the flattened module: generation
+/// bails naming both declarations, like the duplicate-class precedent.
+#[test]
+fn emit_functions_bails_on_duplicate_snake_case_names() {
+    let mut model = one_function_model("sigil::example", "fooBar");
+    model.packages[0].functions.push(Operation::new(
+        "foo_bar",
+        TypeRef::Primitive(PrimitiveType::Boolean),
+        vec![],
+    ));
+    let error = rex_backend_rust::generate(&model).expect_err("duplicate snake_case names");
+    let message = error.to_string();
+    assert!(
+        message.contains("duplicate function name 'foo_bar'"),
+        "{message}"
+    );
+    assert!(message.contains("'fooBar'"), "{message}");
+    assert!(message.contains("'foo_bar'"), "{message}");
+    assert!(
+        message.contains("flattens packages into one module"),
+        "{message}"
+    );
+}
+
+#[test]
+fn emit_functions_bails_on_the_same_function_name_in_two_packages() {
+    let mut model = one_function_model("sigil::a", "calcRate");
+    model.packages.push(
+        one_function_model("sigil::b", "calcRate")
+            .packages
+            .remove(0),
+    );
+    let error = rex_backend_rust::generate(&model).expect_err("same name in two packages");
+    let message = error.to_string();
+    assert!(
+        message.contains("duplicate function name 'calc_rate'"),
+        "{message}"
+    );
+    assert!(
+        message.contains("flattens packages into one module"),
+        "{message}"
+    );
+}
+
+/// The conformance funcs model's `expr`-body op on `Desk` lowers its bare
+/// `calcRate(...)` call to the emitted free stub: the generated method's
+/// body is the stub call with the backend's literal conventions, and the
+/// scratch crate compiles it with the stub-panic assertions appended.
+#[test]
+fn the_expr_body_op_lowering_calls_the_emitted_function_stub() {
+    let generated = rex_backend_rust::generate(&sigil_funcs_model()).expect("generate");
+    let code = &generated["models.rs"];
+    assert!(
+        code.contains("pub fn double_rate(&self, res: &Resource, u: UnderlierId) -> f64"),
+        "the Desk op lowered from its expr body:\n{code}"
+    );
+    assert!(
+        code.contains("calc_rate(2f64, vec![\"leg-1\".to_string()])"),
+        "the bare call lowers to the exact stub name:\n{code}"
+    );
+    // The scratch crate (with the appended stub-panic assertions) must
+    // compile and run against this generated code.
+    run_sigil_funcs_scratch_crate();
+}
+
+/// Byte-identity at the string level: a function-less model emits no
+/// free-function section at all — no stub doc comments, no header bullet
+/// (the golden artifacts already pin the output-level identity).
+#[test]
+fn function_less_models_emit_no_function_section() {
+    let mut model = Model::new();
+    let mut package = Package::new("plain.example");
+    package.classes.push(ClassDef::new("Thing", vec![], vec![]));
+    model.packages.push(package);
+    let code = &rex_backend_rust::generate(&model).expect("generate")["models.rs"];
+    assert!(!code.contains("Package function"), "{code}");
+    assert!(!code.contains("sigil-lowered package functions"), "{code}");
+}
+
+fn sigil_funcs_scratch_crate_files() -> Vec<(std::path::PathBuf, String)> {
+    let generated = rex_backend_rust::generate(&sigil_funcs_model()).expect("generate");
+    let models_rs = &generated["models.rs"];
+
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let runtime_path = Path::new(manifest)
+        .join("../../crates/rex-runtime")
+        .canonicalize()
+        .expect("rex-runtime path");
+
+    let lib_rs = format!(
+        "{models_rs}\n{}",
+        include_str!("scratch/sigil_func_tests.rs")
+    );
+
+    vec![
+        (
+            Path::new("Cargo.toml").to_path_buf(),
+            format!(
+                "[package]\n\
+                 name = \"rex-sigil-func-test\"\n\
+                 version = \"0.1.0\"\n\
+                 edition = \"2021\"\n\
+                 publish = false\n\n\
+                 # Standalone scratch crate: never a member of any workspace.\n\
+                 [workspace]\n\n\
+                 [lib]\n\
+                 path = \"src/lib.rs\"\n\n\
+                 [dependencies]\n\
+                 rex-runtime = {{ path = {:?} }}\n\
+                 slotmap = \"1\"\n\
+                 serde_json = \"1\"\n",
+                runtime_path
+            ),
+        ),
+        (Path::new("src/lib.rs").to_path_buf(), lib_rs),
+    ]
+}
+
+/// Runs `cargo test` inside the sigil-func scratch crate: the stubs compile
+/// with their declared signatures and panic as `todo!()` when called.
+fn run_sigil_funcs_scratch_crate() {
+    let cargo_available = std::process::Command::new("cargo")
+        .arg("--version")
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false);
+    if !cargo_available {
+        eprintln!("skipping sigil-func scratch-crate test: cargo not on PATH");
+        return;
+    }
+
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let scratch = Path::new(manifest).join("../../target/scratch/rex-sigil-func-test");
+    std::fs::create_dir_all(&scratch).expect("create scratch root");
+    for (relative, contents) in sigil_funcs_scratch_crate_files() {
+        let path = scratch.join(&relative);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create scratch dir");
+        }
+        std::fs::write(path, contents).expect("write scratch file");
+    }
+
+    let run = |offline: bool| {
+        let mut command = std::process::Command::new("cargo");
+        command.arg("test").current_dir(&scratch);
+        if offline {
+            command.arg("--offline");
+        }
+        command.output().expect("spawn cargo")
+    };
+
+    let mut output = run(true);
+    if !output.status.success() {
+        eprintln!("offline scratch build failed; retrying online");
+        output = run(false);
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        output.status.success(),
+        "sigil-func scratch crate cargo test failed:\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+    );
+    eprintln!("{stdout}");
+}
+
+#[test]
+fn generated_sigil_function_stubs_compile_and_panic_as_todo() {
+    run_sigil_funcs_scratch_crate();
+}

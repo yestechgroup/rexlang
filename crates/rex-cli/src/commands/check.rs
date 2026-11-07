@@ -1,34 +1,42 @@
 //! `rexlang check`: compile inputs and render diagnostics grouped per file.
+//!
+//! Directory batch mode runs two phases: the per-file project pipeline
+//! (every file checked independently with its imports resolving map-first
+//! from the snapshot), then the union integrity pass (rexlang#114) — the
+//! standalone-compiled artifacts of every successful check are gathered
+//! into import-connected applications and [`rex_driver::check_integrity`]
+//! diagnoses the dangling cross-layer wiring each. Single-file mode has no
+//! union context and stays per-surface.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use rex_driver::{
-    compile_actors_str, compile_ddd_str, compile_deploy_str, compile_evt_str, compile_usecase_str,
-};
+use crate::inputs::{expand_check_inputs, expand_inputs};
+use crate::project::Project;
 
-use crate::inputs::{
-    compile_sources, expand_check_inputs, expand_inputs, is_actor_file, is_ddd_file,
-    is_deploy_file, is_evt_file, is_ifml_file, is_uc_file, read_actor_pair, read_ddd_design,
-    read_deploy_pair, read_evt_pair, read_ifml_inputs, read_sources, read_uc_pair,
-};
-use crate::report::{
-    report_actor_diagnostics, report_ddd_diagnostics, report_deploy_diagnostics,
-    report_evt_diagnostics, report_ifml_diagnostics, report_multi_diagnostics,
-    report_usecase_diagnostics,
-};
+use super::pipeline::compile_surface;
 
-pub(crate) fn run(files: Vec<PathBuf>) -> anyhow::Result<ExitCode> {
-    // Directory inputs enter batch mode: every supported surface under the
-    // directory is checked **independently** (per-file pipeline). Pass
+pub(crate) fn run(files: Vec<PathBuf>, deny_warnings: bool) -> anyhow::Result<ExitCode> {
+    // Directory inputs enter project mode: one snapshot of every supported
+    // surface under the directory, each file checked **independently**
+    // (per-file pipeline) with its imports resolving map-first from the
+    // snapshot and sibling artifacts reused lookup-before-compute. Pass
     // several `.mox` files explicitly to compile them as one multi-package
-    // model instead.
+    // model instead — that path keeps no project context.
     if files.iter().any(|file| file.is_dir()) {
         let expanded = expand_check_inputs(&files)?;
+        let mut project = Project::gather(&expanded);
         let mut failed = 0usize;
+        let mut checked_clean: std::collections::BTreeSet<String> = Default::default();
         for file in &expanded {
-            match check_one(std::slice::from_ref(file)) {
-                Ok(ExitCode::SUCCESS) => {}
+            match check_files(
+                std::slice::from_ref(file),
+                Some(&mut project),
+                deny_warnings,
+            ) {
+                Ok((ExitCode::SUCCESS, ok)) => {
+                    checked_clean.extend(ok);
+                }
                 Ok(_) => failed += 1,
                 Err(error) => {
                     eprintln!("Error: {error:#}");
@@ -36,122 +44,53 @@ pub(crate) fn run(files: Vec<PathBuf>) -> anyhow::Result<ExitCode> {
                 }
             }
         }
+        // Second phase — the union integrity pass (rexlang#114): the
+        // standalone-compiled artifacts cluster into import-connected
+        // applications and the cross-layer wiring is diagnosed per
+        // application. The capability joins are the compiler's since
+        // rexlang#128 (phase 1, spanned errors), so the pass's capability
+        // findings survive only as the lint channel (warnings), and a
+        // file phase 1 already failed stays quiet there. Quiet in the
+        // common case; error-severity findings fail the batch — and with
+        // `--deny-warnings`, warning-severity ones do too.
+        let integrity_errors =
+            super::integrity::run_union_pass(&expanded, &checked_clean, deny_warnings)?;
         if failed > 0 {
             eprintln!("{failed} of {} files failed", expanded.len());
+        }
+        if integrity_errors > 0 {
+            eprintln!(
+                "{integrity_errors} cross-surface integrity errors in the checked applications"
+            );
+            return Ok(ExitCode::FAILURE);
+        }
+        if failed > 0 {
             return Ok(ExitCode::FAILURE);
         }
         return Ok(ExitCode::SUCCESS);
     }
-    check_one(&expand_inputs(&files)?)
+    check_files(&expand_inputs(&files)?, None, deny_warnings).map(|(code, _)| code)
 }
 
-fn check_one(files: &[PathBuf]) -> anyhow::Result<ExitCode> {
-    let files = files.to_vec();
-    if files.len() == 1 && is_ifml_file(&files[0]) {
-        let inputs = read_ifml_inputs(&files[0])?;
-        let sources = |compilation: &rex_ifml::IfmlCompilation| -> Vec<(String, String)> {
-            compilation
-                .index
-                .files
-                .iter()
-                .map(|file| (file.path.clone(), file.text.clone()))
-                .collect()
-        };
-        let compilation =
-            match rex_ifml::compile_ifml_str(&inputs.path, &inputs.source, &inputs.ifml_imports) {
-                Ok(compilation) => compilation,
-                Err(diagnostics) => {
-                    report_ifml_diagnostics(&inputs.sources, &diagnostics);
-                    return Ok(ExitCode::FAILURE);
-                }
-            };
-        let binding = rex_ifml::check_ifml(&compilation, inputs.domains.as_ref());
-        report_ifml_diagnostics(&sources(&compilation), &binding);
-        if binding.is_empty() {
-            println!("OK {}", inputs.path);
-            return Ok(ExitCode::SUCCESS);
-        }
-        Ok(ExitCode::FAILURE)
-    } else if files.len() == 1 && is_ddd_file(&files[0]) {
-        let design = read_ddd_design(&files[0])?;
-        let compilation = compile_ddd_str(
-            &design.path,
-            &design.source,
-            &design.domains,
-            &design.imports(),
-        );
-        report_ddd_diagnostics(&design, &compilation);
-        if compilation.model.is_some() {
-            println!("OK {}", design.path);
-            Ok(ExitCode::SUCCESS)
-        } else {
-            Ok(ExitCode::FAILURE)
-        }
-    } else if files.len() == 1 && is_actor_file(&files[0]) {
-        let pair = read_actor_pair(&files[0])?;
-        let compilation =
-            compile_actors_str(&pair.path, &pair.source, &pair.domains, &pair.imports());
-        report_actor_diagnostics(&pair, &compilation);
-        if compilation.model.is_some() {
-            println!("OK {}", pair.path);
-            Ok(ExitCode::SUCCESS)
-        } else {
-            Ok(ExitCode::FAILURE)
-        }
-    } else if files.len() == 1 && is_evt_file(&files[0]) {
-        let pair = read_evt_pair(&files[0])?;
-        let compilation = compile_evt_str(&pair.path, &pair.source, &pair.domains, &pair.imports());
-        report_evt_diagnostics(&pair, &compilation);
-        if compilation.model.is_some() {
-            println!("OK {}", pair.path);
-            Ok(ExitCode::SUCCESS)
-        } else {
-            Ok(ExitCode::FAILURE)
-        }
-    } else if files.len() == 1 && is_deploy_file(&files[0]) {
-        let pair = read_deploy_pair(&files[0])?;
-        let compilation = compile_deploy_str(&pair.path, &pair.source, &pair.designs, &pair.flows);
-        report_deploy_diagnostics(&pair, &compilation);
-        if compilation.model.is_some() {
-            println!("OK {}", pair.path);
-            Ok(ExitCode::SUCCESS)
-        } else {
-            Ok(ExitCode::FAILURE)
-        }
-    } else if files.len() == 1 && is_uc_file(&files[0]) {
-        let pair = read_uc_pair(&files[0])?;
-        let compilation = compile_usecase_str(
-            &pair.path,
-            &pair.source,
-            &pair.domains,
-            &pair.imports(),
-            &pair.designs,
-            &pair.actors,
-            &pair.events,
-        );
-        report_usecase_diagnostics(&pair, &compilation);
-        if compilation.model.is_some() {
-            println!("OK {}", pair.path);
-            Ok(ExitCode::SUCCESS)
-        } else {
-            Ok(ExitCode::FAILURE)
-        }
-    } else {
-        let sources = read_sources(&files)?;
-        let (compilation, sigil_sources) = compile_sources(&sources)?;
-        report_multi_diagnostics(
-            &sources,
-            &sigil_sources.sources,
-            &compilation.diagnostics,
-            &compilation.sigil_diagnostics,
-        );
-        if compilation.model.is_some() {
-            for (path, _) in &sources {
-                println!("OK {path}");
-            }
-            Ok(ExitCode::SUCCESS)
-        } else {
-            Ok(ExitCode::FAILURE)
-        }
+/// The `check` tail over [`compile_surface`]: print `OK <path>` for every
+/// compiling source and return the driver paths that compiled (the union
+/// pass lint-channel suppression key); a `None` outcome means the
+/// diagnostics were rendered. With `deny_warnings`, a compiling file whose
+/// only findings are warnings fails too (its diagnostics are already
+/// rendered) and prints no `OK` line.
+fn check_files(
+    files: &[PathBuf],
+    project: Option<&mut Project>,
+    deny_warnings: bool,
+) -> anyhow::Result<(ExitCode, Vec<String>)> {
+    let Some(outcome) = compile_surface(files, project, false)? else {
+        return Ok((ExitCode::FAILURE, Vec::new()));
+    };
+    if deny_warnings && outcome.warnings > 0 {
+        return Ok((ExitCode::FAILURE, Vec::new()));
     }
+    for path in &outcome.ok {
+        println!("OK {path}");
+    }
+    Ok((ExitCode::SUCCESS, outcome.ok))
 }

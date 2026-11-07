@@ -1,5 +1,5 @@
-//! The IFML interaction-model artifact: views, components, events, and
-//! navigation flows, produced by parsing `.ifml` sources.
+//! The IFML interaction-model artifact: views, components, events,
+//! navigation flows, and CLI commands, produced by parsing `.ifml` sources.
 //!
 //! This is a standalone, versioned wire artifact in the [rexlang] family,
 //! versioned independently of [`crate::FORMAT_VERSION`] via
@@ -41,9 +41,6 @@
 //!
 //! [rexlang]: https://github.com/anton-makes/rexlang
 
-use std::cmp::Ordering;
-use std::hash::{Hash, Hasher};
-
 use serde::{Deserialize, Serialize};
 
 use crate::IrError;
@@ -52,7 +49,8 @@ use crate::IrError;
 /// interaction-model artifacts ([`IfmlModel`]).
 ///
 /// Versioned independently of [`crate::FORMAT_VERSION`] (the domain-model
-/// marker) and [`crate::ACTOR_MODEL_FORMAT_VERSION`] (the policy marker);
+/// marker), [`crate::ACTOR_MODEL_FORMAT_VERSION`] (the policy marker), and
+/// [`crate::cmmn::CMMN_MODEL_FORMAT_VERSION`] (the case marker);
 /// bump whenever the IFML wire format changes incompatibly.
 pub const IFML_MODEL_FORMAT_VERSION: u32 = 1;
 
@@ -64,6 +62,7 @@ pub enum IfmlDefinition {
     Action(ActionDeclaration),
     Module(ModuleDeclaration),
     Actor(ActorDeclaration),
+    Command(CommandDeclaration),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,89 +102,39 @@ pub struct ViewDeclaration {
     pub position: Option<Position>,
 }
 
-/// The ordered, equality-preserving wrapper for every `f64` this artifact
-/// carries — layout coordinates ([`Position`]), property-bag numbers
-/// ([`ValueExpression::Number`]), and condition literals
-/// ([`Expression::NumLit`]) — so [`IfmlModel`] and everything nested in it
-/// derive [`Eq`] (wire contract rule 14).
-///
-/// # Wire layout
-///
-/// `#[serde(transparent)]`: a `Float` serializes and deserializes exactly
-/// as the bare JSON number it wraps — artifacts are byte-identical to the
-/// raw-`f64` encoding.
-///
-/// # Equality and hashing
-///
-/// [`PartialEq`]/[`Eq`] follow `f64::total_cmp` semantics: equality is
-/// bit-pattern equality, which makes it reflexive even for `NaN` (a `NaN`
-/// equals only another `NaN` with the same bit pattern) and distinguishes
-/// `-0.0` from `0.0` (both deliberate). [`Hash`] hashes the raw bit
-/// pattern, consistent with that equality.
-///
-/// # Ordering
-///
-/// [`Ord`]/[`PartialOrd`] are `f64::total_cmp`: a genuine total order
-/// (`-0.0 < 0.0`, every `NaN` above [`f64::INFINITY`]).
-///
-/// # Where `NaN`/`-0.0` can come from
-///
-/// The `.ifml` grammar accepts only finite numeric literals and JSON
-/// cannot encode `NaN`, so neither source nor wire artifacts produce one
-/// today; the `NaN`/`-0.0` behavior above is the type's deliberate
-/// contract for programmatic construction, not dead-letter handling.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Float(f64);
-
-impl Float {
-    /// Wraps a raw `f64`.
-    pub fn new(value: f64) -> Self {
-        Self(value)
-    }
-
-    /// The raw `f64`.
-    pub fn value(self) -> f64 {
-        self.0
-    }
-}
-
-impl From<f64> for Float {
-    fn from(value: f64) -> Self {
-        Self(value)
-    }
-}
-
-impl From<Float> for f64 {
-    fn from(value: Float) -> Self {
-        value.0
-    }
-}
-
-impl PartialEq for Float {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.total_cmp(&other.0) == Ordering::Equal
-    }
-}
-
-impl Eq for Float {}
-
-impl Hash for Float {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.to_bits().hash(state);
-    }
-}
-
-impl Ord for Float {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.0.total_cmp(&other.0)
-    }
-}
-
-impl PartialOrd for Float {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
+crate::wire::total_order_float! {
+    /// The ordered, equality-preserving wrapper for every `f64` this artifact
+    /// carries — layout coordinates ([`Position`]), property-bag numbers
+    /// ([`ValueExpression::Number`]), and condition literals
+    /// ([`Expression::NumLit`]) — so [`IfmlModel`] and everything nested in it
+    /// derive [`Eq`] (wire contract rule 14).
+    ///
+    /// # Wire layout
+    ///
+    /// `#[serde(transparent)]`: a `Float` serializes and deserializes exactly
+    /// as the bare JSON number it wraps — artifacts are byte-identical to the
+    /// raw-`f64` encoding.
+    ///
+    /// # Equality and hashing
+    ///
+    /// [`PartialEq`]/[`Eq`] follow `f64::total_cmp` semantics: equality is
+    /// bit-pattern equality, which makes it reflexive even for `NaN` (a `NaN`
+    /// equals only another `NaN` with the same bit pattern) and distinguishes
+    /// `-0.0` from `0.0` (both deliberate). [`Hash`] hashes the raw bit
+    /// pattern, consistent with that equality.
+    ///
+    /// # Ordering
+    ///
+    /// [`Ord`]/[`PartialOrd`] are `f64::total_cmp`: a genuine total order
+    /// (`-0.0 < 0.0`, every `NaN` above [`f64::INFINITY`]).
+    ///
+    /// # Where `NaN`/`-0.0` can come from
+    ///
+    /// The `.ifml` grammar accepts only finite numeric literals and JSON
+    /// cannot encode `NaN`, so neither source nor wire artifacts produce one
+    /// today; the `NaN`/`-0.0` behavior above is the type's deliberate
+    /// contract for programmatic construction, not dead-letter handling.
+    Float(f64)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -303,6 +252,10 @@ pub enum ComponentSpec {
     Table(TableSpec),
     Form(FormSpec),
     Chart(ChartSpec),
+    /// Placement of a *modeled* chart authored elsewhere (e.g. codegraph's
+    /// `[charts]` table): the payload is a permissive name — resolution
+    /// against the model graph is the consumer's job, never the parser's.
+    ChartRef(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -416,9 +369,42 @@ impl From<&str> for InputFieldType {
 #[serde(rename_all = "camelCase")]
 pub struct ChartSpec {
     pub kind: ChartKind,
+    /// Series charts only: the category axis field. Org charts carry the
+    /// ordered [`ChartSpec::label_fields`] projections instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_field: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub value_fields: Vec<String>,
+    /// Org charts only: the self-referencing FK the hierarchy lowers over.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hierarchy_field: Option<String>,
+    /// Org charts only: ordered node label projections.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub label_fields: Vec<String>,
+    /// Org charts only: ordered node detail projections.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub detail_fields: Vec<String>,
+    /// Org charts only: client-side render pruning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_depth: Option<u32>,
+    /// Series charts only: aggregation applied to [`ChartSpec::value_fields`]
+    /// (`None` = unspecified; consumers apply their own default, e.g.
+    /// codegraph models `count`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aggregate: Option<ChartAggregate>,
+}
+
+/// Aggregation vocabulary for series charts (`bar | line | pie | radar |
+/// metric`), applied to the chart's `value_fields`. Serialized as bare
+/// lowercase camelCase strings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChartAggregate {
+    Sum,
+    Avg,
+    Count,
+    Min,
+    Max,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -429,6 +415,7 @@ pub enum ChartKind {
     Pie,
     Radar,
     Metric,
+    Org,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -723,6 +710,125 @@ pub struct ActorDeclaration {
     pub properties: Vec<PropertyAssignment>,
 }
 
+/// A top-level `command "Name" { ... }` declaration: the CLI interaction
+/// vocabulary of the same interaction model the views express. Commands
+/// bind to domain types and actions (through the shared
+/// [`EventHandler`] vocabulary, e.g. `on run -> action("CreateCustomer");`)
+/// rather than implementing business logic, so one artifact can describe a
+/// web experience and its terminal counterpart.
+///
+/// Body members: `argument`/`option`/`prompt` declarations, event
+/// handlers, `use` statements, and nested `command` subcommands
+/// (`command "customers" { command "list" { ... } }` — consumers render
+/// the joined path, e.g. `customers list`). `description` is extracted
+/// from the property bag (`description: "...";`); the remaining bag
+/// entries stay in [`CommandDeclaration::properties`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandDeclaration {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub arguments: Vec<CommandArgument>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<CommandOption>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prompts: Vec<CommandPrompt>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub events: Vec<EventHandler>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub module_uses: Vec<ModuleUse>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subcommands: Vec<CommandDeclaration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub properties: Vec<PropertyAssignment>,
+    /// Capability requirements extracted from the property bag
+    /// (`requires: [CapA];`), the view-extraction discipline.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<String>,
+    pub condition: Option<Expression>,
+}
+
+/// A positional `argument <name>: <Type>;` — required by nature; what is
+/// optional in a CLI is an option, not an argument.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandArgument {
+    pub name: String,
+    pub type_ref: String,
+}
+
+/// An `option <name>: <Type> (= default)?;` — optional by nature, which is
+/// why it carries a default and an argument does not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandOption {
+    pub name: String,
+    pub type_ref: String,
+    #[serde(default)]
+    pub default: Option<ValueExpression>,
+}
+
+/// A `prompt <name>: <kind> (= default)?;` — interactive input collected
+/// while the command executes, as opposed to arguments/options supplied on
+/// the invocation line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandPrompt {
+    pub name: String,
+    pub kind: PromptKind,
+    #[serde(default)]
+    pub default: Option<ValueExpression>,
+}
+
+/// The interaction kind of a [`CommandPrompt`] — presentation semantics
+/// (how the terminal asks), not a domain type. Custom kinds survive
+/// verbatim; evaluation stays deferred to generation time, as everywhere
+/// in this artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "camelCase")]
+pub enum PromptKind {
+    Text,
+    Secret,
+    Number,
+    Confirm,
+    Select,
+    MultiSelect,
+    Date,
+    Custom(String),
+}
+
+impl From<&str> for PromptKind {
+    fn from(s: &str) -> Self {
+        match s.to_ascii_lowercase().as_str() {
+            "text" => PromptKind::Text,
+            "secret" | "password" => PromptKind::Secret,
+            "number" => PromptKind::Number,
+            "confirm" | "boolean" => PromptKind::Confirm,
+            "select" => PromptKind::Select,
+            "multiselect" => PromptKind::MultiSelect,
+            "date" => PromptKind::Date,
+            _ => PromptKind::Custom(s.to_string()),
+        }
+    }
+}
+
+impl PromptKind {
+    pub fn as_str(&self) -> &str {
+        match self {
+            PromptKind::Text => "text",
+            PromptKind::Secret => "secret",
+            PromptKind::Number => "number",
+            PromptKind::Confirm => "confirm",
+            PromptKind::Select => "select",
+            PromptKind::MultiSelect => "multiselect",
+            PromptKind::Date => "date",
+            PromptKind::Custom(s) => s.as_str(),
+        }
+    }
+}
+
 /// The root of an IFML interaction model: a standalone, versioned wire
 /// artifact (see the [wire format contract](crate#wire-format-contract) and
 /// the [module docs](self)).
@@ -732,7 +838,6 @@ pub struct IfmlModel {
     /// Artifact format version. Always [`IFML_MODEL_FORMAT_VERSION`] for
     /// artifacts this crate writes; [`IfmlModel::from_json`] rejects
     /// anything else.
-    #[serde(default)]
     pub format_version: u32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub domains: Vec<DomainDeclaration>,
@@ -744,6 +849,11 @@ pub struct IfmlModel {
     pub modules: Vec<ModuleDeclaration>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actors: Vec<ActorDeclaration>,
+    /// Top-level `command "Name" { ... }` declarations — the CLI
+    /// interaction vocabulary. Subcommands nest inside
+    /// [`CommandDeclaration::subcommands`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<CommandDeclaration>,
     /// Raw string values of top-level `import "..."` statements, in source
     /// order. Duplicates are preserved; resolution/dedup is a resolver
     /// concern, not a parser concern.
@@ -761,6 +871,7 @@ impl IfmlModel {
         actions: Vec<ActionDeclaration>,
         modules: Vec<ModuleDeclaration>,
         actors: Vec<ActorDeclaration>,
+        commands: Vec<CommandDeclaration>,
         imports: Vec<String>,
     ) -> Self {
         Self {
@@ -770,18 +881,19 @@ impl IfmlModel {
             actions,
             modules,
             actors,
+            commands,
             imports,
         }
     }
 
     /// Serializes the artifact to pretty-printed (2-space indent) JSON.
     pub fn to_json_pretty(&self) -> Result<String, IrError> {
-        Ok(serde_json::to_string_pretty(self)?)
+        crate::wire::to_json_pretty(self)
     }
 
     /// Serializes the artifact to compact JSON.
     pub fn to_json(&self) -> Result<String, IrError> {
-        Ok(serde_json::to_string(self)?)
+        crate::wire::to_json(self)
     }
 
     /// Deserializes an IFML artifact from JSON, rejecting artifacts whose
@@ -789,24 +901,18 @@ impl IfmlModel {
     ///
     /// Unknown fields are ignored for forward compatibility.
     pub fn from_json(json: &str) -> Result<Self, IrError> {
-        let value: serde_json::Value = serde_json::from_str(json)?;
-        let found = value
-            .get("formatVersion")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or_default() as u32;
-        if found != IFML_MODEL_FORMAT_VERSION {
-            return Err(IrError::UnsupportedFormatVersion {
-                found,
-                expected: IFML_MODEL_FORMAT_VERSION,
-            });
-        }
-        Ok(serde_json::from_value(value)?)
+        crate::wire::from_json(json)
     }
+}
+
+impl crate::wire::VersionedArtifact for IfmlModel {
+    const FORMAT_VERSION: u32 = IFML_MODEL_FORMAT_VERSION;
 }
 
 impl Default for IfmlModel {
     fn default() -> Self {
         Self::new(
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -981,6 +1087,7 @@ mod tests {
                 name: "Admin".to_string(),
                 properties: Vec::new(),
             }],
+            Vec::new(),
             vec!["rexlang/auth.actor".to_string()],
         )
     }
@@ -1055,6 +1162,115 @@ mod tests {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Commands: the CLI interaction vocabulary
+    // -----------------------------------------------------------------------
+
+    /// One command exercising every CLI member: arguments, options with a
+    /// default, prompts, an `on run` handler, and a nested subcommand.
+    fn sample_command() -> CommandDeclaration {
+        CommandDeclaration {
+            name: "customers".to_string(),
+            description: Some("Manage customers".to_string()),
+            arguments: vec![CommandArgument {
+                name: "id".to_string(),
+                type_ref: "Uuid".to_string(),
+            }],
+            options: vec![CommandOption {
+                name: "limit".to_string(),
+                type_ref: "Int".to_string(),
+                default: Some(ValueExpression::Number(Float::new(20.0))),
+            }],
+            prompts: vec![CommandPrompt {
+                name: "email".to_string(),
+                kind: PromptKind::Select,
+                default: None,
+            }],
+            events: vec![EventHandler {
+                event_type: EventType::Custom("run".to_string()),
+                params: Vec::new(),
+                requires: Vec::new(),
+                condition: None,
+                action: EventAction::ActionInvocation {
+                    name: "CreateCustomer".to_string(),
+                    body: None,
+                },
+            }],
+            module_uses: Vec::new(),
+            subcommands: vec![CommandDeclaration {
+                name: "list".to_string(),
+                description: None,
+                arguments: Vec::new(),
+                options: Vec::new(),
+                prompts: Vec::new(),
+                events: Vec::new(),
+                module_uses: Vec::new(),
+                subcommands: Vec::new(),
+                properties: Vec::new(),
+                requires: Vec::new(),
+                condition: None,
+            }],
+            properties: Vec::new(),
+            requires: Vec::new(),
+            condition: None,
+        }
+    }
+
+    #[test]
+    fn commands_round_trip_through_from_json() {
+        let mut model = sample_model();
+        model.commands = vec![sample_command()];
+        let json = model.to_json_pretty().expect("serialize");
+        let parsed = IfmlModel::from_json(&json).expect("deserialize");
+        assert_eq!(parsed, model);
+        assert_eq!(parsed.to_json_pretty().expect("re-serialize"), json);
+    }
+
+    #[test]
+    fn command_wire_shape_is_camel_case_with_tagged_enums() {
+        let mut model = sample_model();
+        model.commands = vec![sample_command()];
+        let json = model.to_json().expect("serialize");
+        assert!(json.contains("\"commands\":[{"), "{json}");
+        assert!(
+            json.contains("\"description\":\"Manage customers\""),
+            "{json}"
+        );
+        assert!(
+            json.contains("\"arguments\":[{\"name\":\"id\",\"typeRef\":\"Uuid\"}]"),
+            "{json}"
+        );
+        assert!(
+            json.contains("\"default\":{\"type\":\"number\",\"value\":20.0}"),
+            "option defaults are ValueExpressions: {json}"
+        );
+        assert!(
+            json.contains("\"kind\":{\"type\":\"select\"}"),
+            "prompt kinds are adjacent-tagged like event types: {json}"
+        );
+        assert!(json.contains("\"subcommands\":[{"), "{json}");
+        assert!(
+            json.contains("\"eventType\":{\"type\":\"custom\",\"value\":\"run\"}"),
+            "command event handlers reuse the shared event vocabulary: {json}"
+        );
+    }
+
+    /// The serde-default discipline holds for the commands vec too: a model
+    /// without commands omits the field on write, and an artifact without
+    /// the field reads back with an empty vec — older artifacts stay
+    /// wire-identical and byte-goldens are untouched.
+    #[test]
+    fn absent_commands_field_reads_back_as_empty() {
+        let json = r#"{"formatVersion":1}"#;
+        let parsed = IfmlModel::from_json(json).expect("deserialize");
+        assert!(parsed.commands.is_empty());
+        assert_eq!(
+            parsed.to_json().expect("re-serialize"),
+            r#"{"formatVersion":1}"#,
+            "empty commands are omitted on write"
+        );
+    }
+
     #[test]
     fn from_json_tolerates_unknown_fields() {
         let json = r#"{
@@ -1100,6 +1316,11 @@ mod tests {
             kind: ChartKind::Bar,
             label_field: Some("month".to_string()),
             value_fields: vec!["sales".to_string()],
+            hierarchy_field: None,
+            label_fields: Vec::new(),
+            detail_fields: Vec::new(),
+            max_depth: None,
+            aggregate: None,
         };
         let json = serde_json::to_string(&spec).expect("serialize chart spec");
         assert_eq!(
@@ -1108,6 +1329,106 @@ mod tests {
         );
         let json = serde_json::to_string(&BinOp::RegexMatch).expect("serialize bin op");
         assert_eq!(json, r#""regexMatch""#);
+    }
+
+    // -----------------------------------------------------------------------
+    // Chart vocabulary (issue #80): org kind, org payload fields, series
+    // aggregates, and modeled-chart references
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn org_chart_kind_serializes_as_bare_string() {
+        let json = serde_json::to_string(&ChartKind::Org).expect("serialize chart kind");
+        assert_eq!(json, r#""org""#);
+    }
+
+    #[test]
+    fn org_chart_spec_round_trips_with_payload_fields() {
+        let spec = ChartSpec {
+            kind: ChartKind::Org,
+            label_field: None,
+            value_fields: Vec::new(),
+            hierarchy_field: Some("managerId".to_string()),
+            label_fields: vec!["name".to_string(), "title".to_string()],
+            detail_fields: vec!["email".to_string()],
+            max_depth: Some(4),
+            aggregate: None,
+        };
+        let json = serde_json::to_string(&spec).expect("serialize org chart spec");
+        assert_eq!(
+            json,
+            r#"{"kind":"org","hierarchyField":"managerId","labelFields":["name","title"],"detailFields":["email"],"maxDepth":4}"#
+        );
+        let parsed: ChartSpec = serde_json::from_str(&json).expect("deserialize org chart spec");
+        assert_eq!(parsed, spec);
+    }
+
+    /// The serde-default discipline: a series chart that does not use the
+    /// new vocabulary serializes exactly as before the fields existed, so
+    /// byte-goldens and older readers are untouched.
+    #[test]
+    fn chart_spec_wire_shape_is_unchanged_when_org_fields_are_absent() {
+        let spec = ChartSpec {
+            kind: ChartKind::Bar,
+            label_field: Some("month".to_string()),
+            value_fields: vec!["sales".to_string()],
+            hierarchy_field: None,
+            label_fields: Vec::new(),
+            detail_fields: Vec::new(),
+            max_depth: None,
+            aggregate: None,
+        };
+        let json = serde_json::to_string(&spec).expect("serialize chart spec");
+        assert_eq!(
+            json,
+            r#"{"kind":"bar","labelField":"month","valueFields":["sales"]}"#
+        );
+        let parsed: ChartSpec = serde_json::from_str(&json).expect("deserialize chart spec");
+        assert_eq!(parsed, spec);
+    }
+
+    #[test]
+    fn chart_aggregate_vocabulary_serializes_lowercase() {
+        let expected = [
+            (ChartAggregate::Sum, "sum"),
+            (ChartAggregate::Avg, "avg"),
+            (ChartAggregate::Count, "count"),
+            (ChartAggregate::Min, "min"),
+            (ChartAggregate::Max, "max"),
+        ];
+        for (aggregate, wire) in expected {
+            let json = serde_json::to_string(&aggregate).expect("serialize aggregate");
+            assert_eq!(json, format!(r#""{wire}""#));
+            let parsed: ChartAggregate =
+                serde_json::from_str(&json).expect("deserialize aggregate");
+            assert_eq!(parsed, aggregate);
+        }
+    }
+
+    #[test]
+    fn chart_ref_component_spec_serializes_as_tagged_string() {
+        let spec = ComponentSpec::ChartRef("org".to_string());
+        let json = serde_json::to_string(&spec).expect("serialize chart ref");
+        assert_eq!(json, r#"{"type":"chartRef","value":"org"}"#);
+        let parsed: ComponentSpec = serde_json::from_str(&json).expect("deserialize chart ref");
+        assert_eq!(parsed, spec);
+    }
+
+    #[test]
+    fn chart_ref_component_round_trips_through_model_json() {
+        let mut model = sample_model();
+        model.views[0].components.push(ComponentDeclaration {
+            name: "modeled".to_string(),
+            component_type: Some(ComponentType::Chart),
+            spec: Some(ComponentSpec::ChartRef("headcount".to_string())),
+            properties: Vec::new(),
+            events: Vec::new(),
+            condition: None,
+        });
+        let json = model.to_json_pretty().expect("serialize");
+        let parsed = IfmlModel::from_json(&json).expect("deserialize");
+        assert_eq!(parsed, model);
+        assert_eq!(parsed.to_json_pretty().expect("re-serialize"), json);
     }
 
     #[test]

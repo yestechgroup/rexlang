@@ -19,6 +19,10 @@
 //!   [`NodeRef`] are *adjacently* tagged like [`crate::TypeRef`] and
 //!   [`crate::DefaultValue`]: `{"type": "<variant>", "value": <payload>}`.
 //!   Unit variants carry no `"value"` key (`{"type": "start"}`).
+//! - **Verbatim conditions.** A step's [`Step::when`] guard carries the
+//!   source's trimmed paren-interior text as written — the driver parses,
+//!   type-checks (boolean, against the subject's class), and stores the
+//!   condition, but the wire never re-serializes a normalized form.
 //! - **Version gate.** [`UseCaseModel::from_json`] rejects any other
 //!   `formatVersion` (absent reports as 0) with
 //!   [`crate::IrError::UnsupportedFormatVersion`] rather than guessing.
@@ -67,7 +71,8 @@ use crate::{IrError, TypeRef};
 /// [`crate::ddd::DDD_MODEL_FORMAT_VERSION`] (the design marker),
 /// [`crate::events::EVENT_MODEL_FORMAT_VERSION`] (the event marker),
 /// [`crate::deploy::DEPLOY_MODEL_FORMAT_VERSION`] (the deployment marker),
-/// and [`crate::ifml::IFML_MODEL_FORMAT_VERSION`] (the interaction marker);
+/// [`crate::ifml::IFML_MODEL_FORMAT_VERSION`] (the interaction marker), and
+/// [`crate::cmmn::CMMN_MODEL_FORMAT_VERSION`] (the case marker);
 /// bump whenever the use-case wire format changes incompatibly.
 pub const USE_CASE_MODEL_FORMAT_VERSION: u32 = 1;
 
@@ -100,12 +105,12 @@ impl UseCaseModel {
 
     /// Serializes the artifact to pretty-printed (2-space indent) JSON.
     pub fn to_json_pretty(&self) -> Result<String, IrError> {
-        Ok(serde_json::to_string_pretty(self)?)
+        crate::wire::to_json_pretty(self)
     }
 
     /// Serializes the artifact to compact JSON.
     pub fn to_json(&self) -> Result<String, IrError> {
-        Ok(serde_json::to_string(self)?)
+        crate::wire::to_json(self)
     }
 
     /// Deserializes a use-case artifact from JSON, rejecting artifacts whose
@@ -113,19 +118,12 @@ impl UseCaseModel {
     ///
     /// Unknown fields are ignored for forward compatibility.
     pub fn from_json(json: &str) -> Result<Self, IrError> {
-        let value: serde_json::Value = serde_json::from_str(json)?;
-        let found = value
-            .get("formatVersion")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or_default() as u32;
-        if found != USE_CASE_MODEL_FORMAT_VERSION {
-            return Err(IrError::UnsupportedFormatVersion {
-                found,
-                expected: USE_CASE_MODEL_FORMAT_VERSION,
-            });
-        }
-        Ok(serde_json::from_value(value)?)
+        crate::wire::from_json(json)
     }
+}
+
+impl crate::wire::VersionedArtifact for UseCaseModel {
+    const FORMAT_VERSION: u32 = USE_CASE_MODEL_FORMAT_VERSION;
 }
 
 impl Default for UseCaseModel {
@@ -223,8 +221,8 @@ pub enum MessageEndSide {
     Target,
 }
 
-/// A step a [`Participant`] performs: a named operation invocation, with the
-/// capabilities it requires.
+/// A step a [`Participant`] performs: a named operation invocation, with
+/// the capabilities it requires and an optional `when` guard condition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Step {
@@ -236,6 +234,16 @@ pub struct Step {
     /// names), in declaration order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires: Vec<String>,
+    /// The step's `when (...)` guard condition as the **verbatim trimmed
+    /// paren interior** text the source carried (the `when`-condition wire
+    /// rule): the driver slices the expression strictly inside the raw
+    /// parens and trims its ends — interior spacing is never normalized,
+    /// so the text round-trips through `rexlang fmt` byte-identically.
+    /// The driver type-checks the condition as boolean against the
+    /// subject's resolved class before the artifact lowers. `None` when the
+    /// step carries no guard.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<String>,
 }
 
 /// A declared message between two endpoints, with an optional payload.

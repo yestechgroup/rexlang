@@ -1,4 +1,4 @@
-//! Shared flow for the examples harness: locates the six canonical
+//! Shared flow for the examples harness: locates the seven canonical
 //! examples, compiles each through [`rex_driver::compile_str`], and turns
 //! the generated Rust code into a namespaced module for the scratch crates
 //! (`target/scratch/rex-codegen-test` and `target/scratch/rex-examples-test`).
@@ -13,9 +13,17 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-/// The six canonical examples. Order is also the module declaration order
+/// The seven canonical examples. Order is also the module declaration order
 /// in the scratch crate's `lib.rs`.
-pub const EXAMPLES: [&str; 6] = ["library", "ecommerce", "org", "iot", "shapes", "support"];
+pub const EXAMPLES: [&str; 7] = [
+    "library",
+    "ecommerce",
+    "org",
+    "iot",
+    "shapes",
+    "support",
+    "pricing",
+];
 
 pub fn workspace_root() -> &'static Path {
     static ROOT: OnceLock<PathBuf> = OnceLock::new();
@@ -54,13 +62,32 @@ pub fn example_source(name: &str) -> String {
     })
 }
 
+/// The example's `import sigil` content, gathered through the sanctioned
+/// disk bridge (`rex_driver::workspace_imports::collect_sigil_imports` —
+/// the CLI collector) so the rosetta walk is scoped to the example's own
+/// directory. Examples without sigil imports yield an empty bundle, so
+/// every example compiles through the same path.
+pub fn example_imports(name: &str) -> rex_driver::DomainImports {
+    let path = example_path(name);
+    let sources = [(
+        path.to_str().expect("utf-8 example path").to_string(),
+        example_source(name),
+    )];
+    let sigil = rex_driver::workspace_imports::collect_sigil_imports(&sources)
+        .expect("gather sigil imports for the example");
+    rex_driver::DomainImports {
+        schemas: rex_driver::SchemaImports::new(),
+        sigil: sigil.imports,
+    }
+}
+
 /// Compiles an example to the Core IR with **zero** diagnostics allowed.
 pub fn compile_example(name: &str) -> rex_ir::Model {
     let path = example_path(name);
     let compilation = rex_driver::compile_str(
         path.to_str().expect("utf-8 example path"),
         &example_source(name),
-        &rex_driver::DomainImports::default(),
+        &example_imports(name),
     );
     assert!(
         compilation.diagnostics.is_empty(),

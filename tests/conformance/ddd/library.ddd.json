@@ -54,8 +54,11 @@
                 {
                   "name": "status",
                   "type": {
-                    "type": "primitive",
-                    "value": "string"
+                    "type": "enum",
+                    "value": {
+                      "package": "nz.example.library",
+                      "name": "MediaStatus"
+                    }
                   }
                 }
               ]
@@ -252,8 +255,11 @@
                   {
                     "name": "status",
                     "type": {
-                      "type": "primitive",
-                      "value": "string"
+                      "type": "enum",
+                      "value": {
+                        "package": "nz.example.library",
+                        "name": "MediaStatus"
+                      }
                     }
                   }
                 ]
@@ -319,6 +325,47 @@
           "name": "PersonService",
           "description": "Keeps the member register current.",
           "operations": [
+            {
+              "name": "updateCustomer",
+              "returnType": {
+                "type": "class",
+                "value": {
+                  "package": "nz.example.library",
+                  "name": "Person"
+                }
+              },
+              "params": [
+                {
+                  "name": "customerId",
+                  "type": {
+                    "type": "primitive",
+                    "value": "string"
+                  }
+                }
+              ],
+              "capabilities": [
+                "ManageCustomer"
+              ]
+            },
+            {
+              "name": "approveCustomer",
+              "returnType": {
+                "type": "primitive",
+                "value": "boolean"
+              },
+              "params": [
+                {
+                  "name": "customerId",
+                  "type": {
+                    "type": "primitive",
+                    "value": "string"
+                  }
+                }
+              ],
+              "capabilities": [
+                "ApproveCustomer"
+              ]
+            },
             {
               "name": "register",
               "delegation": {

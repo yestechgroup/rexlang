@@ -26,20 +26,30 @@
 //! [rexlang]: https://github.com/anton-makes/rexlang
 //! [salsa]: https://crates.io/crates/salsa
 
+pub(crate) mod cmmn;
 mod ddd;
 pub(crate) mod deploy;
 pub mod diagnostic;
 pub(crate) mod events;
+pub(crate) mod integrity;
 pub(crate) mod lower;
+pub mod machines;
 pub mod manifest;
 pub mod navigation;
+pub(crate) mod pipeline;
+pub mod project;
 pub(crate) mod sigil;
 pub(crate) mod usecases;
 pub mod workspace_imports;
 
 pub use diagnostic::{render, Diagnostic, DiagnosticCode, Severity};
+pub use integrity::check_integrity;
 pub use navigation::{
     DefId, Definition, FeatureSymbolKind, Lookup, NavigationIndex, Reference, SymbolKind,
+};
+pub use project::{
+    compile_actor_imports, compile_domain_union, gather_deploy_imports, gather_domain_sources,
+    gather_ifml_project, gather_usecase_imports, ActorImport, DeployPairs, IfmlProject, UcBuckets,
 };
 
 /// Byte-offset span into the source text.
@@ -446,6 +456,30 @@ pub fn parse_usecase_query(db: &dyn Db, file: SourceFile) -> UcParseOutput {
     }
 }
 
+/// The outcome of parsing a [`SourceFile`] as a `.cmmn` file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CmmnParseOutput {
+    /// The recovered case file, or `None` when nothing could be produced.
+    pub ast: Option<rex_syntax::CmmnFile>,
+    /// All syntax errors, as diagnostics.
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Lexes and parses a [`SourceFile`] as a `.cmmn` file (memoized by salsa).
+#[salsa::tracked]
+pub fn parse_cmmn_query(db: &dyn Db, file: SourceFile) -> CmmnParseOutput {
+    let source = file.text(db);
+    let parsed = rex_syntax::parse_cmmn(&source);
+    CmmnParseOutput {
+        ast: parsed.ast,
+        diagnostics: parsed
+            .errors
+            .into_iter()
+            .map(|error| Diagnostic::error(error.message, Some(error.span)))
+            .collect(),
+    }
+}
+
 /// The result of compiling a [`SourceFile`] as an `.actor` file against its
 /// imported domain models.
 ///
@@ -514,7 +548,7 @@ pub fn compile_actors(
     actor: SourceFile,
     domains: Vec<SourceFile>,
 ) -> ActorCompilation {
-    compile_actors_with(db, actor, domains, &DomainImports::default())
+    compile_actors_with(db, actor, domains, &DomainImports::default(), &[])
 }
 
 /// The domain lowering shared by the `.actor` and `.ddd` pipelines: resolve
@@ -630,12 +664,15 @@ fn lower_domains(
 }
 
 /// The body of [`compile_actors`], parameterized over the provided
-/// import content for the domain files (see [`compile_file`] for the shape).
+/// import content for the domain files (see [`compile_file`] for the shape)
+/// and the designs [`compile_actors_str_with_designs`] validates grant
+/// coverage against.
 fn compile_actors_with(
     db: &dyn Db,
     actor: SourceFile,
     domains: Vec<SourceFile>,
     imports: &DomainImports,
+    designs: &[rex_ir::ddd::DddModel],
 ) -> ActorCompilation {
     let actor_path = actor.path(db);
     let actor_source = actor.text(db);
@@ -658,6 +695,7 @@ fn compile_actors_with(
         parsed.ast.as_ref(),
         &parsed.diagnostics,
         &domains.domain_units,
+        designs,
     );
     let mut diagnostics = diagnostics;
     diagnostics.extend(domains.sigil_diagnostics);
@@ -730,6 +768,29 @@ pub struct UseCaseCompilation {
     /// model [`EventCompilation`] carries for field types).
     pub domains_model: Option<rex_ir::Model>,
     /// Diagnostics from the `.uc` file and each imported domain, each
+    /// tagged with its file's path, in compilation order.
+    pub diagnostics: Vec<(String, Diagnostic)>,
+}
+
+/// The result of compiling a `.cmmn` case file against its imported domain
+/// models and the pre-compiled design, actor, and event artifacts its
+/// imports resolve to. Mirrors [`UseCaseCompilation`], with the artifact
+/// buckets the `.deploy` pattern carries.
+///
+/// Diagnostics come from every file involved (the `.cmmn` file, its
+/// imported domains), so each is tagged with its path; group or render them
+/// per file (see [`render`](crate::render)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CmmnCompilation {
+    /// The case artifact, or `None` when any error-severity diagnostic was
+    /// produced in any file. Warnings do not block lowering.
+    pub model: Option<rex_ir::cmmn::CmmnModel>,
+    /// The imported domains lowered against their shared union namespace as
+    /// one multi-package model, or `None` when any domain failed to lower.
+    /// Case-file item type resolution consumes the union (the same model
+    /// [`EventCompilation`] carries for field types).
+    pub domains_model: Option<rex_ir::Model>,
+    /// Diagnostics from the `.cmmn` file and each imported domain, each
     /// tagged with its file's path, in compilation order.
     pub diagnostics: Vec<(String, Diagnostic)>,
 }
@@ -931,16 +992,11 @@ pub struct DomainImports {
 /// assert!(compilation.diagnostics.is_empty());
 /// assert_eq!(compilation.model.unwrap().blocks.len(), 1);
 /// ```
-pub fn compile_actors_str(
-    actor_path: &str,
-    actor_source: &str,
-    domains: &[(String, String)],
-    imports: &DomainImports,
-) -> ActorCompilation {
-    let db = Database::new();
-    let actor = SourceFile::new(&db, actor_path.to_string(), actor_source.to_string());
+/// The one-shot wrappers' domain sources: each `(path, source)` pair as a
+/// salsa input file, duplicate paths read once (first occurrence wins).
+fn domain_files(db: &dyn Db, domains: &[(String, String)]) -> Vec<SourceFile> {
     let mut seen: Vec<&str> = Vec::new();
-    let files: Vec<SourceFile> = domains
+    domains
         .iter()
         .filter(|(path, _)| {
             if seen.contains(&path.as_str()) {
@@ -949,9 +1005,39 @@ pub fn compile_actors_str(
             seen.push(path.as_str());
             true
         })
-        .map(|(path, source)| SourceFile::new(&db, path.clone(), source.clone()))
-        .collect();
-    compile_actors_with(&db, actor, files, imports)
+        .map(|(path, source)| SourceFile::new(db, path.clone(), source.clone()))
+        .collect()
+}
+
+pub fn compile_actors_str(
+    actor_path: &str,
+    actor_source: &str,
+    domains: &[(String, String)],
+    imports: &DomainImports,
+) -> ActorCompilation {
+    compile_actors_str_with_designs(actor_path, actor_source, domains, imports, &[])
+}
+
+/// Like [`compile_actors_str`], but every capability a grant — or a
+/// delegation — hands out must be carried by at least one operation or
+/// search across `designs`, else the grant entry's diagnostic names the
+/// dangling capability with the span of its reference (capability coverage,
+/// issue rexlang#128's J4 at compile time). Each design is a pre-compiled
+/// [`rex_ir::ddd::DddModel`]; capability names pool across all of them. An
+/// empty slice keeps [`compile_actors_str`]'s behavior exactly — the check
+/// is opt-in, so a host compiling a policy without its application's
+/// designs never sees coverage diagnostics.
+pub fn compile_actors_str_with_designs(
+    actor_path: &str,
+    actor_source: &str,
+    domains: &[(String, String)],
+    imports: &DomainImports,
+    designs: &[rex_ir::ddd::DddModel],
+) -> ActorCompilation {
+    let db = Database::new();
+    let actor = SourceFile::new(&db, actor_path.to_string(), actor_source.to_string());
+    let files = domain_files(&db, domains);
+    compile_actors_with(&db, actor, files, imports, designs)
 }
 
 /// Compiles a `.ddd` design file against its imported domain models to the
@@ -966,7 +1052,7 @@ pub fn compile_ddd(db: &dyn Db, design: SourceFile, domains: Vec<SourceFile>) ->
     compile_ddd_with(db, design, domains, None, &DomainImports::default())
 }
 
-/// The body of [`compile_ddd`], parameterized over the actor model the
+/// The body of [`compile_ddd`], parameterized over the actor models the
 /// `_with_actors` entry point validates capabilities against and the
 /// provided import content for the domain files (see [`compile_file`] for
 /// the import shape).
@@ -974,7 +1060,7 @@ fn compile_ddd_with(
     db: &dyn Db,
     design: SourceFile,
     domains: Vec<SourceFile>,
-    actors: Option<&rex_ir::ActorModel>,
+    actors: Option<&[rex_ir::ActorModel]>,
     imports: &DomainImports,
 ) -> DddCompilation {
     let design_path = design.path(db);
@@ -1047,6 +1133,7 @@ fn compile_evt_with(
 
     let (model, diagnostics) = events::compile_evt_file(
         &contract_path,
+        &contract.text(db),
         parsed.ast.as_ref(),
         &parsed.diagnostics,
         &domains.domain_units,
@@ -1208,6 +1295,12 @@ fn compile_evt_with(
 ///     nothing is synthesized — so the author declares the repository the
 ///     scaffolding would hang off. The service remains the author's to
 ///     declare.
+/// 15. **dto-with-ops warning** — a `dto` design whose class carries `ops`
+///     warns once per op, naming the design and the op: a dto is a transfer
+///     record, and behavior on it is almost always a modeling mistake (the
+///     layering heuristic is documented under "Domain operations vs service
+///     operations" in docs/DDD.md). Warning-severity — the artifact is
+///     unaffected; the union is only consulted when fully lowered.
 /// ## Aggregate derivation
 ///
 /// The aggregate boundary derives from the domain model's containment
@@ -1229,16 +1322,20 @@ pub fn compile_ddd_str(
 
 /// Like [`compile_ddd_str`], but the capabilities declared on service
 /// operations are validated against `actors`: every name must exist in the
-/// union of the actor model's blocks' capabilities, else the operation's
+/// union of the actor models' blocks' capabilities, else the operation's
 /// error names the operation, its service, and the unknown capability
-/// (rule 10). The plain [`compile_ddd_str`] records capabilities
+/// (rule 10) — with the [`did_you_mean`](crate::diagnostic) closest
+/// declared name when one is a plausible typo, and the `unknownCapability`
+/// code carrying it for quick fixes. Capabilities pool across every
+/// provided model, so a host passes all of the application's `.actor`
+/// artifacts. The plain [`compile_ddd_str`] records capabilities
 /// unvalidated.
 pub fn compile_ddd_str_with_actors(
     path: &str,
     source: &str,
     domains: &[(String, String)],
     imports: &DomainImports,
-    actors: &rex_ir::ActorModel,
+    actors: &[rex_ir::ActorModel],
 ) -> DddCompilation {
     compile_ddd_str_inner(path, source, domains, Some(actors), imports)
 }
@@ -1248,23 +1345,12 @@ fn compile_ddd_str_inner(
     path: &str,
     source: &str,
     domains: &[(String, String)],
-    actors: Option<&rex_ir::ActorModel>,
+    actors: Option<&[rex_ir::ActorModel]>,
     imports: &DomainImports,
 ) -> DddCompilation {
     let db = Database::new();
     let design = SourceFile::new(&db, path.to_string(), source.to_string());
-    let mut seen: Vec<&str> = Vec::new();
-    let files: Vec<SourceFile> = domains
-        .iter()
-        .filter(|(path, _)| {
-            if seen.contains(&path.as_str()) {
-                return false;
-            }
-            seen.push(path.as_str());
-            true
-        })
-        .map(|(path, source)| SourceFile::new(&db, path.clone(), source.clone()))
-        .collect();
+    let files = domain_files(&db, domains);
     compile_ddd_with(&db, design, files, actors, imports)
 }
 
@@ -1353,12 +1439,58 @@ fn compile_ddd_str_inner(
 ///    `subscription 'S' names an empty consumer`; the empty consumer is
 ///    only reachable through parser recovery, whose syntax error fires
 ///    alongside).
+/// 8. **CloudEvents attributes** — once an event carries a `cloudEvents`
+///    block, its `type` and `source` must be non-empty (`cloudEvents
+///    type/source on event 'X' must not be empty`); when present they are
+///    authoritative for a downstream generator, overriding any derived
+///    mapping.
+/// 9. **Governance `pii`** — every entry of a `pii [ ... ]` line must name
+///    a payload field of the same event (`unknown payload field 'x' in pii
+///    of event 'Y'`). The other governance lines (`owner`,
+///    `classification`, `retention`) are verbatim labels the driver never
+///    interprets.
+/// 10. **Delivery mode** — the `mode` entry of a `delivery` block must be
+///     one of `at_most_once`, `at_least_once`, `effectively_once`
+///     (`unknown delivery mode 'x' on subscription 'S'`, with help listing
+///     them).
+/// 11. **Delivery tuning knobs** — `maxAttempts`, `backoffSeconds`, and
+///     `timeoutSeconds` must be positive (`'maxAttempts' on subscription
+///     'S' must be positive`).
+/// 12. **Dead-letter channel** — the `deadLetter` entry must name a channel
+///     declared in the same file (`unknown dead-letter channel 'x' on
+///     subscription 'S'`).
+/// 13. **Subscription `when`** — the filter's interior (sliced strictly
+///     inside the parens, trimmed — the `when`-condition convention) must
+///     parse as a rex-expr condition and type `boolean` against **every**
+///     event in the subscription's `events [...]` list: the expression is
+///     typed with a synthetic per-event class (the subscribed event's
+///     payload fields as the implicit `self`, over the imported domains'
+///     class union — `DomainTypes::insert_class`, never a fake `Model`).
+///     A field absent from any subscribed event is an error **by design** —
+///     a filter is a routing decision per event, so an event without the
+///     field cannot be routed (the help names the subscription and, for
+///     per-event failures, the event). A parse failure leaves the filter
+///     out of the artifact; a type failure still lowers the verbatim
+///     interior (the `.cmmn` precedent) — the artifact drops on any error
+///     either way.
+///
+/// Scope labels are **never** validated: a channel's `of <scope>` clause
+/// and a subscription's `scope <name>` binding are opaque topic-template
+/// labels carried verbatim into the artifact (`ChannelDef::scope` /
+/// `SubscriptionDef::scope`) — no resolution, no uniqueness, no
+/// cross-checks; interpretation is a consumer concern.
 ///
 /// Diagnostics are ordered deterministically: the contract file's parse
 /// diagnostics first, then the import errors, then each domain's own
 /// diagnostics (import order), then the contract's semantic diagnostics
-/// grouped by declaration kind (events, channels, subscriptions; each in
-/// source order).
+/// grouped by declaration kind — events, then channels, then subscriptions
+/// — each group in source order, matching the artifact's declaration
+/// order. Within an event: its fields (source order), then `pii`, then
+/// `cloudEvents`; within a subscription: its `events [...]` list, then
+/// `when`, then `delivery`. Every diagnostic is tagged with its file's
+/// path, so hosts (and the CLI) render them grouped per file. On any error
+/// the result's `model` is `None`; `domains_model` still carries the
+/// imported domains when they lowered.
 pub fn compile_evt_str(
     path: &str,
     source: &str,
@@ -1367,18 +1499,7 @@ pub fn compile_evt_str(
 ) -> EventCompilation {
     let db = Database::new();
     let contract = SourceFile::new(&db, path.to_string(), source.to_string());
-    let mut seen: Vec<&str> = Vec::new();
-    let files: Vec<SourceFile> = domains
-        .iter()
-        .filter(|(path, _)| {
-            if seen.contains(&path.as_str()) {
-                return false;
-            }
-            seen.push(path.as_str());
-            true
-        })
-        .map(|(path, source)| SourceFile::new(&db, path.clone(), source.clone()))
-        .collect();
+    let files = domain_files(&db, domains);
     compile_evt_with(&db, contract, files, imports)
 }
 
@@ -1417,6 +1538,7 @@ fn compile_usecase_with(
     imports: &DomainImports,
 ) -> UseCaseCompilation {
     let path = file.path(db);
+    let source = file.text(db);
     let parsed = parse_usecase_query(db, file);
     // The `.uc` import declarations reuse the `.actor` shape plus an
     // optional alias; the domain pipeline consumes the shared `ImportDecl`
@@ -1438,6 +1560,7 @@ fn compile_usecase_with(
 
     let (model, mut diagnostics) = usecases::compile_usecase_file(
         &path,
+        &source,
         parsed.ast.as_ref(),
         &parsed.diagnostics,
         &domains.domain_units,
@@ -1550,7 +1673,21 @@ fn compile_usecase_with(
 ///    walking `extends` (cycles guarded by a seen set; a class-typed
 ///    extends target naming no class of the union errors; interface targets
 ///    end the walk — they carry no operations). Sigil-lowered classes have
-///    attributes only, so operations never resolve through them.
+///    attributes only, so operations never resolve through them. The
+///    lowered package functions stay callable from expression positions
+///    that share the domain's `DomainTypes` (`.cmmn` `when` guards, `.ddd`
+///    document expressions, generated code) — steps never resolve them.
+///    A step may carry a `when (<expr>)` guard, written last before `;`:
+///    the guard's paren interior is parsed and typed with rex-expr against
+///    the union of the imported domains, with the subject's resolved class
+///    as `self` (the `.cmmn` criterion typing — no synthetic classes), and
+///    must be boolean. A parse failure, unknown name, or non-boolean type
+///    is an error naming the step (help `in the \`when\` of step ...`); the
+///    condition text still lowers into the artifact verbatim (trimmed
+///    paren interior), and any error drops the artifact per the general
+///    rule. Guards are a subject concern: a non-class-typed subject errors
+///    on the step itself, so sigil-typed subjects never reach the guard
+///    check.
 /// 4. **Placement** — steps are subject-only (a step on an actor errors);
 ///    occurrences are allowed on any participant.
 /// 5. **Message end binding** — for each message and each side, exactly one
@@ -1607,9 +1744,11 @@ fn compile_usecase_with(
 /// 13. **Order** — diagnostics appear in declaration order: the file's
 ///     parse diagnostics first, then the import errors, then each domain's
 ///     own diagnostics (import order), then, per use case (source order):
-///     uniqueness, participants (typing, occurrences, steps), messages
-///     (payload, then binding), successions (resolution, then the graph
-///     checks), `requires` coverage, `never_both`, `realizes`.
+///     uniqueness, participants (typing, occurrences, and — per step in
+///     source order — its operation check followed immediately by its
+///     guard check), messages (payload, then binding), successions
+///     (resolution, then the graph checks), `requires` coverage,
+///     `never_both`, `realizes`.
 pub fn compile_usecase_str(
     path: &str,
     source: &str,
@@ -1621,19 +1760,180 @@ pub fn compile_usecase_str(
 ) -> UseCaseCompilation {
     let db = Database::new();
     let file = SourceFile::new(&db, path.to_string(), source.to_string());
-    let mut seen: Vec<&str> = Vec::new();
-    let files: Vec<SourceFile> = domains
-        .iter()
-        .filter(|(path, _)| {
-            if seen.contains(&path.as_str()) {
-                return false;
-            }
-            seen.push(path.as_str());
-            true
-        })
-        .map(|(path, source)| SourceFile::new(&db, path.clone(), source.clone()))
-        .collect();
+    let files = domain_files(&db, domains);
     compile_usecase_with(&db, file, files, designs, actors, events, imports)
+}
+
+/// Compiles a `.cmmn` case file against its imported domains (memoized by
+/// salsa) with **empty artifact buckets**: under this query every bare event
+/// on-part, unknown role binding, and `execute` binding errors by design
+/// (the [`compile_usecase`](fn.compile_usecase) empty-import-bundle
+/// precedent). Designs, actor models, and event contracts enter only
+/// through the one-shot [`compile_cmmn_str`]. Use it for parse/domain
+/// editing feedback, not for full validation.
+#[salsa::tracked]
+pub fn compile_cmmn(db: &dyn Db, file: SourceFile, domains: Vec<SourceFile>) -> CmmnCompilation {
+    compile_cmmn_with(db, file, domains, &[], &[], &[], &DomainImports::default())
+}
+
+/// The body of [`compile_cmmn`], parameterized over the pre-compiled
+/// design/actor/event artifacts and the provided import content for the
+/// domain files (see [`compile_file`] for the import shape).
+fn compile_cmmn_with(
+    db: &dyn Db,
+    file: SourceFile,
+    domains: Vec<SourceFile>,
+    designs: &[(String, rex_ir::ddd::DddModel)],
+    actors: &[(String, rex_ir::ActorModel)],
+    events: &[(String, rex_ir::events::EventModel)],
+    imports: &DomainImports,
+) -> CmmnCompilation {
+    let path = file.path(db);
+    let source = file.text(db);
+    let parsed = parse_cmmn_query(db, file);
+    // The `.cmmn` import declarations reuse the `.uc` shape; the domain
+    // pipeline consumes the shared `ImportDecl` form (aliases are an
+    // `execute` concern the engine handles).
+    let domain_imports: Vec<rex_syntax::ImportDecl> = parsed
+        .ast
+        .as_ref()
+        .map(|ast| {
+            ast.imports
+                .iter()
+                .map(|import| rex_syntax::ImportDecl {
+                    path: import.path.clone(),
+                    span: import.span,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let domains = lower_domains(db, &path, &domain_imports, &domains, imports);
+
+    let (model, mut diagnostics) = cmmn::compile_cmmn_file(
+        &path,
+        &source,
+        parsed.ast.as_ref(),
+        &parsed.diagnostics,
+        &domains.domain_units,
+        designs,
+        actors,
+        events,
+    );
+    diagnostics.extend(domains.sigil_diagnostics);
+    CmmnCompilation {
+        model,
+        domains_model: domains.domains_model,
+        diagnostics,
+    }
+}
+
+/// Compiles a `.cmmn` case file against its imported domain models and
+/// pre-compiled design, actor, and event artifacts in one call.
+///
+/// The `domains` pairs are raw `.mox` texts; `designs`, `actors`, and
+/// `events` hold the pre-compiled artifacts the file's imports pull in,
+/// each keyed by the path the host resolved (the `.deploy` pattern). Every
+/// import — whatever its surface — matches a provided entry by exact path
+/// or by lexical resolution relative to the `.cmmn` file's directory (the
+/// `.deploy` rule). `imports` carries the domain files' own
+/// `import schema`/`import sigil` content (see [`DomainImports`]).
+///
+/// The artifact is `None` on any error-severity diagnostic anywhere;
+/// warnings never block lowering.
+///
+/// # Resolution semantics
+///
+/// * **Case-file items** resolve their declared types against the union
+///   namespace of the imported domains (the same rule `.evt` fields
+///   follow) — the shared [`crate::lower::resolve_ddd_type`] helper, never
+///   a re-implementation. Ambiguity across packages is an error naming the
+///   qualification.
+/// * **Roles** are case-local. An optional `as <actor>` binding must name
+///   an actor declared in one of the provided `ActorModel`s (every `extends`
+///   member counts, the use-case rule).
+/// * **`execute` bindings** name `alias.Service.operation` against the
+///   aliased `DddModel` (the use-case `realizes` rule): the alias comes
+///   from the import, the service must exist exactly once in that design,
+///   and the operation must exist on it.
+/// * **On-parts** resolve by shape: a dotted reference `name.tail` names a
+///   plan item (or case-file item) declared in the same case and the tail
+///   must be a known transition of that kind; a bare `name` must name an
+///   event declared in exactly one provided `EventModel`. Plan items and
+///   case-file items share one namespace per case, so every reference is
+///   unambiguous.
+/// * **`when` if-parts** type-check against the synthetic case universe
+///   (the `.deploy` settings-universe pattern): the case file as a class
+///   whose features are the case-file items (typed by the imported
+///   domains), each plan item as a class of boolean transition predicates,
+///   and the case as the root class — so `case_file.x` navigation and
+///   `PlanItem.completed` predicates type-check with the standard
+///   `docs/EXPRESSIONS.md` semantics (rules R1–R9 apply; the condition
+///   must be boolean). The artifact carries the condition's **verbatim
+///   interior text** (wire rule 9); parsing, typing, and translation are
+///   driver/backend concerns.
+///
+/// # Validation rules
+///
+/// 1. **Imports** — every `import` must name a provided artifact of any
+///    surface (`imported file "<path>" was not provided`); only design
+///    imports may take an alias (`import "<path>" is not a design; only
+///    design imports take an alias`), because aliases exist for `execute`.
+/// 2. **Case uniqueness** — case names are unique within the file
+///    (`duplicate case '<n>'`).
+/// 3. **Roles** — role names are unique within their case (`duplicate role
+///    '<r>' in case '<c>'`), and every `as` binding names a known actor
+///    (`unknown actor '<a>' on role '<r>' in case '<c>'`).
+/// 4. **Case-file items** — types resolve in the domain union (`unknown
+///    type '<T>'`, `ambiguous type '<T>'`); multiplicity defaults to
+///    `0..1` (the `.mox` feature convention).
+/// 5. **Shared namespace** — plan items and case-file items share one
+///    namespace per case (`duplicate name '<n>' in case '<c>'`), so
+///    criterion references stay unambiguous.
+/// 6. **Performers** — only human tasks carry a `performer` clause, and it
+///    must name a declared role (`unknown role '<r>' on task '<t>' in case
+///    '<c>'`); a performer on any other plan item errors.
+/// 7. **Execute bindings** — only service tasks may `execute`; every
+///    service must carry one (`service '<s>' in case '<c>' does not
+///    declare an execute binding`); the binding resolves through the
+///    aliased design (`unknown design alias '<a>' in case '<c>'`, `unknown
+///    service '<s>' in design '<a>' (case '<c>')`, `unknown operation '<o>'
+///    on service '<s>' in design '<a>' (case '<c>')`, `ambiguous service
+///    '<s>' in design '<a>' (case '<c>')`).
+/// 8. **Discretionary** — `discretionary` is a task/service concept
+///    (`plan item '<p>' in case '<c>' cannot be discretionary`); stages
+///    cannot carry the prefix at all (the parser rejects that shape).
+/// 9. **Criteria** — milestones carry no exit criteria (`milestone '<m>'
+///    in case '<c>' cannot have exit criteria`); a dotted on-part names a
+///    declared plan item or case-file item (`unknown plan item or
+///    case-file item '<s>' in case '<c>'`) and its tail must be a known
+///    transition of that kind (`unknown transition '<t>' on plan item
+///    '<p>' in case '<c>'` / `... on case-file item '<i>' ...`); a bare
+///    on-part names an event of exactly one provided contract (`unknown
+///    event '<e>' in case '<c>'`, `ambiguous event '<e>' in case '<c>'`).
+/// 10. **`when` conditions** — parse with rex-expr (`invalid criterion
+///     condition: ...`) and type-check boolean against the synthetic case
+///     universe (`criterion condition must be boolean, found <ty>`); the
+///     expression rules R1–R4 of `docs/EXPRESSIONS.md` apply and are cited
+///     in the errors.
+///
+/// Diagnostics are ordered deterministically: the case file's parse
+/// diagnostics first, then the import errors, then each domain's own
+/// diagnostics (import order), then the case's semantic diagnostics grouped
+/// by declaration kind (roles, case-file items, then plan items
+/// depth-first; each in source order).
+pub fn compile_cmmn_str(
+    path: &str,
+    source: &str,
+    domains: &[(String, String)],
+    imports: &DomainImports,
+    designs: &[(String, rex_ir::ddd::DddModel)],
+    actors: &[(String, rex_ir::ActorModel)],
+    events: &[(String, rex_ir::events::EventModel)],
+) -> CmmnCompilation {
+    let db = Database::new();
+    let file = SourceFile::new(&db, path.to_string(), source.to_string());
+    let files = domain_files(&db, domains);
+    compile_cmmn_with(&db, file, files, designs, actors, events, imports)
 }
 
 /// The outcome of parsing a [`SourceFile`] as a `.deploy` file.
@@ -1762,6 +2062,14 @@ pub struct DeployCompilation {
 ///    component of the deployed application; word values must be in their
 ///    list (`engine: sqlite|postgres|d1`, ...); integer and text settings
 ///    take the matching literal kind; a path is declared once per level.
+///    The vocabulary carries the operational settings (issue #135): `port`
+///    (integer) on every kind, `health` (text) on `api`/`worker`, and
+///    `cors` (text, comma-separated origins) on `api`/`frontend`. An
+///    `env { NAME = "value" ... }` block is *not* settings: its entries
+///    are opaque strings lowered verbatim, checked only for empty and
+///    duplicated names per component (`duplicate env 'NAME' on component
+///    'C'`), never joined into the effective settings, and never
+///    policy-addressable.
 /// 6. **Bindings** — a binding's path must match one of the file's
 ///    imports, and a `#<Module>` suffix must name a module of the imported
 ///    design/flow.
@@ -1789,7 +2097,9 @@ pub struct DeployCompilation {
 /// 13. **Policies** — every profile policy is parsed with rex-expr, typed
 ///     as `boolean` against the application's components (the synthetic
 ///     settings universe: one class per component holding its setting
-///     vocabulary, the application as the root), and evaluated against the
+///     vocabulary — the operational settings included — and the
+///     application as the root; env entries are not features, so
+///     `api.env.FOO` is a type error), and evaluated against the
 ///     deployment's effective settings with rules R1 (checked arithmetic)
 ///     and R4 (no zero divisor). A `require` condition that evaluates
 ///     false — including through a deployment's overrides — or a

@@ -1,0 +1,148 @@
+{
+  "formatVersion": 1,
+  "events": [
+    {
+      "name": "TicketRaised",
+      "version": "1.0.0",
+      "fields": [
+        {
+          "name": "ticketNo",
+          "type": {
+            "type": "primitive",
+            "value": "string"
+          }
+        },
+        {
+          "name": "title",
+          "type": {
+            "type": "primitive",
+            "value": "string"
+          }
+        },
+        {
+          "name": "state",
+          "type": {
+            "type": "enum",
+            "value": {
+              "package": "nz.example.support",
+              "name": "TicketState"
+            }
+          }
+        },
+        {
+          "name": "internal",
+          "type": {
+            "type": "primitive",
+            "value": "boolean"
+          }
+        }
+      ]
+    },
+    {
+      "name": "RefundRequested",
+      "version": "1.1.0",
+      "fields": [
+        {
+          "name": "ticketNo",
+          "type": {
+            "type": "primitive",
+            "value": "string"
+          }
+        },
+        {
+          "name": "refundCents",
+          "type": {
+            "type": "primitive",
+            "value": "int"
+          }
+        }
+      ]
+    },
+    {
+      "name": "RefundApproved",
+      "version": "1.0.0",
+      "fields": [
+        {
+          "name": "ticketNo",
+          "type": {
+            "type": "primitive",
+            "value": "string"
+          }
+        },
+        {
+          "name": "refundCents",
+          "type": {
+            "type": "primitive",
+            "value": "int"
+          }
+        }
+      ]
+    },
+    {
+      "name": "TicketResolved",
+      "version": "1.0.0",
+      "fields": [
+        {
+          "name": "ticketNo",
+          "type": {
+            "type": "primitive",
+            "value": "string"
+          }
+        },
+        {
+          "name": "state",
+          "type": {
+            "type": "enum",
+            "value": {
+              "package": "nz.example.support",
+              "name": "TicketState"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "channels": [
+    {
+      "name": "tickets",
+      "publishes": [
+        {
+          "event": "TicketRaised"
+        },
+        {
+          "event": "TicketResolved"
+        }
+      ]
+    },
+    {
+      "name": "refunds",
+      "publishes": [
+        {
+          "event": "RefundRequested"
+        },
+        {
+          "event": "RefundApproved"
+        }
+      ]
+    }
+  ],
+  "subscriptions": [
+    {
+      "name": "refundDesk",
+      "events": [
+        "RefundRequested",
+        "RefundApproved"
+      ],
+      "consumer": "refund_approval_service"
+    },
+    {
+      "name": "analytics",
+      "events": [
+        "TicketRaised",
+        "TicketResolved",
+        "RefundRequested"
+      ],
+      "consumer": "analytics_service"
+    }
+  ]
+}

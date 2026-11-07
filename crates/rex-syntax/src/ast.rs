@@ -399,6 +399,8 @@ pub struct ActorsDecl {
     pub capabilities: Vec<CapabilityDecl>,
     /// Declared purposes, in source order.
     pub purposes: Vec<PurposeDecl>,
+    /// Declared obligations, in source order.
+    pub obligations: Vec<ObligationDecl>,
     /// Declared grants, in source order.
     pub grants: Vec<GrantDecl>,
     /// Declared delegations, in source order.
@@ -452,6 +454,17 @@ pub struct PurposeDecl {
     /// The purpose name.
     pub name: Name,
     /// Span of the whole purpose declaration.
+    pub span: Span,
+}
+
+/// An `obligation <name>` member of an [`ActorsDecl`]: a named follow-through
+/// action grant and delegation entries may attach — a declared vocabulary
+/// the entries' obligation references resolve against.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObligationDecl {
+    /// The obligation name.
+    pub name: Name,
+    /// Span of the whole obligation declaration.
     pub span: Span,
 }
 
@@ -980,6 +993,13 @@ pub struct DddServiceOp {
     pub is_protected: bool,
     /// Actor capability names from the `capability` clause, in source order.
     pub capabilities: Vec<Name>,
+    /// Event names from the `emits` clause, in source order — the events
+    /// the operation produces (loosely coupled to the `.evt` layer).
+    pub emits: Vec<Name>,
+    /// The `when ( ... )` guard condition: a `raw_parens` span (parens
+    /// included, expression inside deliberately unparsed — slicing and
+    /// type-checking it is the driver's job).
+    pub condition: Option<Span>,
     /// Span of the whole operation, `;` included.
     pub span: Span,
 }
@@ -1114,7 +1134,53 @@ pub struct DddDesign {
     pub flags: DddFlags,
     /// The class's repository, when designed.
     pub repository: Option<DddRepository>,
+    /// The class's lifecycle state machine, when designed.
+    pub machine: Option<DddMachine>,
     /// Span of the whole declaration (`abstract` included, when present).
+    pub span: Span,
+}
+
+/// The `machine <field>: <Enum> { ... }` block of a [`DddDesign`]: the
+/// designed class's lifecycle, a state machine over one enum-typed feature.
+///
+/// The interleaved source order of the members is not preserved; `initial`,
+/// the `terminal` declarations, and the transitions are collected in their
+/// own source orders (the same split the wire artifact makes, and the
+/// canonical order the formatter emits).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DddMachine {
+    /// The designed class's feature carrying the state; the driver binds the
+    /// machine to it (the feature must exist and be enum-typed).
+    pub field: Name,
+    /// The enum the states are drawn from.
+    pub type_: TypeRef,
+    /// The `initial <State>;` line, when written; the driver requires exactly
+    /// one.
+    pub initial: Option<Name>,
+    /// The `terminal <State>;` lines in source order.
+    pub terminals: Vec<Name>,
+    /// The transitions in source order.
+    pub transitions: Vec<DddMachineTransition>,
+    /// Span of the whole declaration, `machine` keyword included.
+    pub span: Span,
+}
+
+/// One `from -> to` transition of a [`DddMachine`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct DddMachineTransition {
+    /// The source state name.
+    pub from: Name,
+    /// The target state name.
+    pub to: Name,
+    /// The `via <Trigger>` name — the workflow action the transition is
+    /// performed through; `None` for a bare arrow (the driver derives the
+    /// action name).
+    pub trigger: Option<Name>,
+    /// The `when ( ... )` guard condition: a `raw_parens` span (parens
+    /// included, expression inside deliberately unparsed — slicing and
+    /// type-checking it is the driver's job).
+    pub guard: Option<Span>,
+    /// Span of the whole transition, `;` included.
     pub span: Span,
 }
 
@@ -1149,6 +1215,11 @@ pub struct DddRepositoryOp {
     /// `true` for the `protected` modifier: the operation stays off the
     /// public interface (Sculptor's visibility).
     pub is_protected: bool,
+    /// The `when ( ... )` guard condition of a declared operation: a
+    /// `raw_parens` span (parens included, expression inside deliberately
+    /// unparsed — slicing and type-checking it is the driver's job).
+    /// Built-ins take no condition.
+    pub condition: Option<Span>,
     /// Span of the whole operation, `;` included.
     pub span: Span,
 }
@@ -1299,10 +1370,12 @@ pub struct EvtFile {
 }
 
 /// An `event <name> ("version" string)? { ... }` declaration: a named event
-/// contract with its typed payload fields. Slice 1 keeps fields plain — no
+/// contract with its typed payload fields, its governance metadata
+/// (`owner`/`classification`/`retention`/`pii` lines), and its CloudEvents
+/// attribute declarations (the `cloudEvents` block). Fields stay plain — no
 /// constraints, facets, `readonly`/`id` modifiers, or multiplicity
-/// annotations; the grammar deliberately excludes `when` filters, delivery
-/// policy, webhooks, and CloudEvents attributes.
+/// annotations. Webhook targets are deliberately absent: they are
+/// runtime/tenant data, and the DSL stays transport-independent.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EventDecl {
     /// The event name.
@@ -1311,7 +1384,36 @@ pub struct EventDecl {
     pub version: Option<String>,
     /// Payload fields in source order.
     pub fields: Vec<EventFieldDecl>,
+    /// The `owner <name>;` governance line, when present.
+    pub owner: Option<Name>,
+    /// The `classification <word>;` governance line, when present.
+    pub classification: Option<Name>,
+    /// The `retention "<period>";` governance line's string value, verbatim
+    /// as authored (`"7y"` keeps `7y`), when present.
+    pub retention: Option<String>,
+    /// The `pii [ <field>* ];` entries, in source order — payload field
+    /// names validated by the driver.
+    pub pii: Vec<Name>,
+    /// The `cloudEvents { ... }` block's attribute declarations, when
+    /// present.
+    pub cloud_events: Option<CloudEventsDecl>,
     /// Span of the whole declaration, `event` keyword included.
+    pub span: Span,
+}
+
+/// A `cloudEvents { type "..." source "..." ("subject" "...")? }` block of
+/// an [`EventDecl`]: the CloudEvents attribute declarations. When present
+/// they are authoritative for a downstream generator (the integration seam
+/// — see `docs/EVENTS.md`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CloudEventsDecl {
+    /// The CloudEvents `type` attribute.
+    pub r#type: String,
+    /// The CloudEvents `source` attribute.
+    pub source: String,
+    /// The optional CloudEvents `subject` attribute.
+    pub subject: Option<String>,
+    /// Span of the whole block, the `cloudEvents` word included.
     pub span: Span,
 }
 
@@ -1327,12 +1429,20 @@ pub struct EventFieldDecl {
     pub span: Span,
 }
 
-/// A `channel <name> { ... }` declaration: a named channel with the events
-/// published on it. Slice 1 has no delivery policy or webhook targets.
+/// A `channel <name> ("of" <scope>)? { ... }` declaration: a named channel
+/// with the events published on it. The optional scope names the channel's
+/// topic-template dimension (an opaque label). Slice 1 has no delivery
+/// policy or webhook targets.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChannelDecl {
     /// The channel name.
     pub name: Name,
+    /// The `of <scope>` clause's scope name, when present: an opaque
+    /// scoping-dimension label the channel's topics are parameterized by
+    /// (the `/accounts/{id}/trades` topic-family shape). Recovered as `None`
+    /// when the source omitted it or the clause is malformed (a reported
+    /// syntax error).
+    pub scope: Option<Name>,
     /// `publishes` entries in source order.
     pub publishes: Vec<PublishesDecl>,
     /// Span of the whole declaration, `channel` keyword included.
@@ -1350,9 +1460,11 @@ pub struct PublishesDecl {
     pub span: Span,
 }
 
-/// A `subscription <name> { events [...] consumer <name> }` declaration: a
-/// named subscription to a set of events, delivered to one consumer. Slice 1
-/// has no `when` filters or delivery policy.
+/// A `subscription <name> { events [...] consumer <name> ("scope" <name>)?
+/// ("when" (...))? ("delivery" {...})? }` declaration: a named subscription
+/// to a set of events, delivered to one consumer, optionally bound to one
+/// slice of a scoped topic family, optionally filtered by a `when`
+/// condition, and optionally carrying a delivery policy.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubscriptionDecl {
     /// The subscription name.
@@ -1362,7 +1474,39 @@ pub struct SubscriptionDecl {
     /// The consumer receiving the events. Recovered as an empty name when
     /// the source omitted it (a reported syntax error).
     pub consumer: Name,
+    /// The optional `scope <name>` binding: the slice of the scoped topic
+    /// family the consumer subscribes to. Recovered as `None` when the
+    /// source omitted it or the clause is malformed (a reported syntax
+    /// error).
+    pub scope: Option<Name>,
+    /// The optional `when (...)` filter: the raw-parens span covering the
+    /// condition's parens inclusive. The driver slices the interior
+    /// strictly inside (the `when`-condition convention), trims it, and
+    /// types it against every subscribed event.
+    pub when: Option<Span>,
+    /// The optional `delivery { ... }` block, when present.
+    pub delivery: Option<DeliveryDecl>,
     /// Span of the whole declaration, `subscription` keyword included.
+    pub span: Span,
+}
+
+/// A `delivery { mode <word>; ... }` block of a [`SubscriptionDecl`]: the
+/// per-subscription delivery policy. `mode` is required once the block is
+/// present; every other entry is optional.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeliveryDecl {
+    /// The `mode <word>;` entry's delivery-mode word (validated against the
+    /// driver's closed table).
+    pub mode: Option<Name>,
+    /// The `maxAttempts <int>;` entry, when present.
+    pub max_attempts: Option<i64>,
+    /// The `backoffSeconds <int>;` entry, when present.
+    pub backoff_seconds: Option<i64>,
+    /// The `timeoutSeconds <int>;` entry, when present.
+    pub timeout_seconds: Option<i64>,
+    /// The `deadLetter <channel>;` entry's channel name, when present.
+    pub dead_letter: Option<Name>,
+    /// Span of the whole block, the `delivery` word included.
     pub span: Span,
 }
 
@@ -1422,7 +1566,25 @@ pub struct DeployComponentDecl {
     pub designs: Vec<DeployBindingDecl>,
     /// `flow "<path>[#<Module>]"` bindings in source order.
     pub flows: Vec<DeployBindingDecl>,
+    /// `env { NAME = "value" ... }` entries in source order.
+    pub env: Vec<DeployEnvEntry>,
     /// Span of the whole declaration, `component` keyword included.
+    pub span: Span,
+}
+
+/// One `NAME = "value"` entry of a [`DeployComponentDecl`]'s `env { ... }`
+/// block: an opaque string environment variable. The name is a bare word —
+/// keyword tokens included (the qname-segment rule) — and the value is the
+/// unescaped string literal, carried verbatim. Env is deliberately *not* a
+/// setting: it is never policy-addressable and never validated against the
+/// kind's vocabulary (the closed setting-table discipline stays intact).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeployEnvEntry {
+    /// The env var name as written.
+    pub name: Name,
+    /// The env var's string value (escapes applied), verbatim.
+    pub value: String,
+    /// Span of the whole entry.
     pub span: Span,
 }
 
@@ -1637,9 +1799,9 @@ pub enum UcOccurrence {
 }
 
 /// One `perform` step of a [`UcParticipant`] body: a named behavior step,
-/// optionally bound to a named operation and carrying required capability
-/// names. The bare `perform <x>` form names the operation after the step
-/// itself.
+/// optionally bound to a named operation, carrying required capability
+/// names and an optional `when (...)` guard. The bare `perform <x>` form
+/// names the operation after the step itself.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UcStep {
     /// The step name.
@@ -1649,6 +1811,9 @@ pub struct UcStep {
     pub operation: String,
     /// Capability names from the `requires [...]` clause, in source order.
     pub requires: Vec<String>,
+    /// Span of the `when (...)` guard clause's raw parens, both parens
+    /// inclusive (the driver slices strictly inside), when written.
+    pub when: Option<Span>,
     /// Span of the whole step declaration, `;` included.
     pub span: Span,
 }
@@ -1723,5 +1888,168 @@ pub struct UcRealizes {
     /// The realizing operation's name.
     pub operation: String,
     /// Span of the whole binding, `;` included.
+    pub span: Span,
+}
+
+// --- .cmmn case management ---------------------------------------------------
+
+/// A `.cmmn` file: `import` declarations followed by `case` declarations
+/// (imports must come first).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CmmnFile {
+    /// The `import` declarations in source order.
+    pub imports: Vec<CmmnImport>,
+    /// Declared cases, in source order.
+    pub cases: Vec<CmmnCase>,
+}
+
+/// An `import "<path>" (as <name>)?` declaration of a `.cmmn` file: a
+/// dependency on another source, optionally namespaced under an alias.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CmmnImport {
+    /// The imported path (the unescaped string literal payload).
+    pub path: String,
+    /// The alias from the `as` clause, when present.
+    pub alias: Option<String>,
+    /// Span of the whole declaration, `import` keyword included.
+    pub span: Span,
+}
+
+/// A `case <name> { ... }` declaration: one case definition — its roles,
+/// typed case file, and plan items. The interleaved source order of the
+/// member kinds is not preserved; each kind is collected into its own
+/// source-ordered list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CmmnCase {
+    /// The case name.
+    pub name: String,
+    /// Description from the doc comment directly above the declaration
+    /// (contiguous `///` lines, joined).
+    pub description: Option<String>,
+    /// Declared roles in source order.
+    pub roles: Vec<CmmnRole>,
+    /// Declared case-file items in source order.
+    pub case_file: Vec<CmmnFileItem>,
+    /// Declared top-level plan items in source order (stages nest their
+    /// children).
+    pub plan_items: Vec<CmmnItemDecl>,
+    /// Span of the whole declaration.
+    pub span: Span,
+}
+
+/// A `role <name> (as <actor>)?;` declaration: a named case role,
+/// optionally bound to an `.actor` surface actor.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CmmnRole {
+    /// The role name.
+    pub name: String,
+    /// The bound actor name from the `as` clause, when present.
+    pub actor: Option<String>,
+    /// Span of the whole declaration.
+    pub span: Span,
+}
+
+/// A case-file item declaration: `Type[mult]? name;` (the `.mox` attribute
+/// production, type-first).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CmmnFileItem {
+    /// The item name.
+    pub name: String,
+    /// The item's type reference.
+    pub type_ref: TypeRef,
+    /// The multiplicity annotation, when present.
+    pub multiplicity: Option<Multiplicity>,
+    /// Description from the doc comment directly above the declaration.
+    pub description: Option<String>,
+    /// Span of the whole declaration.
+    pub span: Span,
+}
+
+/// A plan item declaration: a `task`, `service`, `milestone`, or `stage`
+/// (optionally prefixed `discretionary` for tasks and services), with its
+/// body members folded into per-kind fields.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CmmnItemDecl {
+    /// The plan item name.
+    pub name: String,
+    /// Description from the doc comment directly above the declaration.
+    pub description: Option<String>,
+    /// `true` when declared with the `discretionary` prefix.
+    pub discretionary: bool,
+    /// The structural kind.
+    pub kind: CmmnItemKind,
+    /// The `performer: <role>;` clause, wherever it was declared — the
+    /// driver validates that only a human task carries one.
+    pub performer: Option<(String, Span)>,
+    /// The `execute <alias>.<Service>.<operation>;` clause, wherever it
+    /// was declared — the driver validates that only a service task
+    /// carries one.
+    pub execute: Option<CmmnExecute>,
+    /// `entry` criteria in source order.
+    pub entry: Vec<CmmnCriterion>,
+    /// `exit` criteria in source order.
+    pub exit: Vec<CmmnCriterion>,
+    /// The `required;` control flag.
+    pub required: bool,
+    /// The `auto;` control flag (auto-start).
+    pub auto: bool,
+    /// The `repeats;` control flag.
+    pub repeats: bool,
+    /// Span of the whole declaration.
+    pub span: Span,
+}
+
+/// The structural kind of a [`CmmnItemDecl`], with its body payload.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CmmnItemKind {
+    /// A human task.
+    Task,
+    /// A service task invoking a `.ddd` service operation.
+    Service,
+    /// A milestone: a case goal reached when its entry criteria satisfy.
+    Milestone,
+    /// A stage grouping nested plan items.
+    Stage {
+        /// The nested plan items in source order.
+        items: Vec<CmmnItemDecl>,
+    },
+}
+
+/// An `execute <alias>.<Service>.<operation>;` clause of a service body.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CmmnExecute {
+    /// The import alias naming the dependency set.
+    pub alias: String,
+    /// The service's name.
+    pub service: String,
+    /// The operation's name.
+    pub operation: String,
+    /// Span of the whole clause, `;` included.
+    pub span: Span,
+}
+
+/// An `entry`/`exit` criterion of a plan item body: the on-parts the
+/// criterion reacts to and the optional `when (...)` if-part.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CmmnCriterion {
+    /// The on-parts in source order.
+    pub on_parts: Vec<CmmnOnPart>,
+    /// The `when (...)` condition: the span strictly inside the parens
+    /// (the `when`-condition convention; the driver slices the source).
+    pub when: Option<Span>,
+    /// Span of the whole criterion, `;` included.
+    pub span: Span,
+}
+
+/// One on-part of a [`CmmnCriterion`]: `name` (a domain event) or
+/// `name.tail` (a plan item standard event or case-file transition — the
+/// driver validates the tail against its transition tables).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CmmnOnPart {
+    /// The watched element's name.
+    pub source: String,
+    /// The tail word, when the reference is dotted.
+    pub event: Option<String>,
+    /// Span of the whole on-part.
     pub span: Span,
 }

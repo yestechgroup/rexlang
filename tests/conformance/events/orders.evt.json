@@ -29,7 +29,18 @@
             }
           }
         }
-      ]
+      ],
+      "owner": "order_team",
+      "classification": "confidential",
+      "retention": "7y",
+      "pii": [
+        "orderId"
+      ],
+      "cloudEvents": {
+        "type": "nz.example.orders.orderplaced.v1",
+        "source": "/orders",
+        "subject": "{orderId}"
+      }
     },
     {
       "name": "OrderCancelled",
@@ -55,6 +66,7 @@
   "channels": [
     {
       "name": "orders",
+      "scope": "account",
       "publishes": [
         {
           "event": "OrderPlaced"
@@ -72,14 +84,24 @@
         "OrderPlaced",
         "OrderCancelled"
       ],
-      "consumer": "billing_service"
+      "consumer": "billing_service",
+      "scope": "account",
+      "when": "orderId != \"\"",
+      "delivery": {
+        "mode": "at_least_once",
+        "maxAttempts": 5,
+        "backoffSeconds": 10,
+        "timeoutSeconds": 30,
+        "deadLetter": "orders"
+      }
     },
     {
       "name": "analytics",
       "events": [
         "OrderPlaced"
       ],
-      "consumer": "analytics_service"
+      "consumer": "analytics_service",
+      "when": "total > 0"
     }
   ]
 }

@@ -4,6 +4,9 @@ application Instruments {
     base rex.sigil.fixture
     module instruments {
         entity Instrument
+        service InstrumentService {
+            Instrument suspend(String instrumentId) capability SuspendInstrument;
+        }
         entity Bond repository BondRepository {
             findAll;
             Bond[] findByShortName(String shortName);

@@ -1,0 +1,453 @@
+{
+  "formatVersion": 1,
+  "views": [
+    {
+      "name": "CustomerList",
+      "label": "Customer Management",
+      "isLandmark": true,
+      "isXor": false,
+      "isModal": false,
+      "roles": [
+        "admin",
+        "manager"
+      ]
+    },
+    {
+      "name": "CustomerEdit",
+      "isLandmark": false,
+      "isXor": false,
+      "isModal": false,
+      "params": [
+        {
+          "name": "customerId",
+          "typeRef": "Uuid",
+          "default": null
+        },
+        {
+          "name": "slug",
+          "typeRef": "String",
+          "default": {
+            "type": "string",
+            "value": "home"
+          }
+        }
+      ],
+      "requires": [
+        "ManageCustomer"
+      ]
+    },
+    {
+      "name": "CustomerDetail",
+      "isLandmark": false,
+      "isXor": false,
+      "isModal": false,
+      "params": [
+        {
+          "name": "customerId",
+          "typeRef": "Uuid",
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "Report",
+      "isLandmark": false,
+      "isXor": true,
+      "isModal": false
+    },
+    {
+      "name": "Dashboard",
+      "isLandmark": false,
+      "isXor": false,
+      "isModal": false
+    }
+  ],
+  "controls": [
+    {
+      "view": "CustomerList",
+      "name": "grid",
+      "componentType": {
+        "type": "list"
+      },
+      "data": "Customer"
+    },
+    {
+      "view": "CustomerEdit",
+      "name": "editor",
+      "componentType": {
+        "type": "form"
+      },
+      "data": "Customer",
+      "fields": [
+        {
+          "name": "title",
+          "input": {
+            "type": "text"
+          },
+          "required": true,
+          "validations": [
+            {
+              "type": "binOp",
+              "value": {
+                "left": {
+                  "type": "call",
+                  "value": {
+                    "name": "len",
+                    "args": [
+                      {
+                        "type": "ident",
+                        "value": "title"
+                      }
+                    ]
+                  }
+                },
+                "op": "gt",
+                "right": {
+                  "type": "numLit",
+                  "value": 2.0
+                }
+              }
+            },
+            {
+              "type": "binOp",
+              "value": {
+                "left": {
+                  "type": "ident",
+                  "value": "title"
+                },
+                "op": "ne",
+                "right": {
+                  "type": "stringLit",
+                  "value": ""
+                }
+              }
+            }
+          ],
+          "messages": [
+            "Title too short",
+            "Title required"
+          ]
+        },
+        {
+          "name": "tier",
+          "input": {
+            "type": "dropdown"
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "view": "Report",
+      "containers": [
+        "Summary"
+      ],
+      "name": "revenue",
+      "componentType": {
+        "type": "chart"
+      }
+    },
+    {
+      "view": "Report",
+      "containers": [
+        "Detail"
+      ],
+      "name": "rows",
+      "componentType": {
+        "type": "table"
+      },
+      "columns": [
+        {
+          "type": "field",
+          "value": {
+            "label": "Name",
+            "field": {
+              "entity": "Customer",
+              "property": "name"
+            }
+          }
+        },
+        {
+          "type": "lookup",
+          "value": {
+            "label": "Status",
+            "field": {
+              "entity": "Customer",
+              "property": "status"
+            },
+            "lookup": "status_labels"
+          }
+        },
+        {
+          "type": "expression",
+          "value": {
+            "label": "Score",
+            "expr": {
+              "type": "binOp",
+              "value": {
+                "left": {
+                  "type": "call",
+                  "value": {
+                    "name": "score",
+                    "args": [
+                      {
+                        "type": "fieldExpr",
+                        "value": {
+                          "object": {
+                            "type": "ident",
+                            "value": "Customer"
+                          },
+                          "field": "history"
+                        }
+                      }
+                    ]
+                  }
+                },
+                "op": "mul",
+                "right": {
+                  "type": "numLit",
+                  "value": 100.0
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "view": "Dashboard",
+      "name": "recentOrders",
+      "componentType": {
+        "type": "list"
+      },
+      "data": "Order"
+    },
+    {
+      "view": "Dashboard",
+      "name": "pager",
+      "componentType": {
+        "type": "list"
+      },
+      "data": "Item"
+    }
+  ],
+  "edges": [
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "CustomerList",
+          "component": "grid"
+        }
+      },
+      "trigger": {
+        "type": "select"
+      },
+      "condition": {
+        "type": "binOp",
+        "value": {
+          "left": {
+            "type": "fieldExpr",
+            "value": {
+              "object": {
+                "type": "ident",
+                "value": "row"
+              },
+              "field": "active"
+            }
+          },
+          "op": "eq",
+          "right": {
+            "type": "boolLit",
+            "value": true
+          }
+        }
+      },
+      "kind": "navigate",
+      "target": "CustomerEdit",
+      "bindings": [
+        [
+          "customerId",
+          {
+            "type": "fieldExpr",
+            "value": {
+              "object": {
+                "type": "ident",
+                "value": "row"
+              },
+              "field": "id"
+            }
+          }
+        ],
+        [
+          "slug",
+          {
+            "type": "stringLit",
+            "value": "detail"
+          }
+        ]
+      ]
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "CustomerList",
+          "component": "grid"
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "create"
+      },
+      "kind": "navigate",
+      "target": "CustomerEdit"
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "CustomerList",
+          "component": "grid"
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "refreshData"
+      },
+      "kind": "refresh",
+      "target": "grid"
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "CustomerEdit",
+          "component": "editor"
+        }
+      },
+      "trigger": {
+        "type": "save"
+      },
+      "requires": [
+        "ManageCustomer",
+        "ApproveCustomer"
+      ],
+      "condition": {
+        "type": "binOp",
+        "value": {
+          "left": {
+            "type": "fieldExpr",
+            "value": {
+              "object": {
+                "type": "ident",
+                "value": "values"
+              },
+              "field": "name"
+            }
+          },
+          "op": "ne",
+          "right": {
+            "type": "stringLit",
+            "value": ""
+          }
+        }
+      },
+      "kind": "action",
+      "target": "UpdateCustomer"
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "CustomerEdit",
+          "component": "editor"
+        }
+      },
+      "trigger": {
+        "type": "custom",
+        "value": "success"
+      },
+      "kind": "navigate",
+      "target": "CustomerDetail",
+      "bindings": [
+        [
+          "customerId",
+          {
+            "type": "fieldExpr",
+            "value": {
+              "object": {
+                "type": "ident",
+                "value": "params"
+              },
+              "field": "customerId"
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "CustomerEdit",
+          "component": "editor"
+        }
+      },
+      "trigger": {
+        "type": "cancel"
+      },
+      "kind": "navigate",
+      "target": "CustomerList"
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "Dashboard",
+          "component": null
+        }
+      },
+      "trigger": {
+        "type": "load"
+      },
+      "kind": "refresh",
+      "target": "recentOrders"
+    },
+    {
+      "source": {
+        "type": "view",
+        "value": {
+          "view": "Dashboard",
+          "component": "recentOrders"
+        }
+      },
+      "trigger": {
+        "type": "select"
+      },
+      "kind": "navigate",
+      "target": "CustomerDetail",
+      "bindings": [
+        [
+          "customerId",
+          {
+            "type": "fieldExpr",
+            "value": {
+              "object": {
+                "type": "ident",
+                "value": "row"
+              },
+              "field": "customerId"
+            }
+          }
+        ]
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "name": "UpdateCustomer",
+      "target": "Person"
+    }
+  ]
+}
