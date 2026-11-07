@@ -99,7 +99,7 @@ fn ledger_next_free_pointers_are_correct() {
         .iter()
         .find(|band| band.id == rex_diagnostics::ifml_lints::LINTS_BAND)
         .expect("the lints band is in the ledger");
-    assert_eq!(lints.next_free, "W0150");
+    assert_eq!(lints.next_free, "W0155");
 }
 
 #[test]

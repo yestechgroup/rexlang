@@ -161,7 +161,7 @@ const BANDS: &[Band] = &[
         range: "W0150–W0199",
         owner: "rex-ifml lints",
         severity_note: "warning",
-        next_free: "W0150",
+        next_free: "W0155",
     },
     Band {
         id: "driver.payload",

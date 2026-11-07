@@ -2912,6 +2912,131 @@ fn check_succeeds_on_the_ifml_conformance_fixture_with_its_actor_import() {
     );
 }
 
+/// A `.ifml` flow whose only finding is the W0150 dead-action lint: the
+/// action is declared, never invoked, and its `target:` resolves against
+/// the imported domain.
+const LINT_WARNING_IFML: &str = r#"import "ifml-domain.mox";
+
+domain "demo" {
+    schema "demo";
+}
+
+view "Home" {
+    params { q: String };
+}
+
+action "Orphan" {
+    target: Product;
+}
+"#;
+
+#[test]
+fn ifml_warning_does_not_fail_check() {
+    let _ = write_source("ifml-domain.mox", IFML_DOMAIN);
+    let flow = write_source("warned.ifml", LINT_WARNING_IFML);
+    let output = rexlang()
+        .args(["check", flow.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert!(
+        output.status.success(),
+        "a lint warning never fails the check: stderr {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("OK {}\n", flow.display())
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("W0150"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("action 'Orphan' is declared but never invoked"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn deny_warnings_fails_on_ifml_warning() {
+    let _ = write_source("ifml-domain.mox", IFML_DOMAIN);
+    let flow = write_source("warned.ifml", LINT_WARNING_IFML);
+    let output = rexlang()
+        .args(["check", "--deny-warnings", flow.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check --deny-warnings");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("W0150"), "stderr: {stderr}");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).is_empty(),
+        "a denied file prints no OK line"
+    );
+}
+
+#[test]
+fn deny_warnings_does_not_break_error_failure() {
+    let _ = write_source("ifml-domain.mox", IFML_DOMAIN);
+    let flow = write_source(
+        "errored.ifml",
+        r#"import "ifml-domain.mox";
+
+view "Home" {
+    params { q: String };
+
+    component "intake" {
+        type: form;
+
+        on raise(values) -> action("Missing");
+    }
+}
+"#,
+    );
+    let output = rexlang()
+        .args(["check", "--deny-warnings", flow.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check --deny-warnings");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E0104"), "stderr: {stderr}");
+}
+
+#[test]
+fn canonical_ifml_fixtures_produce_no_warnings() {
+    // The compile-and-check closures that stand for the canonical surface:
+    // the conformance fixtures and the example apps (which carry the
+    // pattern library's app-facing declaration blocks — `patterns/ifml`
+    // files are libraries whose dangling targets the consumers declare,
+    // so they cannot be checked standalone; their lint silence is pinned
+    // by rex-ifml's `every_pattern_file_checks_without_warnings`).
+    let fixtures: Vec<PathBuf> = [
+        "tests/conformance/ifml/app.ifml",
+        "tests/conformance/ifml/cli.ifml",
+        "examples/cli.ifml",
+        "examples/support.ifml",
+        "examples/ecommerce.ifml",
+    ]
+    .iter()
+    .map(|relative| workspace_root().join(relative))
+    .collect();
+    assert!(!fixtures.is_empty());
+    for fixture in &fixtures {
+        let output = rexlang()
+            .args(["check", fixture.to_str().unwrap()])
+            .output()
+            .expect("run rexlang check");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "{}: stderr {stderr}",
+            fixture.display()
+        );
+        assert!(
+            !stderr.contains("W015"),
+            "{} must be warning-silent: {stderr}",
+            fixture.display()
+        );
+    }
+}
+
 #[test]
 fn fmt_check_passes_on_formatted_ifml() {
     let flow = write_source("formatted.ifml", GOOD_IFML);
@@ -3835,7 +3960,15 @@ fn union_ifml(action: Option<&str>, requires: Option<&str>) -> String {
     let requires_clause = requires
         .map(|names| format!("    requires: [{names}];\n"))
         .unwrap_or_default();
-    format!("import \"app.mox\";\n\nview \"Desk\" {{\n{requires_clause}}}\n{action_block}")
+    // The action is invoked from the view so the dead-action lint
+    // (W0150) stays silent: the union pass judges declaration↔operation
+    // wiring, and a clean batch must render no warnings either.
+    let invocation = action
+        .map(|name| format!("    on load -> action(\"{name}\");\n"))
+        .unwrap_or_default();
+    format!(
+        "import \"app.mox\";\n\nview \"Desk\" {{\n{requires_clause}{invocation}}}\n{action_block}"
+    )
 }
 
 /// Writes a five-file application into the test's scratch directory and
