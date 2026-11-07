@@ -115,14 +115,50 @@
 //!    **`"rosetta"`**: sigil element spans consume trailing whitespace, so
 //!    the lowering trims the slice's trailing whitespace (the same
 //!    ends-trimmed convention as `when` conditions and `cedar` policy
-//!    bodies) while interior indentation survives byte-exact. Dispatch
-//!    heads, conditions, post-conditions, aliases, and `set`/`add`
-//!    statements survive only inside that text, and nothing in rexlang
-//!    parses or executes them yet. Builtin (`com.rosetta.model`) functions
+//!    bodies) while interior indentation survives byte-exact. Builtin
+//!    (`com.rosetta.model`) functions
 //!    stay skipped — rule 6 keeps that namespace minimal. Functions are not
 //!    types: they never join the `.mox`-side resolution namespace, so an
 //!    attribute typed by a function remains an `E0106` sigil error. Sigil
 //!    resolution already rejects duplicate function names within a kind.
+//!
+//!    **Statement bodies (the `"rune"` target, RUNE-BODIES stage 1).** A
+//!    function carrying statements — a dispatch head, or any non-empty
+//!    `conditions`/`post_conditions`/`shortcuts`/`operations` collection —
+//!    additionally lowers them into one **`"rune"`** body beside the
+//!    verbatim text: the dispatch head's `(attr: Enum->VALUE)` becomes the
+//!    leading synthetic **pre** guard `attr == VALUE`, named after the
+//!    head's value (dispatch lowers to branching inside one operation —
+//!    per-branch operations are a non-goal); `condition`s become pre guards
+//!    and `post-condition`s post guards, in written order; `alias`es become
+//!    bindings; `set`/`add` statements become steps. Every expression slot
+//!    is translated to **rex-expr source text** — the shared expression
+//!    language's concrete syntax (`.` navigation, `==`, `&&`,
+//!    `true`/`false`, `if c { t } else { e }`, `param => body`,
+//!    `.size()/.sum()/.first()/.filter/.map`) — and the whole body is
+//!    type-checked by `rex_expr::body::check_body` against the fully
+//!    lowered namespace context (types lower before functions for exactly
+//!    this): **pre guards** see the inputs plus the head's value bound as
+//!    an enum-typed name (the machine-state precedent) and must be
+//!    boolean; **binding *i*** sees the inputs and bindings `0..i`; and
+//!    **steps** see the inputs and every binding, assigning the output
+//!    slot or a binding through the `->` path (`set` unifies exactly with
+//!    the slot type, `add` appends the element type of a list-valued
+//!    slot); **post guards** additionally see the output slot by its
+//!    written name — the sigil AST's rule that non-post conditions cannot
+//!    see the output, post-conditions see everything (outputs carry names,
+//!    and the `set` root in the grammar IS that name). A `LibraryFunction`
+//!    has no statement fields in the sigil AST, so `"rune"` never appears
+//!    for one. **Deferral contract:** when a statement fragment has no
+//!    rex-expr form (quantifiers, deep navigation, `switch`, `default`,
+//!    `then`, implicit closure bodies, ...) or the body fails its
+//!    typecheck, NO `"rune"` body is attached and ONE warning names the
+//!    function and the failing slot; the `"rosetta"` text and the
+//!    operation itself are untouched, and the backend keeps its stub.
+//!    Typecheck failure is a warning, never a compile error. The
+//!    serialized body is `serde_json` of the `rex_expr::body::RuneBody`
+//!    shape, byte-pinned by rex-expr's `tests/body.rs`; rex-ir never
+//!    depends on rex-expr (rule 15).
 //! 9. **Type references.** Sigil fills `TypeRef.resolved` element ids; the
 //!    lowering maps each resolved element to the rexlang equivalent
 //!    (`Class`/`Interface`/`Enum`/`Datatype`) qualified with the element's
@@ -141,9 +177,13 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+use rex_expr::body::{
+    BodyBinding, BodyDispatch, BodyGuard, BodyOutput, BodyStep, GuardPhase, RuneBody,
+};
 use rex_ir as ir;
 use rex_syntax::ast as mox;
 use rex_syntax::Span;
+use sigil_model::expr::Expr as SigilExpr;
 use sigil_model::{CardinalityMax, ModelFile, SemanticElement};
 use sigil_resolve::{ElementId, Resolution};
 
@@ -839,85 +879,100 @@ impl<'a> Lowerer<'a> {
         unreachable!("element {name} of {} is registered", file.name)
     }
 
-    /// Lowers every selected element into its namespace's content.
+    /// Lowers every selected element into its namespace's content. Types
+    /// lower before functions: a function's statement body is type-checked
+    /// against the fully lowered namespace context, so the types it names
+    /// must already be in place regardless of declaration order.
     fn lower_elements(&mut self, files: &[&ModelFile]) {
-        for file in files {
-            let namespace = file.namespace.clone();
-            for element in &file.elements {
-                match element {
-                    SemanticElement::Data(data) if data.is_choice => {
-                        // A choice → interface; options and super types are
-                        // skipped (rule 3).
-                        let interface = interface_def(data);
-                        self.packages
-                            .get_mut(&namespace)
-                            .expect("registered")
-                            .interfaces
-                            .push(interface);
+        for functions_only in [false, true] {
+            for file in files {
+                let namespace = file.namespace.clone();
+                for element in &file.elements {
+                    let is_function = matches!(
+                        element,
+                        SemanticElement::Function(_) | SemanticElement::LibraryFunction(_)
+                    );
+                    if is_function != functions_only {
+                        continue;
                     }
-                    SemanticElement::Data(data) => {
-                        let class = self.lower_class(data, &namespace);
-                        self.packages
-                            .get_mut(&namespace)
-                            .expect("registered")
-                            .classes
-                            .push(class);
-                    }
-                    SemanticElement::Enumeration(enumeration) => {
-                        let mut enum_def =
-                            ir::EnumDef::new(enumeration.name.clone(), lower_enum_values(element));
-                        enum_def.description = enumeration.definition.clone();
-                        self.packages
-                            .get_mut(&namespace)
-                            .expect("registered")
-                            .enums
-                            .push(enum_def);
-                    }
-                    SemanticElement::TypeAlias(alias) => {
-                        let datatype = self.lower_type_alias(alias);
-                        self.packages
-                            .get_mut(&namespace)
-                            .expect("registered")
-                            .datatypes
-                            .push(datatype);
-                    }
-                    SemanticElement::Function(function) => {
-                        if let Some(operation) = self.lower_function(file, function, &namespace) {
+                    match element {
+                        SemanticElement::Data(data) if data.is_choice => {
+                            // A choice → interface; options and super types
+                            // are skipped (rule 3).
+                            let interface = interface_def(data);
                             self.packages
                                 .get_mut(&namespace)
                                 .expect("registered")
-                                .functions
-                                .push(operation);
+                                .interfaces
+                                .push(interface);
                         }
-                    }
-                    SemanticElement::LibraryFunction(function) => {
-                        if let Some(operation) =
-                            self.lower_library_function(file, function, &namespace)
+                        SemanticElement::Data(data) => {
+                            let class = self.lower_class(data, &namespace);
+                            self.packages
+                                .get_mut(&namespace)
+                                .expect("registered")
+                                .classes
+                                .push(class);
+                        }
+                        SemanticElement::Enumeration(enumeration) => {
+                            let mut enum_def = ir::EnumDef::new(
+                                enumeration.name.clone(),
+                                lower_enum_values(element),
+                            );
+                            enum_def.description = enumeration.definition.clone();
+                            self.packages
+                                .get_mut(&namespace)
+                                .expect("registered")
+                                .enums
+                                .push(enum_def);
+                        }
+                        SemanticElement::TypeAlias(alias) => {
+                            let datatype = self.lower_type_alias(alias);
+                            self.packages
+                                .get_mut(&namespace)
+                                .expect("registered")
+                                .datatypes
+                                .push(datatype);
+                        }
+                        SemanticElement::Function(function) => {
+                            if let Some(operation) = self.lower_function(file, function, &namespace)
+                            {
+                                self.packages
+                                    .get_mut(&namespace)
+                                    .expect("registered")
+                                    .functions
+                                    .push(operation);
+                            }
+                        }
+                        SemanticElement::LibraryFunction(function) => {
+                            if let Some(operation) =
+                                self.lower_library_function(file, function, &namespace)
+                            {
+                                self.packages
+                                    .get_mut(&namespace)
+                                    .expect("registered")
+                                    .functions
+                                    .push(operation);
+                            }
+                        }
+                        SemanticElement::BasicType(_) | SemanticElement::RecordType(_)
+                            if namespace != BUILTIN_NAMESPACE =>
                         {
+                            // User-level basic/record types lower to opaque
+                            // datatypes so references resolve.
+                            let mut datatype = ir::DatatypeDef::new(element.name(), None);
+                            datatype.description = element_definition(element);
                             self.packages
                                 .get_mut(&namespace)
                                 .expect("registered")
-                                .functions
-                                .push(operation);
+                                .datatypes
+                                .push(datatype);
                         }
+                        // Everything else (builtin elements, skipped kinds)
+                        // is handled by the builtin registration or
+                        // deliberately skipped (rule 7).
+                        _ => {}
                     }
-                    SemanticElement::BasicType(_) | SemanticElement::RecordType(_)
-                        if namespace != BUILTIN_NAMESPACE =>
-                    {
-                        // User-level basic/record types lower to opaque
-                        // datatypes so references resolve.
-                        let mut datatype = ir::DatatypeDef::new(element.name(), None);
-                        datatype.description = element_definition(element);
-                        self.packages
-                            .get_mut(&namespace)
-                            .expect("registered")
-                            .datatypes
-                            .push(datatype);
-                    }
-                    // Everything else (builtin elements, skipped kinds) is
-                    // handled by the builtin registration or deliberately
-                    // skipped (rule 7).
-                    _ => {}
                 }
             }
         }
@@ -985,8 +1040,11 @@ impl<'a> Lowerer<'a> {
     /// description; the declaration's complete Rune source rides verbatim as
     /// the `"rosetta"` body target (dispatch, conditions, post-conditions,
     /// aliases, and set/add statements survive only inside that text). A
-    /// function without an output cannot become an operation — rexlang
-    /// operations always return — and is skipped with a warning.
+    /// statement-bearing function additionally lowers its statements into
+    /// the checked `"rune"` body (rule 8's statement contract); a function
+    /// whose statements cannot be translated or type-checked defers with a
+    /// warning. A function without an output cannot become an operation —
+    /// rexlang operations always return — and is skipped with a warning.
     fn lower_function(
         &mut self,
         file: &ModelFile,
@@ -1027,6 +1085,7 @@ impl<'a> Lowerer<'a> {
         operation.return_multiplicity = optional_multiplicity(&output.cardinality);
         operation.description = function.definition.clone();
         self.with_rosetta_body(file, function.span, &mut operation);
+        self.with_rune_body(file, function, &mut operation, output);
         Some(operation)
     }
 
@@ -1082,6 +1141,251 @@ impl<'a> Lowerer<'a> {
                 text[span.start..span.end].trim_end().to_string(),
             );
         }
+    }
+
+    /// Lowers a statement-bearing function's statements into the checked
+    /// **`"rune"`** body target (rule 8's statement contract, RUNE-BODIES
+    /// stage 1): the dispatch head becomes the leading synthetic pre guard
+    /// `attr == VALUE`, `condition`s become pre guards (in written order),
+    /// `post-condition`s become post guards, `alias`es become bindings, and
+    /// `set`/`add` statements become steps — all in deterministic source
+    /// order. A function with a dispatch head **or** any non-empty
+    /// statement collection qualifies; a `LibraryFunction` carries no
+    /// statements in the sigil AST, so `"rune"` never appears for one.
+    ///
+    /// Deferral contract: when a statement fragment has no rex-expr form or
+    /// the body fails its typecheck, NO `"rune"` body is attached and ONE
+    /// warning names the function and the failing slot. The verbatim
+    /// `"rosetta"` text and the operation itself are untouched — the
+    /// backend keeps its stub for the function.
+    fn with_rune_body(
+        &mut self,
+        file: &ModelFile,
+        function: &sigil_model::Function,
+        operation: &mut ir::Operation,
+        output: &sigil_model::Attribute,
+    ) {
+        let statement_bearing = function.dispatch.is_some()
+            || !function.shortcuts.is_empty()
+            || !function.conditions.is_empty()
+            || !function.operations.is_empty()
+            || !function.post_conditions.is_empty();
+        if !statement_bearing {
+            return;
+        }
+        match self.lower_rune_body(function, operation, output) {
+            Ok(body) => {
+                operation.bodies.insert(
+                    "rune".to_string(),
+                    serde_json::to_string(&body).expect("the rune body serializes"),
+                );
+            }
+            Err(reason) => {
+                self.warnings.push((
+                    file.name.clone(),
+                    Diagnostic::warning(
+                        format!(
+                            "function '{}' lowers without a \"rune\" body: {reason}",
+                            function.name
+                        ),
+                        Some(Span::from(function.span.start..function.span.end)),
+                    )
+                    .with_help(
+                        "the statement stays in the verbatim \"rosetta\" body; the backend \
+                         keeps its stub (docs/RUNE-BODIES.md deferral contract)",
+                    ),
+                ));
+            }
+        }
+    }
+
+    /// Builds the [`RuneBody`] for one function: the AST statement
+    /// collections in source order, every expression translated to
+    /// rex-expr text, then the whole body type-checked against the lowered
+    /// namespace context (`rex_expr::body::check_body`). The first failure
+    /// — translation or typing — defers with a slot-tagged reason.
+    fn lower_rune_body(
+        &self,
+        function: &sigil_model::Function,
+        operation: &ir::Operation,
+        output: &sigil_model::Attribute,
+    ) -> Result<RuneBody, String> {
+        let mut body = RuneBody::default();
+
+        // The dispatch head leads: the synthetic pre guard pinning the
+        // branch (`attr == VALUE`), named after the head's value.
+        let mut dispatch_enum = None;
+        if let Some(head) = &function.dispatch {
+            let attribute = operation
+                .params
+                .iter()
+                .find(|param| param.name == head.attribute)
+                .ok_or_else(|| {
+                    format!(
+                        "dispatch head '{}' is not an input of the function",
+                        head.attribute
+                    )
+                })?;
+            match &attribute.type_ {
+                ir::TypeRef::Enum { .. } => {
+                    dispatch_enum = Some(attribute.type_.clone());
+                    body.guards.push(BodyGuard {
+                        expr: format!("{} == {}", head.attribute, head.value),
+                        name: Some(head.value.clone()),
+                        phase: GuardPhase::Pre,
+                    });
+                }
+                _ => {
+                    return Err(format!(
+                        "dispatch head '{}' does not lower to an enum",
+                        head.attribute
+                    ));
+                }
+            }
+        }
+
+        // Conditions → pre guards, post-conditions → post guards, in
+        // written order. (Sigil types may carry unnamed conditions; a
+        // function condition keeps whatever name it has.)
+        for (condition, phase) in function
+            .conditions
+            .iter()
+            .map(|condition| (condition, GuardPhase::Pre))
+            .chain(
+                function
+                    .post_conditions
+                    .iter()
+                    .map(|condition| (condition, GuardPhase::Post)),
+            )
+        {
+            let slot = match &condition.name {
+                Some(name) => format!("guard '{name}'"),
+                None => "unnamed guard".to_string(),
+            };
+            body.guards.push(BodyGuard {
+                expr: translate_slot(&condition.expression, &slot)?,
+                name: condition.name.clone(),
+                phase,
+            });
+        }
+
+        // Aliases → bindings, in declaration order.
+        for shortcut in &function.shortcuts {
+            let slot = format!("binding '{}'", shortcut.name);
+            body.bindings.push(BodyBinding {
+                name: shortcut.name.clone(),
+                expr: translate_slot(&shortcut.expression, &slot)?,
+            });
+        }
+
+        // set/add statements → steps, in declaration order; the slot label
+        // mirrors the checker's (the root and its `->` path).
+        for statement in &function.operations {
+            let kind = if statement.add { "add" } else { "set" };
+            let slot = if statement.path.is_empty() {
+                format!("{kind} '{}'", statement.assign_root)
+            } else {
+                let path = statement
+                    .path
+                    .iter()
+                    .map(|segment| segment.feature.as_str())
+                    .collect::<Vec<_>>()
+                    .join("->");
+                format!("{kind} '{}->{}'", statement.assign_root, path)
+            };
+            let step = if statement.add {
+                BodyStep::Add {
+                    root: statement.assign_root.clone(),
+                    path: statement
+                        .path
+                        .iter()
+                        .map(|segment| segment.feature.clone())
+                        .collect(),
+                    expr: translate_slot(&statement.expression, &slot)?,
+                }
+            } else {
+                BodyStep::Set {
+                    root: statement.assign_root.clone(),
+                    path: statement
+                        .path
+                        .iter()
+                        .map(|segment| segment.feature.clone())
+                        .collect(),
+                    expr: translate_slot(&statement.expression, &slot)?,
+                }
+            };
+            body.steps.push(step);
+        }
+
+        // Typecheck the whole body against the lowered namespace context:
+        // the inputs are the named roots, the output slot is reachable by
+        // its written name (post guards and steps), and the dispatch value
+        // binds in the pre-guard scope.
+        let context = self.body_context();
+        let output_ref = BodyOutput {
+            name: &output.name,
+            type_: &operation.return_type,
+            multiplicity: operation.return_multiplicity.as_ref(),
+        };
+        let dispatch = match (&function.dispatch, dispatch_enum.as_ref()) {
+            (Some(head), Some(enum_type)) => Some(BodyDispatch {
+                input: &head.attribute,
+                enum_type,
+                value: &head.value,
+            }),
+            _ => None,
+        };
+        rex_expr::body::check_body(
+            &context,
+            &operation.params,
+            Some(output_ref),
+            dispatch,
+            &body,
+        )
+        .map_err(|errors| {
+            let first = &errors[0];
+            format!("{}: {}", first.slot, first.message)
+        })?;
+        Ok(body)
+    }
+
+    /// The type universe a lowered body is checked against: every lowered
+    /// user namespace (classes with their features, enums, datatypes,
+    /// interfaces) plus the builtin definitions lowered content referenced.
+    /// Assembled incrementally — never a synthesized `rex_ir::Model`.
+    fn body_context(&self) -> rex_expr::DomainTypes {
+        let mut context = rex_expr::DomainTypes::default();
+        for namespace in &self.order {
+            let Some(content) = self.packages.get(namespace) else {
+                continue;
+            };
+            for class in &content.classes {
+                context.insert_class(
+                    namespace,
+                    &class.name,
+                    class.extends.clone(),
+                    class.features.clone(),
+                    class.operations.clone(),
+                );
+            }
+            for enum_ in &content.enums {
+                context.insert_named(namespace, &enum_.name, rex_expr::NamedKind::Enum);
+            }
+            for datatype in &content.datatypes {
+                context.insert_named(namespace, &datatype.name, rex_expr::NamedKind::Datatype);
+            }
+            for interface in &content.interfaces {
+                context.insert_named(namespace, &interface.name, rex_expr::NamedKind::Interface);
+            }
+        }
+        for (name, definition) in &self.builtins {
+            let kind = match definition {
+                BuiltinDef::Datatype(_) => rex_expr::NamedKind::Datatype,
+                BuiltinDef::Enum(_) => rex_expr::NamedKind::Enum,
+            };
+            context.insert_named(BUILTIN_NAMESPACE, name, kind);
+        }
+        context
     }
 
     /// Assembles the synthetic packages: user namespaces in first-appearance
@@ -1285,5 +1589,335 @@ fn placeholder(namespace: &str, type_ref: &sigil_model::TypeRef) -> ir::TypeRef 
             .next()
             .unwrap_or_default()
             .to_string(),
+    }
+}
+
+// --- the Rune statement-expression translator -------------------------------
+
+/// Translates one statement fragment to rex-expr source text, tagging any
+/// unmappable construct with the slot it occurred in.
+fn translate_slot(expr: &SigilExpr, slot: &str) -> Result<String, String> {
+    translate_expr(expr).map_err(|reason| format!("{slot}: {reason}"))
+}
+
+/// The rex-expr parse levels the translator emits into, loosest first. A
+/// node is parenthesized when its level is below the context's minimum;
+/// left-associative chains let the right operand bind one level tighter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ExprLevel {
+    LogicOr,
+    LogicAnd,
+    Comparison,
+    Additive,
+    Multiplicative,
+    Postfix,
+}
+
+/// Translates a sigil statement expression into rex-expr source text —
+/// the shared expression language's concrete syntax (`.` navigation,
+/// `==`/`!=`, `&&`/`||`, `true`/`false`, `if c { t } else { e }`,
+/// `param => body` lambdas, `.size()/.sum()/.first()/.filter/.map`
+/// algebra). Constructs with no rex-expr form (quantifiers, deep
+/// navigation, `switch`, ...) return a named reason: the deferral contract
+/// keeps the statement in the verbatim `"rosetta"` body.
+fn translate_expr(expr: &SigilExpr) -> Result<String, String> {
+    let mut out = String::new();
+    write_expr(expr, ExprLevel::LogicOr, &mut out)?;
+    Ok(out)
+}
+
+/// Writes `expr`, parenthesizing when its level binds looser than `min`.
+fn write_expr(expr: &SigilExpr, min: ExprLevel, out: &mut String) -> Result<(), String> {
+    if level_of(expr) < min {
+        out.push('(');
+        write_bare(expr, out)?;
+        out.push(')');
+        return Ok(());
+    }
+    write_bare(expr, out)
+}
+
+/// The tightest level at which this node may appear bare.
+fn level_of(expr: &SigilExpr) -> ExprLevel {
+    match expr {
+        SigilExpr::LogicalOperation {
+            operator: sigil_model::expr::LogicalOperator::Or,
+            ..
+        } => ExprLevel::LogicOr,
+        SigilExpr::LogicalOperation { .. } => ExprLevel::LogicAnd,
+        SigilExpr::EqualityOperation { .. }
+        | SigilExpr::ComparisonOperation { .. }
+        | SigilExpr::ContainsExpression { .. } => ExprLevel::Comparison,
+        SigilExpr::ArithmeticOperation {
+            operator:
+                sigil_model::expr::ArithmeticOperator::Add
+                | sigil_model::expr::ArithmeticOperator::Subtract,
+            ..
+        } => ExprLevel::Additive,
+        SigilExpr::ArithmeticOperation { .. } => ExprLevel::Multiplicative,
+        SigilExpr::ConditionalExpression { .. } => ExprLevel::Postfix,
+        _ => ExprLevel::Postfix,
+    }
+}
+
+/// Writes `expr` without surrounding parentheses (its context already
+/// allows its level).
+#[allow(clippy::too_many_lines)]
+fn write_bare(expr: &SigilExpr, out: &mut String) -> Result<(), String> {
+    use sigil_model::expr::{
+        ArithmeticOperator, ComparisonOperator, EqualityOperator, LogicalOperator,
+    };
+    match expr {
+        SigilExpr::BooleanLiteral { value } => {
+            out.push_str(if *value { "true" } else { "false" });
+        }
+        SigilExpr::StringLiteral { value } => {
+            out.push('"');
+            for character in value.chars() {
+                match character {
+                    '"' => out.push_str("\\\""),
+                    '\\' => out.push_str("\\\\"),
+                    other => out.push(other),
+                }
+            }
+            out.push('"');
+        }
+        SigilExpr::IntLiteral { text } | SigilExpr::NumberLiteral { text } => {
+            out.push_str(text);
+        }
+        SigilExpr::SymbolReference {
+            symbol,
+            explicit_arguments: false,
+            ..
+        } => {
+            out.push_str(symbol);
+        }
+        SigilExpr::SymbolReference {
+            symbol,
+            explicit_arguments: true,
+            raw_args,
+        } => {
+            out.push_str(symbol);
+            out.push('(');
+            for (index, arg) in raw_args.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(", ");
+                }
+                write_expr(arg, ExprLevel::LogicOr, out)?;
+            }
+            out.push(')');
+        }
+        SigilExpr::FeatureCall {
+            receiver,
+            feature: Some(feature),
+        } => {
+            write_expr(receiver, ExprLevel::Postfix, out)?;
+            out.push('.');
+            out.push_str(feature);
+        }
+        SigilExpr::ArithmeticOperation {
+            operator,
+            left,
+            right,
+        } => {
+            let (spelling, level) = match operator {
+                ArithmeticOperator::Add => ("+", ExprLevel::Additive),
+                ArithmeticOperator::Subtract => ("-", ExprLevel::Additive),
+                ArithmeticOperator::Multiply => ("*", ExprLevel::Multiplicative),
+                ArithmeticOperator::Divide => ("/", ExprLevel::Multiplicative),
+            };
+            write_operand(level, left, right, spelling, out)?;
+        }
+        SigilExpr::LogicalOperation {
+            operator,
+            left,
+            right,
+        } => {
+            let (spelling, level) = match operator {
+                LogicalOperator::And => ("&&", ExprLevel::LogicAnd),
+                LogicalOperator::Or => ("||", ExprLevel::LogicOr),
+            };
+            write_operand(level, left, right, spelling, out)?;
+        }
+        SigilExpr::EqualityOperation {
+            operator,
+            card_mod: sigil_model::expr::CardinalityModifier::None,
+            left,
+            right,
+        } => {
+            let spelling = match operator {
+                EqualityOperator::Eq => "==",
+                EqualityOperator::NotEq => "!=",
+            };
+            write_operand(ExprLevel::Comparison, left, right, spelling, out)?;
+        }
+        SigilExpr::ComparisonOperation {
+            operator,
+            card_mod: sigil_model::expr::CardinalityModifier::None,
+            left,
+            right,
+        } => {
+            let spelling = match operator {
+                ComparisonOperator::Ge => ">=",
+                ComparisonOperator::Le => "<=",
+                ComparisonOperator::Gt => ">",
+                ComparisonOperator::Lt => "<",
+            };
+            write_operand(ExprLevel::Comparison, left, right, spelling, out)?;
+        }
+        SigilExpr::ConditionalExpression {
+            if_,
+            ifthen,
+            elsethen,
+            full: true,
+        } => {
+            // A rex-expr `if` is a primary in braces, so it never needs
+            // parenthesizing; the branches are delimited by the braces too.
+            out.push_str("if ");
+            write_expr(if_, ExprLevel::LogicAnd, out)?;
+            out.push_str(" { ");
+            write_expr(ifthen, ExprLevel::LogicOr, out)?;
+            out.push_str(" } else { ");
+            write_expr(elsethen, ExprLevel::LogicOr, out)?;
+            out.push_str(" }");
+        }
+        SigilExpr::CountOperation { argument } => {
+            write_expr(argument, ExprLevel::Postfix, out)?;
+            out.push_str(".size()");
+        }
+        SigilExpr::SumOperation { argument } => {
+            write_expr(argument, ExprLevel::Postfix, out)?;
+            out.push_str(".sum()");
+        }
+        SigilExpr::FirstOperation { argument } => {
+            write_expr(argument, ExprLevel::Postfix, out)?;
+            out.push_str(".first()");
+        }
+        SigilExpr::FilterOperation {
+            argument,
+            function: Some(function),
+        } => {
+            write_inline(argument, function, "filter", out)?;
+        }
+        SigilExpr::MapOperation {
+            argument,
+            function: Some(function),
+        } => {
+            write_inline(argument, function, "map", out)?;
+        }
+        other => return Err(format!("{} cannot be typed by rex-expr", fragment(other))),
+    }
+    Ok(())
+}
+
+/// One left-associative binary operator at `level`.
+fn write_operand(
+    level: ExprLevel,
+    left: &SigilExpr,
+    right: &SigilExpr,
+    spelling: &str,
+    out: &mut String,
+) -> Result<(), String> {
+    write_expr(left, level, out)?;
+    out.push(' ');
+    out.push_str(spelling);
+    out.push(' ');
+    write_expr(right, next_level(level), out)
+}
+
+/// The level one above `level` (the right operand of a left-associative
+/// chain), saturating at the tightest.
+fn next_level(level: ExprLevel) -> ExprLevel {
+    match level {
+        ExprLevel::LogicOr => ExprLevel::LogicAnd,
+        ExprLevel::LogicAnd => ExprLevel::Comparison,
+        ExprLevel::Comparison => ExprLevel::Additive,
+        ExprLevel::Additive => ExprLevel::Multiplicative,
+        ExprLevel::Multiplicative | ExprLevel::Postfix => ExprLevel::Postfix,
+    }
+}
+
+/// A collection-algebra step with an explicit single-parameter inline
+/// function: `arg.filter(p => body)` / `arg.map(p => body)`.
+fn write_inline(
+    argument: &SigilExpr,
+    function: &sigil_model::expr::InlineFunction,
+    name: &str,
+    out: &mut String,
+) -> Result<(), String> {
+    let parameters = &function.parameters;
+    let body = &function.body;
+    let [parameter] = parameters.as_slice() else {
+        return Err(format!(
+            "the `{name}` inline function takes one parameter; rex-expr lambdas bind exactly \
+             one"
+        ));
+    };
+    write_expr(argument, ExprLevel::Postfix, out)?;
+    out.push('.');
+    out.push_str(name);
+    out.push('(');
+    out.push_str(parameter);
+    out.push_str(" => ");
+    write_expr(body, ExprLevel::LogicOr, out)?;
+    out.push(')');
+    Ok(())
+}
+
+/// A readable name for the statement fragments with no rex-expr form — the
+/// deferral warning names the construct, never just "unsupported".
+fn fragment(expr: &SigilExpr) -> &'static str {
+    use sigil_model::expr::Expr as E;
+    match expr {
+        E::ImplicitVariable => "the implicit `item` variable",
+        E::SymbolReference {
+            explicit_arguments: true,
+            ..
+        } => "the argument-less form of this call",
+        E::FeatureCall { feature: None, .. } => "the bare `->` projection",
+        E::DeepFeatureCall { .. } => "the `->>` deep navigation",
+        E::EqualityOperation { .. } => "the equality cardinality modifier",
+        E::ComparisonOperation { .. } => "the comparison cardinality modifier",
+        E::ContainsExpression { .. } => "the `contains` operator",
+        E::DisjointExpression { .. } => "the `disjoint` operator",
+        E::DefaultOperation { .. } => "the `default` operator",
+        E::JoinOperation { .. } => "the `join` operator",
+        E::ConditionalExpression { full: false, .. } => {
+            "a conditional without `else` (rex-expr `if` requires both branches)"
+        }
+        E::OnlyExistsExpression { .. } => "the `only exists` quantifier",
+        E::ExistsExpression { .. } => "the `exists` quantifier",
+        E::AbsentExpression { .. } => "the `is absent` test",
+        E::OnlyElement { .. } => "the `only-element` operation",
+        E::AsKeyOperation { .. } => "the `as-key` operation",
+        E::OneOfOperation { .. } => "the `one-of` operation",
+        E::ChoiceOperation { .. } => "a `choice` expression",
+        E::ToStringOperation { .. }
+        | E::ToNumberOperation { .. }
+        | E::ToIntOperation { .. }
+        | E::ToTimeOperation { .. }
+        | E::ToDateOperation { .. }
+        | E::ToDateTimeOperation { .. }
+        | E::ToZonedDateTimeOperation { .. }
+        | E::ToEnumOperation { .. } => "a `to-*` conversion",
+        E::SwitchOperation { .. } => "a `switch` expression",
+        E::WithMetaOperation { .. } => "a `with-meta` expression",
+        E::AsOperation { .. } => "an `as` cast",
+        E::ThenOperation { .. } => "the `then` operator",
+        E::FilterOperation { function: None, .. } => {
+            "an implicit (bracket-less) `filter` body; rex-expr lambdas are explicit"
+        }
+        E::MapOperation { function: None, .. } => {
+            "an implicit (bracket-less) `extract` body; rex-expr lambdas are explicit"
+        }
+        E::ReduceOperation { .. } => "a `reduce` expression",
+        E::SortOperation { .. } => "a `sort` expression",
+        E::MinOperation { .. } => "a `min` expression",
+        E::MaxOperation { .. } => "a `max` expression",
+        E::ListLiteral { .. } => "a list literal",
+        E::ConstructorExpression { .. } => "a constructor expression",
+        // The literal/name/call forms are written above; this arm is
+        // unreachable in practice but keeps the match exhaustive.
+        _ => "this expression form",
     }
 }

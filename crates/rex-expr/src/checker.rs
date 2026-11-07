@@ -794,23 +794,7 @@ impl TypeChecker {
 
     /// Walks the class and its class supertypes (a cycle-safe traversal).
     fn find_feature(&self, package: &str, class: &str, name: &str) -> Option<Feature> {
-        let mut queue = vec![(package.to_string(), class.to_string())];
-        let mut visited = BTreeSet::new();
-        while let Some(key) = queue.pop() {
-            if !visited.insert(key.clone()) {
-                continue;
-            }
-            let info = self.context.class(&key.0, &key.1)?;
-            if let Some(feature) = info.features.iter().find(|f| f.name == name) {
-                return Some(feature.clone());
-            }
-            for extends in &info.extends {
-                if let TypeRef::Class { package, name } = extends {
-                    queue.push((package.clone(), name.clone()));
-                }
-            }
-        }
-        None
+        feature_in_class(&self.context, package, class, name)
     }
 
     fn find_operation(&self, package: &str, class: &str, name: &str) -> Option<Operation> {
@@ -1377,7 +1361,7 @@ fn const_of(expr: &Expr) -> Option<i64> {
 /// Spec "Feature typing": attributes/derived follow the multiplicity
 /// (`List` for to-many, `Option` when the lower bound is 0), single
 /// containments/references are present (`Named`), containers are `Option`.
-fn feature_result_ty(feature: &Feature) -> Ty {
+pub(crate) fn feature_result_ty(feature: &Feature) -> Ty {
     let base = Ty::from_type_ref(&feature.type_);
     match feature.kind {
         rex_ir::FeatureKind::Container => base.optional(),
@@ -1387,6 +1371,46 @@ fn feature_result_ty(feature: &Feature) -> Ty {
     }
 }
 
+/// The declared type lifted by a multiplicity — the shared mapping of
+/// [`param_result_ty`] and [`return_result_ty`] (`List` for to-many,
+/// `Option` when the lower bound is 0, the plain type otherwise).
+pub(crate) fn result_ty(type_: &TypeRef, multiplicity: Option<&Multiplicity>) -> Ty {
+    let base = Ty::from_type_ref(type_);
+    match multiplicity {
+        Some(multiplicity) if multiplicity.is_many() => base.list(),
+        Some(multiplicity) if multiplicity.lower == 0 => base.optional(),
+        _ => base,
+    }
+}
+
+/// The feature `name` on `package.class` or its class supertypes
+/// (cycle-safe) — the context-only form of [`TypeChecker::find_feature`],
+/// shared with the Rune body checker's step-path navigation.
+pub(crate) fn feature_in_class(
+    context: &DomainTypes,
+    package: &str,
+    class: &str,
+    name: &str,
+) -> Option<Feature> {
+    let mut queue = vec![(package.to_string(), class.to_string())];
+    let mut visited = BTreeSet::new();
+    while let Some(key) = queue.pop() {
+        if !visited.insert(key.clone()) {
+            continue;
+        }
+        let info = context.class(&key.0, &key.1)?;
+        if let Some(feature) = info.features.iter().find(|f| f.name == name) {
+            return Some(feature.clone());
+        }
+        for extends in &info.extends {
+            if let TypeRef::Class { package, name } = extends {
+                queue.push((package.clone(), name.clone()));
+            }
+        }
+    }
+    None
+}
+
 /// The argument type a free-function parameter expects: the declared type,
 /// `List` when the multiplicity is many, `Option` when the lower bound is 0
 /// (the `feature_result_ty` mapping, minus the container case — a function
@@ -1394,12 +1418,7 @@ fn feature_result_ty(feature: &Feature) -> Ty {
 /// argument where the parameter expects the plain inner type is a type
 /// error, enforced by exact expected-vs-found equality.
 fn param_result_ty(param: &OperationParam) -> Ty {
-    let base = Ty::from_type_ref(&param.type_);
-    match &param.multiplicity {
-        Some(multiplicity) if multiplicity.is_many() => base.list(),
-        Some(multiplicity) if multiplicity.lower == 0 => base.optional(),
-        _ => base,
-    }
+    result_ty(&param.type_, param.multiplicity.as_ref())
 }
 
 /// The type a free-function call produces: the declared return type lifted
@@ -1408,12 +1427,10 @@ fn param_result_ty(param: &OperationParam) -> Ty {
 /// `Option`, and the single-valued convention (unset or `(1..1)`) stays the
 /// plain element type.
 fn return_result_ty(signature: &FunctionSignature) -> Ty {
-    let base = Ty::from_type_ref(&signature.return_type);
-    match &signature.return_multiplicity {
-        Some(multiplicity) if multiplicity.is_many() => base.list(),
-        Some(multiplicity) if multiplicity.lower == 0 => base.optional(),
-        _ => base,
-    }
+    result_ty(
+        &signature.return_type,
+        signature.return_multiplicity.as_ref(),
+    )
 }
 
 /// The single indexed function name within Levenshtein distance 2 of

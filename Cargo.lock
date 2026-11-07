@@ -2720,6 +2720,8 @@ dependencies = [
  "chumsky 0.10.1",
  "logos 0.15.1",
  "rex-ir",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 

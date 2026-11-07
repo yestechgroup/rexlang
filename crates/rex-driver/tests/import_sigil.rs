@@ -1400,10 +1400,11 @@ fn references_into_a_failed_namespace_error_on_the_referencing_file() {
 
 // --- rule 8: func / library function lowering ------------------------------
 
-/// A user-namespace `func` lowers to a signature-only operation in
-/// `Package::functions`: inputs → parameters (with cardinalities), output →
-/// return type, definition → description, and the declaration's complete
-/// Rune source rides verbatim as the `"rosetta"` body target.
+/// A user-namespace `func` lowers to a signature-only rexlang operation:
+/// inputs → parameters (with cardinalities), output → return type,
+/// definition → description, the declaration's complete Rune source rides
+/// verbatim as the `"rosetta"` body target, and the type-checked statement
+/// body rides beside it as the `"rune"` target (the pinned canonical JSON).
 #[test]
 fn a_user_function_lowers_to_a_signature_only_operation() {
     let rosetta = concat!(
@@ -1417,9 +1418,6 @@ fn a_user_function_lowers_to_a_signature_only_operation() {
         "        tags string (0..*)\n",
         "    output:\n",
         "        rate number (1..1)\n",
-        "\n",
-        "    condition Present:\n",
-        "        trade exists\n",
         "\n",
         "    set rate:\n",
         "        trade -> price\n"
@@ -1465,15 +1463,209 @@ fn a_user_function_lowers_to_a_signature_only_operation() {
             upper: rex_ir::Upper::Unbounded
         })
     );
-    // The verbatim body is the complete declaration text, including the
-    // condition and set sections nothing in rexlang parses — ends-trimmed
+    // The verbatim body is the complete declaration text, ends-trimmed
     // (contract rule 8): sigil spans consume trailing whitespace, and the
     // artifact never carries the declaration's trailing blank line.
     let body = function.bodies.get("rosetta").expect("rosetta body");
     assert!(body.starts_with("func Rate:"), "{body:?}");
-    assert!(body.contains("condition Present:"), "{body:?}");
     assert!(body.contains("set rate:"), "{body:?}");
     assert!(!body.ends_with(char::is_whitespace), "{body:?}");
+    // The statement body lowers beside it: one `set` step navigating the
+    // input's feature, serialized in the pinned canonical shape.
+    assert_eq!(
+        function.bodies.get("rune").map(String::as_str),
+        Some("{\"steps\":[{\"kind\":\"set\",\"root\":\"rate\",\"expr\":\"trade.price\"}]}"),
+        "{:?}",
+        function.bodies
+    );
+}
+
+/// The funcs-fixture shape: a named pre condition over the inputs plus a
+/// `set` of the output slot. The guard serializes with its written name and
+/// the `pre` phase; the fixture's canonical golden carries the same bytes.
+#[test]
+fn a_statement_bearing_function_lowers_guard_and_set_into_a_rune_body() {
+    let rosetta = concat!(
+        "namespace oracle.rate\n\n",
+        "func calcRate:\n",
+        "    inputs:\n",
+        "        notional number (1..1)\n",
+        "    output:\n",
+        "        rate number (1..1)\n",
+        "\n",
+        "    condition PositiveNotional:\n",
+        "        notional > 0.0\n",
+        "\n",
+        "    set rate:\n",
+        "        notional\n"
+    );
+    let compilation = compile_with_sigil(
+        &[(
+            MOX.to_string(),
+            "package demo\n\nimport sigil \"c.rosetta\"\n\nclass C { String x }\n".to_string(),
+        )],
+        &rex_driver::SigilImports::new().provide(MOX, "c.rosetta", rosetta),
+    );
+    let model = compile_clean(&compilation);
+    let function = &model.packages[1].functions[0];
+    assert_eq!(function.name, "calcRate");
+    assert_eq!(
+        function.bodies.get("rune").map(String::as_str),
+        Some("{\"guards\":[{\"expr\":\"notional > 0.0\",\"name\":\"PositiveNotional\",\"phase\":\"pre\"}],\"steps\":[{\"kind\":\"set\",\"root\":\"rate\",\"expr\":\"notional\"}]}"),
+        "{:?}",
+        function.bodies
+    );
+}
+
+/// A statement fragment rex-expr cannot type defers the whole `"rune"`
+/// body: ONE warning names the function and the failing slot, the
+/// `"rosetta"` text is untouched, the operation still lowers, and no error
+/// blocks the namespace (the documented generation-time deferral contract).
+#[test]
+fn a_function_with_untypeable_statements_defers_the_rune_body_with_a_warning() {
+    let rosetta = concat!(
+        "namespace oracle.defer\n\n",
+        "type Trade:\n",
+        "    price number (1..1)\n",
+        "\n",
+        "func Rate:\n",
+        "    inputs:\n",
+        "        trade Trade (1..1)\n",
+        "    output:\n",
+        "        rate number (1..1)\n",
+        "\n",
+        "    condition Present:\n",
+        "        trade exists\n",
+        "\n",
+        "    set rate:\n",
+        "        1.0\n"
+    );
+    let compilation = compile_with_sigil(
+        &[(
+            MOX.to_string(),
+            "package demo\n\nimport sigil \"d.rosetta\"\n\nclass C { String x }\n".to_string(),
+        )],
+        &rex_driver::SigilImports::new().provide(MOX, "d.rosetta", rosetta),
+    );
+    // No error blocks the namespace.
+    assert!(
+        compilation
+            .sigil_diagnostics
+            .iter()
+            .chain(compilation.diagnostics.iter())
+            .all(|(_, diagnostic)| !diagnostic.is_error()),
+        "{:?}",
+        compilation.sigil_diagnostics
+    );
+    // ONE warning names the function and the failing slot (`trade exists`
+    // has no rex-expr form).
+    let warnings: Vec<_> = compilation
+        .sigil_diagnostics
+        .iter()
+        .filter(|(path, diagnostic)| path == "d.rosetta" && !diagnostic.is_error())
+        .collect();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].1.message.contains("Rate")
+            && warnings[0].1.message.contains("rune")
+            && warnings[0].1.message.contains("guard 'Present'"),
+        "{:?}",
+        warnings[0].1.message
+    );
+    // The operation still lowers; the verbatim body stays, no rune body.
+    let model = compilation.model.as_ref().expect("namespace still lowers");
+    let function = &model
+        .packages
+        .iter()
+        .find(|p| p.name == "oracle.defer")
+        .expect("namespace package")
+        .functions[0];
+    assert_eq!(function.name, "Rate");
+    assert!(function.bodies.contains_key("rosetta"));
+    assert!(
+        !function.bodies.contains_key("rune"),
+        "{:?}",
+        function.bodies
+    );
+}
+
+/// A typecheck failure defers the `"rune"` body with the same warning
+/// shape: the guard types, but the step writes a `string` into a `double`
+/// slot.
+#[test]
+fn a_failing_statement_typecheck_defers_the_rune_body_with_a_warning() {
+    let rosetta = concat!(
+        "namespace oracle.mismatch\n\n",
+        "func Bad:\n",
+        "    inputs:\n",
+        "        legId string (1..1)\n",
+        "    output:\n",
+        "        rate number (1..1)\n",
+        "\n",
+        "    set rate:\n",
+        "        legId\n"
+    );
+    let compilation = compile_with_sigil(
+        &[(
+            MOX.to_string(),
+            "package demo\n\nimport sigil \"m.rosetta\"\n\nclass C { String x }\n".to_string(),
+        )],
+        &rex_driver::SigilImports::new().provide(MOX, "m.rosetta", rosetta),
+    );
+    let warnings: Vec<_> = compilation
+        .sigil_diagnostics
+        .iter()
+        .filter(|(path, diagnostic)| path == "m.rosetta" && !diagnostic.is_error())
+        .collect();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].1.message.contains("Bad") && warnings[0].1.message.contains("set 'rate'"),
+        "{:?}",
+        warnings[0].1.message
+    );
+    let model = compilation.model.as_ref().expect("namespace still lowers");
+    let function = &model
+        .packages
+        .iter()
+        .find(|p| p.name == "oracle.mismatch")
+        .expect("namespace package")
+        .functions[0];
+    assert!(!function.bodies.contains_key("rune"));
+}
+
+/// A `library function` carries no statements in the sigil AST and a
+/// statement-less `func` carries none either: neither ever grows a `"rune"`
+/// body — the `"rosetta"` verbatim target is the only body.
+#[test]
+fn statement_less_functions_never_carry_a_rune_body() {
+    let rosetta = concat!(
+        "namespace oracle.plain\n\n",
+        "library function Round(x number, cents int[]) boolean <\"Round a number.\">\n",
+        "\n",
+        "func tradeIds:\n",
+        "    inputs:\n",
+        "        legId string (1..1)\n",
+        "    output:\n",
+        "        ids string (0..*)\n"
+    );
+    let compilation = compile_with_sigil(
+        &[(
+            MOX.to_string(),
+            "package demo\n\nimport sigil \"p.rosetta\"\n\nclass C { String x }\n".to_string(),
+        )],
+        &rex_driver::SigilImports::new().provide(MOX, "p.rosetta", rosetta),
+    );
+    let model = compile_clean(&compilation);
+    for function in &model.packages[1].functions {
+        assert_eq!(
+            function.bodies.len(),
+            1,
+            "{} carries only the rosetta body: {:?}",
+            function.name,
+            function.bodies
+        );
+        assert!(function.bodies.contains_key("rosetta"));
+    }
 }
 
 /// A `library function` lowers the same way; an `is_array` parameter carries
@@ -1643,9 +1835,11 @@ fn functions_are_not_referencable_as_types() {
     assert!(compilation.model.is_none());
 }
 
-/// A func with a dispatch head lowers to ONE operation (the head survives
-/// only inside the verbatim body) — the Rosetta multi-branch spelling is
-/// same-name functions, which sigil resolution itself rejects as duplicates.
+/// A func with a dispatch head lowers to ONE operation whose `"rune"` body
+/// leads with the synthetic pre guard `attr == VALUE` (the head's value
+/// binds as an enum-typed name; the head survives in the verbatim body too)
+/// — the Rosetta multi-branch spelling is same-name functions, which sigil
+/// resolution itself rejects as duplicates.
 #[test]
 fn a_dispatch_function_lowers_to_one_operation_with_a_verbatim_head() {
     let rosetta = concat!(
@@ -1677,6 +1871,14 @@ fn a_dispatch_function_lowers_to_one_operation_with_a_verbatim_head() {
     assert_eq!(functions[0].params.len(), 1);
     let body = functions[0].bodies.get("rosetta").expect("rosetta body");
     assert!(body.contains("Kind->FIRST"), "{body:?}");
+    // The head lowers into the synthetic pre guard leading the rune body:
+    // the branch predicate first, then the steps.
+    assert_eq!(
+        functions[0].bodies.get("rune").map(String::as_str),
+        Some("{\"guards\":[{\"expr\":\"t == FIRST\",\"name\":\"FIRST\",\"phase\":\"pre\"}],\"steps\":[{\"kind\":\"set\",\"root\":\"r\",\"expr\":\"1\"}]}"),
+        "{:?}",
+        functions[0].bodies
+    );
 }
 
 /// A func without an output cannot become an operation (rexlang operations

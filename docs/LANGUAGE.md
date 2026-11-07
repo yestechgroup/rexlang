@@ -269,11 +269,15 @@ operations always return) and is skipped with a warning naming it. The
 declaration's complete Rune source is embedded **ends-trimmed verbatim**
 (the declaration's text without trailing whitespace — sigil spans consume
 trailing blank lines; interior indentation is never reformatted) as the
-operation's `"rosetta"` body target — dispatch heads, conditions,
-post-conditions, aliases, and `set`/`add` statements survive only inside
-that text, and nothing in rexlang parses or executes them yet (making them
-executable is the Rune body translation design, [`docs/RUNE-BODIES.md`](RUNE-BODIES.md);
-until then the Rust backend emits `todo!()` stubs). Functions are
+operation's `"rosetta"` body target. A statement-bearing function (a
+dispatch head, or any non-empty conditions, aliases, or `set`/`add`
+statements) additionally carries its lowered, type-checked statement body
+beside it as the **`"rune"`** target — one canonical JSON string whose
+expression slots are rex-expr programs; a fragment rex-expr cannot type
+defers with a warning and the verbatim text stands alone (the generation-time
+deferral contract). Making the statements executable is the Rune body
+translation design, [`docs/RUNE-BODIES.md`](RUNE-BODIES.md); until the
+backend lowering lands, the Rust backend emits `todo!()` stubs. Functions are
 not types: they never join the `.mox`-side resolution namespace (an
 attribute typed by a function stays an error), and builtin
 `com.rosetta.model` functions stay implicit.

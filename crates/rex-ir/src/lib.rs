@@ -140,12 +140,24 @@
 //!     [`Operation::return_multiplicity`] (serialized as `returnMultiplicity`,
 //!     omitted when `None` — the single-valued convention): the same additive
 //!     rules apply, so operations without one stay byte-identical to earlier
-//!     output. The one verbatim body target [`Operation::bodies`] may carry
-//!     beyond codegen targets is **`"rosetta"`**: the declaration's complete
-//!     Rune source text, embedded ends-trimmed verbatim (the declaration's
-//!     text without trailing whitespace, like `when` conditions and `cedar`
-//!     policy bodies) — the IR never parses or reformats it, and backends
-//!     never emit it (they skip body targets they do not own).
+//!     output. The verbatim body targets [`Operation::bodies`] may carry
+//!     beyond codegen targets are **`"rosetta"`** — the declaration's
+//!     complete Rune source text, embedded ends-trimmed verbatim (the
+//!     declaration's text without trailing whitespace, like `when`
+//!     conditions and `cedar` policy bodies) — the IR never parses or
+//!     reformats it, and backends never emit it (they skip body targets
+//!     they do not own) — and **`"rune"`**: the statement body of a
+//!     statement-bearing Rune function, lowered and type-checked by the
+//!     driver at sigil time into one canonical JSON string (the rex-expr
+//!     `RuneBody` shape: guards with `pre`/`post` phases, `alias` bindings,
+//!     `set`/`add` steps; every expression slot an rex-expr program in
+//!     source-text form). The `"rune"` target is attached only when the
+//!     statements translated and type-checked — a function whose statements
+//!     cannot be checked defers with a warning and keeps the verbatim
+//!     `"rosetta"` text alone (the documented generation-time deferral
+//!     contract). rex-ir never depends on rex-expr: the target's value is
+//!     an opaque string to this crate; backends that do not lower Rune
+//!     statements skip it like any target they do not own.
 //!
 //! [rexlang]: https://github.com/anton-makes/rexlang
 
