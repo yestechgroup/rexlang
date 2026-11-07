@@ -970,6 +970,10 @@ pub struct DddService {
     pub operations: Vec<DddServiceOp>,
     /// Injected dependency names (`inject <name>;`), in source order.
     pub dependencies: Vec<Name>,
+    /// Injected decision-service references (`inject decision
+    /// <qualified-name>;`), in source order — the `.dmn` dimension,
+    /// loosely coupled to the decision surface.
+    pub decision_dependencies: Vec<QualifiedName>,
     /// Span of the whole declaration, `service` keyword included.
     pub span: Span,
 }
@@ -995,6 +999,10 @@ pub struct DddServiceOp {
     pub is_protected: bool,
     /// Actor capability names from the `capability` clause, in source order.
     pub capabilities: Vec<Name>,
+    /// Decision-service names from the `invokes` clause, in source order —
+    /// the decision services the operation invokes (the `.dmn` dimension,
+    /// loosely coupled to the decision surface).
+    pub invokes: Vec<QualifiedName>,
     /// Event names from the `emits` clause, in source order — the events
     /// the operation produces (loosely coupled to the `.evt` layer).
     pub emits: Vec<Name>,

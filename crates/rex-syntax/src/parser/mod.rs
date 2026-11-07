@@ -189,15 +189,18 @@
 //! module_member     := service_decl | design_decl | search_decl
 //! service_decl      := "service" name "{" service_member* "}"
 //! service_member    := service_op | inject_decl
-//! service_op        := "protected"? signature capability_clause? emits_clause?
-//!                      guard_clause? ";"
+//! service_op        := "protected"? signature capability_clause?
+//!                      invokes_clause? emits_clause? guard_clause? ";"
 //!                    | "protected"? name "=>" qualified_name
-//!                      capability_clause? emits_clause? guard_clause? ";"
+//!                      capability_clause? invokes_clause? emits_clause?
+//!                      guard_clause? ";"
 //! inject_decl       := "inject" name ";"
+//!                    | "inject" "decision" qualified_name ";"
 //! signature         := type_ref multiplicity? name
 //!                      "(" (param ("," param)*)? ")"
 //! param             := type_ref multiplicity? name
 //! capability_clause := "capability" name ("," name)*
+//! invokes_clause    := "invokes" qualified_name ("," qualified_name)*
 //! emits_clause      := "emits" name ("," name)*
 //! design_decl       := "abstract"? stereotype name design_flag*
 //!                      repository_decl? machine_decl?
@@ -238,14 +241,17 @@
 //!   one application per file (violations are reported errors); the
 //!   delegated-operation `qualified_name` is `target.operation`, split at its
 //!   last segment (a bare name recovers with an error).
-//! * Declared repository operations take no `capability` or `emits` clause
-//!   (the wire artifact carries neither, so accepting one would silently
-//!   drop data); a delegated op may be named `save` etc. — contextual
-//!   words. A service operation's clauses are fixed in the canonical order
-//!   `capability? emits? when?`: `emits` names the events the operation
-//!   produces, loosely coupled to the `.evt` layer — the `.ddd` compile
-//!   has no event bucket, so existence/coverage resolve in the union
-//!   integrity pass (`rex_driver::check_integrity`, `docs/DDD.md`).
+//! * Declared repository operations take no `capability`, `invokes`, or
+//!   `emits` clause (the wire artifact carries none, so accepting one
+//!   would silently drop data); a delegated op may be named `save` etc. —
+//!   contextual words. A service operation's clauses are fixed in the
+//!   canonical order `capability? invokes? emits? when?`: `invokes` names
+//!   the decision services the operation invokes (the `.dmn` dimension,
+//!   loosely coupled to the decision surface), `emits` names the events
+//!   the operation produces, loosely coupled to the `.evt` layer — the
+//!   `.ddd` compile has no event bucket, so existence/coverage resolve in
+//!   the union integrity pass (`rex_driver::check_integrity`,
+//!   `docs/DDD.md`).
 //! * `design_flag`s and the single-member search lines (`entity`, `ranking`,
 //!   `analyzer`, `pagination`) are idempotent on repeat — the first
 //!   declaration wins; repeated `text`/`filters`/`sort`/`document` clauses
@@ -988,7 +994,9 @@ mod grammar_doc_tests {
             ddd::ABSTRACT,
             ddd::REPOSITORY,
             ddd::INJECT,
+            ddd::DECISION,
             ddd::EMITS,
+            ddd::INVOKES,
             ddd::PROTECTED,
             ddd::MACHINE,
             ddd::INITIAL,

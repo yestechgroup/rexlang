@@ -88,6 +88,37 @@ pub(crate) fn ddd_emits<'src>() -> impl Parser<'src, Tokens<'src>, Vec<Name>, Mo
         })
 }
 
+/// The `invokes <DecisionService> (, <DecisionService>)*` clause of a
+/// service operation: the decision services the operation invokes. The
+/// `invokes` keyword is contextual (the [`ddd::INVOKES`] identifier, not a
+/// lexer token), so an operation may be named `invokes` — the keyword
+/// position is unambiguous. The clause is committed once the keyword
+/// matched: a missing name list is a syntax error (with recovery), not a
+/// failed alternative. Names are loosely coupled: the `.ddd` compile
+/// resolves them against the provided `.dmn` artifacts only (the decisions
+/// entry point), never at the wire layer.
+pub(crate) fn ddd_invokes<'src>(
+) -> impl Parser<'src, Tokens<'src>, Vec<QualifiedName>, MoxExtra<'src>> + Clone {
+    ddd_keyword(ddd::INVOKES)
+        .ignore_then(qname().or_not())
+        .then(
+            kw(Token::Comma)
+                .ignore_then(qname())
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .map_with(|(first, rest), e| (first, rest, e.span()))
+        .validate(|(first, rest, span), _e, emitter| {
+            if first.is_none() {
+                emitter.emit(Rich::custom(
+                    span,
+                    "`invokes` requires at least one decision service name",
+                ));
+            }
+            first.into_iter().chain(rest).collect::<Vec<_>>()
+        })
+}
+
 /// A `type_ref multiplicity? name "(" params? ")"` operation signature,
 /// shared verbatim by service and repository operations.
 pub(crate) fn ddd_signature<'src>() -> impl Parser<
@@ -163,24 +194,29 @@ pub(crate) fn ddd_delegation<'src>(
 
 /// One operation of a `service` body: an optional `protected` modifier, then
 /// a declared signature
-/// (`type_ref multiplicity? name "(" params? ")" capability*? emits? ";"`)
-/// or a delegation (`name "=>" target.operation capability*? emits? ";"`).
+/// (`type_ref multiplicity? name "(" params? ")" capability*? invokes? emits? ";"`)
+/// or a delegation (`name "=>" target.operation capability*? invokes? emits? ";"`).
 /// The two alternatives are distinguished by the `=>` after the leading name;
 /// chumsky backtracks, so a delegated op may be named `save` and a declared
 /// op's type may be any contextual keyword. Both forms carry the clause
-/// sequence `capability? emits? when?` (the canonical clause order the
-/// formatter emits); repository operations take none of the `capability`/
-/// `emits` clauses — the wire artifact's repository operations carry
-/// neither, so accepting one would silently drop data.
+/// sequence `capability? invokes? emits? when?` (the canonical clause order
+/// the formatter emits); repository operations take none of the
+/// `capability`/`invokes`/`emits` clauses — the wire artifact's repository
+/// operations carry neither, so accepting one would silently drop data.
 pub(crate) fn ddd_service_op<'src>(
 ) -> impl Parser<'src, Tokens<'src>, DddServiceOp, MoxExtra<'src>> + Clone {
     let declared = ddd_signature()
         .then(ddd_capabilities().or_not())
+        .then(ddd_invokes().or_not())
         .then(ddd_emits().or_not())
         .then(ddd_guard_clause().or_not())
         .then_ignore(kw(Token::Other(';')))
         .map_with(
-            |((((type_ref, multiplicity, name, params), capabilities), emits), condition), e| {
+            |(
+                ((((type_ref, multiplicity, name, params), capabilities), invokes), emits),
+                condition,
+            ),
+             e| {
                 DddServiceOp {
                     name,
                     return_type: Some(type_ref),
@@ -189,6 +225,7 @@ pub(crate) fn ddd_service_op<'src>(
                     delegation: None,
                     is_protected: false,
                     capabilities: capabilities.unwrap_or_default(),
+                    invokes: invokes.unwrap_or_default(),
                     emits: emits.unwrap_or_default(),
                     condition,
                     span: e.span(),
@@ -199,11 +236,12 @@ pub(crate) fn ddd_service_op<'src>(
         .then_ignore(kw(Token::FatArrow))
         .then(ddd_delegation())
         .then(ddd_capabilities().or_not())
+        .then(ddd_invokes().or_not())
         .then(ddd_emits().or_not())
         .then(ddd_guard_clause().or_not())
         .then_ignore(kw(Token::Other(';')))
         .map_with(
-            |((((name, delegation), capabilities), emits), condition), e| DddServiceOp {
+            |(((((name, delegation), capabilities), invokes), emits), condition), e| DddServiceOp {
                 name,
                 return_type: None,
                 multiplicity: None,
@@ -211,6 +249,7 @@ pub(crate) fn ddd_service_op<'src>(
                 delegation: Some(delegation),
                 is_protected: false,
                 capabilities: capabilities.unwrap_or_default(),
+                invokes: invokes.unwrap_or_default(),
                 emits: emits.unwrap_or_default(),
                 condition,
                 span: e.span(),
@@ -227,11 +266,22 @@ pub(crate) fn ddd_service_op<'src>(
         })
 }
 
-/// An `inject <name>;` line of a `service` body.
+/// An `inject <name>;` or `inject decision <qualified-name>;` line of a
+/// `service` body. After the `inject` keyword the parser attempts the
+/// contextual `decision` discriminator ([`ddd::DECISION`]): present, the
+/// rest of the line is a qualified decision-service name (the `.dmn`
+/// dimension); absent, the plain dependency-name form. Chumsky backtracks,
+/// so `inject decision;` — a plain dependency literally named `decision` —
+/// still parses as the plain form (the decision form requires a name
+/// behind the discriminator).
 pub(crate) fn ddd_inject_decl<'src>(
-) -> impl Parser<'src, Tokens<'src>, Name, MoxExtra<'src>> + Clone {
+) -> impl Parser<'src, Tokens<'src>, DddServiceMember, MoxExtra<'src>> + Clone {
+    let decision = ddd_keyword(ddd::DECISION)
+        .ignore_then(qname())
+        .map(DddServiceMember::InjectDecision);
+    let plain = name().map(DddServiceMember::Inject);
     ddd_keyword(ddd::INJECT)
-        .ignore_then(name())
+        .ignore_then(decision.or(plain))
         .then_ignore(kw(Token::Other(';')))
 }
 
@@ -240,6 +290,7 @@ pub(crate) fn ddd_inject_decl<'src>(
 pub(crate) enum DddServiceMember {
     Operation(Box<DddServiceOp>),
     Inject(Name),
+    InjectDecision(QualifiedName),
 }
 
 /// Consumes a run of tokens that cannot start or continue a service member,
@@ -264,7 +315,7 @@ pub(crate) fn ddd_service_member<'src>(
 ) -> impl Parser<'src, Tokens<'src>, Option<DddServiceMember>, MoxExtra<'src>> + Clone {
     choice((
         ddd_service_op().map(|operation| DddServiceMember::Operation(Box::new(operation))),
-        ddd_inject_decl().map(DddServiceMember::Inject),
+        ddd_inject_decl(),
     ))
     .map(Some)
     .or(junk_ddd_service_member().to(None))
@@ -282,12 +333,16 @@ pub(crate) fn ddd_service_decl<'src>(
         .map_with(|(name, members), e| {
             let mut operations = Vec::new();
             let mut dependencies = Vec::new();
+            let mut decision_dependencies = Vec::new();
             for member in members {
                 match member {
                     Some(DddServiceMember::Operation(operation)) => {
                         operations.push(*operation);
                     }
                     Some(DddServiceMember::Inject(name)) => dependencies.push(name),
+                    Some(DddServiceMember::InjectDecision(name)) => {
+                        decision_dependencies.push(name);
+                    }
                     None => {}
                 }
             }
@@ -296,6 +351,7 @@ pub(crate) fn ddd_service_decl<'src>(
                 doc: None,
                 operations,
                 dependencies,
+                decision_dependencies,
                 span: e.span(),
             }
         })

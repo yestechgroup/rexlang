@@ -590,6 +590,13 @@ fn lower_domains(
 ) -> LoweredDomains {
     let mut lookups: Vec<(String, SourceFile)> = Vec::new();
     for import in imports {
+        // `.dmn` imports are not domains — they name the design's decision
+        // models, which the host provides as pre-compiled `DmnModel`s (the
+        // decisions bucket). A plain compile simply ignores them; treating
+        // them as `.mox` sources would mis-parse the artifact.
+        if import.path.ends_with(".dmn") {
+            continue;
+        }
         if lookups.iter().any(|(path, _)| *path == import.path) {
             continue;
         }
@@ -1050,19 +1057,22 @@ pub fn compile_actors_str_with_designs(
 /// See [`compile_ddd_str`] for the normative contract.
 #[salsa::tracked]
 pub fn compile_ddd(db: &dyn Db, design: SourceFile, domains: Vec<SourceFile>) -> DddCompilation {
-    compile_ddd_with(db, design, domains, None, &DomainImports::default())
+    compile_ddd_with(db, design, domains, None, &DomainImports::default(), &[])
 }
 
 /// The body of [`compile_ddd`], parameterized over the actor models the
-/// `_with_actors` entry point validates capabilities against and the
-/// provided import content for the domain files (see [`compile_file`] for
-/// the import shape).
+/// `_with_actors` entry point validates capabilities against, the decision
+/// models the `_with_decisions` entry point validates decision links
+/// against, and the provided import content for the domain files (see
+/// [`compile_file`] for the import shape). Both buckets are
+/// empty-by-default: tracked surfaces carry no cross-surface artifacts.
 fn compile_ddd_with(
     db: &dyn Db,
     design: SourceFile,
     domains: Vec<SourceFile>,
     actors: Option<&[rex_ir::ActorModel]>,
     imports: &DomainImports,
+    decisions: &[(String, rex_ir::dmn::DmnModel)],
 ) -> DddCompilation {
     let design_path = design.path(db);
     let parsed = parse_ddd_query(db, design);
@@ -1085,6 +1095,7 @@ fn compile_ddd_with(
         &parsed.diagnostics,
         &domains.domain_units,
         actors,
+        decisions,
     );
     let mut diagnostics = diagnostics;
     diagnostics.extend(domains.sigil_diagnostics);
@@ -1198,6 +1209,11 @@ fn compile_evt_with(
 ///   **not** validated.
 /// - [`compile_ddd_str_with_actors`] — the same, plus capability
 ///   validation against a caller-provided [`rex_ir::ActorModel`].
+/// - [`compile_ddd_str_with_decisions`] — the same, plus decision-link
+///   validation (rule 17) against caller-provided
+///   [`rex_ir::dmn::DmnModel`]s: every operation `invokes` name and every
+///   `inject decision` name must resolve to a decision service the
+///   provided models declare.
 /// - [`compile_ddd`] / [`parse_ddd_query`] — the salsa-tracked queries the
 ///   one-shot wrappers run on a fresh [`Database`].
 ///
@@ -1302,6 +1318,29 @@ fn compile_evt_with(
 ///     layering heuristic is documented under "Domain operations vs service
 ///     operations" in docs/DDD.md). Warning-severity — the artifact is
 ///     unaffected; the union is only consulted when fully lowered.
+/// 16. **Typed status fields** — an entity design whose class carries a
+///     feature named `status` or `state` typed as a bare `String` is an
+///     error: a status-like field is a lifecycle, and the bare-`String`
+///     shape is the silent no-machine case. Declare an enum in the domain
+///     model and a `machine '<field>: <Enum>'` on the design. Value objects
+///     and dtos are exempt (the check is entity semantics, the machine
+///     rule's scope), and enum-typed fields stay legal — an enum without a
+///     machine is a legitimate modeling choice.
+/// 17. **Decision links** — only [`compile_ddd_str_with_decisions`]
+///     validates: every decision-service reference (an operation's
+///     `invokes` name, a service's `inject decision` name) must resolve by
+///     its **last segment** to a decision service declared in the union of
+///     the provided decision models' services (E0250/E0251, the
+///     `rex_diagnostics::dmn` codes — the code prefixes the message text,
+///     the `driver.integrity` band precedent). Plain compiles record the
+///     names unvalidated — the design dimension is loosely coupled to the
+///     decision dimension by design. Every `.dmn` import the design
+///     declares must be provided under its path (exact match, or the
+///     lexical resolution relative to the design file's directory) when a
+///     non-empty decisions bucket is supplied, else
+///     `imported decision model "<path>" was not provided`; an empty
+///     bucket is the plain compile's behavior — `.dmn` imports are not
+///     domains and lower nothing.
 /// ## Aggregate derivation
 ///
 /// The aggregate boundary derives from the domain model's containment
@@ -1318,7 +1357,7 @@ pub fn compile_ddd_str(
     domains: &[(String, String)],
     imports: &DomainImports,
 ) -> DddCompilation {
-    compile_ddd_str_inner(path, source, domains, None, imports)
+    compile_ddd_str_inner(path, source, domains, None, imports, &[])
 }
 
 /// Like [`compile_ddd_str`], but the capabilities declared on service
@@ -1338,7 +1377,35 @@ pub fn compile_ddd_str_with_actors(
     imports: &DomainImports,
     actors: &[rex_ir::ActorModel],
 ) -> DddCompilation {
-    compile_ddd_str_inner(path, source, domains, Some(actors), imports)
+    compile_ddd_str_inner(path, source, domains, Some(actors), imports, &[])
+}
+
+/// Like [`compile_ddd_str`], but the design's **decision links** are
+/// validated against `decisions` (rule 17): every operation `invokes`
+/// name and every `inject decision` name must resolve by its last segment
+/// to a decision service declared in the union of the provided
+/// [`rex_ir::dmn::DmnModel`]s' services, else the reference errors
+/// `E0250 unknown decision service '<name>' invoked by operation '<op>'
+/// of service '<service>'` (or the `inject decision` variant, E0251),
+/// spanned on the reference, with the [`did_you_mean`](crate::diagnostic)
+/// closest declared service when one is a plausible typo. Decision
+/// services pool across every provided model, so a host passes all of the
+/// application's `.dmn` artifacts as `(path, model)` pairs. An **empty**
+/// slice is the plain [`compile_ddd_str`] behavior: the names lower into
+/// the artifact unvalidated. Every `import "<path>.dmn"` the design
+/// declares must be provided under that path when a non-empty bucket is
+/// supplied, else `imported decision model "<path>" was not provided` —
+/// `.dmn` imports are never domains and never lower as `.mox` sources
+/// (a plain compile ignores them outright).
+pub fn compile_ddd_str_with_decisions(
+    path: &str,
+    source: &str,
+    domains: &[(String, String)],
+    imports: &DomainImports,
+    actors: &[rex_ir::ActorModel],
+    decisions: &[(String, rex_ir::dmn::DmnModel)],
+) -> DddCompilation {
+    compile_ddd_str_inner(path, source, domains, Some(actors), imports, decisions)
 }
 
 /// The body of the one-shot `.ddd` entry points.
@@ -1348,11 +1415,12 @@ fn compile_ddd_str_inner(
     domains: &[(String, String)],
     actors: Option<&[rex_ir::ActorModel]>,
     imports: &DomainImports,
+    decisions: &[(String, rex_ir::dmn::DmnModel)],
 ) -> DddCompilation {
     let db = Database::new();
     let design = SourceFile::new(&db, path.to_string(), source.to_string());
     let files = domain_files(&db, domains);
-    compile_ddd_with(&db, design, files, actors, imports)
+    compile_ddd_with(&db, design, files, actors, imports, decisions)
 }
 
 /// Compiles an `.evt` event-contract file against its imported domain models

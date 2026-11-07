@@ -1625,3 +1625,195 @@ fn adversarial_machine_inputs_do_not_panic() {
         let _ = format_ddd(source);
     }
 }
+
+// --- decision links (`invokes` clause, `inject decision`) ----------------------
+
+/// A service exercising the decision-link surface: plain and decision
+/// injects, and the `invokes` clause on declared and delegated operations.
+const DECISION_LINKS: &str = r#"
+application A {
+    module m {
+        service LoanService {
+            inject LoanRepository;
+            inject decision underwriting.RiskScore;
+            inject decision FraudScreen;
+            boolean approve(int amount) capability ApproveLoans invokes RiskScore, underwriting.FraudScreen emits LoanApproved when (true);
+            route => riskEngine.evaluate invokes CreditBureau;
+        }
+    }
+}
+"#;
+
+#[test]
+fn invokes_clauses_parse_on_declared_and_delegated_ops() {
+    let result = parse_ddd(DECISION_LINKS);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let service = &expect_module(&file, "m").services[0];
+
+    let approve = &service.operations[0];
+    assert_eq!(approve.name.text, "approve");
+    let invokes: Vec<String> = approve
+        .invokes
+        .iter()
+        .map(|name| name.full_name())
+        .collect();
+    assert_eq!(invokes, vec!["RiskScore", "underwriting.FraudScreen"]);
+    // The spans cover the references themselves, source order kept.
+    assert_eq!(
+        span_text(DECISION_LINKS, approve.invokes[0].span),
+        "RiskScore"
+    );
+    assert_eq!(
+        span_text(DECISION_LINKS, approve.invokes[1].span),
+        "underwriting.FraudScreen"
+    );
+
+    // A delegated op carries the clause too (it is a service operation).
+    let route = &service.operations[1];
+    assert!(route.delegation.is_some());
+    assert_eq!(
+        route
+            .invokes
+            .iter()
+            .map(|name| name.full_name())
+            .collect::<Vec<_>>(),
+        vec!["CreditBureau"]
+    );
+    assert_eq!(
+        span_text(DECISION_LINKS, route.invokes[0].span),
+        "CreditBureau"
+    );
+}
+
+#[test]
+fn inject_decision_parses_beside_the_plain_form() {
+    let result = parse_ddd(DECISION_LINKS);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let service = &expect_module(&file, "m").services[0];
+
+    // Plain `inject` is unchanged; `inject decision` collects its own list,
+    // both in source order.
+    assert_eq!(
+        service
+            .dependencies
+            .iter()
+            .map(|name| name.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["LoanRepository"]
+    );
+    assert_eq!(
+        service
+            .decision_dependencies
+            .iter()
+            .map(|name| name.full_name())
+            .collect::<Vec<_>>(),
+        vec!["underwriting.RiskScore", "FraudScreen"]
+    );
+}
+
+#[test]
+fn a_missing_invokes_name_recovers_with_an_error() {
+    // The clause is committed once the keyword matched: a missing name list
+    // is a syntax error, and the rest of the service still parses.
+    let source = r#"
+application A {
+    module m {
+        service S {
+            boolean broken() invokes;
+            boolean fine();
+        }
+    }
+}
+"#;
+    let result = parse_ddd(source);
+    assert!(
+        !result.errors.is_empty(),
+        "the empty `invokes` clause must be an error"
+    );
+    let file = result.ast.expect("a partial AST");
+    let service = &expect_module(&file, "m").services[0];
+    assert!(
+        service
+            .operations
+            .iter()
+            .any(|op| op.name.text == "fine" && op.invokes.is_empty()),
+        "the operation after the broken clause must still parse"
+    );
+}
+
+#[test]
+fn decision_links_format_canonically_and_round_trip() {
+    // The canonical clause order is `capability ... invokes ... emits ...
+    // when ...`; the decision inject re-emits with its discriminator.
+    let canonical = concat!(
+        "application A {\n",
+        "    module m {\n",
+        "        service LoanService {\n",
+        "            inject LoanRepository;\n",
+        "            inject decision underwriting.RiskScore;\n",
+        "            inject decision FraudScreen;\n",
+        "            boolean approve(int amount) capability ApproveLoans invokes RiskScore, underwriting.FraudScreen emits LoanApproved when (true);\n",
+        "            route => riskEngine.evaluate invokes CreditBureau;\n",
+        "        }\n",
+        "    }\n",
+        "}\n",
+    );
+    assert_eq!(fmt_ddd(DECISION_LINKS), canonical);
+    // Idempotence: the canonical output is a fixpoint.
+    assert_eq!(fmt_ddd(canonical), canonical);
+    // The formatted output parses back to the same AST.
+    let once = parse_ddd(&fmt_ddd(DECISION_LINKS));
+    let twice = parse_ddd(&fmt_ddd(&fmt_ddd(DECISION_LINKS)));
+    assert!(once.errors.is_empty(), "{:?}", once.errors);
+    assert!(twice.errors.is_empty(), "{:?}", twice.errors);
+    assert_eq!(once.ast, twice.ast);
+}
+
+#[test]
+fn invokes_and_decision_stay_contextual_identifiers() {
+    // `^invokes` is an ordinary (escaped) operation name; `^decision` is a
+    // plain dependency named `decision`; neither parses as its keyword.
+    let source = concat!(
+        "application A {\n",
+        "    module m {\n",
+        "        service S {\n",
+        "            inject ^decision;\n",
+        "            boolean ^invokes();\n",
+        "        }\n",
+        "    }\n",
+        "}\n",
+    );
+    let result = parse_ddd(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let service = &expect_module(&file, "m").services[0];
+    assert_eq!(
+        service
+            .dependencies
+            .iter()
+            .map(|name| name.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["decision"]
+    );
+    assert!(service.decision_dependencies.is_empty());
+    assert_eq!(service.operations[0].name.text, "invokes");
+    assert!(service.operations[0].invokes.is_empty());
+    // The escaped spellings survive formatting (the escape is load-bearing).
+    let formatted = fmt_ddd(source);
+    assert!(formatted.contains("inject ^decision;"), "{formatted}");
+    assert!(formatted.contains("boolean ^invokes();"), "{formatted}");
+}

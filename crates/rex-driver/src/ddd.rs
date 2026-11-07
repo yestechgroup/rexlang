@@ -17,6 +17,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+use rex_diagnostics::dmn::{E_UNKNOWN_INJECTED_SERVICE, E_UNKNOWN_INVOKED_SERVICE};
 use rex_ir::ddd::{
     Application, Boost, BuiltinRepositoryOp, DddModel, Delegation, Design, DesignFlags,
     DocumentField, Module, Pagination, RankingStrategy, Repository, RepositoryOperation, SearchDef,
@@ -96,10 +97,28 @@ struct CapabilityCheck<'a> {
     capability: &'a dsl::Name,
 }
 
+/// Which decision-link site a [`DecisionCheck`] was queued from: an
+/// operation's `invokes` clause (E0250) or a service's `inject decision`
+/// line (E0251).
+enum DecisionSite {
+    Invoked,
+    Injected,
+}
+
+/// One decision-service reference awaiting the provided `.dmn` models.
+/// `context` names where the reference was declared ("operation 'x' of
+/// service 'Y'" for an invocation, "service 'Y'" for an injection) — the
+/// phrase the E0250/E0251 message embeds.
+struct DecisionCheck<'a> {
+    site: DecisionSite,
+    context: String,
+    name: &'a dsl::QualifiedName,
+}
+
 /// The application-wide registries, accumulated in declaration order while
 /// the modules lower. First declaration wins: a duplicate errors, and the
 /// original keeps resolving. The deferred check queues fill alongside;
-/// their validations (rules 11-binding, 6, 13, 9, 8, 10) run once the
+/// their validations (rules 11-binding, 6, 13, 9, 8, 10, 17) run once the
 /// registries are complete.
 struct Registries<'a> {
     module_names: Vec<(String, Span)>,
@@ -113,6 +132,7 @@ struct Registries<'a> {
     search_bindings: Vec<SearchBindingCheck<'a>>,
     inject_checks: Vec<InjectCheck<'a>>,
     capability_checks: Vec<CapabilityCheck<'a>>,
+    decision_checks: Vec<DecisionCheck<'a>>,
 }
 
 /// Lowers and validates one parsed `.ddd` file against its imported domain
@@ -129,9 +149,10 @@ struct Registries<'a> {
 /// [`lower_module_designs`], [`lower_module_searches`]), and the deferred
 /// validations ([`rule_11_bind_searches`], [`rule_6_aggregate_boundary`],
 /// [`rule_13_aggregate_references`], [`rule_9_resolve_injects`],
-/// [`rule_8_resolve_delegations`], [`rule_10_validate_capabilities`]) —
-/// the emission order of those stages is the diagnostics contract, pinned
-/// by the `ddd_diagnostic_order` characterization suite.
+/// [`rule_8_resolve_delegations`], [`rule_10_validate_capabilities`],
+/// [`rule_17_validate_decision_links`]) — the emission order of those
+/// stages is the diagnostics contract, pinned by the `ddd_diagnostic_order`
+/// characterization suite.
 ///
 /// See [`compile_ddd_str`](crate::compile_ddd_str) for the normative
 /// contract.
@@ -142,11 +163,12 @@ pub(crate) fn compile_ddd_file(
     parse_diagnostics: &[Diagnostic],
     domains: &[DomainUnit],
     actors: Option<&[rex_ir::ActorModel]>,
+    decisions: &[(String, rex_ir::dmn::DmnModel)],
 ) -> (Option<DddModel>, Vec<(String, Diagnostic)>) {
     // Stage 1 — the prologue: import-bucket checks feed the shared engine
     // diagnostic block (parse diagnostics, then import diagnostics, then
     // domain diagnostics, each under its own file path).
-    let import_diagnostics = check_design_imports(ast, domains);
+    let import_diagnostics = check_design_imports(ast, path, domains, decisions);
     let diags = pipeline::engine_diags(path, parse_diagnostics, import_diagnostics, domains);
 
     let Some(ast) = ast else {
@@ -186,6 +208,7 @@ pub(crate) fn compile_ddd_file(
         search_bindings: Vec::new(),
         inject_checks: Vec::new(),
         capability_checks: Vec::new(),
+        decision_checks: Vec::new(),
     };
 
     // The shared expression context: conditions (machine edge guards, service
@@ -259,7 +282,7 @@ pub(crate) fn compile_ddd_file(
     }
 
     // Stage 7 — the deferred validations, in emission order: rules
-    // 11-binding, 6, 13, 9, 8, 10. Each reads the completed registries.
+    // 11-binding, 6, 13, 9, 8, 10, 17. Each reads the completed registries.
     local.extend(rule_11_bind_searches(
         &registries.search_bindings,
         &registries.entity_designs,
@@ -285,6 +308,10 @@ pub(crate) fn compile_ddd_file(
     local.extend(rule_10_validate_capabilities(
         &registries.capability_checks,
         actors,
+    ));
+    local.extend(rule_17_validate_decision_links(
+        &registries.decision_checks,
+        decisions,
     ));
 
     pipeline::engine_finish(path, local, diags, model)
@@ -599,11 +626,81 @@ fn rule_10_validate_capabilities(
     local
 }
 
+/// Rule 17 — decision links: every decision-service reference (an
+/// operation's `invokes` name, a service's `inject decision` name) must
+/// exist in the union of the provided `.dmn` models' decision services.
+/// Only the `_with_decisions` entry point validates; plain compiles record
+/// the names unvalidated. The reference resolves by its **last segment**
+/// (the same spelling the artifact lowers — the decision dimension's
+/// services are flat names), and the names pool across every provided
+/// model (a host passes all of the application's `.dmn` artifacts — the
+/// rule-10 shape). An unknown reference errors with the
+/// `rex_diagnostics::dmn` code prefixed onto the message (the
+/// `driver.integrity` band precedent) and a did-you-mean help line naming
+/// the declared set.
+fn rule_17_validate_decision_links(
+    decision_checks: &[DecisionCheck<'_>],
+    decisions: &[(String, rex_ir::dmn::DmnModel)],
+) -> Vec<Diagnostic> {
+    let mut local: Vec<Diagnostic> = Vec::new();
+    // An empty bucket means no decision artifacts were provided at all —
+    // the plain compiles' behavior exactly. A *non-empty* slice whose
+    // models declare nothing still validates (everything is unknown).
+    if decisions.is_empty() {
+        return local;
+    }
+    let declared: BTreeSet<String> = decisions
+        .iter()
+        .flat_map(|(_, model)| model.services.iter().map(|service| service.name.clone()))
+        .collect();
+    for check in decision_checks {
+        // The qualified name resolves by its last segment: a bare
+        // `RiskScore` and a package-qualified `decisions.RiskScore` are
+        // the same decision service.
+        let name = check
+            .name
+            .segments
+            .last()
+            .map(|segment| segment.text.as_str())
+            .unwrap_or_default();
+        if declared.contains(name) {
+            continue;
+        }
+        let suggestion = crate::diagnostic::did_you_mean(name, &declared);
+        let help = match &suggestion {
+            Some(suggestion) => format!("did you mean '{suggestion}'?"),
+            None if declared.is_empty() => {
+                "the decision models declare no decision services".to_string()
+            }
+            None => format!(
+                "the decision models declare: {}",
+                declared.iter().cloned().collect::<Vec<_>>().join(", ")
+            ),
+        };
+        let (code, verb) = match check.site {
+            DecisionSite::Invoked => (E_UNKNOWN_INVOKED_SERVICE, "invoked by"),
+            DecisionSite::Injected => (E_UNKNOWN_INJECTED_SERVICE, "injected by"),
+        };
+        local.push(
+            Diagnostic::error(
+                format!(
+                    "{code} unknown decision service '{name}' {verb} {}",
+                    check.context
+                ),
+                Some(check.name.span),
+            )
+            .with_help(help),
+        );
+    }
+    local
+}
+
 /// Stage 4 — one module's services: rule 2 on service and operation names,
 /// rule 7 on declared signatures, the `when` conditions of every operation
 /// against the module's machine scopes, and the queues for the deferred
 /// validations (capabilities → rule 10, delegations → rule 8, injects →
-/// rule 9). Returns the lowered services and the stage's diagnostics.
+/// rule 9, decision links → rule 17). Returns the lowered services and the
+/// stage's diagnostics.
 #[allow(clippy::too_many_arguments)]
 fn lower_module_services<'a>(
     module: &'a dsl::DddModule,
@@ -667,6 +764,13 @@ fn lower_module_services<'a>(
             // the `.ddd` compile has no `.evt` bucket — existence/coverage
             // resolve in the union integrity pass).
             let emits: Vec<String> = op.emits.iter().map(|name| name.text.clone()).collect();
+            // The invoked decision services lower as their last segment
+            // (the resolution universe's spelling — rule 17).
+            let invokes: Vec<String> = op
+                .invokes
+                .iter()
+                .map(|name| name.segments.last().unwrap().text.clone())
+                .collect();
             for capability in &op.capabilities {
                 registries.capability_checks.push(CapabilityCheck {
                     context: format!(
@@ -674,6 +778,16 @@ fn lower_module_services<'a>(
                         op.name.text, service.name.text
                     ),
                     capability,
+                });
+            }
+            for name in &op.invokes {
+                registries.decision_checks.push(DecisionCheck {
+                    site: DecisionSite::Invoked,
+                    context: format!(
+                        "operation '{}' of service '{}'",
+                        op.name.text, service.name.text
+                    ),
+                    name,
                 });
             }
 
@@ -693,6 +807,7 @@ fn lower_module_services<'a>(
                     is_protected: op.is_protected,
                     capabilities,
                     emits,
+                    invokes,
                     condition: op
                         .condition
                         .map(|span| condition_text(design_source, span).to_string()),
@@ -758,6 +873,7 @@ fn lower_module_services<'a>(
                     is_protected: op.is_protected,
                     capabilities,
                     emits,
+                    invokes,
                     condition: op
                         .condition
                         .map(|span| condition_text(design_source, span).to_string()),
@@ -782,6 +898,13 @@ fn lower_module_services<'a>(
         for dependency in &service.dependencies {
             registries.inject_checks.push(InjectCheck { dependency });
         }
+        for name in &service.decision_dependencies {
+            registries.decision_checks.push(DecisionCheck {
+                site: DecisionSite::Injected,
+                context: format!("service '{}'", service.name.text),
+                name,
+            });
+        }
 
         if !registries
             .services
@@ -800,6 +923,13 @@ fn lower_module_services<'a>(
                 .dependencies
                 .iter()
                 .map(|name| name.text.clone())
+                .collect(),
+            // The injected decision services lower as their last segment
+            // (the resolution universe's spelling — rule 17).
+            decision_dependencies: service
+                .decision_dependencies
+                .iter()
+                .map(|name| name.segments.last().unwrap().text.clone())
                 .collect(),
         });
     }
@@ -1563,13 +1693,40 @@ fn rule_11_search_document_fields(
 
 /// The prologue's import-bucket checks: every `import` must name one of the
 /// provided domains (duplicates are fine — the domain joins the union
-/// once). Emitted before the domain diagnostics, each under the design
+/// once). Imports ending in `.dmn` are not domains — they are the design's
+/// decision-model imports, ignored by a plain compile (the decisions
+/// bucket, when provided, is checked instead: every `.dmn` import must
+/// name one of the provided decision models). Matching follows
+/// [`crate::import_matches`] — the exact import string wins, with the
+/// lexical resolution relative to the design file's directory as the
+/// fallback. Emitted before the domain diagnostics, each under the design
 /// file's path.
-fn check_design_imports(ast: Option<&dsl::DddFile>, domains: &[DomainUnit]) -> Vec<Diagnostic> {
+fn check_design_imports(
+    ast: Option<&dsl::DddFile>,
+    origin_path: &str,
+    domains: &[DomainUnit],
+    decisions: &[(String, rex_ir::dmn::DmnModel)],
+) -> Vec<Diagnostic> {
     let imports = ast.map(|file| file.imports.as_slice()).unwrap_or_default();
     let mut import_diagnostics = Vec::new();
     for import in imports {
-        if !domains.iter().any(|unit| unit.path == import.path) {
+        if import.path.ends_with(".dmn") {
+            // Provision is checked only when the host actually provided the
+            // decisions bucket (an empty bucket is the plain compile's
+            // unlinked-decision behavior — names ride along unvalidated).
+            let provided = decisions
+                .iter()
+                .any(|(path, _)| crate::import_matches(&import.path, origin_path, path));
+            if !decisions.is_empty() && !provided {
+                import_diagnostics.push(Diagnostic::error(
+                    format!(
+                        "imported decision model \"{}\" was not provided",
+                        import.path
+                    ),
+                    Some(import.span),
+                ));
+            }
+        } else if !domains.iter().any(|unit| unit.path == import.path) {
             import_diagnostics.push(Diagnostic::error(
                 format!("imported file \"{}\" was not provided", import.path),
                 Some(import.span),

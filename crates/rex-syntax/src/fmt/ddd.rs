@@ -200,7 +200,15 @@ impl<'src> Formatter<'src> {
         match self.peek_tok() {
             Some(Token::Ident(ddd::INJECT)) => {
                 self.advance();
-                self.take_name();
+                if matches!(self.peek_tok(), Some(Token::Ident(ddd::DECISION))) {
+                    // The `inject decision <qualified-name>;` form: the
+                    // discriminator re-emits verbatim, the reference scans
+                    // as one dotted name.
+                    self.advance();
+                    self.scan_qname();
+                } else {
+                    self.take_name();
+                }
                 self.take_if(|token| matches!(token, Token::Other(';')));
             }
             Some(Token::Ident(_) | Token::IdentEscaped(_)) => {
@@ -222,6 +230,7 @@ impl<'src> Formatter<'src> {
                     self.scan_ddd_params();
                 }
                 self.scan_ddd_capabilities();
+                self.scan_ddd_invokes();
                 self.scan_ddd_emits();
                 if self.take_if(|token| matches!(token, Token::When)) {
                     self.scan_raw_parens();
@@ -259,8 +268,26 @@ impl<'src> Formatter<'src> {
         }
     }
 
-    /// Consumes and emits an optional `emits A, B` clause, kept on the
+    /// Consumes and emits an optional `invokes A.B, C` clause, kept on the
     /// operation's line: the canonical position between the `capability`
+    /// clause and the `emits` clause (the parser enforces that order, so
+    /// re-emitting in scan order is the canonical order). `invokes` is a
+    /// contextual word — an ordinary identifier everywhere else — so the
+    /// scan matches the [`ddd::INVOKES`] identifier, not a keyword token.
+    /// The names are qualified and re-emitted as dotted references.
+    /// Repository operations never take the clause.
+    pub(crate) fn scan_ddd_invokes(&mut self) {
+        if !self.take_if(|token| matches!(token, Token::Ident(ddd::INVOKES))) {
+            return;
+        }
+        self.scan_qname();
+        while self.take_if(|token| matches!(token, Token::Comma)) {
+            self.scan_qname();
+        }
+    }
+
+    /// Consumes and emits an optional `emits A, B` clause, kept on the
+    /// operation's line: the canonical position between the `invokes`
     /// clause and the `when` guard (the parser enforces that order, so
     /// re-emitting in scan order is the canonical order). `emits` is a
     /// contextual word — an ordinary identifier everywhere else — so the
