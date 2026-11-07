@@ -4112,3 +4112,104 @@ fn single_file_check_stays_per_surface() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn explain_prints_the_registry_entry_for_a_known_code() {
+    let output = rexlang()
+        .args(["explain", "E0104"])
+        .output()
+        .expect("run rexlang explain");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let entry = rex_diagnostics::lookup("E0104").expect("E0104 is registered");
+    assert!(stdout.contains(entry.code), "{stdout}");
+    assert!(stdout.contains(entry.title), "{stdout}");
+    assert!(stdout.contains(entry.fix), "{stdout}");
+    assert!(stdout.contains("ifml.check"), "{stdout}");
+}
+
+#[test]
+fn explain_accepts_driver_camelcase_names() {
+    let output = rexlang()
+        .args(["explain", "attributeWithClassType"])
+        .output()
+        .expect("run rexlang explain");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let entry = rex_diagnostics::lookup("attributeWithClassType").expect("registered by name");
+    assert!(stdout.contains(entry.code), "{stdout}");
+    assert!(stdout.contains(entry.title), "{stdout}");
+}
+
+#[test]
+fn explain_unknown_code_fails_with_a_hint() {
+    let output = rexlang()
+        .args(["explain", "E9999"])
+        .output()
+        .expect("run rexlang explain");
+    assert_eq!(output.status.code(), Some(1));
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(combined.contains("E9999"), "{combined}");
+    assert!(combined.contains("unknown diagnostic code"), "{combined}");
+    assert!(combined.contains("explain --list"), "{combined}");
+}
+
+#[test]
+fn explain_without_code_or_list_fails() {
+    let output = rexlang()
+        .arg("explain")
+        .output()
+        .expect("run rexlang explain");
+    assert_eq!(output.status.code(), Some(1));
+}
+
+#[test]
+fn explain_list_prints_the_ledger_and_every_code() {
+    let output = rexlang()
+        .args(["explain", "--list"])
+        .output()
+        .expect("run rexlang explain --list");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for band in rex_diagnostics::ledger() {
+        assert!(stdout.contains(band.id), "{} missing from --list", band.id);
+        assert!(
+            stdout.contains(band.range),
+            "{} missing from --list",
+            band.range
+        );
+        assert!(
+            stdout.contains(band.next_free),
+            "{} missing from --list",
+            band.next_free
+        );
+    }
+    for entry in rex_diagnostics::all() {
+        assert!(
+            stdout.contains(entry.code),
+            "{} missing from --list",
+            entry.code
+        );
+        assert!(
+            stdout.contains(entry.title),
+            "{} missing from --list",
+            entry.title
+        );
+    }
+}

@@ -55,18 +55,14 @@
 //!
 //! # Diagnostic codes
 //!
-//! | Code | Meaning |
-//! |------|---------|
-//! | `E0100` | A component's `data:` entity does not resolve to exactly one class in the domain model (`unknown data entity 'X'`, or `ambiguous data entity 'X'` when several packages declare the name). |
-//! | `E0101` | A type mismatch: an expression contradicts the type its site expects (`expected <ty>, found <ty> in '<expr>'`, overrides), or rex-expr reports any other semantic rule violation (R1/R2/R4/R9/...), carried through verbatim. |
-//! | `E0102` | Unknown feature or operation on a navigation path (rex-expr's `unknown feature ...` / `unknown operation ...`), or an unknown/ambiguous bare package-function call (`unknown function ...` / `ambiguous function ...`), prefixed with site context (`view 'Dashboard' component 'orders': ...`). |
-//! | `E0103` | Unknown variable: a name that is not a view/container/module parameter, not a `data:` feature, and not an event parameter (`unknown name 'x'`), prefixed with site context. |
-//! | `E0104` | An `action("X")` invocation whose name resolves to no `action "X" { target: ...; }` declaration (`action 'X' is not declared — add action "X" { target: <Entity>; }`). |
-//! | `E0105` | A `navigate("X")` target that is neither a declared view nor a declared container (`navigate target 'X' is not a declared view or container`). |
-//! | `E0106` | A `refresh("X")` target that is not a declared component (`refresh target 'X' is not a declared component`). |
-//! | `E0107` | A `requires:` capability name no provided actor model declares (`capability 'X' is not declared — add "capability X on <Class>;" to an actors block`). |
-//! | `E0108` | A `roles:` name no provided actor model declares as an actor (`role 'X' is not declared — add "actor X;" to an actors block`). |
-//! | `E0109` | An action declaration's `target:` entity does not resolve to exactly one class in the domain model (`unknown target entity 'X'`, or `ambiguous target entity 'X'` when several packages declare the name) — the `data:` discipline applied to the lowering's payload. |
+//! The checker's diagnostic codes (`E0100`–`E0109`, the interaction
+//! cross-reference and authorization passes included) are allocated in
+//! the central registry — the `rex-diagnostics` crate's `ifml_check`
+//! band, re-exported below — and their meanings, fixes, and the
+//! allocation ledger live in
+//! [docs/DIAGNOSTICS.md](https://github.com/yestechgroup/rexlang/blob/main/docs/DIAGNOSTICS.md)
+//! (`rexlang explain E0104` renders one). A new code is a table row
+//! there, never a local constant.
 //!
 //! # Interaction references
 //!
@@ -166,31 +162,11 @@ use rex_ir::{ActorModel, Feature, FeatureKind, Model, Multiplicity, TypeRef};
 use crate::index::{IfmlIndex, LiteralKind};
 use crate::resolve::{IfmlCompilation, IfmlDiagnostic};
 
-/// A component's `data:` entity does not resolve to exactly one class in
-/// the domain model.
-pub const E_UNKNOWN_ENTITY: &str = "E0100";
-/// A checked expression contradicts the type its site expects, or another
-/// rex-expr semantic rule fires.
-pub const E_TYPE_MISMATCH: &str = "E0101";
-/// Unknown feature or operation on a navigation path.
-pub const E_UNKNOWN_FEATURE: &str = "E0102";
-/// An unbound name (not a parameter, not a feature, not an event parameter).
-pub const E_UNKNOWN_VARIABLE: &str = "E0103";
-/// An `action("X")` invocation whose name resolves to no
-/// `action "X" { ... }` declaration.
-pub const E_UNKNOWN_ACTION: &str = "E0104";
-/// A `navigate("X")` target that is neither a declared view nor a
-/// declared container.
-pub const E_UNKNOWN_VIEW: &str = "E0105";
-/// A `refresh("X")` target that is not a declared component.
-pub const E_UNKNOWN_COMPONENT: &str = "E0106";
-/// An action declaration's `target:` entity does not resolve to exactly
-/// one class in the domain model.
-pub const E_UNKNOWN_ACTION_TARGET: &str = "E0109";
-/// A `requires:` capability name that no provided actor model declares.
-pub const E_UNKNOWN_CAPABILITY: &str = "E0107";
-/// A `roles:` name that no provided actor model declares as an actor.
-pub const E_UNKNOWN_ROLE: &str = "E0108";
+pub use rex_diagnostics::ifml_check::{
+    E_TYPE_MISMATCH, E_UNKNOWN_ACTION, E_UNKNOWN_ACTION_TARGET, E_UNKNOWN_CAPABILITY,
+    E_UNKNOWN_COMPONENT, E_UNKNOWN_ENTITY, E_UNKNOWN_FEATURE, E_UNKNOWN_ROLE, E_UNKNOWN_VARIABLE,
+    E_UNKNOWN_VIEW,
+};
 
 /// Checks a compiled IFML model: the interaction cross-reference pass
 /// (every `action(...)`/`navigate(...)`/`refresh(...)` reference resolves

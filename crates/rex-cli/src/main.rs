@@ -38,6 +38,9 @@
 //!   The portable test kit for out-of-tree backends (see docs/BACKENDS.md).
 //! * `rexlang vocab fetch <file> [--provider file:<DIR>|http]` — fetch and
 //!   vendor vocabulary snapshots, updating `model.lock`.
+//! * `rexlang explain <code>` — print one diagnostic code's registry entry
+//!   (band, meaning, fix); `--list` prints the allocation ledger and every
+//!   registered code.
 //!
 //! This file is clap wiring and dispatch only: input expansion and reading
 //! live in `inputs` (plus the shared compile step), disk-facing import
@@ -154,6 +157,17 @@ enum Command {
         #[command(subcommand)]
         action: VocabAction,
     },
+    /// Explain a diagnostic code from the central registry (`rex-diagnostics`):
+    /// its band, meaning, and fix. Numeric surface codes (`E0104`) and the
+    /// driver's camelCase LSP codes (`attributeWithClassType`) both resolve.
+    Explain {
+        /// The diagnostic code to explain.
+        code: Option<String>,
+        /// List the allocation ledger and every registered code instead of
+        /// explaining one code.
+        #[arg(long)]
+        list: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -269,5 +283,6 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 },
         } => commands::vocab::run(&file, provider.as_deref(), url_template.as_deref()),
         Command::Lsp => commands::lsp::run(),
+        Command::Explain { code, list } => commands::explain::run(code.as_deref(), list),
     }
 }

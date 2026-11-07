@@ -2524,6 +2524,7 @@ dependencies = [
  "rex-backend-cedar",
  "rex-backend-jsonschema",
  "rex-backend-rust",
+ "rex-diagnostics",
  "rex-driver",
  "rex-ifml",
  "rex-ir",
@@ -2535,11 +2536,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rex-diagnostics"
+version = "0.1.0"
+
+[[package]]
 name = "rex-driver"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "ariadne",
+ "rex-diagnostics",
  "rex-expr",
  "rex-ifml",
  "rex-ir",
@@ -2574,6 +2580,7 @@ dependencies = [
  "pest",
  "pest_derive",
  "proptest",
+ "rex-diagnostics",
  "rex-driver",
  "rex-expr",
  "rex-ir",

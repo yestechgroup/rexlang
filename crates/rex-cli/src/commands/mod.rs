@@ -3,6 +3,7 @@
 pub(crate) mod artifact;
 pub(crate) mod build;
 pub(crate) mod check;
+pub(crate) mod explain;
 pub(crate) mod fmt;
 pub(crate) mod gen;
 pub(crate) mod integrity;

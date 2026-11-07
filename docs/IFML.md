@@ -436,7 +436,9 @@ byte-identically to the pre-#80 shape.
 ## Downstream Consumption
 
 The `rexlang` language server supports the surface: diagnostics (resolver
-`E0001`–`E0009` + typed-binding `E0100`–`E0108`, authorization included),
+`E0001`–`E0009` + typed-binding `E0100`–`E0109`, authorization included —
+the code table is
+[docs/DIAGNOSTICS.md](DIAGNOSTICS.md), rendered by `rexlang explain`),
 document symbols, hover
 (module signatures), go-to-definition on `use` sites (cross-file), and
 `textDocument/formatting` backed by the canonical formatter. Imports fetch
@@ -469,7 +471,7 @@ crates/rex-ifml/
 │   ├── parser.rs         # Pest parser wrapper + IfmlParseError
 │   ├── index.rs          # Span side-table (IfmlIndex): module decls/uses, views, containers, actions, actors, components, commands, auth sites — never serialized
 │   ├── resolve.rs        # Cross-file module resolution: IfmlImports bundle, compile_ifml_str, IfmlDiagnostic (E0001–E0009)
-│   ├── check.rs          # Typed expression checking against a domain Model, via rex_expr::DomainTypes (E0100–E0106); interaction cross-reference (E0104–E0106) and authorization (E0107–E0108) passes over instantiated-module sites
+│   ├── check/           # Typed expression checking against a domain Model, via rex_expr::DomainTypes; interaction cross-reference and authorization passes over instantiated-module sites (code table: docs/DIAGNOSTICS.md)
 │   ├── expand.rs         # Module-use expansion (opt-in for the IR artifact; the manifest always derives from it)
 │   ├── manifest.rs       # The control/route manifest emitter: IfmlCompilation (+ imports, + optional domain union) → rex_ir::ifml_manifest::IfmlManifest
 │   ├── fmt.rs            # Comment-preserving canonical formatter

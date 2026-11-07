@@ -66,6 +66,7 @@ rexlang gen cedar policy.actor -o policies/   # from a standalone actor file
 rexlang ir usecase.uc -o usecase.uc.json      # every artifact surface: .ddd/.evt/.deploy/.uc/.cmmn
 rexlang artifact check usecase.uc.json        # lint any serialized artifact, no toolchain needed
 rexlang vocab fetch model.mox --provider file:vocab-sources/
+rexlang explain E0104              # explain any diagnostic code (--list: the allocation ledger)
 rexlang lsp                       # start the language server (stdio)
 ```
 

@@ -27,17 +27,13 @@
 //!
 //! # Diagnostic codes
 //!
-//! | Code | Meaning |
-//! |------|---------|
-//! | `E0001` | An `.ifml` import has no content in the [`IfmlImports`] bundle (`imported ifml '<path>' was not provided`). |
-//! | `E0002` | A file (main or imported) failed to parse; the message carries the parse error. |
-//! | `E0003` | A circular `.ifml` import (`circular ifml import involving '<path>'`). |
-//! | `E0004` | Two distinct imported files declare the same module name (`ambiguous module '<name>' ...`). |
-//! | `E0005` | One file declares the same module name twice (`duplicate module '<name>'`). |
-//! | `E0006` | A `use` targets no declared module (`unknown module '<name>'`). |
-//! | `E0007` | An override matches neither an input parameter nor a module property (`unknown input '<p>' for module '<m>'`). |
-//! | `E0008` | An input without a default receives no override (`module '<m>' requires input '<p>'`). |
-//! | `E0009` | A literal override's type contradicts the input's declared type (`input '<p>' of module '<m>' expects <ty>`). Structural check only: string literals suit `String`/`Uuid`/custom-identifier types, numbers suit `Int`/`Float`, booleans suit `Boolean`. Full expression typing is a later phase. |
+//! The resolver's diagnostic codes (`E0001`–`E0009`) are allocated in the
+//! central registry — the `rex-diagnostics` crate's `ifml_resolver` band,
+//! re-exported below — and their meanings, fixes, and the allocation
+//! ledger live in
+//! [docs/DIAGNOSTICS.md](https://github.com/yestechgroup/rexlang/blob/main/docs/DIAGNOSTICS.md)
+//! (`rexlang explain E0004` renders one). A new code is a table row
+//! there, never a local constant.
 //!
 //! `compile_ifml_str` over a file with no imports and no uses produces zero
 //! diagnostics.
@@ -50,24 +46,10 @@ use crate::index::{
     parse_ifml_indexed_with_path, IfmlIndex, LiteralKind, ModuleDeclSite, UseOverride,
 };
 
-/// An `.ifml` import has no content in the bundle.
-pub const E_IMPORT_NOT_PROVIDED: &str = "E0001";
-/// A file (main or imported) failed to parse.
-pub const E_PARSE: &str = "E0002";
-/// A circular `.ifml` import.
-pub const E_CIRCULAR: &str = "E0003";
-/// Two distinct imported files declare the same module name.
-pub const E_AMBIGUOUS_MODULE: &str = "E0004";
-/// One file declares the same module name twice.
-pub const E_DUPLICATE_MODULE: &str = "E0005";
-/// A `use` targets no declared module.
-pub const E_UNKNOWN_MODULE: &str = "E0006";
-/// An override matches neither an input parameter nor a module property.
-pub const E_UNKNOWN_INPUT: &str = "E0007";
-/// An input without a default receives no override.
-pub const E_MISSING_INPUT: &str = "E0008";
-/// A literal override's type contradicts the input's declared type.
-pub const E_INPUT_TYPE: &str = "E0009";
+pub use rex_diagnostics::ifml_resolver::{
+    E_AMBIGUOUS_MODULE, E_CIRCULAR, E_DUPLICATE_MODULE, E_IMPORT_NOT_PROVIDED, E_INPUT_TYPE,
+    E_MISSING_INPUT, E_PARSE, E_UNKNOWN_INPUT, E_UNKNOWN_MODULE,
+};
 
 /// The import content provided to a compilation: the `.ifml` source of every
 /// import, keyed `(importing-file path, import path as written)`. The

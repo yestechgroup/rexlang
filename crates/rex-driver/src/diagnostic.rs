@@ -389,6 +389,43 @@ mod tests {
     // --- DiagnosticCode serialization ---
 
     #[test]
+    fn every_diagnostic_code_name_is_registered() {
+        let codes = [
+            DiagnosticCode::AttributeWithClassType {
+                feature: "author".to_string(),
+                class: "Book".to_string(),
+                type_span: (31..35).into(),
+            },
+            DiagnosticCode::UnknownCapability {
+                capability: "ApprovePayRu".to_string(),
+                suggestion: Some("ApprovePayRun".to_string()),
+                span: (7..19).into(),
+            },
+            DiagnosticCode::GrantedCapabilityUncarried {
+                capability: "TerminateWorker".to_string(),
+                span: (3..18).into(),
+            },
+        ];
+        for code in codes {
+            let (name, title) = match &code {
+                DiagnosticCode::AttributeWithClassType { .. } => {
+                    ("attributeWithClassType", "Attribute with class type")
+                }
+                DiagnosticCode::UnknownCapability { .. } => {
+                    ("unknownCapability", "Unknown capability")
+                }
+                DiagnosticCode::GrantedCapabilityUncarried { .. } => {
+                    ("grantedCapabilityUncarried", "Granted capability uncarried")
+                }
+            };
+            assert_eq!(code.name(), name);
+            let entry = rex_diagnostics::lookup(name)
+                .unwrap_or_else(|| panic!("{name} must be registered in rex-diagnostics"));
+            assert_eq!(entry.title, title);
+        }
+    }
+
+    #[test]
     fn code_names_are_stable_camel_case() {
         let unknown = DiagnosticCode::UnknownCapability {
             capability: "ApprovePayRu".to_string(),
