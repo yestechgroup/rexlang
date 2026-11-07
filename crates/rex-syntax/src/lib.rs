@@ -1,8 +1,8 @@
 //! Syntax crate for rexlang: a logos-based lexer, a fault-tolerant
 //! chumsky-based parser, and the spanned AST they produce for `.mox` model
 //! sources, `.actor` actor-policy sources, `.ddd` design sources, `.evt`
-//! event-contract sources, `.deploy` deployment sources, and `.uc` use case
-//! sources.
+//! event-contract sources, `.deploy` deployment sources, `.uc` use case
+//! sources, and `.dmn` decision model sources.
 //!
 //! # Grammar authority
 //!
@@ -27,13 +27,14 @@
 //!
 //! `.actor` files use the separate [`parse_actors`] entry point, mirroring
 //! the shape of [`parse`]; `.ddd` files use [`parse_ddd`], `.evt` files use
-//! [`parse_evt`], `.deploy` files use [`parse_deploy`], and `.uc` files use
-//! [`parse_usecases`].
+//! [`parse_evt`], `.deploy` files use [`parse_deploy`], `.uc` files use
+//! [`parse_usecases`], and `.dmn` files use [`parse_dmn`].
 
 pub mod ast;
 pub(crate) mod cmmn;
 pub(crate) mod ddd;
 pub(crate) mod deploy;
+pub(crate) mod dmn;
 pub mod fmt;
 pub mod lexer;
 pub mod parser;
@@ -48,6 +49,8 @@ pub use ast::{
     DddServiceOp, DddStereotype, Decl, DefaultValue, DeployApplicationDecl, DeployBindingDecl,
     DeployComponentDecl, DeployConnectionDecl, DeployDeploymentDecl, DeployEnvEntry, DeployFile,
     DeployMappingDecl, DeployPolicyDecl, DeployProfileDecl, DeploySettingDecl, DeploySettingValue,
+    DmnBinding, DmnBkm, DmnDecision, DmnDecisionModel, DmnFile, DmnInput, DmnKnowledgeSource,
+    DmnLogic, DmnMetadata, DmnMetadataKind, DmnOutput, DmnRequirement, DmnService, DmnView,
     EnumDecl, EnumLiteral, EventDecl, EventFieldDecl, EvtFile, FeatureDecl, ImportDecl, ImportKind,
     InterfaceDecl, Model, MultBound, Multiplicity, MultiplicityKind, Name, Param, PublishesDecl,
     QualifiedName, Span, SubscriptionDecl, TypeRef, UcDecl, UcEndpoint, UcFile, UcImport,
@@ -55,12 +58,12 @@ pub use ast::{
     VocabularyDecl, VocabularyFacetDecl, Wraps,
 };
 pub use fmt::{
-    format, format_actors, format_cmmn, format_ddd, format_deploy, format_evt, format_usecases,
-    FormatError,
+    format, format_actors, format_cmmn, format_ddd, format_deploy, format_dmn, format_evt,
+    format_usecases, FormatError,
 };
 pub use lexer::{lex, lex_with_comments, Comment, CommentKind, LexError, Token};
 pub use parser::{
-    parse, parse_actors, parse_cmmn, parse_ddd, parse_deploy, parse_evt, parse_usecases,
-    ActorsParseResult, CmmnParseResult, DddParseResult, DeployParseResult, EvtParseResult,
-    ParseError, ParseResult, UcParseResult,
+    parse, parse_actors, parse_cmmn, parse_ddd, parse_deploy, parse_dmn, parse_evt, parse_usecases,
+    ActorsParseResult, CmmnParseResult, DddParseResult, DeployParseResult, DmnParseResult,
+    EvtParseResult, ParseError, ParseResult, UcParseResult,
 };
