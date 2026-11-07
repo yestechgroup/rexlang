@@ -1,0 +1,107 @@
+// Decision model for the sample library's loan approval.
+// (Deliberately non-canonical source: the formatter golden compares against
+// the canonical layout; do not "fix" the spacing here. The missing
+// statement semicolons are deliberate too — the formatter emits the
+// canonical `;` whether or not the source had one.)
+import "library.mox";
+import "jurisdiction.mox";
+
+/// The loan approval decision model: whether an application passes.
+decision_model LoanApproval {
+    namespace banking.loan;
+    id "loan-approval";
+    version "1.4.0";
+    effective "2026-01-01";
+    jurisdiction "NZ";
+    /// The facts the decision reads.
+    inputs {
+        history: CreditHistory;
+        applicant: Applicant;
+        request: LoanRequest;
+    }
+    knowledge {
+        /// The underwriting policy manual.
+        source PolicyManual {
+            reference "https://example.com/policy";
+            name "Underwriting Policy Manual";
+        }
+        source RegOps {
+            reference "ops/reg";
+        }
+        model EligibilityRules {
+            parameters {
+                age: Number;
+            }
+            output Boolean;
+            logic table "eligibility.dmn"
+        }
+        model RateLookup {
+            parameters {
+                tier: String;
+            }
+            output Rate;
+            logic invoke PricingService {
+                tier: "applicant.tier";
+                amount: "request.amount";
+            }
+        }
+        model FeeSchedule {
+            parameters {}
+            output Money;
+            logic expression "fee = base * factor"
+        }
+    }
+    decisions {
+        /// Whether the application passes.
+        decision Approve {
+            output Boolean;
+            logic invoke EligibilityRules {
+                age: "applicant.age";
+            }
+        }
+        decision Fee {
+            outputs {
+                waiver: Boolean;
+                fee: Money;
+            }
+            logic table "fees.dmn"
+        }
+        decision Plain {
+            output Boolean;
+        }
+    }
+    requirements {
+        information {
+            Approve requires request;
+            Fee requires history;
+        }
+        knowledge {
+            Approve requires EligibilityRules;
+            Fee invokes RateLookup;
+        }
+        authority {
+            Approve governed_by PolicyManual;
+        }
+    }
+    services {
+        service PricingService {
+            description "Rates and fees.";
+            inputs { tier amount }
+            outputs { rate }
+            encapsulates { RateLookup }
+        }
+    }
+    views {
+        view DecisionLetter {
+            description "The approval letter.";
+            show { Approve fee }
+            direction outgoing;
+        }
+        view CommitteeBrief {
+            show {
+                Approve
+                Fee
+            }
+        }
+    }
+}
