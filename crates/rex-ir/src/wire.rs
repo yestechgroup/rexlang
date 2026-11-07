@@ -140,6 +140,7 @@ mod tests {
     use crate::cmmn::CMMN_MODEL_FORMAT_VERSION;
     use crate::ddd::{DddModel, DDD_MODEL_FORMAT_VERSION};
     use crate::deploy::{DeployModel, DEPLOY_MODEL_FORMAT_VERSION};
+    use crate::dmn::{DmnModel, DMN_MODEL_FORMAT_VERSION};
     use crate::events::{EventModel, EVENT_MODEL_FORMAT_VERSION};
     use crate::ifml::{IfmlModel, IFML_MODEL_FORMAT_VERSION};
     use crate::ifml_manifest::{IfmlManifest, IFML_MANIFEST_FORMAT_VERSION};
@@ -171,6 +172,8 @@ mod tests {
         assert_eq!(manifest.format_version, IFML_MANIFEST_FORMAT_VERSION);
         let cmmn: CmmnModel = from_json("{\"formatVersion\":1}").unwrap();
         assert_eq!(cmmn.format_version, CMMN_MODEL_FORMAT_VERSION);
+        let dmn: DmnModel = from_json("{\"formatVersion\":1}").unwrap();
+        assert_eq!(dmn.format_version, DMN_MODEL_FORMAT_VERSION);
 
         for json in ["{}", "{\"formatVersion\":2}"] {
             rejects_version::<Model>(json);
@@ -182,6 +185,7 @@ mod tests {
             rejects_version::<IfmlModel>(json);
             rejects_version::<IfmlManifest>(json);
             rejects_version::<CmmnModel>(json);
+            rejects_version::<DmnModel>(json);
         }
     }
 

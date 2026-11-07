@@ -119,7 +119,8 @@
 //! 14. **Equality policy.** Every artifact root — [`Model`],
 //!     [`ActorModel`], [`ddd::DddModel`], [`events::EventModel`],
 //!     [`deploy::DeployModel`], [`ifml::IfmlModel`],
-//!     [`usecases::UseCaseModel`], and [`cmmn::CmmnModel`] — and every type
+//!     [`usecases::UseCaseModel`], [`cmmn::CmmnModel`], and
+//!     [`dmn::DmnModel`] — and every type
 //!     nested inside them derives
 //!     [`Eq`] (structural value equality). The artifacts' only floating-point
 //!     values are wrapped in ordered newtypes: [`ddd::Boost`] (the
