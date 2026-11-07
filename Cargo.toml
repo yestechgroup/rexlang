@@ -63,6 +63,16 @@ sigil-syntax = { git = "https://github.com/yestechgroup/sigil.git", rev = "69115
 # NOTE: restingstate is a private repo; CI needs credentials to fetch it.
 xstate-ir = { git = "https://github.com/yestechgroup/restingstate.git", rev = "380580b6407f6530c6fb89e1ce87621567f009c5" }
 
+# The dsntk decision-table toolchain (yestechgroup fork of DecisionToolkit/dsntk),
+# pinned by rev — the `.dmn` surface validates external markdown decision tables
+# through dsntk-recognizer (`from_markdown`) and FEEL expression syntax through
+# dsntk-feel-parser. The validation contract lives in `crates/rex-driver/src/dmn.rs`
+# and `docs/DMN.md`; the recognizer's decision-table type is the
+# compatibility boundary (rex-ir stays ours).
+dsntk-recognizer = { git = "https://github.com/yestechgroup/dsntk-rs.git", rev = "0826f7e3138527f485bfd1e0ebd828e21c215d2d" }
+dsntk-feel = { git = "https://github.com/yestechgroup/dsntk-rs.git", rev = "0826f7e3138527f485bfd1e0ebd828e21c215d2d" }
+dsntk-feel-parser = { git = "https://github.com/yestechgroup/dsntk-rs.git", rev = "0826f7e3138527f485bfd1e0ebd828e21c215d2d" }
+
 anyhow = "1.0"
 ariadne = "0.5"
 askama = "0.14"
