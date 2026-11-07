@@ -53,7 +53,7 @@ pub const E_TABLE_INPUT_MISMATCH: &str = "E0211";
 pub const E_TABLE_OUTPUT_MISMATCH: &str = "E0212";
 /// `unknown parameter '<param>' bound by decision '<decision>'` /
 /// `decision '<decision>' does not bind parameter '<param>' of knowledge
-/// model '<model>'`.
+/// model '<model>'` / `parameter '<param>' bound twice by <what> '<name>'`.
 pub const E_BINDING_MISMATCH: &str = "E0213";
 /// `duplicate '<word>' metadata`.
 pub const E_DUPLICATE_METADATA: &str = "E0214";
@@ -173,7 +173,7 @@ pub(crate) const ENTRIES: &[Entry] = &[
         band: DMN_BAND,
         severity: Severity::Error,
         title: "Knowledge-model binding mismatch",
-        meaning: "`unknown parameter '<param>' bound by decision '<decision>'`, or `decision '<decision>' does not bind parameter '<param>' of knowledge model '<model>'` — a decision invoking a knowledge model must bind every parameter of that knowledge model, and no others, or the invocation cannot evaluate.",
+        meaning: "`unknown parameter '<param>' bound by decision '<decision>'`, `decision '<decision>' does not bind parameter '<param>' of knowledge model '<model>'`, or `parameter '<param>' bound twice by <what> '<name>'` — an invocation (a decision's or a knowledge model's) must bind every parameter of the invoked knowledge model, and no others, exactly once, or the invocation cannot evaluate.",
         fix: "Bind exactly the knowledge model's declared parameters — add the missing binding or drop the unknown one.",
     },
     Entry {
