@@ -1,6 +1,6 @@
 //! Doc-comment attachment: leading `///` runs are collected per
 //! source line and attached to the declarations they precede,
-//! for `.mox`, `.ddd`, and `.uc` alike.
+//! for `.mox`, `.ddd`, `.uc`, and `.dmn` alike.
 
 use super::*;
 /// One precomputed comment fact used by doc attachment.
@@ -169,5 +169,47 @@ pub(crate) fn attach_uc_docs(
     for decl in &mut file.use_cases {
         let start_line = line_of(decl.span.start);
         decl.description = doc_run_above(&docs, start_line);
+    }
+}
+
+/// Attaches doc comments to a `.dmn` file's knowledge sources, models
+/// (BKMs), decisions, services, and views. The contiguous `///` run is
+/// joined with newlines into a single description — the same semantic as
+/// the `.mox` doc collection ([`doc_run_above`] is shared).
+pub(crate) fn attach_dmn_docs(
+    file: &mut DmnFile,
+    comments: &[crate::lexer::Comment<'_>],
+    source: &str,
+) {
+    let starts = line_starts(source);
+    let line_of = |byte: usize| line_of(byte, &starts);
+    let docs = collect_docs(comments, source);
+    if let Some(model) = &mut file.model {
+        for source_decl in &mut model.knowledge_sources {
+            let start_line = line_of(source_decl.span.start);
+            source_decl.description = doc_run_above(&docs, start_line);
+        }
+        for bkm in &mut model.models {
+            let start_line = line_of(bkm.span.start);
+            bkm.description = doc_run_above(&docs, start_line);
+        }
+        for decision in &mut model.decisions {
+            let start_line = line_of(decision.span.start);
+            decision.description = doc_run_above(&docs, start_line);
+        }
+        for service in &mut model.services {
+            let start_line = line_of(service.span.start);
+            // A service's body `description` line wins; the doc run only
+            // fills an absent description.
+            if service.description.is_none() {
+                service.description = doc_run_above(&docs, start_line);
+            }
+        }
+        for view in &mut model.views {
+            let start_line = line_of(view.span.start);
+            if view.description.is_none() {
+                view.description = doc_run_above(&docs, start_line);
+            }
+        }
     }
 }

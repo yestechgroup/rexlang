@@ -189,15 +189,18 @@
 //! module_member     := service_decl | design_decl | search_decl
 //! service_decl      := "service" name "{" service_member* "}"
 //! service_member    := service_op | inject_decl
-//! service_op        := "protected"? signature capability_clause? emits_clause?
-//!                      guard_clause? ";"
+//! service_op        := "protected"? signature capability_clause?
+//!                      invokes_clause? emits_clause? guard_clause? ";"
 //!                    | "protected"? name "=>" qualified_name
-//!                      capability_clause? emits_clause? guard_clause? ";"
+//!                      capability_clause? invokes_clause? emits_clause?
+//!                      guard_clause? ";"
 //! inject_decl       := "inject" name ";"
+//!                    | "inject" "decision" qualified_name ";"
 //! signature         := type_ref multiplicity? name
 //!                      "(" (param ("," param)*)? ")"
 //! param             := type_ref multiplicity? name
 //! capability_clause := "capability" name ("," name)*
+//! invokes_clause    := "invokes" qualified_name ("," qualified_name)*
 //! emits_clause      := "emits" name ("," name)*
 //! design_decl       := "abstract"? stereotype name design_flag*
 //!                      repository_decl? machine_decl?
@@ -238,14 +241,17 @@
 //!   one application per file (violations are reported errors); the
 //!   delegated-operation `qualified_name` is `target.operation`, split at its
 //!   last segment (a bare name recovers with an error).
-//! * Declared repository operations take no `capability` or `emits` clause
-//!   (the wire artifact carries neither, so accepting one would silently
-//!   drop data); a delegated op may be named `save` etc. — contextual
-//!   words. A service operation's clauses are fixed in the canonical order
-//!   `capability? emits? when?`: `emits` names the events the operation
-//!   produces, loosely coupled to the `.evt` layer — the `.ddd` compile
-//!   has no event bucket, so existence/coverage resolve in the union
-//!   integrity pass (`rex_driver::check_integrity`, `docs/DDD.md`).
+//! * Declared repository operations take no `capability`, `invokes`, or
+//!   `emits` clause (the wire artifact carries none, so accepting one
+//!   would silently drop data); a delegated op may be named `save` etc. —
+//!   contextual words. A service operation's clauses are fixed in the
+//!   canonical order `capability? invokes? emits? when?`: `invokes` names
+//!   the decision services the operation invokes (the `.dmn` dimension,
+//!   loosely coupled to the decision surface), `emits` names the events
+//!   the operation produces, loosely coupled to the `.evt` layer — the
+//!   `.ddd` compile has no event bucket, so existence/coverage resolve in
+//!   the union integrity pass (`rex_driver::check_integrity`,
+//!   `docs/DDD.md`).
 //! * `design_flag`s and the single-member search lines (`entity`, `ranking`,
 //!   `analyzer`, `pagination`) are idempotent on repeat — the first
 //!   declaration wins; repeated `text`/`filters`/`sort`/`document` clauses
@@ -561,6 +567,108 @@
 //!   that cannot start anything fails into the enclosing body's junk (the
 //!   `actors_block` coarseness); a member that cannot start anything at
 //!   all fails the whole case into file-level junk.
+//!
+//! ## `.dmn` decision model sources ([`parse_dmn`])
+//!
+//! ```text
+//! dmn_file            := (dmn_import | decision_model_decl)*
+//! dmn_import          := "import" string ";"?
+//! decision_model_decl := "decision_model" name "{" model_member* "}"
+//! model_member        := metadata_decl | inputs_block | knowledge_block
+//!                        | decisions_block | requirements_block
+//!                        | services_block | views_block
+//! metadata_decl       := ("namespace" qname | "id" string
+//!                        | "version" string | "effective" string
+//!                        | "jurisdiction" string) ";"?
+//! inputs_block        := "inputs" "{" input_decl* "}"
+//! input_decl          := name ":" type_ref ";"?
+//! knowledge_block     := "knowledge" "{" (source_decl | model_decl)* "}"
+//! source_decl         := "source" name "{" source_prop* "}"
+//! source_prop         := ("name" string | "reference" string) ";"?
+//! model_decl          := "model" name "{" "parameters" "{" param_decl* "}"
+//!                        "output" type_ref ";"? logic_clause "}"
+//! param_decl          := name ":" type_ref ";"?
+//! decisions_block     := "decisions" "{" decision_decl* "}"
+//! decision_decl       := "decision" name "{" decision_item* "}"
+//! decision_item       := output_decl | outputs_block | logic_clause
+//! output_decl         := "output" type_ref ";"?
+//! outputs_block       := "outputs" "{" output_entry* "}"
+//! output_entry        := name ":" type_ref ";"?
+//! logic_clause        := "logic" logic_kind
+//! logic_kind          := "table" string | "expression" string
+//!                       | "invoke" name invoke_body
+//! invoke_body         := "{" binding_decl* "}"
+//! binding_decl        := name ":" string ";"?
+//! requirements_block  := "requirements" "{" requirement_group* "}"
+//! requirement_group   := "information" "{" requirement_line* "}"
+//!                       | "knowledge" "{" requirement_line* "}"
+//!                       | "authority" "{" requirement_line* "}"
+//! requirement_line    := name ("requires" | "invokes" | "governed_by")
+//!                       name ";"?
+//! services_block      := "services" "{" service_decl* "}"
+//! service_decl        := "service" name "{" service_item* "}"
+//! service_item        := "description" string ";"?
+//!                       | "inputs" "{" name* "}"
+//!                       | "outputs" "{" name* "}"
+//!                       | "encapsulates" "{" name* "}"
+//! views_block         := "views" "{" view_decl* "}"
+//! view_decl           := "view" name "{" view_item* "}"
+//! view_item           := "description" string ";"?
+//!                       | "show" "{" name* "}"
+//!                       | "direction" name ";"?
+//! ```
+//!
+//! * Every `.dmn` word above is a **contextual identifier** (the `.ddd`
+//!   discipline): special only in the grammar position noted, an ordinary
+//!   name everywhere else, escapable with `^`. The table in `crate::dmn`
+//!   is the keyword authority shared by the parser and the formatter.
+//!   `import` and `version` are real lexer keywords (`version` is the
+//!   `.mox` vocabulary word — the keyword token is matched positionally,
+//!   and `^version`/`^import` stay usable as names).
+//! * Semicolons follow the `.ddd` import rule: every statement line
+//!   (metadata, input/parameter/output entry, source property, binding,
+//!   requirement line, `description`, `direction`) carries a trailing `;`
+//!   that is tolerated when absent (`";?"` — never a reported error), and
+//!   the formatter emits the canonical `;` whether or not the source had
+//!   one. Block declarations end without one, and a `logic` clause carries
+//!   none — it ends at its string or brace block.
+//! * Model members may be **interleaved** in any order; the AST folds them
+//!   into per-kind lists (the `actors_block` precedent), with `qname` and
+//!   `type_ref` the shared `.mox` productions. A knowledge block folds
+//!   into knowledge sources and models; a requirements block folds into
+//!   its information/knowledge/authority groups (repeated groups append,
+//!   source order kept). A repeated `namespace` line is a reported error
+//!   (the first wins); duplicate metadata, names, or requirement targets
+//!   are a driver concern, not a syntax error.
+//! * The `model_decl` production shows the canonical BKM clause order;
+//!   the parser accepts the three clause kinds (`parameters`, `output`,
+//!   `logic`) in any order and folds them — a repeated `output`/`logic`
+//!   clause is a reported error (the first wins), and a missing `logic`
+//!   clause is a reported error: the grammar requires it. A decision's
+//!   `logic` is deliberately optional (a decision may declare only its
+//!   contract). A decision's bare `output <type>` line is the anonymous
+//!   single-output form — an output with an empty name — while the
+//!   `outputs` block declares named outputs; both fold into one list in
+//!   source order.
+//! * Imports must precede the `decision_model` declaration and there is
+//!   exactly one model per file (violations are reported errors; the
+//!   misplaced import is dropped and the first model wins), mirroring the
+//!   `.ddd` rule. A file without a `decision_model` is an error (the
+//!   `.ddd` precedent).
+//! * Doc comments (`///` runs) directly above a `decision`, `model`,
+//!   `source`, `service`, or `view` declaration become its description.
+//! * Recovery: a metadata line's value, a typed entry's `:`/type, a
+//!   source's name/`{`/properties, a model's name/`{`/clauses, a
+//!   decision's name/`{`/members, a logic kind/string, an invoke's name/
+//!   `{`/bindings, a requirement line's connective/target, a group or
+//!   block's `{`, and a service/view's name/`{`/members are each committed
+//!   once their leading word matched — missing pieces are reported errors
+//!   and the declaration still recovers. Inside a service/view's bare
+//!   `{ name* }` list the words that can begin the next member end the
+//!   list, so a missing `}` never swallows it (the `.evt` events-list
+//!   rule; escaped forms are always names). A member that cannot start
+//!   anything at all fails into the enclosing body's junk (the
+//!   `actors_block` coarseness), or into file-level junk above the model.
 
 use std::ops::{Range, RangeFrom};
 
@@ -685,6 +793,7 @@ mod actor;
 mod cmmn;
 mod ddd;
 mod deploy;
+mod dmn;
 mod docs;
 mod evt;
 mod imports;
@@ -702,6 +811,8 @@ pub use ddd::parse_ddd;
 pub use ddd::DddParseResult;
 pub use deploy::parse_deploy;
 pub use deploy::DeployParseResult;
+pub use dmn::parse_dmn;
+pub use dmn::DmnParseResult;
 pub use evt::parse_evt;
 pub use evt::EvtParseResult;
 pub use mox::parse;
@@ -723,6 +834,7 @@ mod grammar_doc_tests {
     use crate::cmmn;
     use crate::ddd;
     use crate::deploy;
+    use crate::dmn;
     use crate::lexer::lex;
     use crate::usecases;
 
@@ -882,7 +994,9 @@ mod grammar_doc_tests {
             ddd::ABSTRACT,
             ddd::REPOSITORY,
             ddd::INJECT,
+            ddd::DECISION,
             ddd::EMITS,
+            ddd::INVOKES,
             ddd::PROTECTED,
             ddd::MACHINE,
             ddd::INITIAL,
@@ -966,6 +1080,44 @@ mod grammar_doc_tests {
             cmmn::TASK,
             cmmn::SERVICE,
             cmmn::MILESTONE,
+        ] {
+            words.push(word);
+        }
+        for word in [
+            dmn::DECISION_MODEL,
+            dmn::NAMESPACE,
+            dmn::ID,
+            dmn::EFFECTIVE,
+            dmn::JURISDICTION,
+            dmn::INPUTS,
+            dmn::KNOWLEDGE,
+            dmn::SOURCE,
+            dmn::MODEL,
+            dmn::PARAMETERS,
+            dmn::OUTPUT,
+            dmn::OUTPUTS,
+            dmn::DECISIONS,
+            dmn::DECISION,
+            dmn::LOGIC,
+            dmn::TABLE,
+            dmn::EXPRESSION,
+            dmn::INVOKE,
+            dmn::REQUIREMENTS,
+            dmn::INFORMATION,
+            dmn::REQUIRES,
+            dmn::INVOKES,
+            dmn::AUTHORITY,
+            dmn::GOVERNED_BY,
+            dmn::SERVICES,
+            dmn::SERVICE,
+            dmn::ENCAPSULATES,
+            dmn::VIEWS,
+            dmn::VIEW,
+            dmn::SHOW,
+            dmn::DIRECTION,
+            dmn::DESCRIPTION,
+            dmn::REFERENCE,
+            dmn::NAME,
         ] {
             words.push(word);
         }

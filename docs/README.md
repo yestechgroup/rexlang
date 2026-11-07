@@ -15,6 +15,7 @@ artifact. This index routes to the right document.
 | [DEPLOY.md](DEPLOY.md) | `.deploy` | Deployment projections: components, profiles, targets, policies |
 | [USECASES.md](USECASES.md) | `.uc` | SysML v2 use case patterns: subjects, actors, messages, successions, `realizes` |
 | [CMMN.md](CMMN.md) | `.cmmn` | CMMN 1.1 case management: cases, case files, plans, sentry criteria — and the cmmn-rs seam |
+| [DMN.md](DMN.md) | `.dmn` | DMN 1.6-style decision models: the decision-requirements graph, external markdown decision tables, decision services — and the `.ddd` decision link |
 | [IFML.md](IFML.md) | `.ifml` | Interaction flows: views, components, events, the reference pattern library |
 
 ## For consumers and contributors

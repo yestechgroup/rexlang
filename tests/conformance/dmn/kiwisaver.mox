@@ -1,0 +1,25 @@
+package nz.payroll
+
+enum ComplianceStatus {
+    Compliant as "compliant" = 0
+    NonCompliant as "non_compliant" = 1
+    Voluntary as "voluntary" = 2
+}
+
+enum SuperFundType {
+    NoFund as "no_fund" = 0
+    RSS as "rss" = 1
+    DefinedBenefit as "defined_benefit" = 2
+    Complying as "complying" = 3
+}
+
+enum EmployeeDeductionRequired {
+    Yes as "yes" = 0
+    No as "no" = 1
+}
+
+class Employee {
+    id readonly String employeeNumber
+    String name
+    SuperFundType fundType
+}

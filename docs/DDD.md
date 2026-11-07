@@ -104,14 +104,21 @@ Lexical and structural rules:
 - Delegated operations (`name => target.operation`) copy the target's
   signature conceptually and declare none of their own; a delegated op may
   be named `save` (contextual keywords). Declared service operations may
-  carry a `capability a, b` clause and an `emits A, B` clause; delegated
-  service operations may carry both clauses too (they are service
-  operations), while declared repository operations take neither (the wire
-  artifact's repository operations carry no capabilities or emissions, so
-  accepting one would silently drop data). A service operation's clauses
-  are fixed in the canonical order `capability? emits? when?` — the order
-  the formatter emits, so a source writing `when` before `emits` is a
-  syntax error, not a formatting opportunity.
+  carry a `capability a, b` clause, an `invokes a.b, c` clause (the
+  decision services the operation invokes), and an `emits A, B` clause;
+  delegated service operations may carry all three clauses too (they are
+  service operations), while declared repository operations take neither
+  (the wire artifact's repository operations carry no capabilities,
+  invocations, or emissions, so accepting one would silently drop data). A
+  service operation's clauses are fixed in the canonical order
+  `capability? invokes? emits? when?` — the order the formatter emits, so
+  a source writing `when` before `emits` is a syntax error, not a
+  formatting opportunity. A service body may also declare decision
+  dependencies with `inject decision <qualified-name>;` — the second
+  `inject` form, alongside the plain `inject <name>;` dependency form
+  (`decision` is contextual: special only right after `inject`,
+  `^decision` escapes; `invokes` is special only in the clause position,
+  `^invokes` escapes).
 - A service or repository operation may carry a leading `protected`
   modifier (Sculptor's visibility): the operation stays off the public
   interface. `protected` is contextual — in leading position it is the
@@ -240,6 +247,24 @@ consumers resolve against the domain model.
     rule's scope), and enum-typed fields stay legal — an enum without a
     machine is a legitimate modeling choice (the canonical fixture's
     `MediaStatus status` field is the shape).
+17. **Decision links** — only `compile_ddd_str_with_decisions` validates:
+    every decision-service reference (an operation's `invokes` name, a
+    service's `inject decision` name) must resolve by its **last segment**
+    to a decision service declared in the union of the provided `.dmn`
+    models' services (the names pool across every provided model, the
+    rule-10 shape), else the reference errors `E0250 unknown decision
+    service '<name>' invoked by operation '<op>' of service '<service>'`
+    (injections: `E0251 unknown decision service '<name>' injected by
+    service '<service>'`) — spanned on the reference, with the
+    did-you-mean closest declared service when one is a plausible typo,
+    and the exhaustive list otherwise. Plain compiles (and any empty
+    decisions bucket) record the names unvalidated — the design dimension
+    is loosely coupled to the decision dimension by design. Every
+    `import "<path>.dmn"` the design declares must be provided under that
+    path when a non-empty decisions bucket is supplied, else
+    `imported decision model "<path>" was not provided`; `.dmn` imports
+    are not domains and never lower as `.mox` sources — a plain compile
+    ignores them outright.
 
 ## State machines
 
@@ -449,6 +474,38 @@ silent: an `emits` clause in a cluster without `.evt` artifacts is not an
 error, and a contract in a cluster without designs is not either — the
 checks fire only when the counterpart surface is present in the checked
 union (`rexlang check <dir>`).
+
+## Decisions and the decision dimension
+
+A service declares which decision services it relies on without knowing
+how the decisions are computed — the `.ddd` side of the `.dmn` decision
+surface (issue rexlang#78). Two forms, in the positions the grammar fixes:
+
+```
+service LoanService {
+    inject decision underwriting.RiskScore;
+    boolean approve() capability ApproveLoan invokes RiskScore, FraudScreen when (status == AwaitingApproval);
+}
+```
+
+An operation's `invokes` clause names the decision services the operation
+invokes; `inject decision <qualified-name>;` names a decision service the
+whole service injects. Like `capability` and `emits` names, decision
+references are **loosely coupled** at the wire layer: they lower into the
+artifact as their last segment exactly as the resolution universe spells
+them, and a plain `compile_ddd_str` never validates them. Only the library
+entry point `compile_ddd_str_with_decisions` validates the links (rule 17
+above) against a caller-provided `(path, DmnModel)` bucket — the same
+shape the `.uc` import buckets use. Decision services pool across every
+provided model, so a host gathers the sibling `.dmn` artifacts the way it
+pools actors. An empty bucket is the plain behavior.
+
+The `.dmn` dimension stays the authority: it declares the decision
+services (with their inputs, outputs, and encapsulated decisions); the
+design only records the dependency edges. Imports of `.dmn` files are not
+domains — the design's `import "<path>.dmn"` declarations resolve the
+decision bucket at compile time (rule 17's provision check) and lower
+nothing into the domain union.
 
 ---
 

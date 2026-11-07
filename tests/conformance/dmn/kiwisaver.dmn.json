@@ -1,0 +1,338 @@
+{
+  "formatVersion": 1,
+  "name": "KiwiSaver",
+  "namespace": "nz.payroll.kiwisaver",
+  "metadata": [
+    {
+      "kind": {
+        "type": "id"
+      },
+      "value": "NZ-KS-001"
+    },
+    {
+      "kind": {
+        "type": "version"
+      },
+      "value": "1.0.0"
+    },
+    {
+      "kind": {
+        "type": "effective"
+      },
+      "value": "2025-04-01"
+    },
+    {
+      "kind": {
+        "type": "jurisdiction"
+      },
+      "value": "NZ"
+    }
+  ],
+  "inputs": [
+    {
+      "name": "age",
+      "typeRef": {
+        "type": "primitive",
+        "value": "int"
+      }
+    },
+    {
+      "name": "member",
+      "typeRef": {
+        "type": "primitive",
+        "value": "boolean"
+      }
+    },
+    {
+      "name": "employee_rate",
+      "typeRef": {
+        "type": "primitive",
+        "value": "int"
+      }
+    },
+    {
+      "name": "other_super_fund",
+      "typeRef": {
+        "type": "enum",
+        "value": {
+          "package": "nz.payroll",
+          "name": "SuperFundType"
+        }
+      }
+    },
+    {
+      "name": "gross_salary",
+      "typeRef": {
+        "type": "primitive",
+        "value": "int"
+      }
+    },
+    {
+      "name": "savings_suspension",
+      "typeRef": {
+        "type": "primitive",
+        "value": "boolean"
+      }
+    },
+    {
+      "name": "new_employee",
+      "typeRef": {
+        "type": "primitive",
+        "value": "boolean"
+      }
+    },
+    {
+      "name": "esct_rate",
+      "typeRef": {
+        "type": "primitive",
+        "value": "int"
+      }
+    },
+    {
+      "name": "employer_rss_contribution",
+      "typeRef": {
+        "type": "primitive",
+        "value": "int"
+      }
+    }
+  ],
+  "knowledgeSources": [
+    {
+      "name": "KiwiSaverAct",
+      "displayName": "KiwiSaver Act 2006",
+      "reference": "https://www.legislation.govt.nz/act/kiwisaver2006"
+    },
+    {
+      "name": "IncomeTaxAct",
+      "displayName": "Income Tax Act 2007",
+      "reference": "https://www.legislation.govt.nz/act/incometax2007"
+    }
+  ],
+  "businessKnowledgeModels": [
+    {
+      "name": "calculate_esct",
+      "description": "Employer superannuation contribution tax: the tax on the\nemployer's contribution at the given rate.",
+      "parameters": [
+        {
+          "name": "employer_contribution",
+          "typeRef": {
+            "type": "primitive",
+            "value": "int"
+          }
+        },
+        {
+          "name": "rate",
+          "typeRef": {
+            "type": "primitive",
+            "value": "int"
+          }
+        }
+      ],
+      "output": {
+        "type": "primitive",
+        "value": "int"
+      },
+      "logic": {
+        "type": "expression",
+        "value": {
+          "text": "employer_contribution * rate / 100"
+        }
+      }
+    }
+  ],
+  "decisions": [
+    {
+      "name": "contribution_eligibility",
+      "description": "Whether the employee's KiwiSaver deduction is compulsory.",
+      "outputs": [
+        {
+          "name": "",
+          "typeRef": {
+            "type": "enum",
+            "value": {
+              "package": "nz.payroll",
+              "name": "EmployeeDeductionRequired"
+            }
+          }
+        }
+      ],
+      "logic": {
+        "type": "table",
+        "value": {
+          "source": "./tables/eligibility.md"
+        }
+      }
+    },
+    {
+      "name": "calculate_contributions",
+      "description": "The pay-run contribution picture: the employee deduction, the\nemployer's compulsory contribution, the ESCT on it, and the\ncompliance status the pay run records.",
+      "outputs": [
+        {
+          "name": "employee_deduction_required",
+          "typeRef": {
+            "type": "enum",
+            "value": {
+              "package": "nz.payroll",
+              "name": "EmployeeDeductionRequired"
+            }
+          }
+        },
+        {
+          "name": "employer_cec_amount",
+          "typeRef": {
+            "type": "primitive",
+            "value": "int"
+          }
+        },
+        {
+          "name": "esct_amount",
+          "typeRef": {
+            "type": "primitive",
+            "value": "int"
+          }
+        },
+        {
+          "name": "compliance_status",
+          "typeRef": {
+            "type": "enum",
+            "value": {
+              "package": "nz.payroll",
+              "name": "ComplianceStatus"
+            }
+          }
+        }
+      ],
+      "logic": {
+        "type": "table",
+        "value": {
+          "source": "./tables/contributions.md"
+        }
+      }
+    },
+    {
+      "name": "esct_calculation",
+      "description": "The ESCT owed on the employer's contribution, at the member's\nESCT rate.",
+      "outputs": [
+        {
+          "name": "",
+          "typeRef": {
+            "type": "primitive",
+            "value": "int"
+          }
+        }
+      ],
+      "logic": {
+        "type": "invoke",
+        "value": {
+          "model": "calculate_esct",
+          "bindings": [
+            {
+              "name": "employer_contribution",
+              "expression": "employer_cec_amount"
+            },
+            {
+              "name": "rate",
+              "expression": "esct_rate"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "informationRequirements": [
+    {
+      "requiring": "contribution_eligibility",
+      "required": "age"
+    },
+    {
+      "requiring": "contribution_eligibility",
+      "required": "member"
+    },
+    {
+      "requiring": "calculate_contributions",
+      "required": "gross_salary"
+    },
+    {
+      "requiring": "calculate_contributions",
+      "required": "employee_rate"
+    },
+    {
+      "requiring": "calculate_contributions",
+      "required": "savings_suspension"
+    },
+    {
+      "requiring": "esct_calculation",
+      "required": "employer_rss_contribution"
+    },
+    {
+      "requiring": "esct_calculation",
+      "required": "esct_rate"
+    },
+    {
+      "requiring": "esct_calculation",
+      "required": "calculate_contributions"
+    }
+  ],
+  "knowledgeRequirements": [
+    {
+      "requiring": "esct_calculation",
+      "required": "calculate_esct"
+    }
+  ],
+  "authorityRequirements": [
+    {
+      "requiring": "contribution_eligibility",
+      "required": "KiwiSaverAct"
+    },
+    {
+      "requiring": "calculate_contributions",
+      "required": "KiwiSaverAct"
+    },
+    {
+      "requiring": "esct_calculation",
+      "required": "IncomeTaxAct"
+    }
+  ],
+  "services": [
+    {
+      "name": "AssessContributions",
+      "description": "The payroll-facing contract: assess one employee's contributions\nfor a pay run.",
+      "inputs": [
+        "age",
+        "member",
+        "employee_rate",
+        "other_super_fund",
+        "gross_salary",
+        "savings_suspension",
+        "new_employee",
+        "esct_rate",
+        "employer_rss_contribution"
+      ],
+      "outputs": [
+        "calculate_contributions",
+        "esct_calculation"
+      ],
+      "encapsulates": [
+        "contribution_eligibility",
+        "calculate_contributions",
+        "esct_calculation",
+        "calculate_esct"
+      ]
+    }
+  ],
+  "views": [
+    {
+      "name": "overview",
+      "description": "The KiwiSaver decision requirements graph: eligibility, contributions, and ESCT.",
+      "show": [
+        "contribution_eligibility",
+        "calculate_contributions",
+        "esct_calculation",
+        "calculate_esct",
+        "KiwiSaverAct",
+        "IncomeTaxAct"
+      ],
+      "direction": "left_to_right"
+    }
+  ]
+}

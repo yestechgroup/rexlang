@@ -6,19 +6,20 @@ use std::path::{Path, PathBuf};
 
 use rex_driver::{
     compile_actors_str, compile_actors_str_with_designs, compile_cmmn_str, compile_ddd_str,
-    compile_ddd_str_with_actors, compile_deploy_str, compile_evt_str, compile_usecase_str,
+    compile_ddd_str_with_decisions, compile_deploy_str, compile_dmn_str, compile_evt_str,
+    compile_usecase_str,
 };
 
 use crate::inputs::{
-    compile_sources, is_actor_file, is_cmmn_file, is_ddd_file, is_deploy_file, is_evt_file,
-    is_ifml_file, is_uc_file, read_actor_pair_in, read_cmmn_pair, read_ddd_design,
-    read_deploy_pair, read_evt_pair, read_ifml_inputs, read_sources, read_uc_pair,
+    compile_sources, is_actor_file, is_cmmn_file, is_ddd_file, is_deploy_file, is_dmn_file,
+    is_evt_file, is_ifml_file, is_uc_file, read_actor_pair_in, read_cmmn_pair, read_ddd_design,
+    read_deploy_pair, read_dmn_pair, read_evt_pair, read_ifml_inputs, read_sources, read_uc_pair,
 };
 use crate::project::{Artifact, Project};
 use crate::report::{
     report_actor_diagnostics, report_cmmn_diagnostics, report_ddd_diagnostics,
-    report_deploy_diagnostics, report_evt_diagnostics, report_ifml_diagnostics,
-    report_multi_diagnostics, report_usecase_diagnostics,
+    report_deploy_diagnostics, report_dmn_diagnostics, report_evt_diagnostics,
+    report_ifml_diagnostics, report_multi_diagnostics, report_usecase_diagnostics,
 };
 
 /// The multi-file `.mox` pipeline: read the sources, compile them as one
@@ -88,6 +89,43 @@ fn gather_sibling_actors(except: &Path, project: &mut Project) -> Vec<rex_ir::Ac
                 if let Some(model) = compilation.model {
                     project.store(&key, &Artifact::Actor(model.clone()));
                     models.push(model);
+                }
+            }
+        }
+    }
+    models
+}
+
+/// The compiled `.dmn` artifacts of the project snapshot (rexlang#78): the
+/// decision services the `.ddd` decision links resolve against at compile
+/// time — rule 17's decisions bucket. A sibling that fails to compile
+/// contributes nothing (the [`gather_sibling_actors`] discipline).
+fn gather_sibling_decisions(
+    except: &Path,
+    project: &mut Project,
+) -> Vec<(String, rex_ir::dmn::DmnModel)> {
+    let mut models = Vec::new();
+    for key in project.keys_with_extension(".dmn") {
+        if Path::new(&key) == except {
+            continue;
+        }
+        match project.peek(&key) {
+            Some(Artifact::Decision(model)) => models.push((key.clone(), model.clone())),
+            Some(_) => {}
+            None => {
+                let Ok(pair) = read_dmn_pair(Path::new(&key), Some(project)) else {
+                    continue;
+                };
+                let compilation = compile_dmn_str(
+                    &pair.pair.path,
+                    &pair.pair.source,
+                    &pair.pair.domains,
+                    &pair.pair.imports(),
+                    &pair.tables,
+                );
+                if let Some(model) = compilation.model {
+                    project.store(&key, &Artifact::Decision(model.clone()));
+                    models.push((key.clone(), model));
                 }
             }
         }
@@ -199,17 +237,23 @@ pub(crate) fn compile_surface(
         let design = read_ddd_design(&files[0], project.as_deref_mut())?;
         // rexlang#128 (J3 at compile time): the capability clauses resolve
         // against every `.actor` artifact of the project snapshot — the
-        // empty slice is the exact `compile_ddd_str` behavior.
-        let sibling_actors = match project.as_deref_mut() {
-            Some(project) => gather_sibling_actors(&files[0], project),
-            None => Vec::new(),
+        // empty slice is the exact `compile_ddd_str` behavior. rexlang#78
+        // (rule 17): the `invokes`/`inject decision` clauses resolve the
+        // same way against every `.dmn` artifact of the snapshot.
+        let (sibling_actors, sibling_decisions) = match project.as_deref_mut() {
+            Some(project) => (
+                gather_sibling_actors(&files[0], project),
+                gather_sibling_decisions(&files[0], project),
+            ),
+            None => (Vec::new(), Vec::new()),
         };
-        let compilation = compile_ddd_str_with_actors(
+        let compilation = compile_ddd_str_with_decisions(
             &design.path,
             &design.source,
             &design.domains,
             &design.imports(),
             &sibling_actors,
+            &sibling_decisions,
         );
         report_ddd_diagnostics(&design, &compilation);
         let Some(design_model) = compilation.model else {
@@ -330,6 +374,29 @@ pub(crate) fn compile_surface(
             return Ok(None);
         };
         let artifact = Artifact::Case(case_model.clone());
+        if let Some(project) = project.as_deref_mut() {
+            project.store(&files[0].display().to_string(), &artifact);
+        }
+        return Ok(Some(SurfaceOutcome {
+            ok: vec![pair.pair.path.clone()],
+            json: artifact.to_json_pretty()?,
+            warnings: 0,
+        }));
+    }
+    if files.len() == 1 && is_dmn_file(&files[0]) {
+        let pair = read_dmn_pair(&files[0], project.as_deref_mut())?;
+        let compilation = compile_dmn_str(
+            &pair.pair.path,
+            &pair.pair.source,
+            &pair.pair.domains,
+            &pair.pair.imports(),
+            &pair.tables,
+        );
+        report_dmn_diagnostics(&pair.pair, &compilation);
+        let Some(decision_model) = compilation.model else {
+            return Ok(None);
+        };
+        let artifact = Artifact::Decision(decision_model.clone());
         if let Some(project) = project.as_deref_mut() {
             project.store(&files[0].display().to_string(), &artifact);
         }

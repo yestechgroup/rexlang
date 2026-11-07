@@ -28,3 +28,6 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 serde_json = { workspace = true }
 xstate-ir = { workspace = true }
+dsntk-recognizer = { workspace = true }
+dsntk-feel = { workspace = true }
+dsntk-feel-parser = { workspace = true }

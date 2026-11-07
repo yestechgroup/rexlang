@@ -45,6 +45,8 @@ pub(crate) enum Artifact {
     Design(rex_ir::ddd::DddModel),
     /// An `.evt` contract (the standalone `EventModel`).
     Event(rex_ir::events::EventModel),
+    /// A `.dmn` decision model (the standalone `DmnModel`).
+    Decision(rex_ir::dmn::DmnModel),
     /// A `.uc` use case pattern (the standalone `UseCaseModel`).
     UseCase(rex_ir::usecases::UseCaseModel),
     /// A `.cmmn` case (the standalone `CmmnModel`).
@@ -63,6 +65,7 @@ impl Artifact {
             Artifact::Actor(model) => Ok(model.to_json_pretty()?),
             Artifact::Design(model) => Ok(model.to_json_pretty()?),
             Artifact::Event(model) => Ok(model.to_json_pretty()?),
+            Artifact::Decision(model) => Ok(model.to_json_pretty()?),
             Artifact::UseCase(model) => Ok(model.to_json_pretty()?),
             Artifact::Case(model) => Ok(model.to_json_pretty()?),
             Artifact::Deploy(model) => Ok(model.to_json_pretty()?),

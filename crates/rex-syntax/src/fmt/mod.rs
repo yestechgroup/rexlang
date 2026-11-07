@@ -134,6 +134,22 @@
 //!   one; on-parts are comma-space separated, `.` chains stay tight, and a
 //!   criterion's `when (...)` parens re-emit verbatim (the
 //!   `when`-condition rule).
+//! * A `.dmn` source (see [`format_dmn`]) canonicalizes the whole file
+//!   into section order like the `.evt` formatter: `import` declarations
+//!   first (tight, one per line, each ending in `;`), then the
+//!   `decision_model` declaration after exactly one blank line. Within the
+//!   model, members are regrouped into the fixed order metadata
+//!   (`namespace` first, then `id`, `version`, `effective`,
+//!   `jurisdiction`) → `inputs` → `knowledge` (sources then models) →
+//!   `decisions` → `requirements` (information, knowledge, authority
+//!   groups) → `services` → `views`, source order kept within each group
+//!   (a member's leading comments travel with it). Every statement line
+//!   gets its canonical `;` whether or not the source had one; `logic`
+//!   clauses carry none (they end at their string or brace block). A
+//!   service's or view's `{ name* }` list stays inline on its line while
+//!   it fits within 100 columns; past the budget — or when the source
+//!   already listed names across lines or carried a comment inside the
+//!   braces — it renders one name per line.
 //! * An `import schema` or `import sigil` declaration of a `.mox` source is
 //!   hoisted into a canonical section directly after the `package`
 //!   declaration (mirroring the `.actor` import rule): the section renders
@@ -153,6 +169,7 @@ mod actor;
 mod cmmn;
 mod ddd;
 mod deploy;
+mod dmn;
 mod evt;
 mod mox;
 mod uc;
@@ -272,6 +289,31 @@ pub fn format_cmmn(source: &str) -> Result<String, FormatError> {
     Ok(fmt.run_cmmn())
 }
 
+/// Format a `.dmn` source text, preserving comments verbatim.
+///
+/// The canonical layout mirrors [`format_evt`]: `import` declarations are
+/// hoisted into a tight first section (one per line, in source order, each
+/// ending in `;`), followed by the `decision_model` declaration after
+/// exactly one blank line. Within the model, members are regrouped into
+/// the fixed order metadata (`namespace` first, then `id`, `version`,
+/// `effective`, `jurisdiction`) → `inputs` → `knowledge` (sources then
+/// models) → `decisions` → `requirements` (information, knowledge,
+/// authority groups) → `services` → `views`, source order kept within
+/// each group (a member's leading comments travel with it). Every
+/// statement line gets its canonical `;` whether or not the source had
+/// one; `logic` clauses carry none (they end at their string or brace
+/// block). A service's or view's `{ name* }` list stays inline on its
+/// line while it fits within 100 columns; past the budget — or when the
+/// source already listed names across lines or carried a comment inside
+/// the braces — it renders one name per line. Returns the formatted text
+/// ending in exactly one `\n` (empty input formats to empty output), or
+/// [`FormatError::Lex`] if the source cannot be tokenized.
+pub fn format_dmn(source: &str) -> Result<String, FormatError> {
+    let (tokens, comments) = lex_with_comments(source)?;
+    let mut fmt = Formatter::new(source, tokens, comments);
+    Ok(fmt.run_dmn())
+}
+
 /// One node of the merged stream the formatter walks: a token or a comment,
 /// ordered by source position.
 #[derive(Debug, Clone)]
@@ -361,6 +403,38 @@ enum BodyKind {
     UcUseCase,
     /// `occurrence`/`perform` members of a `.uc` participant body.
     UcParticipant,
+    /// members of a `.dmn` decision model body: metadata lines and the
+    /// six blocks.
+    DmnModel,
+    /// `name ":" type_ref ";"` entries of a `.dmn` inputs, outputs, or
+    /// parameters block (three blocks, one production).
+    DmnInputs,
+    /// knowledge sources and models (BKMs) of a `.dmn` knowledge block.
+    DmnKnowledge,
+    /// the display `name`/`reference` properties of a `.dmn` knowledge
+    /// source.
+    DmnSource,
+    /// `parameters`/`output`/`logic` clauses of a `.dmn` model (BKM) body.
+    DmnBkm,
+    /// `decision` declarations of a `.dmn` decisions block.
+    DmnDecisions,
+    /// the anonymous `output` line, the named `outputs` block, and the
+    /// `logic` clause of a `.dmn` decision body.
+    DmnDecision,
+    /// requirement groups of a `.dmn` requirements block.
+    DmnRequirements,
+    /// `<name> <connective> <name>;` lines of a `.dmn` requirement group.
+    DmnRequirementLines,
+    /// `service` declarations of a `.dmn` services block.
+    DmnServices,
+    /// members of a `.dmn` service body.
+    DmnServiceItems,
+    /// `view` declarations of a `.dmn` views block.
+    DmnViews,
+    /// members of a `.dmn` view body.
+    DmnViewItems,
+    /// `name ":" "<expression>";` bindings of a `.dmn` invoke body.
+    DmnInvoke,
     /// `role` declarations of a `.cmmn` roles block.
     CmmnRoles,
     /// typed items of a `.cmmn` case-file block.
@@ -1051,6 +1125,20 @@ impl<'src> Formatter<'src> {
                 BodyKind::DeployDeployment => self.scan_deploy_deployment_item(),
                 BodyKind::UcUseCase => self.scan_uc_item(),
                 BodyKind::UcParticipant => self.scan_uc_participant_item(),
+                BodyKind::DmnModel => self.scan_dmn_model_item(),
+                BodyKind::DmnInputs => self.scan_dmn_typed_entry(),
+                BodyKind::DmnKnowledge => self.scan_dmn_knowledge_item(),
+                BodyKind::DmnSource => self.scan_dmn_source_prop(),
+                BodyKind::DmnBkm => self.scan_dmn_bkm_item(),
+                BodyKind::DmnDecisions => self.scan_dmn_decisions_item(),
+                BodyKind::DmnDecision => self.scan_dmn_decision_item(),
+                BodyKind::DmnRequirements => self.scan_dmn_requirements_item(),
+                BodyKind::DmnRequirementLines => self.scan_dmn_requirement_line(),
+                BodyKind::DmnServices => self.scan_dmn_services_item(),
+                BodyKind::DmnServiceItems => self.scan_dmn_service_item(),
+                BodyKind::DmnViews => self.scan_dmn_views_item(),
+                BodyKind::DmnViewItems => self.scan_dmn_view_item(),
+                BodyKind::DmnInvoke => self.scan_dmn_invoke_binding(),
                 BodyKind::CmmnRoles => self.scan_cmmn_roles_item(),
                 BodyKind::CmmnCaseFile => self.scan_cmmn_case_file_item(),
                 BodyKind::CmmnCase => self.scan_cmmn_case_item(),

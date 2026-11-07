@@ -51,10 +51,14 @@
 //! package-qualified at this layer); resolution against the domain
 //! [`crate::Model`] is a driver/consumer concern, never a wire concern.
 //! Likewise [`ServiceOperation::capabilities`] loosely references actor
-//! capability names (the [`crate::ActorModel`] dimension), and
+//! capability names (the [`crate::ActorModel`] dimension),
 //! [`ServiceOperation::emits`] loosely references event names (the
-//! [`crate::events::EventModel`] dimension); neither is validated at the
-//! wire layer.
+//! [`crate::events::EventModel`] dimension), and
+//! [`ServiceOperation::invokes`] / [`Service::decision_dependencies`]
+//! loosely reference decision-service names (the [`crate::dmn::DmnModel`]
+//! dimension); none are validated at the wire layer — the `.ddd`
+//! decisions entry point joins the design against the provided decision
+//! models at compile time.
 //!
 //! A [`RepositoryOperation`] carries **exactly one** of a built-in op
 //! ([`RepositoryOperation::builtin`] — the consumer knows its signature) or
@@ -225,6 +229,12 @@ pub struct Service {
     /// services this service delegates to.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dependencies: Vec<String>,
+    /// Injected decision-service references (`inject decision <name>;`;
+    /// the [`crate::dmn::DmnModel`] dimension); loosely coupled, not
+    /// validated at the wire layer — the `.ddd` decisions entry point
+    /// joins them against the provided decision models.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decision_dependencies: Vec<String>,
 }
 
 impl Service {
@@ -235,6 +245,7 @@ impl Service {
             description: None,
             operations: Vec::new(),
             dependencies: Vec::new(),
+            decision_dependencies: Vec::new(),
         }
     }
 }
@@ -274,6 +285,12 @@ pub struct ServiceOperation {
     /// validated at the wire layer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub emits: Vec<String>,
+    /// Decision-service names this operation invokes (the `invokes`
+    /// clause; the [`crate::dmn::DmnModel`] dimension); loosely coupled,
+    /// not validated at the wire layer — the `.ddd` decisions entry point
+    /// joins them against the provided decision models.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub invokes: Vec<String>,
     /// The `when (...)` guard condition's source text, verbatim between the
     /// parentheses (the `when`-condition rule); typing is a driver concern.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -282,7 +299,7 @@ pub struct ServiceOperation {
 
 impl ServiceOperation {
     /// Creates an operation with no return type, parameters, delegation,
-    /// capabilities, or emitted events.
+    /// capabilities, invoked decision services, or emitted events.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -293,6 +310,7 @@ impl ServiceOperation {
             is_protected: false,
             capabilities: Vec::new(),
             emits: Vec::new(),
+            invokes: Vec::new(),
             condition: None,
         }
     }
@@ -312,6 +330,12 @@ impl ServiceOperation {
     /// Chainable setter for the emitted event names.
     pub fn with_emits(mut self, emits: Vec<String>) -> Self {
         self.emits = emits;
+        self
+    }
+
+    /// Chainable setter for the invoked decision-service names.
+    pub fn with_invokes(mut self, invokes: Vec<String>) -> Self {
+        self.invokes = invokes;
         self
     }
 }
@@ -973,8 +997,9 @@ mod tests {
     }
 
     /// A full-featured model: every stereotype, every flag, builtin and
-    /// declared repository operations, delegation, capabilities,
-    /// dependencies, and a qualified base package.
+    /// declared repository operations, delegation, capabilities, invoked
+    /// decision services, injected decision dependencies, dependencies,
+    /// and a qualified base package.
     fn sample_model() -> DddModel {
         DddModel::new()
             .application(Application {
@@ -996,6 +1021,7 @@ mod tests {
                             is_protected: false,
                             capabilities: vec!["BorrowBooks".to_string()],
                             emits: vec!["LoanStateChanged".to_string()],
+                            invokes: vec!["RiskScore".to_string()],
                             condition: None,
                         },
                         ServiceOperation {
@@ -1010,6 +1036,7 @@ mod tests {
                             is_protected: false,
                             capabilities: Vec::new(),
                             emits: Vec::new(),
+                            invokes: Vec::new(),
                             condition: None,
                         },
                     ],
@@ -1017,6 +1044,7 @@ mod tests {
                         "LoanRepository".to_string(),
                         "NotificationService".to_string(),
                     ],
+                    decision_dependencies: vec!["RiskScore".to_string()],
                 }],
                 designs: vec![
                     Design {
@@ -1342,16 +1370,29 @@ mod tests {
     }
 
     #[test]
-    fn emits_are_omitted_when_empty_and_round_trip_when_set() {
-        // Additive rule 9: an operation with no `emits` clause serializes
-        // without the key (artifacts authored before the clause stay
-        // byte-identical), and a populated list round-trips.
+    fn loose_reference_lists_are_omitted_when_empty_and_round_trip_when_set() {
+        // Additive rule 9: an operation with no `emits`/`invokes` clause —
+        // and a service with no `inject decision` line — serializes without
+        // those keys (artifacts authored before the clauses stay
+        // byte-identical), and populated lists round-trip.
         let mut op = ServiceOperation::new("approve");
         let json = serde_json::to_string(&op).expect("serialize");
         assert!(!json.contains("emits"), "empty emits are omitted: {json}");
+        assert!(
+            !json.contains("invokes"),
+            "empty invokes are omitted: {json}"
+        );
         let parsed: ServiceOperation =
             serde_json::from_str(&json).expect("deserialize without emits");
         assert_eq!(parsed, op, "the default is the empty list");
+        let service = Service::new("LoanService");
+        let json = serde_json::to_string(&service).expect("serialize");
+        assert!(
+            !json.contains("decisionDependencies"),
+            "empty decision dependencies are omitted: {json}"
+        );
+        let parsed: Service = serde_json::from_str(&json).expect("deserialize without injects");
+        assert_eq!(parsed, service, "the default is the empty list");
 
         op.emits = vec!["PayRunStateChanged".to_string()];
         let json = serde_json::to_string(&op).expect("serialize");
@@ -1367,9 +1408,31 @@ mod tests {
             "re-serialization is byte-identical"
         );
 
-        // The chainable setter.
-        let op = ServiceOperation::new("submit").with_emits(vec!["PayRunSubmitted".to_string()]);
+        op.invokes = vec!["RiskScore".to_string()];
+        let json = serde_json::to_string(&op).expect("serialize");
+        assert_eq!(
+            json, r#"{"name":"approve","emits":["PayRunStateChanged"],"invokes":["RiskScore"]}"#,
+            "the invokes key follows emits, in declaration order: {json}"
+        );
+        let parsed: ServiceOperation = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, op);
+
+        let mut service = Service::new("LoanService");
+        service.decision_dependencies = vec!["RiskScore".to_string()];
+        let json = serde_json::to_string(&service).expect("serialize");
+        assert_eq!(
+            json, r#"{"name":"LoanService","decisionDependencies":["RiskScore"]}"#,
+            "camelCase key: {json}"
+        );
+        let parsed: Service = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, service);
+
+        // The chainable setters.
+        let op = ServiceOperation::new("submit")
+            .with_emits(vec!["PayRunSubmitted".to_string()])
+            .with_invokes(vec!["CreditCheck".to_string()]);
         assert_eq!(op.emits, vec!["PayRunSubmitted".to_string()]);
+        assert_eq!(op.invokes, vec!["CreditCheck".to_string()]);
     }
 
     #[test]

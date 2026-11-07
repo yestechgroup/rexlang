@@ -26,9 +26,9 @@
 //!
 //! The remaining single words ([`APPLICATION`], [`BASE`], [`MODULE`],
 //! [`SERVICE`], [`SEARCH`], [`ABSTRACT`], [`REPOSITORY`], [`INJECT`],
-//! [`EMITS`], [`BOOST`], [`ANALYZER`], [`LIMIT`], [`MAX`], [`CURSOR`]) are
-//! matched on both sides at fixed grammar positions; they carry no
-//! canonical order.
+//! [`DECISION`], [`EMITS`], [`INVOKES`], [`BOOST`], [`ANALYZER`],
+//! [`LIMIT`], [`MAX`], [`CURSOR`]) are matched on both sides at fixed
+//! grammar positions; they carry no canonical order.
 //! The `ranking` value words (`bm25`, `tfIdf`, `exact`, `custom`) are
 //! parser-only — the formatter re-emits whatever follows the `ranking`
 //! keyword — so they stay in the parser alone.
@@ -56,14 +56,31 @@ pub(crate) const ABSTRACT: &str = "abstract";
 pub(crate) const REPOSITORY: &str = "repository";
 /// The `inject <name>;` keyword of a service body.
 pub(crate) const INJECT: &str = "inject";
+/// The `inject decision <qualified-name>;` discriminator word of a service
+/// body: the second `inject` form, declaring a decision-service dependency
+/// (the `.dmn` dimension — loosely coupled at the wire layer, validated by
+/// the decisions entry point). A contextual word like the rest: special
+/// only right after `inject`, an ordinary identifier everywhere else
+/// (`^decision` escapes).
+pub(crate) const DECISION: &str = "decision";
+/// The `invokes <DecisionService> (, <DecisionService>)*` clause of a
+/// service operation: the decision services the operation invokes (the
+/// `.dmn` dimension — loosely coupled at the wire layer, validated by the
+/// decisions entry point). A contextual word like the rest: special only
+/// in the clause position between a service operation's `capability`
+/// clause and its `emits` clause, an ordinary identifier everywhere else.
+/// Repository operations take no `invokes` clause (the wire artifact's
+/// repository operations carry none, so accepting one would silently drop
+/// data).
+pub(crate) const INVOKES: &str = "invokes";
 /// The `emits <Event> (, <Event>)*` clause of a service operation: the
 /// events the operation produces (loosely coupled to the `.evt` layer —
 /// existence/coverage resolve in the union integrity pass, never at the
-/// wire layer). A contextual word like the rest: special only between a
-/// service operation's `capability` clause and its `when` guard, an
-/// ordinary identifier everywhere else. Repository operations take no
-/// `emits` clause (the wire artifact's repository operations carry none,
-/// so accepting one would silently drop data).
+/// wire layer). A contextual word like the rest: special only in the
+/// clause position between a service operation's `invokes` clause and its
+/// `when` guard, an ordinary identifier everywhere else. Repository
+/// operations take no `emits` clause (the wire artifact's repository
+/// operations carry none, so accepting one would silently drop data).
 pub(crate) const EMITS: &str = "emits";
 /// The optional `protected` visibility modifier of a service or repository
 /// operation (Sculptor's `protected` — the operation stays off the public

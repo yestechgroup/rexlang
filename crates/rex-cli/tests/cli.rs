@@ -1649,6 +1649,190 @@ fn fmt_evt_files_rewrites_in_place_and_check_then_passes() {
     assert!(String::from_utf8_lossy(&check.stdout).is_empty());
 }
 
+// --- `.dmn` decision-model files -----------------------------------------------
+
+const BROKEN_DMN: &str = r#"decision_model Broken {
+    inputs {
+        age: Mystery;
+    }
+    decisions {
+        decision assess {
+            output int;
+            logic table "./missing-table.md"
+        }
+    }
+}
+"#;
+
+#[test]
+fn check_succeeds_on_the_canonical_dmn_fixture() {
+    // The fixture's `kiwisaver.mox` import and `./tables/*.md` decision
+    // tables resolve from disk next to it.
+    let fixture = workspace_root().join("tests/conformance/dmn/kiwisaver.dmn");
+    let output = rexlang()
+        .args(["check", fixture.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("OK {}\n", fixture.display())
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).is_empty());
+}
+
+#[test]
+fn check_fails_on_broken_dmn_file_with_dmn_path_in_output() {
+    let model = write_source("broken.dmn", BROKEN_DMN);
+    let output = rexlang()
+        .args(["check", model.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown type 'Mystery'"),
+        "stderr was: {stderr}"
+    );
+    assert!(
+        stderr.contains("missing-table.md"),
+        "the unprovided table path must be named: {stderr}"
+    );
+    assert!(
+        stderr.contains("broken.dmn"),
+        "the model file path must name the report: {stderr}"
+    );
+}
+
+#[test]
+fn ir_dmn_file_writes_decision_model_artifact() {
+    let fixture = workspace_root().join("tests/conformance/dmn/kiwisaver.dmn");
+    let out = scratch_dir().join("kiwisaver.dmn.json");
+    let output = rexlang()
+        .args(["ir", fixture.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .expect("run rexlang ir");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).is_empty());
+    let json = std::fs::read_to_string(&out).expect("read decision IR output");
+    let decision_model = rex_ir::dmn::DmnModel::from_json(&json).expect("file is DmnModel JSON");
+    assert_eq!(
+        decision_model.format_version,
+        rex_ir::dmn::DMN_MODEL_FORMAT_VERSION
+    );
+    assert_eq!(decision_model.decisions.len(), 3);
+}
+
+#[test]
+fn fmt_dmn_files_rewrites_in_place_and_check_then_passes() {
+    let messy = "decision_model   Minimal  {\n\n\ninputs  {  flag : boolean ; }\n\n\ndecisions  {  decision  draft  {  output  boolean  }  }\n\n\n}\n\n\n";
+    let path = write_source("fmt_dmn.dmn", messy);
+    let output = rexlang()
+        .args(["fmt", path.to_str().unwrap()])
+        .output()
+        .expect("run rexlang fmt");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let formatted = std::fs::read_to_string(&path).expect("read formatted decision model file");
+    assert!(
+        formatted.starts_with("decision_model Minimal {\n    inputs {\n        flag: boolean;\n"),
+        "canonical decision-model layout: {formatted:?}"
+    );
+    assert!(
+        formatted.ends_with("}\n"),
+        "no trailing blanks: {formatted:?}"
+    );
+
+    let check = rexlang()
+        .args(["fmt", "--check", path.to_str().unwrap()])
+        .output()
+        .expect("run rexlang fmt --check");
+    assert!(
+        check.status.success(),
+        "fmt output must be a fixpoint: {:?}",
+        String::from_utf8_lossy(&check.stdout)
+    );
+    assert!(String::from_utf8_lossy(&check.stdout).is_empty());
+}
+
+// --- `.ddd` decision links (rexlang#78 rule 17) --------------------------------
+
+const JOIN_DDD: &str = r#"
+import "decisions.dmn";
+
+application Desk {
+    module desk {
+        service TicketService {
+            inject decision AssessRefund;
+            boolean raiseRefund(String ticketNo, int cents) invokes AssessRefund;
+        }
+    }
+}
+"#;
+
+const JOIN_DMN: &str = r#"
+decision_model Decisions {
+    decisions {
+        decision refund {
+            output boolean;
+        }
+    }
+
+    services {
+        service AssessRefund {
+            outputs { refund }
+            encapsulates { refund }
+        }
+    }
+}
+"#;
+
+#[test]
+fn check_resolves_ddd_decision_links_against_a_sibling_dmn_artifact() {
+    let dir = scratch_dir();
+    std::fs::write(dir.join("desk.ddd"), JOIN_DDD).expect("write design");
+    std::fs::write(dir.join("decisions.dmn"), JOIN_DMN).expect("write decisions");
+    let output = rexlang()
+        .args(["check", dir.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn check_fails_when_an_invoked_decision_service_is_unknown() {
+    let dir = scratch_dir();
+    std::fs::write(
+        dir.join("desk.ddd"),
+        JOIN_DDD.replace("AssessRefund", "AssessNothing"),
+    )
+    .expect("write design");
+    std::fs::write(dir.join("decisions.dmn"), JOIN_DMN).expect("write decisions");
+    let output = rexlang()
+        .args(["check", dir.to_str().unwrap()])
+        .output()
+        .expect("run rexlang check");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E0250"), "stderr: {stderr:?}");
+    assert!(stderr.contains("AssessNothing"), "stderr: {stderr:?}");
+}
+
 // --- multi-file and directory inputs ------------------------------------------
 
 const MULTI_A: &str = "package alpha\n\nclass Book { String title }\n";
@@ -1838,14 +2022,17 @@ const EXAMPLES: [&str; 7] = [
 const ACTOR_EXAMPLES: [&str; 1] = ["support"];
 
 /// Canonical artifact-surface examples: each compiled against the imports
-/// it declares, all resolved relative to the file (the CLI gathers and
-/// compiles `.ddd`/`.evt`/`.uc`/`.deploy`/`.cmmn` imports exactly like a
-/// `rexlang check` of those surfaces). Their artifact bytes are pinned by
-/// `crates/rex-driver/tests/examples_artifacts.rs` and the cmmn backend's
-/// examples test.
-const ARTIFACT_EXAMPLES: [(&str, &str); 7] = [
+/// it declares (and, for `.dmn`, the decision tables its `logic table`
+/// clauses name), all resolved relative to the file (the CLI gathers and
+/// compiles `.ddd`/`.evt`/`.dmn`/`.uc`/`.deploy`/`.cmmn` imports exactly
+/// like a `rexlang check` of those surfaces). Their artifact bytes are
+/// pinned by `crates/rex-driver/tests/examples_artifacts.rs` and the cmmn
+/// backend's examples test.
+const ARTIFACT_EXAMPLES: [(&str, &str); 9] = [
     ("ecommerce", "evt"),
     ("support", "evt"),
+    ("lending", "dmn"),
+    ("support", "dmn"),
     ("orders", "ddd"),
     ("support", "ddd"),
     ("support", "uc"),

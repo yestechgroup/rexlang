@@ -1,0 +1,104 @@
+// Decision model for the sample library's loan approval.
+// (Deliberately non-canonical source: the formatter golden compares against
+// the canonical layout; do not "fix" the spacing here. The missing
+// statement semicolons are deliberate too — the formatter emits the
+// canonical `;` whether or not the source had one. The import is real so
+// the batch check compiles this file like any model — shapes that need
+// richer cross-surface detail live in tests/conformance/dmn/kiwisaver.dmn
+// and the unit tests.)
+import "../ddd/library.mox"
+
+decision_model  LoanApproval {
+
+   jurisdiction  "NZ"
+   version "1.4.0"
+   id  "loan-approval"
+    effective "2026-01-01"
+   namespace   banking.loan;
+
+    /// The facts the decision reads.
+    inputs {
+        history : int
+        applicant : int;
+        request  :  int;
+    }
+
+    knowledge {
+        /// The underwriting policy manual.
+        source PolicyManual {
+            reference "https://example.com/policy"
+            name "Underwriting Policy Manual" ;
+        }
+        model EligibilityRules {
+            parameters { age : int }
+            output int
+            logic table "./tables/eligibility.md"
+        }
+        model RateLookup {
+            parameters { tier : string }
+            output int ;
+            logic expression "tier"
+        }
+        source RegOps { reference "ops/reg" }
+        model FeeSchedule {
+            parameters {}
+            output int;
+            logic expression "fee = base * factor"
+        }
+    }
+
+    decisions {
+        /// Whether the application passes.
+        decision Approve {
+            output int;
+            logic invoke EligibilityRules {
+                age: "applicant.age";
+            }
+        }
+        decision Fee {
+            outputs {
+                waiver : boolean;
+                fee  :  int
+            }
+            logic table "./tables/fees.md"
+        }
+        decision Plain { output boolean }
+    }
+
+    requirements {
+        knowledge {
+            Approve requires EligibilityRules;
+            Fee invokes RateLookup;
+        }
+        information {
+            Approve requires request
+            Fee requires history;
+        }
+        authority {
+            Approve governed_by PolicyManual;
+        }
+    }
+
+    services {
+        service PricingService {
+            description "Rates and fees."
+            inputs { request history }
+            outputs { Approve }
+            encapsulates { RateLookup }
+        }
+    }
+
+    views {
+        view DecisionLetter {
+            description "The approval letter."
+            show { Approve Fee }
+            direction outgoing;
+        }
+        view CommitteeBrief {
+            show {
+                Approve
+                Fee
+            }
+        }
+    }
+}

@@ -34,12 +34,14 @@
 
 use std::sync::LazyLock;
 
+pub mod dmn;
 pub mod driver;
 pub mod ifml_check;
 pub mod ifml_lints;
 pub mod ifml_resolver;
 pub mod integrity;
 
+pub use dmn::*;
 pub use driver::*;
 pub use ifml_check::*;
 pub use ifml_lints::*;
@@ -115,6 +117,7 @@ const BAND_ENTRIES: &[&[Entry]] = &[
     ifml_lints::ENTRIES,
     driver::ENTRIES,
     integrity::ENTRIES,
+    dmn::ENTRIES,
 ];
 
 /// All registered entries, flattened once.
@@ -176,6 +179,13 @@ const BANDS: &[Band] = &[
         owner: "rex-driver integrity pass",
         severity_note: "error",
         next_free: "X0009",
+    },
+    Band {
+        id: "dmn.check",
+        range: "E0200–E0299",
+        owner: "rex-driver .dmn surface and .ddd decision links",
+        severity_note: "error",
+        next_free: "E0252",
     },
 ];
 

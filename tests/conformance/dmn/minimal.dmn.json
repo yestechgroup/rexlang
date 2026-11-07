@@ -1,0 +1,28 @@
+{
+  "formatVersion": 1,
+  "name": "Minimal",
+  "namespace": "nz.example.minimal",
+  "inputs": [
+    {
+      "name": "flag",
+      "typeRef": {
+        "type": "primitive",
+        "value": "boolean"
+      }
+    }
+  ],
+  "decisions": [
+    {
+      "name": "draft",
+      "outputs": [
+        {
+          "name": "",
+          "typeRef": {
+            "type": "primitive",
+            "value": "boolean"
+          }
+        }
+      ]
+    }
+  ]
+}

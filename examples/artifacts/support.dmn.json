@@ -1,0 +1,264 @@
+{
+  "formatVersion": 1,
+  "name": "RefundDecisions",
+  "namespace": "nz.example.support.decisions",
+  "inputs": [
+    {
+      "name": "ticket",
+      "typeRef": {
+        "type": "class",
+        "value": {
+          "package": "nz.example.support",
+          "name": "Ticket"
+        }
+      }
+    },
+    {
+      "name": "helper",
+      "typeRef": {
+        "type": "class",
+        "value": {
+          "package": "nz.example.support",
+          "name": "User"
+        }
+      }
+    },
+    {
+      "name": "requested_cents",
+      "typeRef": {
+        "type": "primitive",
+        "value": "int"
+      }
+    }
+  ],
+  "knowledgeSources": [
+    {
+      "name": "ConsumerGuaranteesAct",
+      "displayName": "Consumer Guarantees Act 1993",
+      "reference": "https://www.legislation.govt.nz/act/consumer-guarantees-1993"
+    }
+  ],
+  "businessKnowledgeModels": [
+    {
+      "name": "assess_refund",
+      "description": "The narrative the desk records for a refund decision.",
+      "parameters": [
+        {
+          "name": "eligible",
+          "typeRef": {
+            "type": "primitive",
+            "value": "boolean"
+          }
+        },
+        {
+          "name": "approval_required",
+          "typeRef": {
+            "type": "primitive",
+            "value": "boolean"
+          }
+        },
+        {
+          "name": "amount",
+          "typeRef": {
+            "type": "primitive",
+            "value": "int"
+          }
+        }
+      ],
+      "output": {
+        "type": "primitive",
+        "value": "string"
+      },
+      "logic": {
+        "type": "expression",
+        "value": {
+          "text": "if eligible then (if approval_required then \"finance approval required\" else \"approved at the desk\") else \"refund unavailable\""
+        }
+      }
+    }
+  ],
+  "decisions": [
+    {
+      "name": "RefundEligibility",
+      "description": "Whether the desk can raise the requested refund on this ticket.",
+      "outputs": [
+        {
+          "name": "",
+          "typeRef": {
+            "type": "primitive",
+            "value": "boolean"
+          }
+        }
+      ],
+      "logic": {
+        "type": "expression",
+        "value": {
+          "text": "helper.active and ticket.needsRefund and requested_cents > 0"
+        }
+      }
+    },
+    {
+      "name": "RefundAuthority",
+      "description": "The approval ladder: who must sign off and how much they may release.",
+      "outputs": [
+        {
+          "name": "requires_approval",
+          "typeRef": {
+            "type": "primitive",
+            "value": "boolean"
+          }
+        },
+        {
+          "name": "approver_role",
+          "typeRef": {
+            "type": "primitive",
+            "value": "string"
+          }
+        },
+        {
+          "name": "maximum_amount",
+          "typeRef": {
+            "type": "primitive",
+            "value": "int"
+          }
+        }
+      ],
+      "logic": {
+        "type": "table",
+        "value": {
+          "source": "./tables/refund-authority.md"
+        }
+      }
+    },
+    {
+      "name": "RefundAssessment",
+      "description": "The composed assessment recorded against the ticket.",
+      "outputs": [
+        {
+          "name": "eligible",
+          "typeRef": {
+            "type": "primitive",
+            "value": "boolean"
+          }
+        },
+        {
+          "name": "requires_approval",
+          "typeRef": {
+            "type": "primitive",
+            "value": "boolean"
+          }
+        },
+        {
+          "name": "maximum_amount",
+          "typeRef": {
+            "type": "primitive",
+            "value": "int"
+          }
+        },
+        {
+          "name": "reason",
+          "typeRef": {
+            "type": "primitive",
+            "value": "string"
+          }
+        }
+      ],
+      "logic": {
+        "type": "invoke",
+        "value": {
+          "model": "assess_refund",
+          "bindings": [
+            {
+              "name": "eligible",
+              "expression": "RefundEligibility"
+            },
+            {
+              "name": "approval_required",
+              "expression": "requires_approval"
+            },
+            {
+              "name": "amount",
+              "expression": "maximum_amount"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "informationRequirements": [
+    {
+      "requiring": "RefundEligibility",
+      "required": "ticket"
+    },
+    {
+      "requiring": "RefundEligibility",
+      "required": "helper"
+    },
+    {
+      "requiring": "RefundEligibility",
+      "required": "requested_cents"
+    },
+    {
+      "requiring": "RefundAuthority",
+      "required": "requested_cents"
+    },
+    {
+      "requiring": "RefundAssessment",
+      "required": "RefundEligibility"
+    },
+    {
+      "requiring": "RefundAssessment",
+      "required": "RefundAuthority"
+    }
+  ],
+  "knowledgeRequirements": [
+    {
+      "requiring": "RefundAssessment",
+      "required": "assess_refund"
+    }
+  ],
+  "authorityRequirements": [
+    {
+      "requiring": "RefundEligibility",
+      "required": "ConsumerGuaranteesAct"
+    },
+    {
+      "requiring": "RefundAuthority",
+      "required": "ConsumerGuaranteesAct"
+    }
+  ],
+  "services": [
+    {
+      "name": "AssessRefund",
+      "description": "The design-facing contract: assess one refund request.",
+      "inputs": [
+        "ticket",
+        "helper",
+        "requested_cents"
+      ],
+      "outputs": [
+        "RefundAssessment"
+      ],
+      "encapsulates": [
+        "RefundEligibility",
+        "RefundAuthority",
+        "RefundAssessment",
+        "assess_refund"
+      ]
+    }
+  ],
+  "views": [
+    {
+      "name": "refund_flow",
+      "description": "How a refund request flows from eligibility through authority to the recorded assessment.",
+      "show": [
+        "RefundEligibility",
+        "RefundAuthority",
+        "RefundAssessment",
+        "assess_refund",
+        "ConsumerGuaranteesAct"
+      ],
+      "direction": "left_to_right"
+    }
+  ]
+}

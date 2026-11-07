@@ -11,6 +11,12 @@ env:
   # CLI so actions/checkout's persisted credentials authenticate private
   # repos; cargo's default libgit2 backend carries no credentials.
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  # The dsntk dependency tree pushed the full --all-targets build past the
+  # runner's disk budget (the linker Bus-errors when the disk fills); CI
+  # builds without incremental compilation and without debuginfo, which
+  # keeps target/ tens of GB smaller without changing any test's semantics.
+  CARGO_INCREMENTAL: "0"
+  RUSTFLAGS: "-C debuginfo=0"
 
 jobs:
   test:
@@ -19,10 +25,16 @@ jobs:
       - uses: actions/checkout@v4
       # The full workspace build + scratch-crate e2e + doctest linking
       # exceed the runner's default free disk; the preinstalled toolchains
-      # we don't use are tens of GB.
+      # we don't use are tens of GB. The dsntk toolchain (chrono-tz, the
+      # icu data crates, dfp-number-sys) grew the dep tree enough that the
+      # default dev profile no longer fits either: CI builds with
+      # incremental compilation and debuginfo disabled (job env below),
+      # which keeps target/ tens of GB smaller.
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc             /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
+          sudo rm -rf /usr/share/swift /usr/local/share/powershell /usr/local/julia /usr/local/lib/R /usr/local/share/chromium /opt/microsoft || true
+          sudo apt-get clean || true
           sudo docker image prune -af || true
           df -h /
       - uses: dtolnay/rust-toolchain@stable
@@ -38,4 +50,4 @@ jobs:
       - name: Format check
         run: |
           cargo fmt --all -- --check
-          cargo run -q -p rex-cli -- fmt --check examples/*.mox examples/*.actor examples/*.ifml examples/*.evt examples/*.ddd examples/*.uc examples/*.deploy examples/*.cmmn tests/conformance/models/*.mox tests/conformance/models/*.actor tests/conformance/ddd/*.ddd tests/conformance/sigil/*.mox tests/conformance/sigil/*.actor tests/conformance/sigil/*.ddd tests/conformance/events/*.mox tests/conformance/events/*.evt tests/conformance/deploy/*.deploy tests/conformance/usecases/*.uc tests/conformance/cmmn/*.cmmn patterns/ifml/*.ifml tests/conformance/ifml/app.ifml tests/conformance/ifml/cli.ifml tests/conformance/ifml/rexlang/auth.mox tests/conformance/ifml/rexlang/auth.actor
+          cargo run -q -p rex-cli -- fmt --check examples/*.mox examples/*.actor examples/*.ifml examples/*.evt examples/*.dmn examples/*.ddd examples/*.uc examples/*.deploy examples/*.cmmn tests/conformance/models/*.mox tests/conformance/models/*.actor tests/conformance/ddd/*.ddd tests/conformance/sigil/*.mox tests/conformance/sigil/*.actor tests/conformance/sigil/*.ddd tests/conformance/events/*.mox tests/conformance/events/*.evt tests/conformance/deploy/*.deploy tests/conformance/usecases/*.uc tests/conformance/cmmn/*.cmmn tests/conformance/dmn/*.dmn patterns/ifml/*.ifml tests/conformance/ifml/app.ifml tests/conformance/ifml/cli.ifml tests/conformance/ifml/rexlang/auth.mox tests/conformance/ifml/rexlang/auth.actor

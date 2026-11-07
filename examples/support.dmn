@@ -1,0 +1,98 @@
+// Support-desk refund decisions over the support.mox domain: this model is
+// the decision layer the desk consults — eligibility under the consumer
+// guarantees, the approval ladder, and the composed assessment the stored
+// RefundDecision record carries (rexlang#78).
+import "support.mox";
+
+decision_model RefundDecisions {
+    namespace nz.example.support.decisions;
+    inputs {
+        ticket: Ticket;
+        helper: User;
+        requested_cents: int;
+    }
+    knowledge {
+        source ConsumerGuaranteesAct {
+            name "Consumer Guarantees Act 1993";
+            reference "https://www.legislation.govt.nz/act/consumer-guarantees-1993";
+        }
+        /// The narrative the desk records for a refund decision.
+        model assess_refund {
+            parameters {
+                eligible: boolean;
+                approval_required: boolean;
+                amount: int;
+            }
+            output string;
+            logic expression "if eligible then (if approval_required then \"finance approval required\" else \"approved at the desk\") else \"refund unavailable\""
+        }
+    }
+    decisions {
+        /// Whether the desk can raise the requested refund on this ticket.
+        decision RefundEligibility {
+            output boolean;
+            logic expression "helper.active and ticket.needsRefund and requested_cents > 0"
+        }
+        /// The approval ladder: who must sign off and how much they may release.
+        decision RefundAuthority {
+            outputs {
+                requires_approval: boolean;
+                approver_role: string;
+                maximum_amount: int;
+            }
+            logic table "./tables/refund-authority.md"
+        }
+        /// The composed assessment recorded against the ticket.
+        decision RefundAssessment {
+            outputs {
+                eligible: boolean;
+                requires_approval: boolean;
+                maximum_amount: int;
+                reason: string;
+            }
+            logic invoke assess_refund {
+                eligible: "RefundEligibility";
+                approval_required: "requires_approval";
+                amount: "maximum_amount";
+            }
+        }
+    }
+    requirements {
+        information {
+            RefundEligibility requires ticket;
+            RefundEligibility requires helper;
+            RefundEligibility requires requested_cents;
+            RefundAuthority requires requested_cents;
+            RefundAssessment requires RefundEligibility;
+            RefundAssessment requires RefundAuthority;
+        }
+        knowledge {
+            RefundAssessment invokes assess_refund;
+        }
+        authority {
+            RefundEligibility governed_by ConsumerGuaranteesAct;
+            RefundAuthority governed_by ConsumerGuaranteesAct;
+        }
+    }
+    services {
+        /// The design-facing contract: assess one refund request.
+        service AssessRefund {
+            inputs { ticket helper requested_cents }
+            outputs { RefundAssessment }
+            encapsulates { RefundEligibility RefundAuthority RefundAssessment assess_refund }
+        }
+    }
+    views {
+        view refund_flow {
+            description "How a refund request flows from eligibility through authority to the recorded assessment.";
+            show {
+                RefundEligibility
+                RefundAuthority
+                RefundAssessment
+                assess_refund
+                ConsumerGuaranteesAct
+            }
+            direction left_to_right;
+        }
+    }
+}
