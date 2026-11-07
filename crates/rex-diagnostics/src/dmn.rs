@@ -26,7 +26,8 @@ pub const E_UNKNOWN_INFORMATION_REQUIREMENT: &str = "E0201";
 /// '<requiring>'`.
 pub const E_UNKNOWN_KNOWLEDGE_MODEL: &str = "E0202";
 /// `unknown knowledge source '<required>' governed by decision
-/// '<requiring>'`.
+/// '<requiring>'`, or `'<requiring>' is not a decision; requirements are
+/// carried by decisions`.
 pub const E_UNKNOWN_KNOWLEDGE_SOURCE: &str = "E0203";
 /// `duplicate <kind> '<name>'`.
 pub const E_DUPLICATE_NAME: &str = "E0204";
@@ -77,7 +78,7 @@ pub(crate) const ENTRIES: &[Entry] = &[
         band: DMN_BAND,
         severity: Severity::Error,
         title: "Unknown information requirement",
-        meaning: "`unknown input or decision '<required>' required by decision '<requiring>'` — the decision's information requirement names neither a declared input-data element nor another decision in the decision-requirements graph, so the decision has no source for the input it consumes.",
+        meaning: "`unknown input or decision '<required>' required by decision '<requiring>'` — the decision's information requirement names neither a declared input-data element nor another decision in the decision-requirements graph, so the decision has no source for the input it consumes. Or `'<requiring>' is not a decision; requirements are carried by decisions` — requirement lines are always the decision's perspective.",
         fix: "Declare the input data, point the requirement at a declared decision, or fix the spelling.",
     },
     Entry {
@@ -85,7 +86,7 @@ pub(crate) const ENTRIES: &[Entry] = &[
         band: DMN_BAND,
         severity: Severity::Error,
         title: "Unknown knowledge model",
-        meaning: "`unknown knowledge model '<required>' invoked by decision '<requiring>'` — the decision's knowledge requirement names no declared business knowledge model, so the decision has no boxed logic to apply.",
+        meaning: "`unknown knowledge model '<required>' invoked by decision '<requiring>'` — the decision's knowledge requirement names no declared business knowledge model, so the decision has no boxed logic to apply (the same shape fires at a `logic invoke` clause naming an unknown model). Or `'<requiring>' is not a decision; requirements are carried by decisions`.",
         fix: "Declare the knowledge model, or fix the spelling.",
     },
     Entry {
@@ -93,7 +94,7 @@ pub(crate) const ENTRIES: &[Entry] = &[
         band: DMN_BAND,
         severity: Severity::Error,
         title: "Unknown knowledge source",
-        meaning: "`unknown knowledge source '<required>' governed by decision '<requiring>'` — the decision's authority requirement names no declared knowledge source; DMN models the authority behind a decision (a person, policy, or system) separately from the logic that computes it.",
+        meaning: "`unknown knowledge source '<required>' governed by decision '<requiring>'` — the decision's authority requirement names no declared knowledge source; DMN models the authority behind a decision (a person, policy, or system) separately from the logic that computes it. Or `'<requiring>' is not a decision; requirements are carried by decisions`.",
         fix: "Declare the knowledge source, or fix the spelling.",
     },
     Entry {
