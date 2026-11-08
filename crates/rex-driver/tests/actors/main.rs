@@ -3,7 +3,6 @@
 
 mod support;
 
-
 mod agents_and_delegations;
 mod navigation;
 mod obligations;

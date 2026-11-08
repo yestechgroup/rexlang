@@ -3,7 +3,6 @@
 
 mod support;
 
-
 mod happy_path;
 mod repository_breadth;
 mod resolution_semantics;
