@@ -170,6 +170,27 @@ fn an_untranslatable_when_construct_is_a_named_error() {
 }
 
 #[test]
+fn a_free_function_call_is_a_named_error() {
+    let (mut model, domains) = conformance_inputs();
+    let case = &mut model.cases[0];
+    let milestone = case
+        .plan_items
+        .iter_mut()
+        .find(|item| item.name == "ApplicationReady")
+        .expect("milestone");
+    milestone.entry[0].when = Some("score(financials)".to_string());
+    let error = generate(&model, &domains).expect_err("generate must fail");
+    assert_eq!(
+        error,
+        GenerateError::Untranslatable {
+            case: "CommercialLoan".into(),
+            item: "ApplicationReady".into(),
+            reason: "a free-function call".into(),
+        }
+    );
+}
+
+#[test]
 fn auto_on_a_milestone_is_a_named_error() {
     let (mut model, domains) = conformance_inputs();
     let case = &mut model.cases[0];

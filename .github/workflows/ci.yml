@@ -24,27 +24,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # The full workspace build + scratch-crate e2e + doctest linking
-      # exceed the runner's default free disk; the preinstalled toolchains
-      # we don't use are tens of GB. The dsntk toolchain (chrono-tz, the
-      # icu data crates, dfp-number-sys) grew the dep tree enough that the
-      # default dev profile no longer fits either: CI builds with
-      # incremental compilation and debuginfo disabled (job env below),
-      # which keeps target/ tens of GB smaller.
+      # exceed the runner's default free disk, and lld dies with SIGBUS
+      # writing mmap'd output when it fills (`ld terminated with signal 7`
+      # in the Doc-tests section). The preinstalled toolchains we don't use
+      # are tens of GB. The dsntk dependency tree (chrono-tz, the icu data
+      # crates, dfp-number-sys) grew the dep tree enough that the default
+      # dev profile no longer fits either: CI builds with incremental
+      # compilation and debuginfo disabled (job env below), which keeps
+      # target/ tens of GB smaller without changing any test's semantics.
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc             /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
           sudo rm -rf /usr/share/swift /usr/local/share/powershell /usr/local/julia /usr/local/lib/R /usr/local/share/chromium /opt/microsoft || true
           sudo apt-get clean || true
           sudo docker image prune -af || true
-          df -h /
+          df -h / /tmp
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo build --workspace --all-targets
+      # rustdoc links doctest artifacts under TMPDIR, which defaults to
+      # the small tmpfs /tmp — the linker SIGBUSes there (the AGENTS.md
+      # testing-quirks gotcha; `ld terminated with signal 7`). Point it at
+      # the workspace's disk-backed target/, and cap the job count so the
+      # eleven rex-driver doctests don't link concurrently.
       - name: Tests
-        run: cargo test --workspace
+        run: |
+          mkdir -p target/tmp
+          TMPDIR=$PWD/target/tmp cargo test --workspace --jobs 2
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Format check

@@ -13,4 +13,8 @@ workspace = true
 logos = { workspace = true }
 chumsky = { workspace = true }
 rex-ir = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

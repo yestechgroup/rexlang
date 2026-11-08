@@ -539,6 +539,72 @@ fn a_receiver_call_still_resolves_class_ops_only() {
     );
 }
 
+#[test]
+fn a_function_return_multiplicity_lifts_the_call_type() {
+    // The declared return cardinality lifts the call's type the same way a
+    // parameter's multiplicity lifts the argument's: many → List, lower 0 →
+    // Option, the required `(1..1)` (and `None`) stay the plain type.
+    let mut model = Model::new();
+    let mut package = Package::new("sigil::nz.example.rates");
+    let mut many = Operation::new(
+        "legRates",
+        TypeRef::Primitive(PrimitiveType::Double),
+        vec![OperationParam {
+            name: "legId".to_string(),
+            type_: TypeRef::Primitive(PrimitiveType::Int),
+            multiplicity: None,
+        }],
+    );
+    many.return_multiplicity = Some(Multiplicity::MANY);
+    package.functions.push(many);
+    let mut optional = Operation::new(
+        "maybeRate",
+        TypeRef::Primitive(PrimitiveType::Int),
+        vec![OperationParam {
+            name: "legId".to_string(),
+            type_: TypeRef::Primitive(PrimitiveType::Int),
+            multiplicity: None,
+        }],
+    );
+    optional.return_multiplicity = Some(Multiplicity::OPTIONAL);
+    package.functions.push(optional);
+    package.functions.push(Operation::new(
+        "scalarRate",
+        TypeRef::Primitive(PrimitiveType::Int),
+        vec![OperationParam {
+            name: "legId".to_string(),
+            type_: TypeRef::Primitive(PrimitiveType::Int),
+            multiplicity: None,
+        }],
+    ));
+    model.packages.push(package);
+
+    let checker = TypeChecker::new(DomainTypes::from_model(&model));
+    let type_of = |source: &str| {
+        let parsed = parse(source);
+        assert!(parsed.errors.is_empty(), "{source:?}: {:?}", parsed.errors);
+        checker
+            .clone()
+            .type_of(parsed.ast.as_ref().expect("ast"))
+            .unwrap_or_else(|errors| panic!("{source:?}: {errors:?}"))
+    };
+    assert_eq!(
+        type_of("legRates(1)"),
+        Ty::double().list(),
+        "a (0..*) return types the call as List"
+    );
+    assert_eq!(
+        type_of("maybeRate(1)"),
+        Ty::int().optional(),
+        "a (0..1) return types the call as Option"
+    );
+    assert_eq!(
+        type_of("scalarRate(1)"),
+        Ty::int(),
+        "a (1..1) return stays the plain element type"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Collection algebra (A1-A6)
 // ---------------------------------------------------------------------------
@@ -1040,6 +1106,7 @@ fn insert_function_registers_a_signature_for_model_less_hosts() {
         FunctionSignature {
             package: "sigil::scoring".to_string(),
             return_type: TypeRef::Primitive(PrimitiveType::Long),
+            return_multiplicity: None,
             params: vec![OperationParam {
                 name: "value".to_string(),
                 type_: TypeRef::Primitive(PrimitiveType::Int),
@@ -1103,6 +1170,7 @@ fn merge_unions_function_tables_without_dropping_either_side() {
         FunctionSignature {
             package: "a.pricing".to_string(),
             return_type: TypeRef::Primitive(PrimitiveType::Int),
+            return_multiplicity: None,
             params: vec![],
         },
     );
@@ -1112,6 +1180,7 @@ fn merge_unions_function_tables_without_dropping_either_side() {
         FunctionSignature {
             package: "b.pricing".to_string(),
             return_type: TypeRef::Primitive(PrimitiveType::Int),
+            return_multiplicity: None,
             params: vec![],
         },
     );

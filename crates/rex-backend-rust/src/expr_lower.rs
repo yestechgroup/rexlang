@@ -82,6 +82,17 @@ enum Binding {
         /// Whether the variable's Rust type is `Copy`.
         copy: bool,
     },
+    /// An owned local whose Rust type is a *plain* value while the rex-expr
+    /// scope types it `Option<..>` — a `0..1` function input (`fn_param_type`
+    /// lifts only to-many parameters, but rex-expr's scope keeps the
+    /// `Option`). Every read wraps the local in `Some`, so the lowered code
+    /// has the shape the rest of the lowering expects.
+    Lifted {
+        /// The Rust variable name.
+        var: String,
+        /// Whether the wrapped value's Rust type is `Copy`.
+        copy: bool,
+    },
     /// A lambda parameter. Lowering emits iterator closures, so the
     /// parameter is a reference: `map` lends `&T` (`refs == 1`) while the
     /// `find`/`filter`/`any` predicates lend `&&T` (`refs == 2`, Rust's
@@ -149,6 +160,53 @@ impl<'a> LowerCtx<'a> {
             checker,
             root_scope,
         }
+    }
+
+    /// Builds the lowering context for a free-function body (a sigil-lowered
+    /// Rune function, RUNE-BODIES stage 2): no implicit `self`; `roots` are
+    /// the named scope entries (the function's inputs, alias bindings, the
+    /// output slot for post guards) with their lifted rex-expr types. An
+    /// `Option`-typed root lowers as a [`Binding::Lifted`] local; everything
+    /// else is a plain [`Binding::Local`].
+    pub fn new_function(model: &'a Model, roots: &[(String, Ty)]) -> Self {
+        let mut checker = TypeChecker::new(rex_expr::TypeContext::from_model(model));
+        let mut root_scope = Vec::new();
+        for (name, ty) in roots {
+            checker = checker.with_binding(name.clone(), ty.clone());
+            let var = rust_ident(&snake_case(name));
+            let binding = match ty {
+                Ty::Option(inner) => Binding::Lifted {
+                    var: var.clone(),
+                    copy: is_copy(inner),
+                },
+                _ => Binding::Local {
+                    var: var.clone(),
+                    copy: is_copy(ty),
+                },
+            };
+            root_scope.push((name.clone(), binding));
+        }
+        LowerCtx {
+            model,
+            checker,
+            root_scope,
+        }
+    }
+
+    /// Binds a raw Rust expression text under `name` (the Rune dispatch
+    /// head's enum literal, whose lowered text is the generated enum path):
+    /// the checker types the name, and reads emit the text verbatim.
+    pub fn with_raw_binding(mut self, name: impl Into<String>, ty: Ty, text: String) -> Self {
+        let name = name.into();
+        self.checker = self.checker.with_binding(name.clone(), ty);
+        self.root_scope.push((
+            name,
+            Binding::Local {
+                var: text,
+                copy: true,
+            },
+        ));
+        self
     }
 
     /// The features of the implicit self, nearest class first (mirroring
@@ -498,6 +556,15 @@ impl Lowerer<'_, '_> {
                     format!("{var}.clone()")
                 }
             }
+            Binding::Lifted { var, copy } => {
+                // The Rust local is a plain value; the scope types the name
+                // `Option<..>`, so every read wraps it.
+                if copy {
+                    format!("Some({var})")
+                } else {
+                    format!("Some({var}.clone())")
+                }
+            }
             Binding::ClosureParam { var, copy, refs } => {
                 // Iterator closures lend the element behind `refs` reference
                 // layers; cloning (for non-`Copy` values) forces a shared
@@ -706,10 +773,14 @@ impl Lowerer<'_, '_> {
         })
     }
 
-    /// A bare free-function call (issue #63): the free stub `emit_functions`
-    /// generates, named exactly `rust_ident(&snake_case(name))` and resolved
-    /// against every package's functions in the model. Arguments follow the
+    /// A bare free-function call (issue #63): the emitted free function,
+    /// named exactly `rust_ident(&snake_case(name))` and resolved against
+    /// every package's functions in the model. Arguments follow the
     /// receiver-call shape (L1 literal adaptation via the expected type).
+    /// A callee whose checked Rune body needs the arena (RUNE-BODIES stage
+    /// 2) takes `res: &Resource` first, so the call passes it — every
+    /// lowering context (operation methods, derived accessors) carries
+    /// `res` in scope.
     fn function_call(
         &mut self,
         name: &rex_expr::Spanned<String>,
@@ -723,8 +794,16 @@ impl Lowerer<'_, '_> {
             let arg_ty = self.operand_ty(arg, expected == Ty::long())?;
             lowered_args.push(self.lower(arg, &arg_ty)?);
         }
+        let needs_resource =
+            crate::codegen::rune_body::function_needs_resource(self.ctx.model, &function)
+                .map_err(LowerError::new)?;
         let function_name = rust_ident(&snake_case(&function.name));
-        Ok(format!("{}({})", function_name, lowered_args.join(", ")))
+        let args = lowered_args.join(", ");
+        Ok(match (needs_resource, lowered_args.is_empty()) {
+            (true, true) => format!("{function_name}(res)"),
+            (true, false) => format!("{function_name}(res, {args})"),
+            (false, _) => format!("{function_name}({args})"),
+        })
     }
 
     /// The calendar algebra on `date` receivers (spec R5–R8): the runtime

@@ -41,6 +41,7 @@
 //! [docs/EXPRESSIONS.md]: https://github.com/yestechgroup/rexlang/blob/main/docs/EXPRESSIONS.md
 
 pub mod ast;
+pub mod body;
 pub mod checker;
 pub mod error;
 pub mod lexer;
@@ -48,6 +49,10 @@ pub mod parser;
 pub mod types;
 
 pub use ast::{AlgebraKind, BinOp, Expr, ExprKind, Span, Spanned, UnOp};
+pub use body::{
+    check_body, BodyBinding, BodyDispatch, BodyError, BodyGuard, BodyOutput, BodyStep, GuardPhase,
+    RuneBody,
+};
 pub use checker::{
     is_string_operand, ClassInfo, DomainTypes, FunctionSignature, TypeChecker, TypeContext,
 };

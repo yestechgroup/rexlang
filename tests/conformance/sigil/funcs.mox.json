@@ -184,7 +184,32 @@
             }
           ],
           "bodies": {
-            "rosetta": "func calcRate: <\"Compute the rate of a leg.\">\n\tinputs:\n\t\tnotional number (1..1) <\"The notional amount.\">\n\t\tlegIds string (0..*) <\"The leg identifiers.\">\n\toutput:\n\t\trate number (1..1) <\"The computed rate.\">\n\n\tcondition PositiveNotional:\n\t\tnotional > 0\n\n\tset rate:\n\t\tnotional"
+            "rosetta": "func calcRate: <\"Compute the rate of a leg.\">\n\tinputs:\n\t\tnotional number (1..1) <\"The notional amount.\">\n\t\tlegIds string (0..*) <\"The leg identifiers.\">\n\toutput:\n\t\trate number (1..1) <\"The computed rate.\">\n\n\tcondition PositiveNotional:\n\t\tnotional > 0.0\n\n\tset rate:\n\t\tnotional",
+            "rune": "{\"guards\":[{\"expr\":\"notional > 0.0\",\"name\":\"PositiveNotional\",\"phase\":\"pre\"}],\"steps\":[{\"kind\":\"set\",\"root\":\"rate\",\"expr\":\"notional\"}]}"
+          }
+        },
+        {
+          "name": "tradeIds",
+          "description": "Collect the trade ids of a leg.",
+          "returnType": {
+            "type": "primitive",
+            "value": "string"
+          },
+          "returnMultiplicity": {
+            "lower": 0,
+            "upper": "unbounded"
+          },
+          "params": [
+            {
+              "name": "legId",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              }
+            }
+          ],
+          "bodies": {
+            "rosetta": "func tradeIds: <\"Collect the trade ids of a leg.\">\n\tinputs:\n\t\tlegId string (1..1)\n\toutput:\n\t\tids string (0..*) <\"The trade ids.\">"
           }
         }
       ]

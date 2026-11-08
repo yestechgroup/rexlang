@@ -136,12 +136,28 @@
 //!     signature-only [`Operation`]s under the same additive rules as
 //!     vocabularies (rule 6): `#[serde(default)]` and omitted when empty, so
 //!     artifacts for function-less models are byte-identical to earlier
-//!     output. The one verbatim body target [`Operation::bodies`] may carry
-//!     beyond codegen targets is **`"rosetta"`**: the declaration's complete
-//!     Rune source text, embedded ends-trimmed verbatim (the declaration's
-//!     text without trailing whitespace, like `when` conditions and `cedar`
-//!     policy bodies) — the IR never parses or reformats it, and backends
-//!     never emit it (they skip body targets they do not own).
+//!     output. A function's return cardinality lowers into
+//!     [`Operation::return_multiplicity`] (serialized as `returnMultiplicity`,
+//!     omitted when `None` — the single-valued convention): the same additive
+//!     rules apply, so operations without one stay byte-identical to earlier
+//!     output. The verbatim body targets [`Operation::bodies`] may carry
+//!     beyond codegen targets are **`"rosetta"`** — the declaration's
+//!     complete Rune source text, embedded ends-trimmed verbatim (the
+//!     declaration's text without trailing whitespace, like `when`
+//!     conditions and `cedar` policy bodies) — the IR never parses or
+//!     reformats it, and backends never emit it (they skip body targets
+//!     they do not own) — and **`"rune"`**: the statement body of a
+//!     statement-bearing Rune function, lowered and type-checked by the
+//!     driver at sigil time into one canonical JSON string (the rex-expr
+//!     `RuneBody` shape: guards with `pre`/`post` phases, `alias` bindings,
+//!     `set`/`add` steps; every expression slot an rex-expr program in
+//!     source-text form). The `"rune"` target is attached only when the
+//!     statements translated and type-checked — a function whose statements
+//!     cannot be checked defers with a warning and keeps the verbatim
+//!     `"rosetta"` text alone (the documented generation-time deferral
+//!     contract). rex-ir never depends on rex-expr: the target's value is
+//!     an opaque string to this crate; backends that do not lower Rune
+//!     statements skip it like any target they do not own.
 //!
 //! [rexlang]: https://github.com/anton-makes/rexlang
 
@@ -501,6 +517,11 @@ pub struct Operation {
     pub description: Option<String>,
     /// The resolved return type.
     pub return_type: TypeRef,
+    /// The declared return cardinality; `None` is single-valued. Lowered
+    /// from a Rune `func` output's cardinality (wire contract rule 15);
+    /// domain `Operation`s are always single-valued and never set this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub return_multiplicity: Option<Multiplicity>,
     /// Parameters in declaration order.
     #[serde(default)]
     pub params: Vec<OperationParam>,
@@ -516,6 +537,7 @@ impl Operation {
             name: name.into(),
             description: None,
             return_type,
+            return_multiplicity: None,
             params,
             bodies: BTreeMap::new(),
         }
@@ -1934,6 +1956,91 @@ mod tests {
             plain.to_json().expect("serialize"),
             r#"{"formatVersion":1,"rexVersion":"0.1.0","packages":[{"name":"p","annotations":[],"enums":[],"datatypes":[],"interfaces":[],"classes":[]}]}"#
         );
+    }
+
+    #[test]
+    fn golden_json_with_function_return_multiplicity_pins_the_wire_format() {
+        // Additive (wire-contract rule 15): operations without a return
+        // multiplicity stay byte-identical (see
+        // `an_operation_without_return_multiplicity_stays_byte_identical`);
+        // this golden pins the NEW field — `returnMultiplicity`, lowered
+        // from a Rune output cardinality — which is omitted when `None`.
+        let mut package = Package::new("nz.example.demo");
+        let mut function = Operation::new(
+            "legRates",
+            TypeRef::Primitive(PrimitiveType::Double),
+            vec![OperationParam {
+                name: "legId".to_string(),
+                type_: TypeRef::Primitive(PrimitiveType::String),
+                multiplicity: None,
+            }],
+        );
+        function.return_multiplicity = Some(Multiplicity::MANY);
+        package.functions.push(function);
+        let mut model = Model::new();
+        model.packages.push(package);
+
+        let expected = r#"{
+  "formatVersion": 1,
+  "rexVersion": "0.1.0",
+  "packages": [
+    {
+      "name": "nz.example.demo",
+      "annotations": [],
+      "enums": [],
+      "datatypes": [],
+      "interfaces": [],
+      "classes": [],
+      "functions": [
+        {
+          "name": "legRates",
+          "returnType": {
+            "type": "primitive",
+            "value": "double"
+          },
+          "returnMultiplicity": {
+            "lower": 0,
+            "upper": "unbounded"
+          },
+          "params": [
+            {
+              "name": "legId",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}"#;
+
+        assert_eq!(model.to_json_pretty().expect("serialize"), expected);
+        let parsed = Model::from_json(expected).expect("deserialize golden");
+        assert_eq!(model, parsed);
+    }
+
+    #[test]
+    fn an_operation_without_return_multiplicity_stays_byte_identical() {
+        // The empty case of the return-multiplicity field: an operation
+        // whose return type carries no cardinality never carries the key —
+        // byte-identical to pre-field output (wire-contract rule 5).
+        let mut package = Package::new("p");
+        package.functions.push(Operation::new(
+            "calcRate",
+            TypeRef::Primitive(PrimitiveType::Double),
+            vec![],
+        ));
+        let mut model = Model::new();
+        model.packages.push(package);
+        assert_eq!(
+            model.to_json().expect("serialize"),
+            r#"{"formatVersion":1,"rexVersion":"0.1.0","packages":[{"name":"p","annotations":[],"enums":[],"datatypes":[],"interfaces":[],"classes":[],"functions":[{"name":"calcRate","returnType":{"type":"primitive","value":"double"},"params":[]}]}]}"#
+        );
+        let parsed = Model::from_json(&model.to_json().expect("serialize")).expect("deserialize");
+        assert_eq!(model, parsed);
     }
 
     #[test]

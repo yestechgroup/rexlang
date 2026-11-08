@@ -15,7 +15,7 @@ func priceQuote: <"Compute the price of a quote.">
 		price number (1..1) <"The computed price.">
 
 	condition PositiveNotional:
-		notional > 0
+		notional > 0.0
 
 	set price:
 		notional
