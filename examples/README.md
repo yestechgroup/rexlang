@@ -90,10 +90,13 @@ rexlang artifact check /tmp/support.cmmn.json
 rexlang check examples/pricing.mox
 rexlang ir examples/pricing.mox -o /tmp/pricing.rex.json
 #   -> packages: nz.example.pricing, pricing.model (lowered functions with
-#      verbatim "rosetta" bodies), com.rosetta.model (the builtin). The Rust
-#      backend emits each lowered function as a free todo!() stub — the
-#      Rune text is carried, never translated (docs/RUNE-BODIES.md is the
-#      design for executing it later).
+#      verbatim "rosetta" bodies; priceQuote also carries its checked
+#      "rune" statement body), com.rosetta.model (the builtin). The Rust
+#      backend emits a checked "rune" body as straight-line Rust — the
+#      example's price_quote computes (`price_quote(1000.0, …) == 1000.0`
+#      in the scratch assertions; the PositiveNotional guard panics naming
+#      itself), while statement-less and library functions stay todo!()
+#      stubs (docs/RUNE-BODIES.md).
 
 # canonical formatting (CI gates all of examples/ with --check)
 rexlang fmt examples/org.mox

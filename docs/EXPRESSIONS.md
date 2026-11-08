@@ -179,10 +179,15 @@ exactly one indexed function is within edit distance 2). Each parameter
 expects its declared type mapped by multiplicity — `is_many` → `List(T)`,
 lower bound 0 → `Option(T)`, else `T` — with L1 literal adaptation and the
 R1–R4 argument rules unchanged; there is no R3 auto-propagation, so an
-`Option` argument does not satisfy a plain parameter. The declared return
-type is the call's type; there is no `?.` form (a function has no receiver
-to be optional). Receiver calls (`x.name(...)`) never consult the function
-index — they resolve class operations only.
+`Option` argument does not satisfy a plain parameter. The call's type is
+the declared return type lifted by the function's **return multiplicity**,
+the same mapping as the parameter rule above: `0..*` → `List(T)`, `0..1` →
+`Option(T)`, the single-valued convention (unset, or a required `(1..1)`)
+→ `T` (a sigil `func` output's cardinality lowers into the multiplicity;
+wire contract rule 15, and the Rust backend's emitted signature mirrors
+it). There is no `?.` form (a function has no receiver to be optional).
+Receiver calls (`x.name(...)`) never consult the function index — they
+resolve class operations only.
 
 Unknown features, unknown operations, and unknown names are type errors whose
 diagnostic span points at the offending name token.
@@ -433,6 +438,21 @@ side rides in `Some`), per R3:
 self.citation(res).zip(Some(self.title.clone()))
     .map(|(concat_lhs, concat_rhs)| format!("{concat_lhs}{concat_rhs}"))
 ```
+
+## Rune statement bodies
+
+A sigil-lowered Rune function body (the `"rune"` target, wire contract
+rule 15) is a statement layer above this expression language — not a second
+semantics: every expression slot in it (guards, `alias` bindings,
+`set`/`add` steps) is a rex-expr program, checked and lowered by the same
+checker and lowerings as any `expr` body, so the rules above apply inside
+those slots unchanged. Nothing Rune-specific re-derives overflow, equality,
+`Option`, or division semantics — the carry-over is a pinned contract, not
+a lowering accident. The statement layer itself (guard phases, binding
+scoping, accumulation order, the driver's typechecking and deferral
+contract) is specified in
+[`docs/RUNE-BODIES.md`](RUNE-BODIES.md); the Rust lowering of a checked
+body is pinned in `docs/BACKENDS.md`.
 
 ## Collection algebra
 

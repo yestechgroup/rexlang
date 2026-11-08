@@ -1,10 +1,14 @@
 # Rune body translation — design (RFC)
 
-Status: **planning**. This doc records the design decisions for making
-sigil-lowered Rune function bodies executable; nothing in it is implemented
-yet. Until it lands, the `"rosetta"` body target carries the declaration's
-ends-trimmed verbatim source (wire contract rule 15), `rex-backend-rust`
-emits `todo!()` stubs (#61), and the call surface stays closed (#63).
+Status: **landed** — all three implementation stages shipped. This doc
+records the design decisions for making sigil-lowered Rune function bodies
+executable; the sections below stay as the design record. The `"rosetta"`
+body target still carries the declaration's ends-trimmed verbatim source
+(wire contract rule 15); statement-bearing functions additionally carry the
+driver-checked `"rune"` statement body (sigil mapping rule 8),
+`rex-backend-rust` emits it as straight-line Rust — the `todo!()` stub
+remains only for functions without a `"rune"` target (#61 is closed) — and
+the bare-call surface is open (#63).
 
 The sigil side of this contract lives in the `rex-driver` sigil module docs
 (`crates/rex-driver/src/sigil.rs`, mapping rule 8); the Rust-backend stub
@@ -127,9 +131,24 @@ synthesized `Model`:
 
 ## Per-backend lowering order
 
-1. **rex-backend-rust first**: a lowered `RuneBody` emits straight-line
-   Rust (guards → `assert!`/`expect` shape, aliases → `let`, steps →
-   assignments/`push`), replacing the `todo!()` stub (#61 is the stopgap).
+1. **rex-backend-rust** (landed): a present `"rune"` target emits
+   straight-line Rust — guards → `assert!(expr, "guard '<name>' failed")`
+   (unnamed guards carry the checker's phase-derived slot labels, `unnamed
+   pre guard` / `unnamed post guard`), `alias` bindings → sequential
+   `let`s, `set`/`add` steps → assignment/`push` into the output local. The
+   output local is introduced at its declared default shape — `Vec::new()`
+   for a `(0..*)` output, `None` for `(0..1)`, the Tier-1 scalar default for
+   a required scalar, the arena's default-initialized object
+   (`res.new_<class>()`) for a class-typed output. A body that reaches the
+   arena (a class-typed output, a `->` path step, navigation on a
+   class-typed value in any slot) makes the function take `res: &Resource`
+   as its first parameter, and bare `expr`-body calls pass it. The
+   `todo!()` stub remains **only** for functions without a `"rune"` target
+   (statement-less, driver-deferred, or library functions — library
+   functions never carry one); a present target that fails to decode,
+   re-check, or lower is a hard generate-time error naming the function and
+   the slot — artifact corruption, not deferral, because the driver never
+   attaches an unchecked body.
 2. **rex-backend-jsonschema**: unaffected — functions never enter schemas;
    instances stay class-shaped.
 3. Later backends consume the same statement IR; nobody re-parses the
@@ -141,12 +160,24 @@ synthesized `Model`:
    sigil AST shapes above are the reference), typechecked against the
    extended `DomainTypes`; the driver lowers at sigil time and attaches the
    neutral body beside the verbatim `"rosetta"` one.
+   — landed as `rex_expr::body::RuneBody` plus the `"rune"` wire target
+   (rule 15) and the driver's checked lowering (sigil mapping rule 8:
+   dispatch heads lower as the leading synthetic pre guard; a deferral
+   attaches no target and emits one warning naming the function).
 2. rex-backend-rust emits bodies instead of stubs; the stub remains only
    for functions whose statements could not be checked (the documented
    generation-time deferral contract, mirroring the `.ifml` checker's).
+   — landed as `codegen::rune_body`: the stub only where no `"rune"`
+   target exists; a present-but-invalid target is a generate-time error
+   (the per-backend lowering order above pins the emission shapes).
 3. The call surface (#63): rex-expr resolves `name(...)` against union
    package functions; `.uc` steps and IFML handlers decide their
    subject-free-step question with the typing index in place.
+   — landed as the bare-call surface: rex-expr resolves and types
+   `name(...)` (return multiplicity included — `List`/`Option`/plain,
+   mirroring the parameter mapping) and the Rust backend emits the matching
+   shapes and passes `res` when the callee needs the arena; the `.uc`/IFML
+   subject-free-step adoption is still each surface's call to make.
 
 Each stage keeps the wire format additive: function-less models stay
 byte-identical, and the golden diff of stage 1 is reviewed as a spec

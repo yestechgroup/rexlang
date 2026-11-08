@@ -276,8 +276,11 @@ beside it as the **`"rune"`** target — one canonical JSON string whose
 expression slots are rex-expr programs; a fragment rex-expr cannot type
 defers with a warning and the verbatim text stands alone (the generation-time
 deferral contract). Making the statements executable is the Rune body
-translation design, [`docs/RUNE-BODIES.md`](RUNE-BODIES.md); until the
-backend lowering lands, the Rust backend emits `todo!()` stubs. Functions are
+translation design, [`docs/RUNE-BODIES.md`](RUNE-BODIES.md) — landed: the
+Rust backend emits a checked `"rune"` body as straight-line Rust and keeps
+the `todo!()` stub only for functions without one (statement-less,
+driver-deferred, or library functions); a present-but-invalid `"rune"`
+payload is a generate-time error naming the function. Functions are
 not types: they never join the `.mox`-side resolution namespace (an
 attribute typed by a function stays an error), and builtin
 `com.rosetta.model` functions stay implicit.
