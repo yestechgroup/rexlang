@@ -136,7 +136,10 @@ impl<'a> Unit<'a> {
             .ok_or_else(|| anyhow::anyhow!("class '{name}' not found in model"))
     }
 
-    fn first_enum_literal(&self, enum_name: &str) -> anyhow::Result<&'a rex_ir::EnumLiteral> {
+    pub(crate) fn first_enum_literal(
+        &self,
+        enum_name: &str,
+    ) -> anyhow::Result<&'a rex_ir::EnumLiteral> {
         let enum_def = self
             .enums
             .iter()
@@ -149,7 +152,10 @@ impl<'a> Unit<'a> {
     }
 
     /// The first vendored entry of a vocabulary, used as its default value.
-    fn first_vocabulary_entry(&self, vocabulary_name: &str) -> anyhow::Result<&'a VocabularyEntry> {
+    pub(crate) fn first_vocabulary_entry(
+        &self,
+        vocabulary_name: &str,
+    ) -> anyhow::Result<&'a VocabularyEntry> {
         let vocabulary = self
             .vocabularies
             .iter()
@@ -241,17 +247,22 @@ fn generate_unit(model: &Model) -> anyhow::Result<String> {
 /// wire contract rule 15) as free functions in the flattened module.
 ///
 /// Body policy: a `rust` body emits verbatim (the class-operation
-/// convention); a `rosetta`-only or body-less function — today every
-/// lowered Rune function — emits a `todo!()` stub named after the
-/// function, because the verbatim Rune text is never emitted as code (wire
-/// contract rule 15). Bare `expr`-body calls (issue #63) lower to exactly
-/// these stubs. An `expr` body *on a function itself* is a generate-time
-/// error: function bodies are the Rune statement IR's job
-/// (docs/RUNE-BODIES.md), not the neutral expression language's. Function
-/// names must stay unique after snake_case (two packages declaring the
-/// same name, or `fooBar`/`foo_bar`, collide in the flattened module) —
-/// generation bails naming both declarations. Emits nothing for
-/// function-less models, keeping their generated code byte-identical.
+/// convention); a checked `rune` body emits real straight-line Rust
+/// ([`rune_body::emit_rune_body`], RUNE-BODIES stage 2 — guards assert,
+/// aliases bind, steps accumulate into the output local, and an
+/// arena-reaching body takes `res: &Resource` first); anything else — a
+/// function the driver deferred (no `"rune"` target) or a statement-less
+/// declaration — emits a `todo!()` stub named after the function, because
+/// the verbatim Rune text is never emitted as code (wire contract rule
+/// 15). Bare `expr`-body calls (issue #63) lower to exactly these emitted
+/// functions, passing `res` when the callee's body needs the arena. An
+/// `expr` body *on a function itself* is a generate-time error: function
+/// bodies are the Rune statement IR's job (docs/RUNE-BODIES.md), not the
+/// neutral expression language's. Function names must stay unique after
+/// snake_case (two packages declaring the same name, or
+/// `fooBar`/`foo_bar`, collide in the flattened module) — generation bails
+/// naming both declarations. Emits nothing for function-less models,
+/// keeping their generated code byte-identical.
 fn emit_functions(e: &mut String, unit: &Unit<'_>) -> anyhow::Result<()> {
     let mut seen: BTreeMap<String, String> = BTreeMap::new();
     for package in &unit.model.packages {
@@ -307,20 +318,40 @@ fn emit_functions(e: &mut String, unit: &Unit<'_>) -> anyhow::Result<()> {
                      pub fn {snake}({params}) -> {ret} {{\n{body}\n}}\n",
                     name = function.name,
                 )),
-                None => {
-                    let mut doc = format!("/// Package function `{}`", function.name);
-                    if let Some(description) = &function.description {
-                        doc.push_str(&format!(": {description}"));
+                None => match rune_body::emit_rune_body(unit, function)? {
+                    Some(EmittedBody {
+                        needs_resource,
+                        code,
+                    }) => {
+                        let params = if needs_resource {
+                            format!("res: &Resource, {params}")
+                        } else {
+                            params
+                        };
+                        e.push_str(&format!(
+                            "/// Package function `{name}` (lowered from the checked `rune` \
+                             body, docs/RUNE-BODIES.md).\n\
+                             pub fn {snake}({params}) -> {ret} {{\n    {code}\n}}\n",
+                            name = function.name,
+                        ));
                     }
-                    e.push_str(&format!(
-                        "{doc}\n\
-                         /// Stub: the verbatim `rosetta` body stays in the IR (wire\n\
-                         /// contract rule 15); nothing executes Rune bodies yet.\n\
-                         pub fn {snake}({params}) -> {ret} {{\n\
-                         \x20   todo!()\n\
-                         }}\n",
-                    ));
-                }
+                    None => {
+                        let mut doc = format!("/// Package function `{}`", function.name);
+                        if let Some(description) = &function.description {
+                            doc.push_str(&format!(": {description}"));
+                        }
+                        e.push_str(&format!(
+                            "{doc}\n\
+                             /// Stub: no checked `rune` body is attached (the driver deferred\n\
+                             /// it, or the declaration carries no statements); the verbatim\n\
+                             /// `rosetta` body stays in the IR (wire contract rule 15) and is\n\
+                             /// never emitted as code.\n\
+                             pub fn {snake}({params}) -> {ret} {{\n\
+                             \x20   todo!()\n\
+                             }}\n",
+                        ));
+                    }
+                },
             }
         }
     }
@@ -356,6 +387,7 @@ fn fn_return_type(type_: &TypeRef, multiplicity: Option<&Multiplicity>) -> anyho
 mod classes;
 mod ops;
 mod resource;
+pub(crate) mod rune_body;
 #[cfg(test)]
 mod tests;
 mod types;
@@ -365,6 +397,7 @@ mod values;
 use classes::emit_struct;
 use ops::{lower_derived_expr_body, lower_op_expr_body};
 use resource::emit_resource;
+use rune_body::EmittedBody;
 use types::default_expr;
 use types::op_type;
 use values::{emit_datatypes, emit_enums, emit_header, emit_new_key_types, emit_vocabularies};

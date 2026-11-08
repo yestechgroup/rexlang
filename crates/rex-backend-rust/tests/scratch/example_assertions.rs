@@ -693,16 +693,38 @@ mod example_assertions {
     }
 
     // ------------------------------------------------------------------
-    // pricing — the sigil showcase: sigil-lowered package functions are
-    // emitted as free `todo!()` stubs, and a class op's bare `expr`-body
-    // call lowers to exactly such a stub (`withSpread` → `with_spread`
-    // calling `spread`, the scalar-number library function).
+    // pricing — the sigil showcase: `priceQuote` carries a checked `rune`
+    // body (RUNE-BODIES stage 2) and emits real straight-line Rust, a class
+    // op's bare `expr`-body call lowers to the emitted free function
+    // (`withSpread` → `with_spread` calling `spread`, the scalar-number
+    // library function), and a library function still stubs (no `rune`
+    // body exists for one).
     // ------------------------------------------------------------------
     mod pricing_example {
         use crate::pricing::*;
 
         #[test]
-        fn with_spread_lowers_the_bare_call_to_the_emitted_stub() {
+        fn price_quote_computes_through_its_rune_body() {
+            // Compile-time proof of the emitted signature: the `(0..*)`
+            // input arrives as `Vec<..>`, the opaque zonedDateTime datatype
+            // as its newtype, and the required scalar output stays plain.
+            let price_quote: fn(f64, Vec<InstrumentId>, zonedDateTime) -> f64 =
+                crate::pricing::price_quote;
+            // `condition PositiveNotional: notional > 0.0` passes and
+            // `set price: notional` assigns the output: the function
+            // computes end to end.
+            assert_eq!(price_quote(1000.0, vec![], zonedDateTime::default()), 1000.0);
+            assert_eq!(price_quote(0.25, vec![], zonedDateTime::default()), 0.25);
+        }
+
+        #[test]
+        #[should_panic(expected = "guard 'PositiveNotional' failed")]
+        fn price_quote_guard_panics_naming_the_guard() {
+            crate::pricing::price_quote(-1.0, vec![], zonedDateTime::default());
+        }
+
+        #[test]
+        fn with_spread_lowers_the_bare_call_to_the_emitted_function() {
             // Compile-time proof of the lowered signatures: the op method
             // carries the resource + its scalar `double` parameter, and the
             // library function is a plain scalar free function.
@@ -710,9 +732,10 @@ mod example_assertions {
             let spread: fn(f64) -> f64 = crate::pricing::spread;
             let _ = (with_spread, spread);
 
-            // The method's body is the stub call: read the scratch crate's
-            // own generated source and pin the lowered body text (the bare
-            // `spread(base)` call, snake_case name, typed parameter id).
+            // The method's body is the free-function call: read the scratch
+            // crate's own generated source and pin the lowered body text
+            // (the bare `spread(base)` call, snake_case name, typed
+            // parameter id).
             let source = std::fs::read_to_string(concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/src/lib.rs"
@@ -729,16 +752,16 @@ mod example_assertions {
             assert!(
                 body.contains("spread(base)"),
                 "the `with_spread` body must lower the bare call to the emitted \
-                 `spread` stub:\n{body}"
+                 `spread` function:\n{body}"
             );
         }
 
         #[test]
         #[should_panic(expected = "not yet implemented")]
         fn calling_with_spread_panics_through_the_todo_stub() {
-            // The stub contract, reachable through the op's `expr` body: the
-            // method lowers the bare `spread(base)` call to the free stub,
-            // whose body panics as `todo!()`.
+            // The stub contract for library functions: `spread` carries no
+            // `rune` body (a `LibraryFunction` has no statements), so the
+            // op's bare call panics through the stub.
             let mut res = Resource::default();
             let quote = res.new_quote();
             res.quote(quote).unwrap().with_spread(&res, 0.05);

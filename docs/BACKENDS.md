@@ -68,17 +68,34 @@ minimal `{"formatVersion": N}` bytes.
   descriptions) stay **byte-identical** to older output. Unknown fields are
   ignored on read, never denied.
 - **Functions and unknown body targets.** `Package.functions` carries
-  sigil-lowered Rune functions as signature-only `Operation`s whose only
-  body is the ends-trimmed verbatim `"rosetta"` target (wire contract
-  rule 15). Backends skip body targets they do not own — the `rosetta`
-  text is never emitted as code. The Rust backend emits each lowered
-  function as a free function in the flattened module: a `rust` body
-  verbatim, anything else a `todo!()` stub named after the function. A
-  function's `return_multiplicity` shapes the stub's return type the same
-  way a parameter's multiplicity shapes its parameters: `0..*` → `Vec<T>`,
+  sigil-lowered Rune functions as signature-only `Operation`s whose bodies
+  are the ends-trimmed verbatim `"rosetta"` target plus — for functions
+  whose statements the driver translated and checked — the canonical
+  `"rune"` statement IR (wire contract rule 15, RUNE-BODIES). Backends
+  skip body targets they do not own — the `rosetta` text is never emitted
+  as code. The Rust backend emits each lowered function as a free function
+  in the flattened module: a `rust` body verbatim; a checked `rune` body
+  as straight-line Rust (guards → `assert!(expr, "guard '<name>' failed")`
+  with the phase label for unnamed guards, aliases → sequential `let`s,
+  `set`/`add` steps → assignment/`push` into the output local, which is
+  introduced at its declared default shape — `Vec::new()`, `None`, the
+  Tier-1 scalar default, or the arena's default-initialized object for a
+  class-typed output; a `0..1` output therefore returns `Some`/`None`
+  exactly as the checked expressions produce them, never an invented
+  wrap); anything else — a deferred or statement-less function — a
+  `todo!()` stub named after the function. A function's
+  `return_multiplicity` shapes the emitted return type the same way a
+  parameter's multiplicity shapes its parameters: `0..*` → `Vec<T>`,
   `0..1` → `Option<T>`, the single-valued convention → `T` (rex-expr types
-  calls to the function identically). Bare
-  `expr`-body calls (issue #63) lower to exactly those emitted stubs.
+  calls to the function identically). Bare `expr`-body calls (issue #63)
+  lower to exactly these emitted functions, passing `res: &Resource` when
+  the callee's body reaches the arena (a class-typed output, a `->` path
+  step, or navigation on a class-typed value) — such functions take the
+  arena as their first parameter. A `"rune"` payload that decodes but does
+  not parse, type-check, or lower is a generate-time error naming the
+  function and the slot (the `expr`-body bail convention): the driver
+  never attaches an unchecked body, so a present-but-invalid target is
+  artifact corruption, not deferral.
 - **Stable feature ids.** `Feature::id` equals its 0-based declaration index
   at publication time and is frozen for wire formats; backends key on it.
 - **Golden byte-identity.** The goldens under `tests/conformance/` are the

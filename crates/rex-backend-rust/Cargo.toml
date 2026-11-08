@@ -14,8 +14,8 @@ rex-backend-common = { workspace = true }
 rex-ir = { workspace = true }
 rex-expr = { workspace = true }
 anyhow = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
 rex-driver = { workspace = true }
-serde_json = { workspace = true }

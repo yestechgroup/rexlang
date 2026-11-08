@@ -562,12 +562,15 @@ fn sigil_funcs_model() -> Model {
     compilation.model.expect("funcs.mox lowered to the Core IR")
 }
 
-/// Sigil-lowered functions generate free `todo!()` stubs named after the
+/// Sigil-lowered functions generate free functions named after the
 /// declarations, with the backend's multiplicity conventions in their
-/// signatures — and the verbatim `rosetta` body text is never emitted as
-/// code (wire contract rule 15).
+/// signatures. A function with a checked `rune` body (RUNE-BODIES stage 2)
+/// emits real straight-line Rust; a function without one — the library
+/// function and the statement-less `tradeIds` — still emits a `todo!()`
+/// stub. The verbatim `rosetta` body text is never emitted as code (wire
+/// contract rule 15).
 #[test]
-fn sigil_functions_generate_todo_stubs_without_rosetta_text() {
+fn sigil_functions_emit_bodies_or_stubs_by_body_target() {
     let generated = rex_backend_rust::generate(&sigil_funcs_model()).expect("generate");
     let code = &generated["models.rs"];
     assert!(
@@ -576,23 +579,38 @@ fn sigil_functions_generate_todo_stubs_without_rosetta_text() {
     );
     assert!(
         code.contains("pub fn calc_rate(notional: f64, leg_ids: Vec<String>) -> f64"),
-        "func stub with mixed multiplicities:\n{code}"
+        "func with mixed multiplicities:\n{code}"
     );
     assert!(
         code.contains("pub fn trade_ids(leg_id: String) -> Vec<String>"),
         "func stub with a (0..*) output — the return multiplicity lifts the\n\
          return type:\n{code}"
     );
+    // calcRate carries the checked `rune` body: the guard asserts and the
+    // step assigns the output local, which the function returns.
+    assert!(
+        code.contains("assert!((notional > 0f64), \"guard 'PositiveNotional' failed\");"),
+        "the pre guard emits as an assert naming the guard:\n{code}"
+    );
+    assert!(
+        code.contains("let mut rate: f64 = 0.0;"),
+        "the scalar output local is introduced with the declared default\n\
+         shape:\n{code}"
+    );
+    assert!(
+        code.contains("    rate = notional;\n    rate\n}"),
+        "the step assigns and the function returns the output local:\n{code}"
+    );
     assert_eq!(
         code.matches("\n    todo!()").count(),
-        3,
-        "one stub body per lowered function (the header note's todo!() mention\n\
-         doesn't count):\n{code}"
+        2,
+        "one stub body per body-less function — `anyActive` and `tradeIds` (the\n\
+          header note's todo!() mention doesn't count):\n{code}"
     );
     // The verbatim Rune text stays in the IR, never in generated code.
     assert!(!code.contains("set rate:"), "{code}");
     assert!(!code.contains("library function anyActive"), "{code}");
-    // The header documents the stub contract (only when functions exist).
+    // The header documents the function contract (only when functions exist).
     assert!(code.contains("sigil-lowered package functions"), "{code}");
 }
 
@@ -824,4 +842,459 @@ fn run_sigil_funcs_scratch_crate() {
 #[test]
 fn generated_sigil_function_stubs_compile_and_panic_as_todo() {
     run_sigil_funcs_scratch_crate();
+}
+
+// ------------------------------------------------------------------
+// RUNE-BODIES stage 2: a checked `rune` body emits straight-line Rust
+// (docs/RUNE-BODIES.md per-backend lowering order, item 1). The fixtures
+// below hand-build IR models carrying the canonical `"rune"` payload
+// exactly as the driver stores it (rex-expr's `RuneBody`, serde_json'd),
+// mirroring `tests/conformance/sigil/funcs.mox.json`.
+// ------------------------------------------------------------------
+
+/// Serializes a hand-built `RuneBody` into the `"rune"` payload shape the
+/// driver stores (canonical serde_json, key order = declaration order).
+fn rune_payload(body: &rex_expr::body::RuneBody) -> String {
+    serde_json::to_string(body).expect("the rune body serializes")
+}
+
+fn rune_function(
+    name: &str,
+    ret: TypeRef,
+    ret_multiplicity: Option<Multiplicity>,
+    params: Vec<OperationParam>,
+    body: &rex_expr::body::RuneBody,
+) -> Operation {
+    let mut operation = Operation::new(name, ret, params);
+    operation.return_multiplicity = ret_multiplicity;
+    operation
+        .bodies
+        .insert("rune".to_string(), rune_payload(body));
+    operation
+}
+
+fn fn_param(name: &str, type_: TypeRef, multiplicity: Option<Multiplicity>) -> OperationParam {
+    OperationParam {
+        name: name.to_string(),
+        type_,
+        multiplicity,
+    }
+}
+
+fn class_qname(package: &str, name: &str) -> TypeRef {
+    TypeRef::Class {
+        package: package.to_string(),
+        name: name.to_string(),
+    }
+}
+
+/// A package with a `Quote` class (required `symbol` string, required
+/// `notional` double, many `legs` string attributes) plus the given
+/// package functions — the pricing-shaped fixture for body emission.
+fn quote_model(functions: Vec<Operation>) -> Model {
+    let mut model = Model::new();
+    let mut package = Package::new("sigil::example");
+    package.classes.push(ClassDef::new(
+        "Quote",
+        vec![],
+        vec![
+            Feature::new(
+                "symbol",
+                FeatureKind::Attribute,
+                TypeRef::Primitive(PrimitiveType::String),
+                Multiplicity::REQUIRED,
+            ),
+            Feature::new(
+                "notional",
+                FeatureKind::Attribute,
+                TypeRef::Primitive(PrimitiveType::Double),
+                Multiplicity::REQUIRED,
+            ),
+            Feature::new(
+                "legs",
+                FeatureKind::Attribute,
+                TypeRef::Primitive(PrimitiveType::String),
+                Multiplicity::MANY,
+            ),
+        ],
+    ));
+    package.functions = functions;
+    model.packages.push(package);
+    model
+}
+
+/// A corrupt `"rune"` payload is a generate-time ERROR naming the function —
+/// the crate's bail convention (the duplicate-name and expr-on-function
+/// precedents); a body the driver deferred never carries the target at all,
+/// so a present-but-undecodable payload is artifact corruption, not a
+/// deferral.
+#[test]
+fn a_corrupt_rune_payload_is_a_generate_error_naming_the_function() {
+    let mut model = quote_model(vec![Operation::new(
+        "broken",
+        TypeRef::Primitive(PrimitiveType::Double),
+        vec![],
+    )]);
+    model.packages[0].functions[0]
+        .bodies
+        .insert("rune".to_string(), "{not json".to_string());
+    let error = rex_backend_rust::generate(&model).expect_err("corrupt rune payload");
+    let message = error.to_string();
+    assert!(message.contains("function 'broken'"), "{message}");
+    assert!(message.contains("\"rune\""), "{message}");
+}
+
+/// `(0..*)` output + `add` steps: the output local starts at the empty vec
+/// and each step pushes, in declaration order; the function returns it.
+#[test]
+fn a_many_output_accumulates_add_steps_into_a_vec() {
+    let mut body = rex_expr::body::RuneBody::default();
+    body.steps = vec![
+        rex_expr::body::BodyStep::Add {
+            root: "ids".to_string(),
+            path: vec![],
+            expr: "\"a\"".to_string(),
+        },
+        rex_expr::body::BodyStep::Add {
+            root: "ids".to_string(),
+            path: vec![],
+            expr: "\"b\"".to_string(),
+        },
+    ];
+    let model = quote_model(vec![rune_function(
+        "legRates",
+        TypeRef::Primitive(PrimitiveType::String),
+        Some(Multiplicity::MANY),
+        vec![],
+        &body,
+    )]);
+    let code = &rex_backend_rust::generate(&model).expect("generate")["models.rs"];
+    let body_text = code
+        .split("pub fn leg_rates")
+        .nth(1)
+        .expect("the generated function")
+        .split("pub fn ")
+        .next()
+        .expect("the function body block");
+    assert!(
+        body_text.contains("let mut ids: Vec<String> = Vec::new();"),
+        "the Vec output local starts empty:\n{body_text}"
+    );
+    assert!(
+        body_text.contains("ids.push(\"a\".to_string());")
+            && body_text.contains("ids.push(\"b\".to_string());"),
+        "each add step pushes in order:\n{body_text}"
+    );
+    assert!(
+        body_text.contains("\n    ids\n}"),
+        "returns the vec:\n{body_text}"
+    );
+}
+
+/// `(0..1)` output: the output local starts at `None` and a `set` assigns it
+/// directly — the checker requires the assigned expression to carry the
+/// `Option` lift itself (the slot type keeps its lift), so no implicit
+/// `Some` wrap is invented.
+#[test]
+fn an_optional_output_local_starts_at_none_and_set_assigns_directly() {
+    let mut body = rex_expr::body::RuneBody::default();
+    body.steps = vec![rex_expr::body::BodyStep::Set {
+        root: "head".to_string(),
+        path: vec![],
+        expr: "legIds.first()".to_string(),
+    }];
+    let model = quote_model(vec![rune_function(
+        "firstLeg",
+        TypeRef::Primitive(PrimitiveType::String),
+        Some(Multiplicity::OPTIONAL),
+        vec![fn_param(
+            "legIds",
+            TypeRef::Primitive(PrimitiveType::String),
+            Some(Multiplicity::MANY),
+        )],
+        &body,
+    )]);
+    let code = &rex_backend_rust::generate(&model).expect("generate")["models.rs"];
+    let body_text = code
+        .split("pub fn first_leg")
+        .nth(1)
+        .expect("the generated function")
+        .split("pub fn ")
+        .next()
+        .expect("the function body block");
+    assert!(
+        code.contains("pub fn first_leg(leg_ids: Vec<String>) -> Option<String>"),
+        "the 0..1 return lifts to Option:\n{code}"
+    );
+    assert!(
+        body_text.contains("let mut head: Option<String> = None;"),
+        "the Option output local starts at None:\n{body_text}"
+    );
+    assert!(
+        body_text.contains("head = "),
+        "the set assigns the Option-typed expression directly:\n{body_text}"
+    );
+}
+
+/// Unnamed guards get the phase-derived fallback label (the checker's slot
+/// label), post guards emit after the steps but before the return, aliases
+/// become sequential `let`s, and repeated `set`s overwrite (last wins).
+#[test]
+fn guards_bindings_and_repeated_sets_emit_in_declaration_order() {
+    let mut body = rex_expr::body::RuneBody::default();
+    body.guards = vec![
+        rex_expr::body::BodyGuard {
+            expr: "notional > 0.0".to_string(),
+            name: None,
+            phase: rex_expr::body::GuardPhase::Pre,
+        },
+        rex_expr::body::BodyGuard {
+            expr: "rate > 0.0".to_string(),
+            name: Some("Filled".to_string()),
+            phase: rex_expr::body::GuardPhase::Post,
+        },
+    ];
+    body.bindings = vec![
+        rex_expr::body::BodyBinding {
+            name: "base".to_string(),
+            expr: "notional".to_string(),
+        },
+        rex_expr::body::BodyBinding {
+            name: "doubled".to_string(),
+            expr: "base * 2.0".to_string(),
+        },
+    ];
+    body.steps = vec![
+        rex_expr::body::BodyStep::Set {
+            root: "rate".to_string(),
+            path: vec![],
+            expr: "notional".to_string(),
+        },
+        rex_expr::body::BodyStep::Set {
+            root: "rate".to_string(),
+            path: vec![],
+            expr: "doubled".to_string(),
+        },
+    ];
+    let model = quote_model(vec![rune_function(
+        "scaled",
+        TypeRef::Primitive(PrimitiveType::Double),
+        None,
+        vec![fn_param(
+            "notional",
+            TypeRef::Primitive(PrimitiveType::Double),
+            None,
+        )],
+        &body,
+    )]);
+    let code = &rex_backend_rust::generate(&model).expect("generate")["models.rs"];
+    let expected = "\
+pub fn scaled(notional: f64) -> f64 {
+    assert!((notional > 0f64), \"guard 'unnamed pre guard' failed\");
+    let base = notional;
+    let doubled = (base * 2f64);
+    let mut rate: f64 = 0.0;
+    rate = notional;
+    rate = doubled;
+    assert!((rate > 0f64), \"guard 'Filled' failed\");
+    rate
+}";
+    assert!(
+        code.contains(expected),
+        "the exact emission shape (guards → assert, aliases → let, steps →\n\
+         assign, post guard after the steps, last set wins):\n{code}"
+    );
+}
+
+/// The dispatch head's synthetic pre guard lowers the bare enum-literal name
+/// to the generated enum path (`RateType::FIXED`).
+#[test]
+fn the_dispatch_head_literal_lowers_to_the_enum_path() {
+    let mut model = quote_model(vec![]);
+    let package = &mut model.packages[0];
+    package.enums.push(EnumDef::new(
+        "RateType",
+        vec![
+            EnumLiteral::new("FIXED", None, 0),
+            EnumLiteral::new("FLOATING", None, 1),
+        ],
+    ));
+    let mut body = rex_expr::body::RuneBody::default();
+    body.guards = vec![rex_expr::body::BodyGuard {
+        expr: "status == FIXED".to_string(),
+        name: Some("FIXED".to_string()),
+        phase: rex_expr::body::GuardPhase::Pre,
+    }];
+    body.steps = vec![rex_expr::body::BodyStep::Set {
+        root: "rate".to_string(),
+        path: vec![],
+        expr: "1.0".to_string(),
+    }];
+    package.functions.push(rune_function(
+        "fixedRate",
+        TypeRef::Primitive(PrimitiveType::Double),
+        None,
+        vec![fn_param(
+            "status",
+            TypeRef::Enum {
+                package: "sigil::example".to_string(),
+                name: "RateType".to_string(),
+            },
+            None,
+        )],
+        &body,
+    ));
+    let code = &rex_backend_rust::generate(&model).expect("generate")["models.rs"];
+    assert!(
+        code.contains("assert!((status == RateType::FIXED), \"guard 'FIXED' failed\");"),
+        "the dispatch literal lowers to the generated enum path:\n{code}"
+    );
+}
+
+/// A step path navigates features from the output root through the arena:
+/// a class-typed output makes the function take `res`, the output local is
+/// the arena's default-initialized object, attribute `set`s assign the
+/// resolved field, attribute `add`s push, and the function returns the id.
+#[test]
+fn a_step_path_mutates_through_the_arena_and_the_function_takes_res() {
+    let mut body = rex_expr::body::RuneBody::default();
+    body.guards = vec![rex_expr::body::BodyGuard {
+        expr: "legIds.size() > 0".to_string(),
+        name: None,
+        phase: rex_expr::body::GuardPhase::Pre,
+    }];
+    body.steps = vec![
+        rex_expr::body::BodyStep::Set {
+            root: "q".to_string(),
+            path: vec!["symbol".to_string()],
+            expr: "\"AAPL\"".to_string(),
+        },
+        rex_expr::body::BodyStep::Set {
+            root: "q".to_string(),
+            path: vec!["notional".to_string()],
+            expr: "10.0".to_string(),
+        },
+        rex_expr::body::BodyStep::Add {
+            root: "q".to_string(),
+            path: vec!["legs".to_string()],
+            expr: "\"leg-1\"".to_string(),
+        },
+    ];
+    let model = quote_model(vec![rune_function(
+        "makeQuote",
+        class_qname("sigil::example", "Quote"),
+        None,
+        vec![fn_param(
+            "legIds",
+            TypeRef::Primitive(PrimitiveType::String),
+            Some(Multiplicity::MANY),
+        )],
+        &body,
+    )]);
+    let code = &rex_backend_rust::generate(&model).expect("generate")["models.rs"];
+    let expected = "\
+pub fn make_quote(res: &Resource, leg_ids: Vec<String>) -> QuoteId {
+    assert!((leg_ids.clone().len() as i32 > 0i32), \"guard 'unnamed pre guard' failed\");
+    let mut q = res.new_quote();
+    res.quote_mut(q).expect(\"dangling `Quote` id\").symbol = \"AAPL\".to_string();
+    res.quote_mut(q).expect(\"dangling `Quote` id\").notional = 10f64;
+    res.quote_mut(q).expect(\"dangling `Quote` id\").legs.push(\"leg-1\".to_string());
+    q
+}";
+    assert!(
+        code.contains(expected),
+        "arena-path emission shape:\n{code}"
+    );
+}
+
+/// Navigation inside a slot expression (a guard reading a class-typed
+/// input's feature) makes the function take `res` and lowers through the
+/// arena lookup, exactly like the `expr`-body lowering.
+#[test]
+fn feature_access_in_slot_expressions_takes_res_and_reads_through_the_arena() {
+    let mut body = rex_expr::body::RuneBody::default();
+    body.guards = vec![rex_expr::body::BodyGuard {
+        expr: "q.notional > 0.0".to_string(),
+        name: Some("Positive".to_string()),
+        phase: rex_expr::body::GuardPhase::Pre,
+    }];
+    body.steps = vec![rex_expr::body::BodyStep::Set {
+        root: "price".to_string(),
+        path: vec![],
+        expr: "q.notional".to_string(),
+    }];
+    let model = quote_model(vec![rune_function(
+        "priceOf",
+        TypeRef::Primitive(PrimitiveType::Double),
+        None,
+        vec![fn_param("q", class_qname("sigil::example", "Quote"), None)],
+        &body,
+    )]);
+    let code = &rex_backend_rust::generate(&model).expect("generate")["models.rs"];
+    assert!(
+        code.contains("pub fn price_of(res: &Resource, q: QuoteId) -> f64"),
+        "navigation makes the function take res:\n{code}"
+    );
+    let lookup = "res.quote(q).map(|o| o.notional).expect(\"dangling `Quote` id\")";
+    assert!(
+        code.matches(lookup).count() == 2,
+        "the guard and the step both read the feature through the arena:\n{code}"
+    );
+}
+
+/// An `expr`-body op calling a res-taking rune-bodied function lowers the
+/// bare call with the arena as the first argument, so the generated code
+/// compiles and the call surface stays closed but callable (issue #63 is
+/// the typing side, not this text shape).
+#[test]
+fn an_expr_call_to_a_res_taking_function_passes_the_arena() {
+    let mut body = rex_expr::body::RuneBody::default();
+    body.steps = vec![rex_expr::body::BodyStep::Set {
+        root: "q".to_string(),
+        path: vec!["symbol".to_string()],
+        expr: "\"AAPL\"".to_string(),
+    }];
+    let make_quote = rune_function(
+        "makeQuote",
+        class_qname("sigil::example", "Quote"),
+        None,
+        vec![],
+        &body,
+    );
+    let op = Operation::new("newQuote", class_qname("sigil::example", "Quote"), vec![])
+        .with_body("expr", "makeQuote()");
+    let mut model = quote_model(vec![make_quote]);
+    model.packages[0].classes[0].operations.push(op.clone());
+    let code = &rex_backend_rust::generate(&model).expect("generate")["models.rs"];
+    assert!(
+        code.contains("make_quote(res)"),
+        "the bare call passes the arena to the res-taking function:\n{code}"
+    );
+    // A non-res function keeps the bare argument list (the pinned stub-call
+    // convention).
+    let plain = quote_model(vec![rune_function(
+        "answer",
+        TypeRef::Primitive(PrimitiveType::Int),
+        None,
+        vec![],
+        &{
+            let mut body = rex_expr::body::RuneBody::default();
+            body.steps = vec![rex_expr::body::BodyStep::Set {
+                root: "n".to_string(),
+                path: vec![],
+                expr: "42".to_string(),
+            }];
+            body
+        },
+    )]);
+    let code = &rex_backend_rust::generate(&plain).expect("generate")["models.rs"];
+    assert!(
+        !code.contains("answer(res"),
+        "an arena-free body takes no res parameter:\n{code}"
+    );
+    assert!(
+        code.contains("pub fn answer() -> i32"),
+        "signature unchanged:\n{code}"
+    );
+    let _ = op;
 }
