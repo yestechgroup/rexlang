@@ -1026,13 +1026,14 @@ mod tests {
 
     #[test]
     fn rejected_constructs_name_the_capability_and_the_construct() {
-        let rejected: [(&str, &str); 8] = [
+        let rejected: [(&str, &str); 9] = [
             ("let x = 1; x", "`let`"),
             ("if internal { 1 } else { 2 }", "`if`"),
             ("internal?.flag == true", "`?.`"),
             ("internal ?: true", "`?:`"),
             ("internal == null", "`null`"),
             ("internal.filter(x => x)", "collection algebra `filter`"),
+            ("score(amount)", "a free-function call"),
             ("x => x", "a lambda"),
             ("[1, 2]", "list literals"),
         ];
