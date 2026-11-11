@@ -2,8 +2,6 @@
 //!
 //! [ariadne]: https://crates.io/crates/ariadne
 
-use std::collections::BTreeSet;
-
 use ariadne::{Config, IndexType, Label, Report, ReportKind, Source};
 
 /// Byte-offset span into the source text.
@@ -36,8 +34,9 @@ pub enum DiagnosticCode {
     /// `unknown capability '<capability>' on …` — the capability name
     /// carries no resolution to a declared actor capability (issue
     /// rexlang#128's J3, resolved at compile time). `suggestion` is the
-    /// [`did_you_mean`] closest declared name, when one is close enough to
-    /// be a plausible typo — a quick fix can rename the reference to it.
+    /// [`did_you_mean_adaptive`](rex_diagnostics::did_you_mean_adaptive)
+    /// closest declared name, when one is close enough to be a plausible
+    /// typo — a quick fix can rename the reference to it.
     UnknownCapability {
         /// The capability name as written in the source.
         capability: String,
@@ -71,59 +70,6 @@ impl DiagnosticCode {
             DiagnosticCode::GrantedCapabilityUncarried { .. } => "grantedCapabilityUncarried",
         }
     }
-}
-
-/// Suggests the closest declared name for an unknown one, or `None` when
-/// nothing is close enough to be a plausible typo — the did-you-mean
-/// helper behind the resolver-standard diagnostics (issue rexlang#128).
-///
-/// Resolution order:
-///
-/// 1. a case-variant match (ASCII-case-insensitive equality) wins
-///    outright — the author spelled the right name in the wrong case;
-/// 2. otherwise the candidate with the smallest Levenshtein distance
-///    (over `char`s) wins, provided the distance is within budget —
-///    `max(2, name_chars / 3)` edits;
-/// 3. ties break alphabetically (candidates arrive in `BTreeSet` order
-///    and only a strictly smaller distance replaces the best).
-///
-/// An empty candidate set yields `None` by construction.
-pub(crate) fn did_you_mean(name: &str, declared: &BTreeSet<String>) -> Option<String> {
-    if let Some(case_variant) = declared
-        .iter()
-        .find(|candidate| candidate.eq_ignore_ascii_case(name))
-    {
-        return Some(case_variant.clone());
-    }
-    let budget = std::cmp::max(2, name.chars().count() / 3);
-    let mut best: Option<(usize, &String)> = None;
-    for candidate in declared {
-        let distance = levenshtein(name, candidate);
-        if distance <= budget && best.is_none_or(|(best, _)| distance < best) {
-            best = Some((distance, candidate));
-        }
-    }
-    best.map(|(_, candidate)| candidate.clone())
-}
-
-/// The Levenshtein edit distance between two strings, over `char`s
-/// (one insertion, deletion, or substitution per edit; no transposition).
-fn levenshtein(a: &str, b: &str) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
-    let mut previous: Vec<usize> = (0..=b.len()).collect();
-    for (i, a_char) in a.iter().enumerate() {
-        let mut current = vec![i + 1];
-        for (j, b_char) in b.iter().enumerate() {
-            let cost = usize::from(a_char != b_char);
-            current.push(usize::min(
-                usize::min(previous[j + 1] + 1, current[j] + 1),
-                previous[j] + cost,
-            ));
-        }
-        previous = current;
-    }
-    previous[b.len()]
 }
 
 /// The `attributeWithClassType` payload, serialized with camelCase keys and
@@ -309,82 +255,9 @@ pub fn render(path: &str, source: &str, diagnostics: &[Diagnostic]) -> String {
 mod tests {
     use super::*;
 
-    fn declared(names: &[&str]) -> BTreeSet<String> {
-        names.iter().map(|name| name.to_string()).collect()
-    }
-
-    // --- did_you_mean ---
-
-    #[test]
-    fn case_variant_match_wins() {
-        assert_eq!(
-            did_you_mean(
-                "approvepayrun",
-                &declared(&["TerminateWorker", "ApprovePayRun"])
-            ),
-            Some("ApprovePayRun".to_string())
-        );
-        assert_eq!(
-            did_you_mean("APPROVEPAYRUN", &declared(&["ApprovePayRun"])),
-            Some("ApprovePayRun".to_string())
-        );
-    }
-
-    #[test]
-    fn close_typo_suggests_the_nearest_declared_name() {
-        assert_eq!(
-            did_you_mean(
-                "ApprovePayRunn",
-                &declared(&["TerminateWorker", "ApprovePayRun"])
-            ),
-            Some("ApprovePayRun".to_string())
-        );
-    }
-
-    #[test]
-    fn distant_name_suggests_nothing() {
-        assert_eq!(
-            did_you_mean("GrantReward", &declared(&["TerminateWorker"])),
-            None,
-            "distance 9 over a 4-edit budget: no plausible typo"
-        );
-    }
-
-    #[test]
-    fn empty_declared_set_suggests_nothing() {
-        assert_eq!(did_you_mean("Anything", &declared(&[])), None);
-    }
-
-    #[test]
-    fn ties_break_alphabetically() {
-        assert_eq!(
-            did_you_mean("ab", &declared(&["ad", "ac"])),
-            Some("ac".to_string()),
-            "both one edit away; the alphabetically-first candidate wins"
-        );
-    }
-
-    #[test]
-    fn short_names_get_a_two_edit_budget() {
-        assert_eq!(
-            did_you_mean("helo", &declared(&["hello"])),
-            Some("hello".to_string()),
-            "four chars: budget max(2, 1) = 2; one deletion is within it"
-        );
-        assert_eq!(did_you_mean("wxyz", &declared(&["hello"])), None);
-    }
-
-    #[test]
-    fn long_names_scale_their_budget() {
-        let declared = declared(&["ApprovePayRunStatusTransition"]);
-        // 11 substitutions — beyond every budget.
-        assert_eq!(did_you_mean("TerminateWorkerActions", &declared), None);
-        // 3 edits on a 27-char name: budget max(2, 9) = 9 — within it.
-        assert_eq!(
-            did_you_mean("ApprovePayRunStatusTransitioX", &declared),
-            Some("ApprovePayRunStatusTransition".to_string())
-        );
-    }
+    // The did_you_mean policy tests live with the hoisted function
+    // (rex-diagnostics' `suggest` suite, rexlang#166); this module pins
+    // only the DiagnosticCode payloads below.
 
     // --- DiagnosticCode serialization ---
 

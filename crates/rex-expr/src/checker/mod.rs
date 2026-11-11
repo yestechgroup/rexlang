@@ -45,8 +45,8 @@ pub use context::{ClassInfo, DomainTypes, FunctionSignature};
 pub type TypeContext = DomainTypes;
 
 pub(crate) use shared::{
-    const_of, did_you_mean, feature_in_class, feature_result_ty, is_float_literal,
-    param_result_ty, parse_date_text, result_ty, return_result_ty,
+    const_of, feature_in_class, feature_result_ty, is_float_literal, param_result_ty,
+    parse_date_text, result_ty, return_result_ty,
 };
 
 /// A type-checker over a [`TypeContext`], with an initial variable scope.

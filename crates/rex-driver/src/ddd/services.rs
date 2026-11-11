@@ -156,7 +156,7 @@ pub(crate) fn rule_17_validate_decision_links(
         if declared.contains(name) {
             continue;
         }
-        let suggestion = crate::diagnostic::did_you_mean(name, &declared);
+        let suggestion = rex_diagnostics::did_you_mean_adaptive(name, &declared);
         let help = match &suggestion {
             Some(suggestion) => format!("did you mean '{suggestion}'?"),
             None if declared.is_empty() => {
