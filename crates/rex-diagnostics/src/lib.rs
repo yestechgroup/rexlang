@@ -40,6 +40,7 @@ pub mod ifml_check;
 pub mod ifml_lints;
 pub mod ifml_resolver;
 pub mod integrity;
+pub mod suggest;
 
 pub use dmn::*;
 pub use driver::*;
@@ -47,6 +48,7 @@ pub use ifml_check::*;
 pub use ifml_lints::*;
 pub use ifml_resolver::*;
 pub use integrity::*;
+pub use suggest::*;
 
 /// How severe a diagnostic is — each registry entry's severity class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

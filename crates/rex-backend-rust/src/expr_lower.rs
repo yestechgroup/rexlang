@@ -32,7 +32,9 @@
 //! (strings, datatypes, lists, optional strings) clones, which keeps the
 //! emitted text correct in every context at the cost of a few allocations.
 
-use rex_expr::{is_string_operand, BinOp, Expr, ExprKind, NamedKind, Ty, TypeChecker, UnOp};
+use rex_expr::{
+    is_int_literal, is_string_operand, BinOp, Expr, ExprKind, NamedKind, Ty, TypeChecker, UnOp,
+};
 use rex_ir::{Feature, FeatureKind, Model, Operation, OperationParam, PrimitiveType, TypeRef};
 
 use crate::naming::{rust_ident, snake_case};
@@ -1029,18 +1031,5 @@ fn strip_string_literal(expr: &Expr, code: String) -> String {
     match &expr.kind {
         ExprKind::String(text) => format!("{text:?}"),
         _ => code,
-    }
-}
-
-/// Whether an expression is an integer *literal* (optionally negated): the
-/// only value L1 ever re-types. Mirrors the checker's private predicate.
-fn is_int_literal(expr: &Expr) -> bool {
-    match &expr.kind {
-        ExprKind::Int(_) => true,
-        ExprKind::Unary {
-            op: UnOp::Neg,
-            expr: inner,
-        } => matches!(inner.kind, ExprKind::Int(_)),
-        _ => false,
     }
 }

@@ -1,5 +1,5 @@
 //! Shared leaf helpers: calendar arithmetic, literal predicates,
-//! constant folding, resolved-type mapping, and suggestions.
+//! constant folding, and resolved-type mapping.
 
 use std::collections::BTreeSet;
 
@@ -70,8 +70,11 @@ pub(crate) fn days_from_civil(y: i32, m: u32, d: u32) -> Option<i32> {
 }
 
 /// Whether an expression is an integer *literal* (optionally negated): the
-/// only value L1 ever re-types.
-pub(crate) fn is_int_literal(expr: &Expr) -> bool {
+/// only value L1 ever re-types. Public so backends branch on exactly the
+/// predicate the checker used (the Rust lowering re-types the same L1
+/// sites: arithmetic/relational right operands, long equality, call
+/// arguments, list elements, `?:` defaults).
+pub fn is_int_literal(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Int(_) => true,
         ExprKind::Unary {
@@ -207,38 +210,4 @@ pub(crate) fn return_result_ty(signature: &FunctionSignature) -> Ty {
         &signature.return_type,
         signature.return_multiplicity.as_ref(),
     )
-}
-
-/// The single indexed function name within Levenshtein distance 2 of
-/// `requested` (case-sensitive), for the unknown-function hint; `None`
-/// when zero or several names qualify.
-pub(crate) fn did_you_mean<'a, I>(requested: &str, indexed: I) -> Option<String>
-where
-    I: IntoIterator<Item = &'a String>,
-{
-    let mut candidates = indexed
-        .into_iter()
-        .filter(|name| levenshtein(requested, name) <= 2)
-        .map(|name| name.as_str());
-    let first = candidates.next()?;
-    candidates.next().is_none().then(|| first.to_string())
-}
-
-/// The Levenshtein edit distance (plain two-row DP; function names are
-/// short, so no bandwidth optimization).
-pub(crate) fn levenshtein(a: &str, b: &str) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
-    let mut previous: Vec<usize> = (0..=b.len()).collect();
-    for i in 1..=a.len() {
-        let mut current = vec![i];
-        for j in 1..=b.len() {
-            let substitution = previous[j - 1] + usize::from(a[i - 1] != b[j - 1]);
-            let deletion = previous[j] + 1;
-            let insertion = current[j - 1] + 1;
-            current.push(substitution.min(deletion).min(insertion));
-        }
-        previous = current;
-    }
-    previous[b.len()]
 }
