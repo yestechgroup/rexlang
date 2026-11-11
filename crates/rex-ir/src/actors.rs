@@ -11,9 +11,9 @@ use crate::IrError;
 /// The artifact format version this crate writes and accepts for standalone
 /// actor-policy artifacts ([`ActorModel`]).
 ///
-/// Versioned independently of [`FORMAT_VERSION`](crate::FORMAT_VERSION) (the
-/// domain-model marker); bump whenever the actor wire format changes
-/// incompatibly; see the [wire format contract](crate#wire-format-contract).
+/// Bump whenever the actor wire format changes incompatibly; this marker is
+/// versioned independently of every other artifact marker — see the
+/// [version-marker inventory](crate#version-markers).
 pub const ACTOR_MODEL_FORMAT_VERSION: u32 = 1;
 
 /// An `actors` declaration: a named authorization model (Cedar spirit)

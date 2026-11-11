@@ -76,11 +76,9 @@ use crate::{IrError, Multiplicity, OperationParam, TypeRef};
 /// The artifact format version this crate writes and accepts for DDD design
 /// artifacts ([`DddModel`]).
 ///
-/// Versioned independently of [`crate::FORMAT_VERSION`] (the domain-model
-/// marker), [`crate::ACTOR_MODEL_FORMAT_VERSION`] (the policy marker), and
-/// [`crate::ifml::IFML_MODEL_FORMAT_VERSION`] (the interaction marker),
-/// [`crate::cmmn::CMMN_MODEL_FORMAT_VERSION`] (the case marker); bump
-/// whenever the DDD wire format changes incompatibly.
+/// Bump whenever the DDD wire format changes incompatibly; this marker is
+/// versioned independently of every other artifact marker — see the
+/// [version-marker inventory](crate#version-markers).
 pub const DDD_MODEL_FORMAT_VERSION: u32 = 1;
 
 /// The root of a DDD design artifact: one application with its modules of

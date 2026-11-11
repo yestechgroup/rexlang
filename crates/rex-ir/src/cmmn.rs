@@ -84,14 +84,9 @@ use crate::{IrError, Multiplicity, TypeRef};
 /// The artifact format version this crate writes and accepts for
 /// case-management artifacts ([`CmmnModel`]).
 ///
-/// Versioned independently of [`crate::FORMAT_VERSION`] (the domain-model
-/// marker), [`crate::ACTOR_MODEL_FORMAT_VERSION`] (the policy marker),
-/// [`crate::ddd::DDD_MODEL_FORMAT_VERSION`] (the design marker),
-/// [`crate::events::EVENT_MODEL_FORMAT_VERSION`] (the event marker),
-/// [`crate::deploy::DEPLOY_MODEL_FORMAT_VERSION`] (the deployment marker),
-/// [`crate::ifml::IFML_MODEL_FORMAT_VERSION`] (the interaction marker), and
-/// [`crate::usecases::USE_CASE_MODEL_FORMAT_VERSION`] (the use-case marker);
-/// bump whenever the case wire format changes incompatibly.
+/// Bump whenever the case wire format changes incompatibly; this marker is
+/// versioned independently of every other artifact marker — see the
+/// [version-marker inventory](crate#version-markers).
 pub const CMMN_MODEL_FORMAT_VERSION: u32 = 1;
 
 /// The root of a case-management artifact: the declared cases, each with

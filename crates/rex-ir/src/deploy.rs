@@ -63,13 +63,9 @@ use crate::IrError;
 /// The artifact format version this crate writes and accepts for
 /// deployment artifacts ([`DeployModel`]).
 ///
-/// Versioned independently of [`crate::FORMAT_VERSION`] (the domain-model
-/// marker), [`crate::ACTOR_MODEL_FORMAT_VERSION`] (the policy marker),
-/// [`crate::ddd::DDD_MODEL_FORMAT_VERSION`] (the design marker),
-/// [`crate::events::EVENT_MODEL_FORMAT_VERSION`] (the event marker), and
-/// [`crate::ifml::IFML_MODEL_FORMAT_VERSION`] (the interaction marker),
-/// [`crate::cmmn::CMMN_MODEL_FORMAT_VERSION`] (the case marker); bump
-/// whenever the deployment wire format changes incompatibly.
+/// Bump whenever the deployment wire format changes incompatibly; this
+/// marker is versioned independently of every other artifact marker — see
+/// the [version-marker inventory](crate#version-markers).
 pub const DEPLOY_MODEL_FORMAT_VERSION: u32 = 1;
 
 /// The root of a deployment artifact: the declared applications, the

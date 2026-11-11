@@ -77,12 +77,9 @@ use crate::{IrError, TypeRef};
 /// The artifact format version this crate writes and accepts for
 /// event-contract artifacts ([`EventModel`]).
 ///
-/// Versioned independently of [`crate::FORMAT_VERSION`] (the domain-model
-/// marker), [`crate::ACTOR_MODEL_FORMAT_VERSION`] (the policy marker),
-/// [`crate::ddd::DDD_MODEL_FORMAT_VERSION`] (the design marker), and
-/// [`crate::ifml::IFML_MODEL_FORMAT_VERSION`] (the interaction marker),
-/// [`crate::cmmn::CMMN_MODEL_FORMAT_VERSION`] (the case marker); bump
-/// whenever the event wire format changes incompatibly.
+/// Bump whenever the event wire format changes incompatibly; this marker is
+/// versioned independently of every other artifact marker — see the
+/// [version-marker inventory](crate#version-markers).
 pub const EVENT_MODEL_FORMAT_VERSION: u32 = 1;
 
 /// The root of an event-contract artifact: the declared events, the channels
