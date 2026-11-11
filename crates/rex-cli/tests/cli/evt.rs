@@ -49,96 +49,8 @@ channel orders {
 }
 "#;
 
-#[test]
-fn check_succeeds_on_evt_pair() {
-    let _ = write_source("evt-domain.mox", EVT_DOMAIN);
-    let contract = write_source("good.evt", GOOD_EVT);
-    let output = rexlang()
-        .args(["check", contract.to_str().unwrap()])
-        .output()
-        .expect("run rexlang check");
-    assert!(
-        output.status.success(),
-        "stderr: {:?}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        format!("OK {}\n", contract.display())
-    );
-    assert!(String::from_utf8_lossy(&output.stderr).is_empty());
-}
-
-#[test]
-fn check_fails_on_broken_evt_file_with_evt_path_in_output() {
-    let _ = write_source("evt-domain.mox", EVT_DOMAIN);
-    let contract = write_source("broken.evt", BROKEN_EVT);
-    let output = rexlang()
-        .args(["check", contract.to_str().unwrap()])
-        .output()
-        .expect("run rexlang check");
-    assert_eq!(output.status.code(), Some(1));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("unknown type 'Mystery'"),
-        "stderr was: {stderr}"
-    );
-    assert!(
-        stderr.contains("unknown event 'OrderDeleted' on channel 'orders'"),
-        "stderr was: {stderr}"
-    );
-    assert!(
-        stderr.contains("broken.evt"),
-        "the contract file path must name the report: {stderr}"
-    );
-}
-
-#[test]
-fn missing_evt_import_file_is_a_clean_error() {
-    let contract = write_source(
-        "dangling.evt",
-        "import \"missing-domain.mox\"\n\nevent Ping {}\n",
-    );
-    let output = rexlang()
-        .args(["check", contract.to_str().unwrap()])
-        .output()
-        .expect("run rexlang check");
-    assert_eq!(output.status.code(), Some(1));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.starts_with("error:"),
-        "clean clap-style error, no panic: {stderr}"
-    );
-    assert!(
-        stderr.contains("missing-domain.mox"),
-        "the import path must be named: {stderr}"
-    );
-    assert!(!stderr.contains("panicked"), "must not panic: {stderr}");
-}
-
-#[test]
-fn ir_evt_file_writes_event_model_artifact() {
-    let _ = write_source("evt-domain.mox", EVT_DOMAIN);
-    let contract = write_source("good.evt", GOOD_EVT);
-    let out = scratch_dir().join("good.evt.json");
-    let output = rexlang()
-        .args([
-            "ir",
-            contract.to_str().unwrap(),
-            "-o",
-            out.to_str().unwrap(),
-        ])
-        .output()
-        .expect("run rexlang ir");
-    assert!(
-        output.status.success(),
-        "stderr: {:?}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(String::from_utf8_lossy(&output.stdout).is_empty());
-    let json = std::fs::read_to_string(&out).expect("read event IR output");
-    let event_model =
-        rex_ir::events::EventModel::from_json(&json).expect("file is EventModel JSON");
+fn verify_event_artifact(json: &str) {
+    let event_model = rex_ir::events::EventModel::from_json(json).expect("file is EventModel JSON");
     assert_eq!(
         event_model.format_version,
         rex_ir::events::EVENT_MODEL_FORMAT_VERSION
@@ -149,33 +61,70 @@ fn ir_evt_file_writes_event_model_artifact() {
     assert_eq!(event_model.subscriptions.len(), 1);
 }
 
+fn evt() -> SurfaceCase {
+    SurfaceCase {
+        prereqs: &[("evt-domain.mox", EVT_DOMAIN)],
+        good_name: "good.evt",
+        good_source: GOOD_EVT,
+        canonical_fixture: None,
+        assert_stderr_empty: true,
+        broken_name: "broken.evt",
+        broken_source: BROKEN_EVT,
+        broken_fragments: &[
+            ("unknown type 'Mystery'", "stderr was: "),
+            (
+                "unknown event 'OrderDeleted' on channel 'orders'",
+                "stderr was: ",
+            ),
+        ],
+        broken_path_fragment: "broken.evt",
+        broken_path_noun: "contract file",
+        dangling: Some((
+            "dangling.evt",
+            "import \"missing-domain.mox\"\n\nevent Ping {}\n",
+        )),
+        artifact: Some(ArtifactCase {
+            out_name: "good.evt.json",
+            read_message: "read event IR output",
+            verify: verify_event_artifact,
+        }),
+        fmt: Some(FmtCase {
+            messy: Some("import  \"evt-domain.mox\"\n\n\nevent   OrderPlaced  version  \"1.0.0\"  { orderId : String ; }\n\n\n"),
+            messy_name: "fmt_evt.evt",
+            write_prereqs: false,
+            prefix: Some((
+                "import \"evt-domain.mox\"\n\nevent OrderPlaced version \"1.0.0\" {\n    orderId: String;\n",
+                "canonical contract layout: ",
+            )),
+            suffix: None,
+            pins_stderr_on_first_fmt: true,
+            read_message: "read formatted contract file",
+            fixpoint: FixpointAssert::StdoutEmpty("fmt output must be a fixpoint: "),
+        }),
+    }
+}
+
+#[test]
+fn check_succeeds_on_evt_pair() {
+    check_succeeds(&evt(), InputSource::ScratchGood);
+}
+
+#[test]
+fn check_fails_on_broken_evt_file_with_evt_path_in_output() {
+    check_fails_on_broken(&evt());
+}
+
+#[test]
+fn missing_evt_import_file_is_a_clean_error() {
+    missing_import_file_is_a_clean_error(&evt());
+}
+
+#[test]
+fn ir_evt_file_writes_event_model_artifact() {
+    ir_writes_artifact(&evt(), InputSource::ScratchGood);
+}
+
 #[test]
 fn fmt_evt_files_rewrites_in_place_and_check_then_passes() {
-    let messy = "import  \"evt-domain.mox\"\n\n\nevent   OrderPlaced  version  \"1.0.0\"  { orderId : String ; }\n\n\n";
-    let path = write_source("fmt_evt.evt", messy);
-    let output = rexlang()
-        .args(["fmt", path.to_str().unwrap()])
-        .output()
-        .expect("run rexlang fmt");
-    assert!(
-        output.status.success(),
-        "stderr: {:?}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let formatted = std::fs::read_to_string(&path).expect("read formatted contract file");
-    assert!(
-        formatted.starts_with("import \"evt-domain.mox\"\n\nevent OrderPlaced version \"1.0.0\" {\n    orderId: String;\n"),
-        "canonical contract layout: {formatted:?}"
-    );
-
-    let check = rexlang()
-        .args(["fmt", "--check", path.to_str().unwrap()])
-        .output()
-        .expect("run rexlang fmt --check");
-    assert!(
-        check.status.success(),
-        "fmt output must be a fixpoint: {:?}",
-        String::from_utf8_lossy(&check.stdout)
-    );
-    assert!(String::from_utf8_lossy(&check.stdout).is_empty());
+    fmt_rewrites_in_place_and_check_then_passes(&evt());
 }

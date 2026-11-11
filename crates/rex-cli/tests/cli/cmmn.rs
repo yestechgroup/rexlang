@@ -34,85 +34,8 @@ case Loan {
 }
 "#;
 
-#[test]
-fn check_succeeds_on_cmmn_conformance_fixture() {
-    let path = workspace_root().join("tests/conformance/cmmn/lending.cmmn");
-    let output = rexlang()
-        .args(["check", path.to_str().unwrap()])
-        .output()
-        .expect("run rexlang check");
-    assert!(
-        output.status.success(),
-        "stderr: {:?}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        format!("OK {}\n", path.display())
-    );
-    assert!(String::from_utf8_lossy(&output.stderr).is_empty());
-}
-
-#[test]
-fn check_fails_on_broken_cmmn_file_with_cmmn_path_in_output() {
-    let _ = write_source("cmmn-domain.mox", CMMN_DOMAIN);
-    let cmmn = write_source("broken.cmmn", BROKEN_CMMN);
-    let output = rexlang()
-        .args(["check", cmmn.to_str().unwrap()])
-        .output()
-        .expect("run rexlang check");
-    assert_eq!(output.status.code(), Some(1));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("unknown transition 'explode' on case-file item 'borrower' in case 'Loan'"),
-        "stderr was: {stderr}"
-    );
-    assert!(
-        stderr.contains("broken.cmmn"),
-        "the case file path must name the report: {stderr}"
-    );
-}
-
-#[test]
-fn missing_cmmn_import_file_is_a_clean_error() {
-    let cmmn = write_source(
-        "dangling.cmmn",
-        "import \"missing-domain.mox\"\n\ncase C {}\n",
-    );
-    let output = rexlang()
-        .args(["check", cmmn.to_str().unwrap()])
-        .output()
-        .expect("run rexlang check");
-    assert_eq!(output.status.code(), Some(1));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.starts_with("error:"),
-        "clean clap-style error, no panic: {stderr}"
-    );
-    assert!(
-        stderr.contains("missing-domain.mox"),
-        "the import path must be named: {stderr}"
-    );
-    assert!(!stderr.contains("panicked"), "must not panic: {stderr}");
-}
-
-#[test]
-fn ir_cmmn_file_writes_case_model_artifact() {
-    let _ = write_source("cmmn-domain.mox", CMMN_DOMAIN);
-    let cmmn = write_source("good.cmmn", GOOD_CMMN);
-    let out = scratch_dir().join("good.cmmn.json");
-    let output = rexlang()
-        .args(["ir", cmmn.to_str().unwrap(), "-o", out.to_str().unwrap()])
-        .output()
-        .expect("run rexlang ir");
-    assert!(
-        output.status.success(),
-        "stderr: {:?}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(String::from_utf8_lossy(&output.stdout).is_empty());
-    let json = std::fs::read_to_string(&out).expect("read case IR output");
-    let case_model = rex_ir::cmmn::CmmnModel::from_json(&json).expect("file is CmmnModel JSON");
+fn verify_case_artifact(json: &str) {
+    let case_model = rex_ir::cmmn::CmmnModel::from_json(json).expect("file is CmmnModel JSON");
     assert_eq!(
         case_model.format_version,
         rex_ir::cmmn::CMMN_MODEL_FORMAT_VERSION
@@ -122,36 +45,67 @@ fn ir_cmmn_file_writes_case_model_artifact() {
     assert_eq!(case_model.cases[0].plan_items.len(), 2);
 }
 
+fn cmmn() -> SurfaceCase {
+    SurfaceCase {
+        prereqs: &[("cmmn-domain.mox", CMMN_DOMAIN)],
+        good_name: "good.cmmn",
+        good_source: GOOD_CMMN,
+        canonical_fixture: Some("tests/conformance/cmmn/lending.cmmn"),
+        assert_stderr_empty: true,
+        broken_name: "broken.cmmn",
+        broken_source: BROKEN_CMMN,
+        broken_fragments: &[(
+            "unknown transition 'explode' on case-file item 'borrower' in case 'Loan'",
+            "stderr was: ",
+        )],
+        broken_path_fragment: "broken.cmmn",
+        broken_path_noun: "case file",
+        dangling: Some((
+            "dangling.cmmn",
+            "import \"missing-domain.mox\"\n\ncase C {}\n",
+        )),
+        artifact: Some(ArtifactCase {
+            out_name: "good.cmmn.json",
+            read_message: "read case IR output",
+            verify: verify_case_artifact,
+        }),
+        fmt: Some(FmtCase {
+            messy: Some("import  \"cmmn-domain.mox\"\n\n\ncase   Loan { roles { role  analyst ; } task Verify { performer:  analyst } }\n\n\n"),
+            messy_name: "fmt_cmmn.cmmn",
+            write_prereqs: true,
+            prefix: Some((
+                "import \"cmmn-domain.mox\"\n\ncase Loan {\n    roles {\n        role analyst;\n    }\n",
+                "canonical case layout: ",
+            )),
+            suffix: None,
+            pins_stderr_on_first_fmt: true,
+            read_message: "read formatted case file",
+            fixpoint: FixpointAssert::ContentEq("formatting must be a fixpoint; stderr: "),
+        }),
+    }
+}
+
+#[test]
+fn check_succeeds_on_cmmn_conformance_fixture() {
+    check_succeeds(&cmmn(), InputSource::CanonicalFixture);
+}
+
+#[test]
+fn check_fails_on_broken_cmmn_file_with_cmmn_path_in_output() {
+    check_fails_on_broken(&cmmn());
+}
+
+#[test]
+fn missing_cmmn_import_file_is_a_clean_error() {
+    missing_import_file_is_a_clean_error(&cmmn());
+}
+
+#[test]
+fn ir_cmmn_file_writes_case_model_artifact() {
+    ir_writes_artifact(&cmmn(), InputSource::ScratchGood);
+}
+
 #[test]
 fn fmt_cmmn_files_rewrites_in_place_and_check_then_passes() {
-    let _ = write_source("cmmn-domain.mox", CMMN_DOMAIN);
-    let messy = "import  \"cmmn-domain.mox\"\n\n\ncase   Loan { roles { role  analyst ; } task Verify { performer:  analyst } }\n\n\n";
-    let path = write_source("fmt_cmmn.cmmn", messy);
-    let output = rexlang()
-        .args(["fmt", path.to_str().unwrap()])
-        .output()
-        .expect("run rexlang fmt");
-    assert!(
-        output.status.success(),
-        "stderr: {:?}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let formatted = std::fs::read_to_string(&path).expect("read formatted case file");
-    assert!(
-        formatted.starts_with(
-            "import \"cmmn-domain.mox\"\n\ncase Loan {\n    roles {\n        role analyst;\n    }\n"
-        ),
-        "canonical case layout: {formatted:?}"
-    );
-
-    let check = rexlang()
-        .args(["fmt", "--check", path.to_str().unwrap()])
-        .output()
-        .expect("run rexlang fmt --check");
-    assert!(
-        check.status.success(),
-        "formatting must be a fixpoint; stderr: {:?}",
-        String::from_utf8_lossy(&check.stderr)
-    );
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), formatted);
+    fmt_rewrites_in_place_and_check_then_passes(&cmmn());
 }
