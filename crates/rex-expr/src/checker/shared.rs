@@ -70,8 +70,11 @@ pub(crate) fn days_from_civil(y: i32, m: u32, d: u32) -> Option<i32> {
 }
 
 /// Whether an expression is an integer *literal* (optionally negated): the
-/// only value L1 ever re-types.
-pub(crate) fn is_int_literal(expr: &Expr) -> bool {
+/// only value L1 ever re-types. Public so backends branch on exactly the
+/// predicate the checker used (the Rust lowering re-types the same L1
+/// sites: arithmetic/relational right operands, long equality, call
+/// arguments, list elements, `?:` defaults).
+pub fn is_int_literal(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Int(_) => true,
         ExprKind::Unary {
