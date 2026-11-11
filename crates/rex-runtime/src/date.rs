@@ -10,9 +10,10 @@
 //! the day to the target month's length (R8: Jan 31 + 1 month = Feb 28/29).
 //!
 //! Serialization is ISO-8601 `YYYY-MM-DD` ([`Display`]); parsing is strict
-//! (`FromStr`) — this is what generated instance loaders use. There are no
-//! external dependencies and no time-of-day, no timezone, and no clock:
-//! expressions stay pure (the "as at date D" queries take dates as values).
+//! (`FromStr`) — this is what generated instance loaders use. There is no
+//! time-of-day, no timezone, and no clock: expressions stay pure (the "as
+//! at date D" queries take dates as values). The only dependency is
+//! [`rex_dates`] (the shared civil-date core, rexlang#169).
 
 use std::fmt;
 use std::str::FromStr;
