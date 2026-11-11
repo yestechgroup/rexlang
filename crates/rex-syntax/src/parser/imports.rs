@@ -5,14 +5,16 @@
 use crate::lexer::Token;
 
 use super::*;
-/// An `import "path"` declaration of an `.actor` file. The path is a string
-/// literal with the standard escapes.
-pub(crate) fn import_decl<'src>(
-) -> impl Parser<'src, Tokens<'src>, ImportDecl, MoxExtra<'src>> + Clone {
+/// An `import "path"` declaration without an `as` clause (`.actor`,
+/// `.evt`, `.deploy`). The path is a string literal with the standard
+/// escapes.
+pub(crate) fn import_decl<'src>() -> impl Parser<'src, Tokens<'src>, Import, MoxExtra<'src>> + Clone
+{
     kw(Token::Import)
         .ignore_then(string_lit())
-        .map_with(|path, e| ImportDecl {
+        .map_with(|path, e| Import {
             path,
+            alias: None,
             span: e.span(),
         })
 }

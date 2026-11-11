@@ -9,21 +9,9 @@ use super::*;
 #[derive(Debug, Clone, PartialEq)]
 pub struct CmmnFile {
     /// The `import` declarations in source order.
-    pub imports: Vec<CmmnImport>,
+    pub imports: Vec<Import>,
     /// Declared cases, in source order.
     pub cases: Vec<CmmnCase>,
-}
-
-/// An `import "<path>" (as <name>)?` declaration of a `.cmmn` file: a
-/// dependency on another source, optionally namespaced under an alias.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CmmnImport {
-    /// The imported path (the unescaped string literal payload).
-    pub path: String,
-    /// The alias from the `as` clause, when present.
-    pub alias: Option<String>,
-    /// Span of the whole declaration, `import` keyword included.
-    pub span: Span,
 }
 
 /// A `case <name> { ... }` declaration: one case definition — its roles,

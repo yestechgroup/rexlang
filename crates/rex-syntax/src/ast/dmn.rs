@@ -11,7 +11,7 @@ use super::*;
 #[derive(Debug, Clone, PartialEq)]
 pub struct DmnFile {
     /// The `import` declarations in source order.
-    pub imports: Vec<ImportDecl>,
+    pub imports: Vec<Import>,
     /// The `decision_model` declaration, when one was recovered.
     pub model: Option<DmnDecisionModel>,
 }

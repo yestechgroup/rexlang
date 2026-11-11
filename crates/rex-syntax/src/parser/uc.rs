@@ -20,7 +20,7 @@ pub(crate) fn uc_keyword<'src>(
 /// the `as` keyword matched: a missing alias name is a reported error.
 /// Without `as` nothing else is consumed (the next word may be a usecase).
 pub(crate) fn uc_import_decl<'src>(
-) -> impl Parser<'src, Tokens<'src>, UcImport, MoxExtra<'src>> + Clone {
+) -> impl Parser<'src, Tokens<'src>, Import, MoxExtra<'src>> + Clone {
     kw(Token::Import)
         .ignore_then(string_lit())
         .then(
@@ -37,7 +37,7 @@ pub(crate) fn uc_import_decl<'src>(
             if matches!(&alias, Some(Some(None))) {
                 emitter.emit(Rich::custom(span, "expected a name after `as`"));
             }
-            UcImport {
+            Import {
                 path,
                 alias: match alias {
                     Some(Some(Some(Some(alias)))) => Some(alias.text),
@@ -566,7 +566,7 @@ pub(crate) fn junk_uc_file<'src>() -> impl Parser<'src, Tokens<'src>, (), MoxExt
 /// One top-level item of a `.uc` file.
 #[derive(Clone)]
 pub(crate) enum UcFileItem {
-    Import(UcImport),
+    Import(Import),
     UseCase(Box<UcDecl>),
     Junk,
 }

@@ -8,7 +8,7 @@ use super::*;
 /// One top-level item of an `.evt` file.
 #[derive(Clone)]
 pub(crate) enum EvtFileItem {
-    Import(ImportDecl),
+    Import(Import),
     Event(EventDecl),
     Channel(ChannelDecl),
     Subscription(SubscriptionDecl),

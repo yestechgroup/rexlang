@@ -17,7 +17,7 @@ pub(crate) fn cmmn_keyword<'src>(
 /// missing alias name is a reported error. Without `as` nothing else is
 /// consumed (the next word may begin a case).
 pub(crate) fn cmmn_import_decl<'src>(
-) -> impl Parser<'src, Tokens<'src>, CmmnImport, MoxExtra<'src>> + Clone {
+) -> impl Parser<'src, Tokens<'src>, Import, MoxExtra<'src>> + Clone {
     kw(Token::Import)
         .ignore_then(string_lit())
         .then(
@@ -30,7 +30,7 @@ pub(crate) fn cmmn_import_decl<'src>(
             if matches!(&alias, Some(Some(None))) {
                 emitter.emit(Rich::custom(span, "expected a name after `as`"));
             }
-            CmmnImport {
+            Import {
                 path,
                 alias: match alias {
                     Some(Some(Some(Some(alias)))) => Some(alias.text),
@@ -621,7 +621,7 @@ pub(crate) fn junk_cmmn_file<'src>() -> impl Parser<'src, Tokens<'src>, (), MoxE
 /// One top-level item of a `.cmmn` file.
 #[derive(Clone)]
 pub(crate) enum CmmnFileItemKind {
-    Import(CmmnImport),
+    Import(Import),
     Case(Box<CmmnCase>),
     Junk,
 }

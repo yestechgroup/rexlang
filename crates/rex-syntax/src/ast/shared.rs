@@ -331,12 +331,17 @@ pub struct NeverBothDecl {
     /// Span of the whole constraint.
     pub span: Span,
 }
-/// An `import "path"` declaration of an `.actor` file: a dependency on
-/// another source, resolved by the driver.
+/// One `import "<path>" (as <alias>)?` declaration shared by every
+/// surface: a dependency on another source, resolved by the driver.
+/// `alias` is `Some` only for the surfaces whose grammar has an `as`
+/// clause (`.uc`/`.cmmn`); the alias-less surfaces (`.actor`, `.ddd`,
+/// `.evt`, `.deploy`, `.dmn`) set `None`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ImportDecl {
+pub struct Import {
     /// The imported path (the unescaped string literal payload).
     pub path: String,
+    /// The alias from the `as` clause, when the surface has one.
+    pub alias: Option<String>,
     /// Span of the whole declaration, `import` keyword included.
     pub span: Span,
 }
@@ -385,7 +390,7 @@ pub struct ImportSchemaDecl {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ActorFile {
     /// The `import` declarations in source order.
-    pub imports: Vec<ImportDecl>,
+    pub imports: Vec<Import>,
     /// The `actors` blocks in source order.
     pub blocks: Vec<ActorsDecl>,
 }

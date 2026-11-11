@@ -5,7 +5,7 @@
 //! cache in long-lived services such as a language server.
 //!
 //! The `.ddd` design DSL reuses the shared node types ([`Name`],
-//! [`QualifiedName`], [`TypeRef`], [`Multiplicity`], [`ImportDecl`]) and adds
+//! [`QualifiedName`], [`TypeRef`], [`Multiplicity`], [`Import`]) and adds
 //! the `Ddd`-prefixed declarations in the [`ddd`] submodule, mirroring the
 //! `rex_ir::ddd` wire artifact field for field. The `.evt` event-contract
 //! DSL ([`evt`]) reuses the same shared node types and mirrors

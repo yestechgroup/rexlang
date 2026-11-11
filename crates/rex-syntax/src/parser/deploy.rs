@@ -667,7 +667,7 @@ pub(crate) fn junk_deploy_file<'src>() -> impl Parser<'src, Tokens<'src>, (), Mo
 /// One top-level item of a `.deploy` file.
 #[derive(Clone)]
 pub(crate) enum DeployFileItem {
-    Import(ImportDecl),
+    Import(Import),
     Application(DeployApplicationDecl),
     Profile(DeployProfileDecl),
     Deployment(DeployDeploymentDecl),
