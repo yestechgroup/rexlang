@@ -45,29 +45,7 @@ pub(crate) fn name<'src>() -> impl Parser<'src, Tokens<'src>, Name, MoxExtra<'sr
 
 pub(crate) fn string_lit<'src>() -> impl Parser<'src, Tokens<'src>, String, MoxExtra<'src>> + Clone
 {
-    select! { Token::Str(raw) => unescape_string(raw) }
-}
-
-pub(crate) fn unescape_string(raw: &str) -> String {
-    let mut value = String::with_capacity(raw.len());
-    let mut chars = raw.chars();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next() {
-                Some('"') => value.push('"'),
-                Some('\\') => value.push('\\'),
-                // Unknown escapes are kept verbatim rather than rejected.
-                Some(other) => {
-                    value.push('\\');
-                    value.push(other);
-                }
-                None => value.push('\\'),
-            }
-        } else {
-            value.push(c);
-        }
-    }
-    value
+    select! { Token::Str(raw) => rex_strings::unescape_string(raw) }
 }
 
 pub(crate) fn int_lit<'src>() -> impl Parser<'src, Tokens<'src>, i64, MoxExtra<'src>> + Clone {
