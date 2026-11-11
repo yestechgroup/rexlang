@@ -154,29 +154,7 @@ fn string_lit<'src, I>() -> impl Parser<'src, I, String, ExExtra<'src>> + Clone
 where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
-    select! { Token::Str(raw) => unescape_string(raw) }
-}
-
-fn unescape_string(raw: &str) -> String {
-    let mut value = String::with_capacity(raw.len());
-    let mut chars = raw.chars();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next() {
-                Some('"') => value.push('"'),
-                Some('\\') => value.push('\\'),
-                // Unknown escapes are kept verbatim rather than rejected.
-                Some(other) => {
-                    value.push('\\');
-                    value.push(other);
-                }
-                None => value.push('\\'),
-            }
-        } else {
-            value.push(c);
-        }
-    }
-    value
+    select! { Token::Str(raw) => rex_strings::unescape_string(raw) }
 }
 
 /// One postfix step: `.name` or `?.name`, with an optional parenthesized

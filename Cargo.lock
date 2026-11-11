@@ -2683,6 +2683,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rex-dates"
+version = "0.1.0"
+
+[[package]]
 name = "rex-diagnostics"
 version = "0.1.0"
 
@@ -2719,8 +2723,11 @@ version = "0.1.0"
 dependencies = [
  "chumsky 0.10.1",
  "logos 0.15.1",
+ "rex-dates",
  "rex-diagnostics",
  "rex-ir",
+ "rex-runtime",
+ "rex-strings",
  "serde",
  "serde_json",
  "thiserror",
@@ -2772,6 +2779,7 @@ dependencies = [
 name = "rex-runtime"
 version = "0.1.0"
 dependencies = [
+ "rex-dates",
  "serde",
  "serde_json",
  "slotmap",
@@ -2779,11 +2787,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rex-strings"
+version = "0.1.0"
+
+[[package]]
 name = "rex-syntax"
 version = "0.1.0"
 dependencies = [
  "chumsky 0.10.1",
  "logos 0.15.1",
+ "rex-strings",
  "thiserror",
 ]
 

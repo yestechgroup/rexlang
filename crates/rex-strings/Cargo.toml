@@ -1,0 +1,12 @@
+[package]
+name = "rex-strings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared lexical leaf: string-literal escape decoding (unknown escapes kept verbatim)"
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
