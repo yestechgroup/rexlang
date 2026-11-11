@@ -304,7 +304,7 @@ pub(crate) fn fold_delegation(
 
 #[derive(Clone)]
 pub(crate) enum ActorFileItem {
-    Import(ImportDecl),
+    Import(Import),
     Block(ActorsDecl),
     Junk,
 }

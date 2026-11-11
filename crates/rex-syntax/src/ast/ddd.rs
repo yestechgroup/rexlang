@@ -12,7 +12,7 @@ use super::*;
 #[derive(Debug, Clone, PartialEq)]
 pub struct DddFile {
     /// The `import` declarations in source order.
-    pub imports: Vec<ImportDecl>,
+    pub imports: Vec<Import>,
     /// The `application` declaration, when one was parsed.
     pub application: Option<DddApplication>,
 }

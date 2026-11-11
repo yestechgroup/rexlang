@@ -42,20 +42,20 @@ pub(crate) mod usecases;
 
 pub use ast::{
     ActorFile, AnnotationDecl, BindingEntry, ChannelDecl, ClassDecl, CmmnCase, CmmnCriterion,
-    CmmnExecute, CmmnFile, CmmnFileItem, CmmnImport, CmmnItemDecl, CmmnItemKind, CmmnOnPart,
-    CmmnRole, DatatypeDecl, DddBase, DddBuiltinOp, DddDelegation, DddDesign, DddDocumentEntry,
-    DddFile, DddFlagKind, DddFlags, DddMachine, DddMachineTransition, DddModule, DddPagination,
-    DddParam, DddRanking, DddRepository, DddRepositoryOp, DddSearch, DddSearchField, DddService,
+    CmmnExecute, CmmnFile, CmmnFileItem, CmmnItemDecl, CmmnItemKind, CmmnOnPart, CmmnRole,
+    DatatypeDecl, DddBase, DddBuiltinOp, DddDelegation, DddDesign, DddDocumentEntry, DddFile,
+    DddFlagKind, DddFlags, DddMachine, DddMachineTransition, DddModule, DddPagination, DddParam,
+    DddRanking, DddRepository, DddRepositoryOp, DddSearch, DddSearchField, DddService,
     DddServiceOp, DddStereotype, Decl, DefaultValue, DeployApplicationDecl, DeployBindingDecl,
     DeployComponentDecl, DeployConnectionDecl, DeployDeploymentDecl, DeployEnvEntry, DeployFile,
     DeployMappingDecl, DeployPolicyDecl, DeployProfileDecl, DeploySettingDecl, DeploySettingValue,
     DmnBinding, DmnBkm, DmnDecision, DmnDecisionModel, DmnFile, DmnInput, DmnKnowledgeSource,
     DmnLogic, DmnMetadata, DmnMetadataKind, DmnOutput, DmnRequirement, DmnService, DmnView,
-    EnumDecl, EnumLiteral, EventDecl, EventFieldDecl, EvtFile, FeatureDecl, ImportDecl, ImportKind,
+    EnumDecl, EnumLiteral, EventDecl, EventFieldDecl, EvtFile, FeatureDecl, Import, ImportKind,
     InterfaceDecl, Model, MultBound, Multiplicity, MultiplicityKind, Name, Param, PublishesDecl,
-    QualifiedName, Span, SubscriptionDecl, TypeRef, UcDecl, UcEndpoint, UcFile, UcImport,
-    UcMessage, UcNodeRef, UcOccurrence, UcParticipant, UcRealizes, UcStep, UcSuccession,
-    VocabularyDecl, VocabularyFacetDecl, Wraps,
+    QualifiedName, Span, SubscriptionDecl, TypeRef, UcDecl, UcEndpoint, UcFile, UcMessage,
+    UcNodeRef, UcOccurrence, UcParticipant, UcRealizes, UcStep, UcSuccession, VocabularyDecl,
+    VocabularyFacetDecl, Wraps,
 };
 pub use fmt::{
     format, format_actors, format_cmmn, format_ddd, format_deploy, format_dmn, format_evt,

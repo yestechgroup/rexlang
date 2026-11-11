@@ -69,7 +69,7 @@ pub(crate) struct LoweredDomains {
 pub(crate) fn lower_domains(
     db: &dyn Db,
     origin_path: &str,
-    imports: &[rex_syntax::ImportDecl],
+    imports: &[rex_syntax::Import],
     domains: &[SourceFile],
     provided: &DomainImports,
 ) -> LoweredDomains {

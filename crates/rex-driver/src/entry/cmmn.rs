@@ -36,21 +36,13 @@ fn compile_cmmn_with(
     let path = file.path(db);
     let source = file.text(db);
     let parsed = parse_cmmn_query(db, file);
-    // The `.cmmn` import declarations reuse the `.uc` shape; the domain
-    // pipeline consumes the shared `ImportDecl` form (aliases are an
-    // `execute` concern the engine handles).
-    let domain_imports: Vec<rex_syntax::ImportDecl> = parsed
+    // The `.cmmn` import declarations are the one shared `Import` shape
+    // every surface parses; the domain pipeline consumes them directly
+    // (the alias is an `execute` concern the engine handles).
+    let domain_imports: Vec<rex_syntax::Import> = parsed
         .ast
         .as_ref()
-        .map(|ast| {
-            ast.imports
-                .iter()
-                .map(|import| rex_syntax::ImportDecl {
-                    path: import.path.clone(),
-                    span: import.span,
-                })
-                .collect()
-        })
+        .map(|ast| ast.imports.clone())
         .unwrap_or_default();
     let domains = lower_domains(db, &path, &domain_imports, &domains, imports);
 
