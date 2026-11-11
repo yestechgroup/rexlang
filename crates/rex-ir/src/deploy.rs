@@ -63,13 +63,9 @@ use crate::IrError;
 /// The artifact format version this crate writes and accepts for
 /// deployment artifacts ([`DeployModel`]).
 ///
-/// Versioned independently of [`crate::FORMAT_VERSION`] (the domain-model
-/// marker), [`crate::ACTOR_MODEL_FORMAT_VERSION`] (the policy marker),
-/// [`crate::ddd::DDD_MODEL_FORMAT_VERSION`] (the design marker),
-/// [`crate::events::EVENT_MODEL_FORMAT_VERSION`] (the event marker), and
-/// [`crate::ifml::IFML_MODEL_FORMAT_VERSION`] (the interaction marker),
-/// [`crate::cmmn::CMMN_MODEL_FORMAT_VERSION`] (the case marker); bump
-/// whenever the deployment wire format changes incompatibly.
+/// Bump whenever the deployment wire format changes incompatibly; this
+/// marker is versioned independently of every other artifact marker — see
+/// the [version-marker inventory](crate#version-markers).
 pub const DEPLOY_MODEL_FORMAT_VERSION: u32 = 1;
 
 /// The root of a deployment artifact: the declared applications, the
@@ -128,12 +124,12 @@ impl DeployModel {
 
     /// Serializes the artifact to pretty-printed (2-space indent) JSON.
     pub fn to_json_pretty(&self) -> Result<String, IrError> {
-        crate::wire::to_json_pretty(self)
+        crate::wire::VersionedArtifact::to_json_pretty(self)
     }
 
     /// Serializes the artifact to compact JSON.
     pub fn to_json(&self) -> Result<String, IrError> {
-        crate::wire::to_json(self)
+        crate::wire::VersionedArtifact::to_json(self)
     }
 
     /// Deserializes a deployment artifact from JSON, rejecting artifacts
@@ -141,7 +137,7 @@ impl DeployModel {
     ///
     /// Unknown fields are ignored for forward compatibility.
     pub fn from_json(json: &str) -> Result<Self, IrError> {
-        crate::wire::from_json(json)
+        crate::wire::VersionedArtifact::from_json(json)
     }
 }
 
@@ -149,11 +145,7 @@ impl crate::wire::VersionedArtifact for DeployModel {
     const FORMAT_VERSION: u32 = DEPLOY_MODEL_FORMAT_VERSION;
 }
 
-impl Default for DeployModel {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::wire::default_format_version!(DeployModel);
 
 /// A declared application: the logical architecture a deployment projects
 /// onto a target. Deliberately infrastructure-free — components carry what
@@ -663,37 +655,24 @@ pub enum DeployValue {
 mod tests {
     use super::*;
 
-    /// An empty artifact serializes as exactly the version marker, and the
-    /// version gate rejects everything else (the ActorModel empty-model
-    /// discipline).
+    /// The shared wire-contract characterization (see
+    /// `wire::tests::assert_wire_contract`): an empty artifact serializes
+    /// as exactly the version marker and round-trips, the gate rejects
+    /// wrong/absent versions (the ActorModel empty-model discipline),
+    /// unknown fields are tolerated, and the populated sample round-trips
+    /// byte-stably through both serializers.
     #[test]
     fn empty_model_is_exactly_the_version_marker() {
-        let json = DeployModel::new().to_json().expect("serialize");
-        assert_eq!(json, r#"{"formatVersion":1}"#);
-        assert_eq!(
-            DeployModel::from_json(&json).expect("round trip"),
-            DeployModel::new()
-        );
+        crate::wire::tests::assert_wire_contract(r#"{"formatVersion":1}"#, &sample_model());
     }
 
-    #[test]
-    fn from_json_rejects_other_versions() {
-        for version in ["", "0", "2"] {
-            let text = if version.is_empty() {
-                "{}".to_string()
-            } else {
-                format!(r#"{{"formatVersion":{version}}}"#)
-            };
-            let error = DeployModel::from_json(&text).expect_err("must reject");
-            assert!(matches!(error, IrError::UnsupportedFormatVersion { .. }));
-        }
-    }
-
-    /// The wire shapes the docs promise: bare camelCase unit-enum tags, the
-    /// adjacently tagged setting value, and default+skip discipline.
-    #[test]
-    fn wire_shapes_are_pinned() {
-        let model = DeployModel::new()
+    /// A populated deployment covering applications, components
+    /// (capability, settings, env, design + flow bindings), a connection,
+    /// a profile (defaults, policy, mapping), and a deployment with
+    /// overrides. The shared wire-contract's populated sample and the
+    /// wire-shape pins' input.
+    fn sample_model() -> DeployModel {
+        DeployModel::new()
             .application(
                 DeployApplication::new("Svc")
                     .component(
@@ -718,9 +697,19 @@ mod tests {
                     .policy(DeployPolicy::prohibit(r#"db.storage == "local""#))
                     .mapping(DeployMapping::new(ComponentKind::Database, "cloudflare.d1")),
             )
-            .deployment(DeployDeployment::new("prod", "Svc", "edge").configure(
-                DeploySetting::new("db.storage", DeployValue::Text("remote".into())),
-            ));
+            .deployment(
+                DeployDeployment::new("prod", "Svc", "edge").configure(DeploySetting::new(
+                    "db.storage",
+                    DeployValue::Text("remote".into()),
+                )),
+            )
+    }
+
+    /// The wire shapes the docs promise: bare camelCase unit-enum tags, the
+    /// adjacently tagged setting value, and default+skip discipline.
+    #[test]
+    fn wire_shapes_are_pinned() {
+        let model = sample_model();
         let json = model.to_json_pretty().expect("serialize");
         assert!(
             json.contains(r#""kind": "database""#),

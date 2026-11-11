@@ -69,7 +69,7 @@ pub(crate) struct LoweredDomains {
 pub(crate) fn lower_domains(
     db: &dyn Db,
     origin_path: &str,
-    imports: &[rex_syntax::ImportDecl],
+    imports: &[rex_syntax::Import],
     domains: &[SourceFile],
     provided: &DomainImports,
 ) -> LoweredDomains {
@@ -155,26 +155,6 @@ pub(crate) fn lower_domains(
         sigil_diagnostics,
     }
 }
-/// Compiles an `.actor` file against its imported domain models in one call.
-///
-/// Each domain is a `(path, source)` pair; an actor-file import resolves by
-/// exact path match. Extra pairs no import names are ignored.
-///
-/// ```
-/// let domains = [(
-///     "support.mox".to_string(),
-///     "package support\n\nclass Ticket { String title }".to_string(),
-/// )];
-/// let source = "import \"support.mox\"\n\nactors Ops {\n    actor Agent\n}";
-/// let compilation = rex_driver::compile_actors_str(
-///     "ops.actor",
-///     source,
-///     &domains,
-///     &rex_driver::DomainImports::default(),
-/// );
-/// assert!(compilation.diagnostics.is_empty());
-/// assert_eq!(compilation.model.unwrap().blocks.len(), 1);
-/// ```
 /// The one-shot wrappers' domain sources: each `(path, source)` pair as a
 /// salsa input file, duplicate paths read once (first occurrence wins).
 pub(crate) fn domain_files(db: &dyn Db, domains: &[(String, String)]) -> Vec<SourceFile> {

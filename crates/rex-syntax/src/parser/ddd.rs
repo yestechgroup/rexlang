@@ -22,12 +22,13 @@ pub(crate) fn ddd_keyword<'src>(
 /// production this tolerates a trailing `;`, which the canonical `.ddd`
 /// formatting emits on every import line.
 pub(crate) fn ddd_import_decl<'src>(
-) -> impl Parser<'src, Tokens<'src>, ImportDecl, MoxExtra<'src>> + Clone {
+) -> impl Parser<'src, Tokens<'src>, Import, MoxExtra<'src>> + Clone {
     kw(Token::Import)
         .ignore_then(string_lit())
         .then_ignore(kw(Token::Other(';')).or_not())
-        .map_with(|path, e| ImportDecl {
+        .map_with(|path, e| Import {
             path,
+            alias: None,
             span: e.span(),
         })
 }
@@ -1085,7 +1086,7 @@ pub(crate) fn ddd_application_decl<'src>(
 /// One top-level item of a `.ddd` file.
 #[derive(Clone)]
 pub(crate) enum DddFileItem {
-    Import(ImportDecl),
+    Import(Import),
     Application(DddApplication),
     Junk,
 }

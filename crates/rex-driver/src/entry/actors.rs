@@ -69,6 +69,26 @@ fn compile_actors_with(
         diagnostics,
     }
 }
+/// Compiles an `.actor` file against its imported domain models in one call.
+///
+/// Each domain is a `(path, source)` pair; an actor-file import resolves by
+/// exact path match. Extra pairs no import names are ignored.
+///
+/// ```
+/// let domains = [(
+///     "support.mox".to_string(),
+///     "package support\n\nclass Ticket { String title }".to_string(),
+/// )];
+/// let source = "import \"support.mox\"\n\nactors Ops {\n    actor Agent\n}";
+/// let compilation = rex_driver::compile_actors_str(
+///     "ops.actor",
+///     source,
+///     &domains,
+///     &rex_driver::DomainImports::default(),
+/// );
+/// assert!(compilation.diagnostics.is_empty());
+/// assert_eq!(compilation.model.unwrap().blocks.len(), 1);
+/// ```
 pub fn compile_actors_str(
     actor_path: &str,
     actor_source: &str,

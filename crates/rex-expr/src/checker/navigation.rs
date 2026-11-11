@@ -10,6 +10,7 @@ use crate::error::ExprError;
 use crate::types::{NamedKind, Ty};
 
 use super::*;
+use rex_diagnostics::did_you_mean_unique;
 
 impl TypeChecker {
     pub(crate) fn receiver_target(
@@ -208,7 +209,8 @@ impl TypeChecker {
     ) -> Checked {
         let Some(candidates) = self.context.functions.get(&name.value) else {
             let mut message = format!("unknown function `{}`", name.value);
-            if let Some(candidate) = did_you_mean(&name.value, self.context.functions.keys()) {
+            if let Some(candidate) = did_you_mean_unique(&name.value, self.context.functions.keys())
+            {
                 message.push_str(&format!("; did you mean `{candidate}`?"));
             }
             errors.push(ExprError::new(message, name.span));

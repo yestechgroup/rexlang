@@ -20,12 +20,13 @@ pub(crate) fn dmn_keyword<'src>(
 /// An `import "<path>";` declaration of a `.dmn` file: the `.ddd` import
 /// production verbatim — the trailing `;` is canonical but optional.
 pub(crate) fn dmn_import_decl<'src>(
-) -> impl Parser<'src, Tokens<'src>, ImportDecl, MoxExtra<'src>> + Clone {
+) -> impl Parser<'src, Tokens<'src>, Import, MoxExtra<'src>> + Clone {
     kw(Token::Import)
         .ignore_then(string_lit())
         .then_ignore(kw(Token::Other(';')).or_not())
-        .map_with(|path, e| ImportDecl {
+        .map_with(|path, e| Import {
             path,
+            alias: None,
             span: e.span(),
         })
 }
@@ -1109,7 +1110,7 @@ pub(crate) fn decision_model_decl<'src>(
 /// One top-level item of a `.dmn` file.
 #[derive(Clone)]
 pub(crate) enum DmnFileItem {
-    Import(ImportDecl),
+    Import(Import),
     Model(Box<DmnDecisionModel>),
     Junk,
 }

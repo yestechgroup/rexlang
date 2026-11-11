@@ -80,17 +80,9 @@ use crate::{IrError, TypeRef};
 /// The artifact format version this crate writes and accepts for
 /// decision-model artifacts ([`DmnModel`]).
 ///
-/// Versioned independently of [`crate::FORMAT_VERSION`] (the domain-model
-/// marker), [`crate::ACTOR_MODEL_FORMAT_VERSION`] (the policy marker),
-/// [`crate::ddd::DDD_MODEL_FORMAT_VERSION`] (the design marker),
-/// [`crate::events::EVENT_MODEL_FORMAT_VERSION`] (the event marker),
-/// [`crate::deploy::DEPLOY_MODEL_FORMAT_VERSION`] (the deployment marker),
-/// [`crate::ifml::IFML_MODEL_FORMAT_VERSION`] (the interaction marker),
-/// [`crate::ifml_manifest::IFML_MANIFEST_FORMAT_VERSION`] (the manifest
-/// marker), [`crate::cmmn::CMMN_MODEL_FORMAT_VERSION`] (the case marker),
-/// and [`crate::usecases::USE_CASE_MODEL_FORMAT_VERSION`] (the use-case
-/// marker); bump whenever the decision-model wire format changes
-/// incompatibly.
+/// Bump whenever the decision-model wire format changes incompatibly; this
+/// marker is versioned independently of every other artifact marker — see
+/// the [version-marker inventory](crate#version-markers).
 pub const DMN_MODEL_FORMAT_VERSION: u32 = 1;
 
 /// The root of a decision-model artifact: the declared input data,
@@ -172,12 +164,12 @@ impl DmnModel {
 
     /// Serializes the artifact to pretty-printed (2-space indent) JSON.
     pub fn to_json_pretty(&self) -> Result<String, IrError> {
-        crate::wire::to_json_pretty(self)
+        crate::wire::VersionedArtifact::to_json_pretty(self)
     }
 
     /// Serializes the artifact to compact JSON.
     pub fn to_json(&self) -> Result<String, IrError> {
-        crate::wire::to_json(self)
+        crate::wire::VersionedArtifact::to_json(self)
     }
 
     /// Deserializes a decision-model artifact from JSON, rejecting
@@ -186,7 +178,7 @@ impl DmnModel {
     ///
     /// Unknown fields are ignored for forward compatibility.
     pub fn from_json(json: &str) -> Result<Self, IrError> {
-        crate::wire::from_json(json)
+        crate::wire::VersionedArtifact::from_json(json)
     }
 }
 
@@ -194,11 +186,7 @@ impl crate::wire::VersionedArtifact for DmnModel {
     const FORMAT_VERSION: u32 = DMN_MODEL_FORMAT_VERSION;
 }
 
-impl Default for DmnModel {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::wire::default_format_version!(DmnModel);
 
 /// One metadata entry of a [`DmnModel`]: a kind-tagged value (`id`,
 /// `version`, `effective`, or `jurisdiction`), carrying provenance or

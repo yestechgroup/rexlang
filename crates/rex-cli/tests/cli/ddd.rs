@@ -31,86 +31,47 @@ application Demo {
 }
 "#;
 
+fn ddd() -> SurfaceCase {
+    SurfaceCase {
+        prereqs: &[("ddd-domain.mox", DDD_DOMAIN)],
+        good_name: "good.ddd",
+        good_source: GOOD_DDD,
+        canonical_fixture: Some("tests/conformance/ddd/library.ddd"),
+        assert_stderr_empty: true,
+        broken_name: "broken.ddd",
+        broken_source: BROKEN_DDD,
+        broken_fragments: &[("unknown type 'Missing'", "stderr was: ")],
+        broken_path_fragment: "broken.ddd",
+        broken_path_noun: "design file",
+        dangling: Some((
+            "dangling.ddd",
+            "import \"missing-domain.mox\"\n\napplication A { module m { entity T } }\n",
+        )),
+        // The `ir` and `fmt` steps here are the golden-comparison and
+        // fmt-check shapes, not the skeleton — they stay hand-written below.
+        artifact: None,
+        fmt: None,
+    }
+}
+
 #[test]
 fn check_succeeds_on_ddd_design() {
-    let path = workspace_root().join("tests/conformance/ddd/library.ddd");
-    let output = rexlang()
-        .args(["check", path.to_str().unwrap()])
-        .output()
-        .expect("run rexlang check");
-    assert!(
-        output.status.success(),
-        "stderr: {:?}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        format!("OK {}\n", path.display())
-    );
-    assert!(String::from_utf8_lossy(&output.stderr).is_empty());
+    check_succeeds(&ddd(), InputSource::CanonicalFixture);
 }
 
 #[test]
 fn check_succeeds_on_a_scratch_ddd_pair() {
-    let _ = write_source("ddd-domain.mox", DDD_DOMAIN);
-    let design = write_source("good.ddd", GOOD_DDD);
-    let output = rexlang()
-        .args(["check", design.to_str().unwrap()])
-        .output()
-        .expect("run rexlang check");
-    assert!(
-        output.status.success(),
-        "stderr: {:?}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        format!("OK {}\n", design.display())
-    );
-    assert!(String::from_utf8_lossy(&output.stderr).is_empty());
+    check_succeeds(&ddd(), InputSource::ScratchGood);
 }
 
 #[test]
 fn check_fails_on_broken_ddd_design_with_diagnostic_on_stderr() {
-    let _ = write_source("ddd-domain.mox", DDD_DOMAIN);
-    let design = write_source("broken.ddd", BROKEN_DDD);
-    let output = rexlang()
-        .args(["check", design.to_str().unwrap()])
-        .output()
-        .expect("run rexlang check");
-    assert_eq!(output.status.code(), Some(1));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("unknown type 'Missing'"),
-        "stderr was: {stderr}"
-    );
-    assert!(
-        stderr.contains("broken.ddd"),
-        "the design file path must name the report: {stderr}"
-    );
+    check_fails_on_broken(&ddd());
 }
 
 #[test]
 fn missing_ddd_import_file_is_a_clean_error() {
-    let design = write_source(
-        "dangling.ddd",
-        "import \"missing-domain.mox\"\n\napplication A { module m { entity T } }\n",
-    );
-    let output = rexlang()
-        .args(["check", design.to_str().unwrap()])
-        .output()
-        .expect("run rexlang check");
-    assert_eq!(output.status.code(), Some(1));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.starts_with("error:"),
-        "clean clap-style error, no panic: {stderr}"
-    );
-    assert!(
-        stderr.contains("missing-domain.mox"),
-        "the import path must be named: {stderr}"
-    );
-    assert!(!stderr.contains("panicked"), "must not panic: {stderr}");
+    missing_import_file_is_a_clean_error(&ddd());
 }
 
 const DDD_GOLDEN: &str = include_str!("../../../../tests/conformance/ddd/library.ddd.json");

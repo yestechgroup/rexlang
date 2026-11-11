@@ -14,7 +14,7 @@ use super::*;
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvtFile {
     /// The `import` declarations in source order.
-    pub imports: Vec<ImportDecl>,
+    pub imports: Vec<Import>,
     /// Declared events, in source order.
     pub events: Vec<EventDecl>,
     /// Declared channels, in source order.

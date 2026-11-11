@@ -10,12 +10,15 @@
 //! the day to the target month's length (R8: Jan 31 + 1 month = Feb 28/29).
 //!
 //! Serialization is ISO-8601 `YYYY-MM-DD` ([`Display`]); parsing is strict
-//! (`FromStr`) — this is what generated instance loaders use. There are no
-//! external dependencies and no time-of-day, no timezone, and no clock:
-//! expressions stay pure (the "as at date D" queries take dates as values).
+//! (`FromStr`) — this is what generated instance loaders use. There is no
+//! time-of-day, no timezone, and no clock: expressions stay pure (the "as
+//! at date D" queries take dates as values). The only dependency is
+//! [`rex_dates`] (the shared civil-date core, rexlang#169).
 
 use std::fmt;
 use std::str::FromStr;
+
+use rex_dates::{civil_from_days, days_from_civil};
 
 /// A calendar date in the proleptic Gregorian civil calendar, without time
 /// of day or timezone.
@@ -71,33 +74,6 @@ fn days_in_month(year: i64, month: u32) -> u32 {
 /// The proleptic Gregorian leap rule.
 fn is_leap_year(year: i64) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
-}
-
-/// Days from 1970-01-01 to `y-m-d` (Hinnant's `days_from_civil`, in `i64`
-/// with the `i32` bound enforced by the caller). Valid for the full range
-/// where the result fits `i64`.
-fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
-    let y = y - i64::from(m <= 2);
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400; // [0, 399]
-    let mp = i64::from(if m > 2 { m - 3 } else { m + 9 }); // [0, 11]
-    let doy = (153 * mp + 2) / 5 + i64::from(d) - 1; // [0, 365]
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
-    era * 146_097 + doe - 719_468
-}
-
-/// The inverse of [`days_from_civil`] (Hinnant's `civil_from_days`).
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097; // [0, 146096]
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
-    let mp = (5 * doy + 2) / 153; // [0, 11]
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
-    (y + i64::from(m <= 2), m, d)
 }
 
 impl Date {

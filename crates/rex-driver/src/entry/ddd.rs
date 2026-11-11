@@ -272,7 +272,8 @@ pub fn compile_ddd_str(
 /// operations are validated against `actors`: every name must exist in the
 /// union of the actor models' blocks' capabilities, else the operation's
 /// error names the operation, its service, and the unknown capability
-/// (rule 10) — with the [`did_you_mean`](crate::diagnostic) closest
+/// (rule 10) — with the
+/// [`did_you_mean_adaptive`](rex_diagnostics::did_you_mean_adaptive) closest
 /// declared name when one is a plausible typo, and the `unknownCapability`
 /// code carrying it for quick fixes. Capabilities pool across every
 /// provided model, so a host passes all of the application's `.actor`
@@ -295,7 +296,8 @@ pub fn compile_ddd_str_with_actors(
 /// [`rex_ir::dmn::DmnModel`]s' services, else the reference errors
 /// `E0250 unknown decision service '<name>' invoked by operation '<op>'
 /// of service '<service>'` (or the `inject decision` variant, E0251),
-/// spanned on the reference, with the [`did_you_mean`](crate::diagnostic)
+/// spanned on the reference, with the
+/// [`did_you_mean_adaptive`](rex_diagnostics::did_you_mean_adaptive)
 /// closest declared service when one is a plausible typo. Decision
 /// services pool across every provided model, so a host passes all of the
 /// application's `.dmn` artifacts as `(path, model)` pairs. An **empty**

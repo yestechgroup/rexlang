@@ -138,6 +138,20 @@ fn library_model() -> Model {
     model
 }
 
+/// The shared wire-contract characterization (see
+/// `wire::tests::assert_wire_contract`): the empty model serializes as
+/// exactly the canonical bytes — the version marker, the crate
+/// `rexVersion`, and the always-present `packages` array — and the
+/// populated library model round-trips byte-stably through both
+/// serializers.
+#[test]
+fn model_wire_contract_holds_through_the_shared_helper() {
+    crate::wire::tests::assert_wire_contract(
+        r#"{"formatVersion":1,"rexVersion":"0.1.0","packages":[]}"#,
+        &library_model(),
+    );
+}
+
 #[test]
 fn round_trip_library_model() {
     let model = library_model();

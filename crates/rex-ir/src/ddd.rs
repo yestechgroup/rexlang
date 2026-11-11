@@ -76,11 +76,9 @@ use crate::{IrError, Multiplicity, OperationParam, TypeRef};
 /// The artifact format version this crate writes and accepts for DDD design
 /// artifacts ([`DddModel`]).
 ///
-/// Versioned independently of [`crate::FORMAT_VERSION`] (the domain-model
-/// marker), [`crate::ACTOR_MODEL_FORMAT_VERSION`] (the policy marker), and
-/// [`crate::ifml::IFML_MODEL_FORMAT_VERSION`] (the interaction marker),
-/// [`crate::cmmn::CMMN_MODEL_FORMAT_VERSION`] (the case marker); bump
-/// whenever the DDD wire format changes incompatibly.
+/// Bump whenever the DDD wire format changes incompatibly; this marker is
+/// versioned independently of every other artifact marker — see the
+/// [version-marker inventory](crate#version-markers).
 pub const DDD_MODEL_FORMAT_VERSION: u32 = 1;
 
 /// The root of a DDD design artifact: one application with its modules of
@@ -133,12 +131,12 @@ impl DddModel {
 
     /// Serializes the artifact to pretty-printed (2-space indent) JSON.
     pub fn to_json_pretty(&self) -> Result<String, IrError> {
-        crate::wire::to_json_pretty(self)
+        crate::wire::VersionedArtifact::to_json_pretty(self)
     }
 
     /// Serializes the artifact to compact JSON.
     pub fn to_json(&self) -> Result<String, IrError> {
-        crate::wire::to_json(self)
+        crate::wire::VersionedArtifact::to_json(self)
     }
 
     /// Deserializes a design artifact from JSON, rejecting artifacts whose
@@ -146,7 +144,7 @@ impl DddModel {
     ///
     /// Unknown fields are ignored for forward compatibility.
     pub fn from_json(json: &str) -> Result<Self, IrError> {
-        crate::wire::from_json(json)
+        crate::wire::VersionedArtifact::from_json(json)
     }
 }
 
@@ -154,11 +152,7 @@ impl crate::wire::VersionedArtifact for DddModel {
     const FORMAT_VERSION: u32 = DDD_MODEL_FORMAT_VERSION;
 }
 
-impl Default for DddModel {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::wire::default_format_version!(DddModel);
 
 /// The designed application.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -972,9 +966,9 @@ pub struct Pagination {
     pub cursor: bool,
 }
 
-fn is_false(flag: &bool) -> bool {
-    !*flag
-}
+// The `skip_serializing_if` paths above resolve `is_false` in this
+// module's scope; the shared predicate lives in `wire`.
+use crate::wire::is_false;
 
 #[cfg(test)]
 mod tests {
@@ -1111,36 +1105,15 @@ mod tests {
         assert_eq!(DDD_MODEL_FORMAT_VERSION, 1);
     }
 
+    /// The shared wire-contract characterization (see
+    /// `wire::tests::assert_wire_contract`): an empty artifact serializes
+    /// as exactly the version marker (as both `new()` and `Default` — the
+    /// helper pins `Default`), the gate rejects wrong/absent versions,
+    /// unknown fields are tolerated, and the populated design round-trips
+    /// byte-stably through both serializers.
     #[test]
     fn empty_model_serializes_as_exactly_format_version() {
-        assert_eq!(
-            DddModel::new().to_json().expect("serialize"),
-            r#"{"formatVersion":1}"#
-        );
-        assert_eq!(
-            DddModel::default().to_json().expect("serialize"),
-            r#"{"formatVersion":1}"#
-        );
-        let parsed = DddModel::from_json(r#"{"formatVersion":1}"#).expect("deserialize");
-        assert_eq!(parsed, DddModel::new());
-    }
-
-    #[test]
-    fn full_model_round_trips_through_json() {
-        let model = sample_model();
-        let json = model.to_json().expect("serialize");
-        let parsed = DddModel::from_json(&json).expect("deserialize");
-        assert_eq!(parsed, model);
-        assert_eq!(parsed.to_json().expect("re-serialize"), json);
-    }
-
-    #[test]
-    fn full_model_round_trips_through_json_pretty() {
-        let model = sample_model();
-        let json = model.to_json_pretty().expect("serialize");
-        let parsed = DddModel::from_json(&json).expect("deserialize");
-        assert_eq!(parsed, model);
-        assert_eq!(parsed.to_json_pretty().expect("re-serialize"), json);
+        crate::wire::tests::assert_wire_contract(r#"{"formatVersion":1}"#, &sample_model());
     }
 
     #[test]

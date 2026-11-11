@@ -14,7 +14,7 @@ use super::*;
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeployFile {
     /// The `import` declarations in source order.
-    pub imports: Vec<ImportDecl>,
+    pub imports: Vec<Import>,
     /// Declared applications, in source order.
     pub applications: Vec<DeployApplicationDecl>,
     /// Declared profiles, in source order.

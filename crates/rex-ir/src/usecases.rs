@@ -66,14 +66,9 @@ use crate::{IrError, TypeRef};
 /// The artifact format version this crate writes and accepts for use-case
 /// artifacts ([`UseCaseModel`]).
 ///
-/// Versioned independently of [`crate::FORMAT_VERSION`] (the domain-model
-/// marker), [`crate::ACTOR_MODEL_FORMAT_VERSION`] (the policy marker),
-/// [`crate::ddd::DDD_MODEL_FORMAT_VERSION`] (the design marker),
-/// [`crate::events::EVENT_MODEL_FORMAT_VERSION`] (the event marker),
-/// [`crate::deploy::DEPLOY_MODEL_FORMAT_VERSION`] (the deployment marker),
-/// [`crate::ifml::IFML_MODEL_FORMAT_VERSION`] (the interaction marker), and
-/// [`crate::cmmn::CMMN_MODEL_FORMAT_VERSION`] (the case marker);
-/// bump whenever the use-case wire format changes incompatibly.
+/// Bump whenever the use-case wire format changes incompatibly; this marker
+/// is versioned independently of every other artifact marker — see the
+/// [version-marker inventory](crate#version-markers).
 pub const USE_CASE_MODEL_FORMAT_VERSION: u32 = 1;
 
 /// The root of a use-case artifact: the declared use cases, each with its
@@ -105,12 +100,12 @@ impl UseCaseModel {
 
     /// Serializes the artifact to pretty-printed (2-space indent) JSON.
     pub fn to_json_pretty(&self) -> Result<String, IrError> {
-        crate::wire::to_json_pretty(self)
+        crate::wire::VersionedArtifact::to_json_pretty(self)
     }
 
     /// Serializes the artifact to compact JSON.
     pub fn to_json(&self) -> Result<String, IrError> {
-        crate::wire::to_json(self)
+        crate::wire::VersionedArtifact::to_json(self)
     }
 
     /// Deserializes a use-case artifact from JSON, rejecting artifacts whose
@@ -118,7 +113,7 @@ impl UseCaseModel {
     ///
     /// Unknown fields are ignored for forward compatibility.
     pub fn from_json(json: &str) -> Result<Self, IrError> {
-        crate::wire::from_json(json)
+        crate::wire::VersionedArtifact::from_json(json)
     }
 }
 
@@ -126,11 +121,7 @@ impl crate::wire::VersionedArtifact for UseCaseModel {
     const FORMAT_VERSION: u32 = USE_CASE_MODEL_FORMAT_VERSION;
 }
 
-impl Default for UseCaseModel {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::wire::default_format_version!(UseCaseModel);
 
 /// A declared use case: a subject, the participating actors, the exchanged
 /// messages, and the successions ordering the behavior.
@@ -341,4 +332,133 @@ pub enum NodeRef {
     },
     /// A message end of the referenced declared message.
     MessageEnd(MessageEndRef),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A populated use case covering both occurrence kinds, both payload
+    /// kinds, all three anchors, a policy-principal participant (a bare
+    /// `.actor` actor, `type_name: None`), and a guarded step.
+    fn sample_model() -> UseCaseModel {
+        UseCaseModel {
+            format_version: USE_CASE_MODEL_FORMAT_VERSION,
+            use_cases: vec![UseCaseDef {
+                name: "BorrowBook".into(),
+                description: Some("A member borrows a book.".into()),
+                subject: Some(Participant {
+                    name: "Library".into(),
+                    type_name: Some("nz.example.library::Library".into()),
+                    occurrences: vec![
+                        Occurrence::Named("holdRequested".into()),
+                        Occurrence::MessageEnd(MessageEndRef {
+                            message: "borrowConfirmed".into(),
+                            end: MessageEndSide::Target,
+                        }),
+                    ],
+                    steps: Vec::new(),
+                }),
+                actors: vec![
+                    Participant {
+                        name: "Member".into(),
+                        type_name: Some("nz.example.library::Member".into()),
+                        occurrences: vec![Occurrence::Named("browses".into())],
+                        steps: Vec::new(),
+                    },
+                    Participant {
+                        name: "LibrarianAgent".into(),
+                        type_name: None,
+                        occurrences: Vec::new(),
+                        steps: vec![Step {
+                            name: "checkCard".into(),
+                            operation: "verifyMember".into(),
+                            requires: vec!["VerifyMember".into()],
+                            when: Some("member.active == true".into()),
+                        }],
+                    },
+                ],
+                messages: vec![
+                    Message {
+                        name: "requestBorrow".into(),
+                        payload: Some(PayloadRef::Domain(TypeRef::Class {
+                            package: "nz.example.library".into(),
+                            name: "Book".into(),
+                        })),
+                        source: Endpoint {
+                            participant: "Member".into(),
+                            anchor: Anchor::Occurrence("browses".into()),
+                        },
+                        target: Endpoint {
+                            participant: "Library".into(),
+                            anchor: Anchor::Occurrence("holdRequested".into()),
+                        },
+                    },
+                    Message {
+                        name: "borrowConfirmed".into(),
+                        payload: Some(PayloadRef::Event("BorrowConfirmed".into())),
+                        source: Endpoint {
+                            participant: "Library".into(),
+                            anchor: Anchor::MessageEnd(MessageEndSide::Source),
+                        },
+                        target: Endpoint {
+                            participant: "Member".into(),
+                            anchor: Anchor::MessageEnd(MessageEndSide::Target),
+                        },
+                    },
+                    Message {
+                        name: "notifyOverdue".into(),
+                        payload: None,
+                        source: Endpoint {
+                            participant: "LibrarianAgent".into(),
+                            anchor: Anchor::Step("checkCard".into()),
+                        },
+                        target: Endpoint {
+                            participant: "Library".into(),
+                            anchor: Anchor::Occurrence("holdRequested".into()),
+                        },
+                    },
+                ],
+                successions: vec![
+                    Succession {
+                        first: NodeRef::Start,
+                        then: NodeRef::Step("checkCard".into()),
+                    },
+                    Succession {
+                        first: NodeRef::Step("checkCard".into()),
+                        then: NodeRef::Occurrence {
+                            participant: "Member".into(),
+                            name: "browses".into(),
+                        },
+                    },
+                    Succession {
+                        first: NodeRef::Occurrence {
+                            participant: "Library".into(),
+                            name: "holdRequested".into(),
+                        },
+                        then: NodeRef::MessageEnd(MessageEndRef {
+                            message: "borrowConfirmed".into(),
+                            end: MessageEndSide::Target,
+                        }),
+                    },
+                    Succession {
+                        first: NodeRef::MessageEnd(MessageEndRef {
+                            message: "borrowConfirmed".into(),
+                            end: MessageEndSide::Source,
+                        }),
+                        then: NodeRef::Done,
+                    },
+                ],
+                realizes: vec!["Lending".into()],
+            }],
+        }
+    }
+
+    /// The shared wire-contract characterization (see
+    /// `wire::tests::assert_wire_contract`): the empty artifact serializes
+    /// as exactly the version marker, and this populated one round-trips.
+    #[test]
+    fn empty_model_serializes_as_exactly_the_version_marker() {
+        crate::wire::tests::assert_wire_contract(r#"{"formatVersion":1}"#, &sample_model());
+    }
 }

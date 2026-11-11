@@ -54,7 +54,8 @@ pub use body::{
     RuneBody,
 };
 pub use checker::{
-    is_string_operand, ClassInfo, DomainTypes, FunctionSignature, TypeChecker, TypeContext,
+    is_int_literal, is_string_operand, ClassInfo, DomainTypes, FunctionSignature, TypeChecker,
+    TypeContext,
 };
 pub use error::{ExprError, ParseResult};
 pub use parser::parse;

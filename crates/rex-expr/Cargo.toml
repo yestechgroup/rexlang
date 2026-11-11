@@ -12,9 +12,13 @@ workspace = true
 [dependencies]
 logos = { workspace = true }
 chumsky = { workspace = true }
+rex-diagnostics = { workspace = true }
 rex-ir = { workspace = true }
+rex-dates = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
+rex-strings = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+rex-runtime = { workspace = true }

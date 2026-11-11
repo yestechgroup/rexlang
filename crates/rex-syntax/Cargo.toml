@@ -20,3 +20,4 @@ unsafe_code = "allow"
 logos = { workspace = true }
 chumsky = { workspace = true }
 thiserror = { workspace = true }
+rex-strings = { workspace = true }
