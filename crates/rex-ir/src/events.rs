@@ -77,12 +77,9 @@ use crate::{IrError, TypeRef};
 /// The artifact format version this crate writes and accepts for
 /// event-contract artifacts ([`EventModel`]).
 ///
-/// Versioned independently of [`crate::FORMAT_VERSION`] (the domain-model
-/// marker), [`crate::ACTOR_MODEL_FORMAT_VERSION`] (the policy marker),
-/// [`crate::ddd::DDD_MODEL_FORMAT_VERSION`] (the design marker), and
-/// [`crate::ifml::IFML_MODEL_FORMAT_VERSION`] (the interaction marker),
-/// [`crate::cmmn::CMMN_MODEL_FORMAT_VERSION`] (the case marker); bump
-/// whenever the event wire format changes incompatibly.
+/// Bump whenever the event wire format changes incompatibly; this marker is
+/// versioned independently of every other artifact marker — see the
+/// [version-marker inventory](crate#version-markers).
 pub const EVENT_MODEL_FORMAT_VERSION: u32 = 1;
 
 /// The root of an event-contract artifact: the declared events, the channels
@@ -141,12 +138,12 @@ impl EventModel {
 
     /// Serializes the artifact to pretty-printed (2-space indent) JSON.
     pub fn to_json_pretty(&self) -> Result<String, IrError> {
-        crate::wire::to_json_pretty(self)
+        crate::wire::VersionedArtifact::to_json_pretty(self)
     }
 
     /// Serializes the artifact to compact JSON.
     pub fn to_json(&self) -> Result<String, IrError> {
-        crate::wire::to_json(self)
+        crate::wire::VersionedArtifact::to_json(self)
     }
 
     /// Deserializes an event-contract artifact from JSON, rejecting
@@ -154,7 +151,7 @@ impl EventModel {
     ///
     /// Unknown fields are ignored for forward compatibility.
     pub fn from_json(json: &str) -> Result<Self, IrError> {
-        crate::wire::from_json(json)
+        crate::wire::VersionedArtifact::from_json(json)
     }
 }
 
@@ -162,11 +159,7 @@ impl crate::wire::VersionedArtifact for EventModel {
     const FORMAT_VERSION: u32 = EVENT_MODEL_FORMAT_VERSION;
 }
 
-impl Default for EventModel {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::wire::default_format_version!(EventModel);
 
 /// A declared event: a named contract with its typed payload fields.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -507,4 +500,62 @@ pub enum DeliveryMode {
     AtLeastOnce,
     /// Delivery neither drops nor duplicates: deduplication keys.
     EffectivelyOnce,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::PrimitiveType;
+
+    /// A populated contract covering every section: a pinned version, typed
+    /// payload fields, the governance labels, CloudEvents attributes, a
+    /// scoped channel, and a subscription with a filter and a full delivery
+    /// policy.
+    fn sample_model() -> EventModel {
+        EventModel::new()
+            .event(
+                EventDef::new("BookBorrowed")
+                    .version("1.0.0")
+                    .field(EventField::new(
+                        "bookId",
+                        TypeRef::Primitive(PrimitiveType::String),
+                    ))
+                    .owner("lending")
+                    .classification("internal")
+                    .retention("7y")
+                    .pii_field("bookId")
+                    .cloud_events(CloudEventsAttributes {
+                        r#type: "nz.example.library.book.borrowed".to_string(),
+                        source: "/library".to_string(),
+                        subject: Some("book".to_string()),
+                    }),
+            )
+            .channel(
+                ChannelDef::new("lending")
+                    .scope("/libraries/{id}")
+                    .publishes("BookBorrowed"),
+            )
+            .subscription(
+                SubscriptionDef::new("notices")
+                    .event("BookBorrowed")
+                    .consumer("notices-service")
+                    .scope("main")
+                    .when("bookId != null")
+                    .delivery(
+                        DeliveryPolicy::new(DeliveryMode::AtLeastOnce)
+                            .max_attempts(5)
+                            .backoff_seconds(30)
+                            .timeout_seconds(120)
+                            .dead_letter("lending-dlq"),
+                    ),
+            )
+    }
+
+    /// The shared wire-contract characterization (see
+    /// `wire::tests::assert_wire_contract`): the empty contract serializes
+    /// as exactly the version marker, and this populated one round-trips.
+    #[test]
+    fn empty_model_serializes_as_exactly_the_version_marker() {
+        crate::wire::tests::assert_wire_contract(r#"{"formatVersion":1}"#, &sample_model());
+    }
 }

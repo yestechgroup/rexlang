@@ -48,10 +48,9 @@ use crate::IrError;
 /// The artifact format version this crate writes and accepts for IFML
 /// interaction-model artifacts ([`IfmlModel`]).
 ///
-/// Versioned independently of [`crate::FORMAT_VERSION`] (the domain-model
-/// marker), [`crate::ACTOR_MODEL_FORMAT_VERSION`] (the policy marker), and
-/// [`crate::cmmn::CMMN_MODEL_FORMAT_VERSION`] (the case marker);
-/// bump whenever the IFML wire format changes incompatibly.
+/// Bump whenever the IFML wire format changes incompatibly; this marker is
+/// versioned independently of every other artifact marker — see the
+/// [version-marker inventory](crate#version-markers).
 pub const IFML_MODEL_FORMAT_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -888,12 +887,12 @@ impl IfmlModel {
 
     /// Serializes the artifact to pretty-printed (2-space indent) JSON.
     pub fn to_json_pretty(&self) -> Result<String, IrError> {
-        crate::wire::to_json_pretty(self)
+        crate::wire::VersionedArtifact::to_json_pretty(self)
     }
 
     /// Serializes the artifact to compact JSON.
     pub fn to_json(&self) -> Result<String, IrError> {
-        crate::wire::to_json(self)
+        crate::wire::VersionedArtifact::to_json(self)
     }
 
     /// Deserializes an IFML artifact from JSON, rejecting artifacts whose
@@ -901,7 +900,7 @@ impl IfmlModel {
     ///
     /// Unknown fields are ignored for forward compatibility.
     pub fn from_json(json: &str) -> Result<Self, IrError> {
-        crate::wire::from_json(json)
+        crate::wire::VersionedArtifact::from_json(json)
     }
 }
 
@@ -909,19 +908,18 @@ impl crate::wire::VersionedArtifact for IfmlModel {
     const FORMAT_VERSION: u32 = IFML_MODEL_FORMAT_VERSION;
 }
 
-impl Default for IfmlModel {
-    fn default() -> Self {
-        Self::new(
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-        )
-    }
-}
+crate::wire::default_format_version!(
+    IfmlModel,
+    Self::new(
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new()
+    )
+);
 
 #[cfg(test)]
 mod tests {
@@ -1102,24 +1100,16 @@ mod tests {
         assert_eq!(IFML_MODEL_FORMAT_VERSION, 1);
     }
 
-    #[test]
-    fn to_json_pretty_round_trips_through_from_json() {
-        let model = sample_model();
-        let json = model.to_json_pretty().expect("serialize");
-        let parsed = IfmlModel::from_json(&json).expect("deserialize");
-        assert_eq!(parsed, model);
-        assert_eq!(parsed.to_json_pretty().expect("re-serialize"), json);
-    }
-
-    /// The write-side half of the minimal-artifact claim: empty vec fields
-    /// are omitted, so an empty model serializes as exactly
-    /// `{"formatVersion":1}` — byte-identical to the empty ActorModel.
+    /// The shared wire-contract characterization (see
+    /// `wire::tests::assert_wire_contract`): the write-side half of the
+    /// minimal-artifact claim — empty vec fields are omitted, so an empty
+    /// model serializes as exactly `{"formatVersion":1}` (byte-identical
+    /// to the empty ActorModel) — plus the gate, unknown-field tolerance,
+    /// and byte-stable round-trips of the populated interaction model
+    /// through both serializers.
     #[test]
     fn empty_model_serializes_as_exactly_the_format_version_marker() {
-        let json = IfmlModel::default().to_json().expect("serialize empty");
-        assert_eq!(json, r#"{"formatVersion":1}"#);
-        let parsed = IfmlModel::from_json(&json).expect("deserialize empty");
-        assert_eq!(parsed, IfmlModel::default());
+        crate::wire::tests::assert_wire_contract(r#"{"formatVersion":1}"#, &sample_model());
     }
 
     /// A populated model round-trips even though its empty vec fields are
@@ -1136,30 +1126,6 @@ mod tests {
         );
         let parsed = IfmlModel::from_json(&json).expect("deserialize");
         assert_eq!(parsed, model);
-    }
-
-    #[test]
-    fn from_json_rejects_wrong_format_version() {
-        let json = r#"{"formatVersion": 2, "domains": [], "views": []}"#;
-        match IfmlModel::from_json(json) {
-            Err(IrError::UnsupportedFormatVersion { found, expected }) => {
-                assert_eq!(found, 2);
-                assert_eq!(expected, IFML_MODEL_FORMAT_VERSION);
-            }
-            other => panic!("expected UnsupportedFormatVersion, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn from_json_rejects_missing_format_version() {
-        let json = r#"{"domains": [], "views": []}"#;
-        match IfmlModel::from_json(json) {
-            Err(IrError::UnsupportedFormatVersion { found, expected }) => {
-                assert_eq!(found, 0, "an absent version reports as 0");
-                assert_eq!(expected, IFML_MODEL_FORMAT_VERSION);
-            }
-            other => panic!("expected UnsupportedFormatVersion, got {other:?}"),
-        }
     }
 
     // -----------------------------------------------------------------------
@@ -1269,19 +1235,6 @@ mod tests {
             r#"{"formatVersion":1}"#,
             "empty commands are omitted on write"
         );
-    }
-
-    #[test]
-    fn from_json_tolerates_unknown_fields() {
-        let json = r#"{
-            "formatVersion": 1,
-            "domains": [],
-            "views": [],
-            "nobodyKnowsMe": {"nested": [1, 2, 3]}
-        }"#;
-        let model = IfmlModel::from_json(json).expect("unknown fields are ignored");
-        assert!(model.domains.is_empty());
-        assert!(model.views.is_empty());
     }
 
     #[test]

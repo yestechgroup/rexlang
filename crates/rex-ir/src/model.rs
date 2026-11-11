@@ -43,12 +43,12 @@ impl Model {
 
     /// Serializes the model to pretty-printed (2-space indent) JSON.
     pub fn to_json_pretty(&self) -> Result<String, IrError> {
-        wire::to_json_pretty(self)
+        wire::VersionedArtifact::to_json_pretty(self)
     }
 
     /// Serializes the model to compact JSON.
     pub fn to_json(&self) -> Result<String, IrError> {
-        wire::to_json(self)
+        wire::VersionedArtifact::to_json(self)
     }
 
     /// Deserializes a model from JSON, rejecting artifacts whose
@@ -56,7 +56,7 @@ impl Model {
     ///
     /// Unknown fields are ignored for forward compatibility.
     pub fn from_json(json: &str) -> Result<Self, IrError> {
-        wire::from_json(json)
+        wire::VersionedArtifact::from_json(json)
     }
 }
 
@@ -64,11 +64,7 @@ impl wire::VersionedArtifact for Model {
     const FORMAT_VERSION: u32 = FORMAT_VERSION;
 }
 
-impl Default for Model {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+wire::default_format_version!(Model);
 
 /// A named namespace of related definitions, corresponding to a dotted package
 /// clause in a `.mox` source (e.g. `nz.example.library`).

@@ -159,6 +159,27 @@
 //!     an opaque string to this crate; backends that do not lower Rune
 //!     statements skip it like any target they do not own.
 //!
+//! # Version markers
+//!
+//! Every artifact root is gated by its own marker const, and each marker
+//! is versioned **independently** of the others: a bump on one never
+//! moves another. This table is the single inventory — the per-const docs
+//! link here instead of restating the full set, so a new artifact root is
+//! one table row.
+//!
+//! | Marker | Owning root | Surface |
+//! |---|---|---|
+//! | [`FORMAT_VERSION`] | [`Model`] | `.mox` domain model |
+//! | [`ACTOR_MODEL_FORMAT_VERSION`] | [`ActorModel`] | `.actor` actor policy |
+//! | [`ddd::DDD_MODEL_FORMAT_VERSION`] | [`ddd::DddModel`] | `.ddd` design |
+//! | [`events::EVENT_MODEL_FORMAT_VERSION`] | [`events::EventModel`] | `.evt` event contract |
+//! | [`deploy::DEPLOY_MODEL_FORMAT_VERSION`] | [`deploy::DeployModel`] | `.deploy` deployment model |
+//! | [`usecases::USE_CASE_MODEL_FORMAT_VERSION`] | [`usecases::UseCaseModel`] | `.uc` use case pattern |
+//! | [`ifml::IFML_MODEL_FORMAT_VERSION`] | [`ifml::IfmlModel`] | `.ifml` interaction flow |
+//! | [`ifml_manifest::IFML_MANIFEST_FORMAT_VERSION`] | [`ifml_manifest::IfmlManifest`] | `.ifml` control/route manifest |
+//! | [`cmmn::CMMN_MODEL_FORMAT_VERSION`] | [`cmmn::CmmnModel`] | `.cmmn` case management |
+//! | [`dmn::DMN_MODEL_FORMAT_VERSION`] | [`dmn::DmnModel`] | `.dmn` decision model |
+//!
 //! [rexlang]: https://github.com/anton-makes/rexlang
 
 mod actors;
@@ -178,10 +199,12 @@ pub mod ifml_manifest;
 pub mod usecases;
 mod wire;
 
-/// The artifact format version this crate writes and accepts.
+/// The artifact format version this crate writes and accepts for domain
+/// models ([`Model`]).
 ///
-/// Bump whenever the wire format changes incompatibly; see the [wire format
-/// contract](crate#wire-format-contract).
+/// Bump whenever the domain wire format changes incompatibly; see the [wire
+/// format contract](crate#wire-format-contract) and the
+/// [version-marker inventory](crate#version-markers).
 pub const FORMAT_VERSION: u32 = 1;
 
 pub use actors::{
