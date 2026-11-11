@@ -972,9 +972,9 @@ pub struct Pagination {
     pub cursor: bool,
 }
 
-fn is_false(flag: &bool) -> bool {
-    !*flag
-}
+// The `skip_serializing_if` paths above resolve `is_false` in this
+// module's scope; the shared predicate lives in `wire`.
+use crate::wire::is_false;
 
 #[cfg(test)]
 mod tests {
