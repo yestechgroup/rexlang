@@ -655,37 +655,24 @@ pub enum DeployValue {
 mod tests {
     use super::*;
 
-    /// An empty artifact serializes as exactly the version marker, and the
-    /// version gate rejects everything else (the ActorModel empty-model
-    /// discipline).
+    /// The shared wire-contract characterization (see
+    /// `wire::tests::assert_wire_contract`): an empty artifact serializes
+    /// as exactly the version marker and round-trips, the gate rejects
+    /// wrong/absent versions (the ActorModel empty-model discipline),
+    /// unknown fields are tolerated, and the populated sample round-trips
+    /// byte-stably through both serializers.
     #[test]
     fn empty_model_is_exactly_the_version_marker() {
-        let json = DeployModel::new().to_json().expect("serialize");
-        assert_eq!(json, r#"{"formatVersion":1}"#);
-        assert_eq!(
-            DeployModel::from_json(&json).expect("round trip"),
-            DeployModel::new()
-        );
+        crate::wire::tests::assert_wire_contract(r#"{"formatVersion":1}"#, &sample_model());
     }
 
-    #[test]
-    fn from_json_rejects_other_versions() {
-        for version in ["", "0", "2"] {
-            let text = if version.is_empty() {
-                "{}".to_string()
-            } else {
-                format!(r#"{{"formatVersion":{version}}}"#)
-            };
-            let error = DeployModel::from_json(&text).expect_err("must reject");
-            assert!(matches!(error, IrError::UnsupportedFormatVersion { .. }));
-        }
-    }
-
-    /// The wire shapes the docs promise: bare camelCase unit-enum tags, the
-    /// adjacently tagged setting value, and default+skip discipline.
-    #[test]
-    fn wire_shapes_are_pinned() {
-        let model = DeployModel::new()
+    /// A populated deployment covering applications, components
+    /// (capability, settings, env, design + flow bindings), a connection,
+    /// a profile (defaults, policy, mapping), and a deployment with
+    /// overrides. The shared wire-contract's populated sample and the
+    /// wire-shape pins' input.
+    fn sample_model() -> DeployModel {
+        DeployModel::new()
             .application(
                 DeployApplication::new("Svc")
                     .component(
@@ -710,9 +697,19 @@ mod tests {
                     .policy(DeployPolicy::prohibit(r#"db.storage == "local""#))
                     .mapping(DeployMapping::new(ComponentKind::Database, "cloudflare.d1")),
             )
-            .deployment(DeployDeployment::new("prod", "Svc", "edge").configure(
-                DeploySetting::new("db.storage", DeployValue::Text("remote".into())),
-            ));
+            .deployment(
+                DeployDeployment::new("prod", "Svc", "edge").configure(DeploySetting::new(
+                    "db.storage",
+                    DeployValue::Text("remote".into()),
+                )),
+            )
+    }
+
+    /// The wire shapes the docs promise: bare camelCase unit-enum tags, the
+    /// adjacently tagged setting value, and default+skip discipline.
+    #[test]
+    fn wire_shapes_are_pinned() {
+        let model = sample_model();
         let json = model.to_json_pretty().expect("serialize");
         assert!(
             json.contains(r#""kind": "database""#),

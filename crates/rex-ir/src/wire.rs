@@ -193,11 +193,12 @@ macro_rules! total_order_float {
 pub(crate) use total_order_float;
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use serde::de::DeserializeOwned;
+    use serde::Serialize;
     use std::fmt::Debug;
 
-    use super::{from_json, VersionedArtifact};
+    use super::{from_json, to_json, to_json_pretty, VersionedArtifact};
     use crate::cmmn::CmmnModel;
     use crate::cmmn::CMMN_MODEL_FORMAT_VERSION;
     use crate::ddd::{DddModel, DDD_MODEL_FORMAT_VERSION};
@@ -258,5 +259,87 @@ mod tests {
             matches!(error, IrError::UnsupportedFormatVersion { .. }),
             "unexpected error for `{json}`: {error}"
         );
+    }
+
+    /// The shared wire-contract characterization for one artifact root,
+    /// covering the contract points every root shares (each caller keeps
+    /// its own canonical-bytes expectation, because root-specific always-on
+    /// keys live there):
+    ///
+    /// 1. `T::default()` (== `new()`) serializes to **exactly**
+    ///    `empty_canonical_json` — the Default stamp and the write-side
+    ///    minimal-artifact discipline in one byte-identity.
+    /// 2. Those canonical bytes deserialize back to the same empty model.
+    /// 3. The version gate rejects a wrong and an absent `formatVersion`
+    ///    with [`IrError::UnsupportedFormatVersion`], reporting the found
+    ///    and expected versions — on payloads that also carry unknown
+    ///    fields, so the gate demonstrably fires before decoding.
+    /// 4. Unknown fields are tolerated: the canonical bytes plus a
+    ///    `nobodyKnowsMe` object deserialize to the plain empty model.
+    /// 5. A populated `sample` round-trips through both `to_json` and
+    ///    `to_json_pretty`, re-serializing byte-stably.
+    pub(crate) fn assert_wire_contract<T>(empty_canonical_json: &str, sample: &T)
+    where
+        T: VersionedArtifact + Serialize + DeserializeOwned + Default + PartialEq + Debug,
+    {
+        let name = std::any::type_name::<T>();
+
+        let default = T::default();
+        assert_eq!(
+            to_json(&default).expect("serialize empty"),
+            empty_canonical_json,
+            "{name}'s empty artifact must serialize to exactly the canonical bytes"
+        );
+
+        let parsed: T = from_json(empty_canonical_json).expect("canonical bytes must deserialize");
+        assert_eq!(parsed, default, "{name}'s canonical bytes must round-trip");
+
+        let with_version = |version: Option<u64>| {
+            let mut value: serde_json::Value =
+                serde_json::from_str(empty_canonical_json).expect("canonical bytes are JSON");
+            let object = value
+                .as_object_mut()
+                .expect("canonical bytes are an object");
+            match version {
+                Some(version) => {
+                    object.insert("formatVersion".to_string(), version.into());
+                }
+                None => {
+                    object.remove("formatVersion");
+                }
+            }
+            object.insert(
+                "nobodyKnowsMe".to_string(),
+                serde_json::json!({ "nested": [1, 2, 3] }),
+            );
+            value.to_string()
+        };
+        for (json, found) in [(with_version(Some(0)), 0u32), (with_version(Some(2)), 2)] {
+            let error = from_json::<T>(&json).expect_err("wrong version must be rejected");
+            assert!(
+                matches!(error, IrError::UnsupportedFormatVersion { found: f, expected } if f == found && expected == T::FORMAT_VERSION),
+                "unexpected gate error for `{json}`: {error:?}"
+            );
+        }
+        let error =
+            from_json::<T>(&with_version(None)).expect_err("absent version must be rejected");
+        assert!(
+            matches!(error, IrError::UnsupportedFormatVersion { found: 0, expected } if expected == T::FORMAT_VERSION),
+            "unexpected gate error for the absent version: {error:?}"
+        );
+
+        let tolerant = with_version(Some(T::FORMAT_VERSION as u64));
+        let parsed: T = from_json(&tolerant).expect("unknown fields are ignored");
+        assert_eq!(parsed, default, "unknown fields are dropped on write");
+
+        let compact = to_json(sample).expect("serialize sample");
+        let parsed: T = from_json(&compact).expect("sample must round-trip through to_json");
+        assert_eq!(&parsed, sample);
+        assert_eq!(to_json(&parsed).expect("re-serialize"), compact);
+
+        let pretty = to_json_pretty(sample).expect("serialize sample pretty");
+        let parsed: T = from_json(&pretty).expect("sample must round-trip through to_json_pretty");
+        assert_eq!(&parsed, sample);
+        assert_eq!(to_json_pretty(&parsed).expect("re-serialize"), pretty);
     }
 }

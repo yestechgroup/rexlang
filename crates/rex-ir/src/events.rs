@@ -501,3 +501,61 @@ pub enum DeliveryMode {
     /// Delivery neither drops nor duplicates: deduplication keys.
     EffectivelyOnce,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::PrimitiveType;
+
+    /// A populated contract covering every section: a pinned version, typed
+    /// payload fields, the governance labels, CloudEvents attributes, a
+    /// scoped channel, and a subscription with a filter and a full delivery
+    /// policy.
+    fn sample_model() -> EventModel {
+        EventModel::new()
+            .event(
+                EventDef::new("BookBorrowed")
+                    .version("1.0.0")
+                    .field(EventField::new(
+                        "bookId",
+                        TypeRef::Primitive(PrimitiveType::String),
+                    ))
+                    .owner("lending")
+                    .classification("internal")
+                    .retention("7y")
+                    .pii_field("bookId")
+                    .cloud_events(CloudEventsAttributes {
+                        r#type: "nz.example.library.book.borrowed".to_string(),
+                        source: "/library".to_string(),
+                        subject: Some("book".to_string()),
+                    }),
+            )
+            .channel(
+                ChannelDef::new("lending")
+                    .scope("/libraries/{id}")
+                    .publishes("BookBorrowed"),
+            )
+            .subscription(
+                SubscriptionDef::new("notices")
+                    .event("BookBorrowed")
+                    .consumer("notices-service")
+                    .scope("main")
+                    .when("bookId != null")
+                    .delivery(
+                        DeliveryPolicy::new(DeliveryMode::AtLeastOnce)
+                            .max_attempts(5)
+                            .backoff_seconds(30)
+                            .timeout_seconds(120)
+                            .dead_letter("lending-dlq"),
+                    ),
+            )
+    }
+
+    /// The shared wire-contract characterization (see
+    /// `wire::tests::assert_wire_contract`): the empty contract serializes
+    /// as exactly the version marker, and this populated one round-trips.
+    #[test]
+    fn empty_model_serializes_as_exactly_the_version_marker() {
+        crate::wire::tests::assert_wire_contract(r#"{"formatVersion":1}"#, &sample_model());
+    }
+}

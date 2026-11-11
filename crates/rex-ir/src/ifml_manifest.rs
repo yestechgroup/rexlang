@@ -441,23 +441,15 @@ mod tests {
         assert_eq!(IFML_MANIFEST_FORMAT_VERSION, 1);
     }
 
-    /// The write-side half of the minimal-artifact claim: an empty
-    /// manifest serializes as exactly `{"formatVersion":1}`.
+    /// The shared wire-contract characterization (see
+    /// `wire::tests::assert_wire_contract`): the write-side half of the
+    /// minimal-artifact claim — an empty manifest serializes as exactly
+    /// `{"formatVersion":1}` — plus the gate, unknown-field tolerance, and
+    /// byte-stable round-trips of the populated manifest through both
+    /// serializers.
     #[test]
     fn empty_manifest_serializes_as_exactly_the_format_version_marker() {
-        let json = IfmlManifest::default().to_json().expect("serialize empty");
-        assert_eq!(json, r#"{"formatVersion":1}"#);
-        let parsed = IfmlManifest::from_json(&json).expect("deserialize empty");
-        assert_eq!(parsed, IfmlManifest::default());
-    }
-
-    #[test]
-    fn to_json_pretty_round_trips_through_from_json() {
-        let manifest = sample_manifest();
-        let json = manifest.to_json_pretty().expect("serialize");
-        let parsed = IfmlManifest::from_json(&json).expect("deserialize");
-        assert_eq!(parsed, manifest);
-        assert_eq!(parsed.to_json_pretty().expect("re-serialize"), json);
+        crate::wire::tests::assert_wire_contract(r#"{"formatVersion":1}"#, &sample_manifest());
     }
 
     /// A populated manifest round-trips even though its empty collection
@@ -480,40 +472,6 @@ mod tests {
         }
         let parsed = IfmlManifest::from_json(&json).expect("deserialize");
         assert_eq!(parsed, manifest);
-    }
-
-    #[test]
-    fn from_json_rejects_wrong_format_version() {
-        let json = r#"{"formatVersion": 2, "views": []}"#;
-        match IfmlManifest::from_json(json) {
-            Err(IrError::UnsupportedFormatVersion { found, expected }) => {
-                assert_eq!(found, 2);
-                assert_eq!(expected, IFML_MANIFEST_FORMAT_VERSION);
-            }
-            other => panic!("expected UnsupportedFormatVersion, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn from_json_rejects_missing_format_version() {
-        let json = r#"{"views": []}"#;
-        match IfmlManifest::from_json(json) {
-            Err(IrError::UnsupportedFormatVersion { found, expected }) => {
-                assert_eq!(found, 0, "an absent version reports as 0");
-                assert_eq!(expected, IFML_MANIFEST_FORMAT_VERSION);
-            }
-            other => panic!("expected UnsupportedFormatVersion, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn from_json_tolerates_unknown_fields() {
-        let json = r#"{
-            "formatVersion": 1,
-            "nobodyKnowsMe": {"nested": [1, 2, 3]}
-        }"#;
-        let manifest = IfmlManifest::from_json(json).expect("unknown fields are ignored");
-        assert_eq!(manifest, IfmlManifest::default());
     }
 
     #[test]

@@ -333,3 +333,132 @@ pub enum NodeRef {
     /// A message end of the referenced declared message.
     MessageEnd(MessageEndRef),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A populated use case covering both occurrence kinds, both payload
+    /// kinds, all three anchors, a policy-principal participant (a bare
+    /// `.actor` actor, `type_name: None`), and a guarded step.
+    fn sample_model() -> UseCaseModel {
+        UseCaseModel {
+            format_version: USE_CASE_MODEL_FORMAT_VERSION,
+            use_cases: vec![UseCaseDef {
+                name: "BorrowBook".into(),
+                description: Some("A member borrows a book.".into()),
+                subject: Some(Participant {
+                    name: "Library".into(),
+                    type_name: Some("nz.example.library::Library".into()),
+                    occurrences: vec![
+                        Occurrence::Named("holdRequested".into()),
+                        Occurrence::MessageEnd(MessageEndRef {
+                            message: "borrowConfirmed".into(),
+                            end: MessageEndSide::Target,
+                        }),
+                    ],
+                    steps: Vec::new(),
+                }),
+                actors: vec![
+                    Participant {
+                        name: "Member".into(),
+                        type_name: Some("nz.example.library::Member".into()),
+                        occurrences: vec![Occurrence::Named("browses".into())],
+                        steps: Vec::new(),
+                    },
+                    Participant {
+                        name: "LibrarianAgent".into(),
+                        type_name: None,
+                        occurrences: Vec::new(),
+                        steps: vec![Step {
+                            name: "checkCard".into(),
+                            operation: "verifyMember".into(),
+                            requires: vec!["VerifyMember".into()],
+                            when: Some("member.active == true".into()),
+                        }],
+                    },
+                ],
+                messages: vec![
+                    Message {
+                        name: "requestBorrow".into(),
+                        payload: Some(PayloadRef::Domain(TypeRef::Class {
+                            package: "nz.example.library".into(),
+                            name: "Book".into(),
+                        })),
+                        source: Endpoint {
+                            participant: "Member".into(),
+                            anchor: Anchor::Occurrence("browses".into()),
+                        },
+                        target: Endpoint {
+                            participant: "Library".into(),
+                            anchor: Anchor::Occurrence("holdRequested".into()),
+                        },
+                    },
+                    Message {
+                        name: "borrowConfirmed".into(),
+                        payload: Some(PayloadRef::Event("BorrowConfirmed".into())),
+                        source: Endpoint {
+                            participant: "Library".into(),
+                            anchor: Anchor::MessageEnd(MessageEndSide::Source),
+                        },
+                        target: Endpoint {
+                            participant: "Member".into(),
+                            anchor: Anchor::MessageEnd(MessageEndSide::Target),
+                        },
+                    },
+                    Message {
+                        name: "notifyOverdue".into(),
+                        payload: None,
+                        source: Endpoint {
+                            participant: "LibrarianAgent".into(),
+                            anchor: Anchor::Step("checkCard".into()),
+                        },
+                        target: Endpoint {
+                            participant: "Library".into(),
+                            anchor: Anchor::Occurrence("holdRequested".into()),
+                        },
+                    },
+                ],
+                successions: vec![
+                    Succession {
+                        first: NodeRef::Start,
+                        then: NodeRef::Step("checkCard".into()),
+                    },
+                    Succession {
+                        first: NodeRef::Step("checkCard".into()),
+                        then: NodeRef::Occurrence {
+                            participant: "Member".into(),
+                            name: "browses".into(),
+                        },
+                    },
+                    Succession {
+                        first: NodeRef::Occurrence {
+                            participant: "Library".into(),
+                            name: "holdRequested".into(),
+                        },
+                        then: NodeRef::MessageEnd(MessageEndRef {
+                            message: "borrowConfirmed".into(),
+                            end: MessageEndSide::Target,
+                        }),
+                    },
+                    Succession {
+                        first: NodeRef::MessageEnd(MessageEndRef {
+                            message: "borrowConfirmed".into(),
+                            end: MessageEndSide::Source,
+                        }),
+                        then: NodeRef::Done,
+                    },
+                ],
+                realizes: vec!["Lending".into()],
+            }],
+        }
+    }
+
+    /// The shared wire-contract characterization (see
+    /// `wire::tests::assert_wire_contract`): the empty artifact serializes
+    /// as exactly the version marker, and this populated one round-trips.
+    #[test]
+    fn empty_model_serializes_as_exactly_the_version_marker() {
+        crate::wire::tests::assert_wire_contract(r#"{"formatVersion":1}"#, &sample_model());
+    }
+}

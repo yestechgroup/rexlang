@@ -1105,36 +1105,15 @@ mod tests {
         assert_eq!(DDD_MODEL_FORMAT_VERSION, 1);
     }
 
+    /// The shared wire-contract characterization (see
+    /// `wire::tests::assert_wire_contract`): an empty artifact serializes
+    /// as exactly the version marker (as both `new()` and `Default` — the
+    /// helper pins `Default`), the gate rejects wrong/absent versions,
+    /// unknown fields are tolerated, and the populated design round-trips
+    /// byte-stably through both serializers.
     #[test]
     fn empty_model_serializes_as_exactly_format_version() {
-        assert_eq!(
-            DddModel::new().to_json().expect("serialize"),
-            r#"{"formatVersion":1}"#
-        );
-        assert_eq!(
-            DddModel::default().to_json().expect("serialize"),
-            r#"{"formatVersion":1}"#
-        );
-        let parsed = DddModel::from_json(r#"{"formatVersion":1}"#).expect("deserialize");
-        assert_eq!(parsed, DddModel::new());
-    }
-
-    #[test]
-    fn full_model_round_trips_through_json() {
-        let model = sample_model();
-        let json = model.to_json().expect("serialize");
-        let parsed = DddModel::from_json(&json).expect("deserialize");
-        assert_eq!(parsed, model);
-        assert_eq!(parsed.to_json().expect("re-serialize"), json);
-    }
-
-    #[test]
-    fn full_model_round_trips_through_json_pretty() {
-        let model = sample_model();
-        let json = model.to_json_pretty().expect("serialize");
-        let parsed = DddModel::from_json(&json).expect("deserialize");
-        assert_eq!(parsed, model);
-        assert_eq!(parsed.to_json_pretty().expect("re-serialize"), json);
+        crate::wire::tests::assert_wire_contract(r#"{"formatVersion":1}"#, &sample_model());
     }
 
     #[test]
