@@ -407,12 +407,12 @@ impl ActorModel {
 
     /// Serializes the artifact to pretty-printed (2-space indent) JSON.
     pub fn to_json_pretty(&self) -> Result<String, IrError> {
-        wire::to_json_pretty(self)
+        wire::VersionedArtifact::to_json_pretty(self)
     }
 
     /// Serializes the artifact to compact JSON.
     pub fn to_json(&self) -> Result<String, IrError> {
-        wire::to_json(self)
+        wire::VersionedArtifact::to_json(self)
     }
 
     /// Deserializes an actor-policy artifact from JSON, rejecting artifacts
@@ -420,7 +420,7 @@ impl ActorModel {
     ///
     /// Unknown fields are ignored for forward compatibility.
     pub fn from_json(json: &str) -> Result<Self, IrError> {
-        wire::from_json(json)
+        wire::VersionedArtifact::from_json(json)
     }
 }
 
@@ -428,8 +428,4 @@ impl wire::VersionedArtifact for ActorModel {
     const FORMAT_VERSION: u32 = ACTOR_MODEL_FORMAT_VERSION;
 }
 
-impl Default for ActorModel {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+wire::default_format_version!(ActorModel);

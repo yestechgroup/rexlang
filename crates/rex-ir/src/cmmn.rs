@@ -118,12 +118,12 @@ impl CmmnModel {
 
     /// Serializes the artifact to pretty-printed (2-space indent) JSON.
     pub fn to_json_pretty(&self) -> Result<String, IrError> {
-        crate::wire::to_json_pretty(self)
+        crate::wire::VersionedArtifact::to_json_pretty(self)
     }
 
     /// Serializes the artifact to compact JSON.
     pub fn to_json(&self) -> Result<String, IrError> {
-        crate::wire::to_json(self)
+        crate::wire::VersionedArtifact::to_json(self)
     }
 
     /// Deserializes a case artifact from JSON, rejecting artifacts whose
@@ -131,7 +131,7 @@ impl CmmnModel {
     ///
     /// Unknown fields are ignored for forward compatibility.
     pub fn from_json(json: &str) -> Result<Self, IrError> {
-        crate::wire::from_json(json)
+        crate::wire::VersionedArtifact::from_json(json)
     }
 }
 
@@ -139,11 +139,7 @@ impl crate::wire::VersionedArtifact for CmmnModel {
     const FORMAT_VERSION: u32 = CMMN_MODEL_FORMAT_VERSION;
 }
 
-impl Default for CmmnModel {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::wire::default_format_version!(CmmnModel);
 
 /// A declared case: roles, the typed case file, and the flat plan-item
 /// graph.

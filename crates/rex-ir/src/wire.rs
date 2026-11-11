@@ -2,13 +2,18 @@
 //!
 //! Every artifact root ([`Model`], [`ActorModel`], [`ddd::DddModel`],
 //! [`events::EventModel`], [`deploy::DeployModel`],
-//! [`usecases::UseCaseModel`], [`ifml::IfmlModel`], [`cmmn::CmmnModel`])
+//! [`usecases::UseCaseModel`], [`ifml::IfmlModel`],
+//! [`ifml_manifest::IfmlManifest`], [`cmmn::CmmnModel`], [`dmn::DmnModel`])
 //! carries a `format_version` field and implements
 //! [`VersionedArtifact`]. The serialize/version-gate plumbing is written
-//! once here and called from each root's inherent `to_json` /
-//! `from_json` methods, so the next artifact surface is a
-//! [`VersionedArtifact`] impl plus three one-line delegations, and the
-//! gate semantics cannot drift between roots.
+//! once here, as the trait's default methods: each root's public inherent
+//! `to_json` / `to_json_pretty` / `from_json` — the API external consumers
+//! call — is a one-line delegation to the corresponding default, and
+//! [`default_format_version!`] generates the root's `Default` from its
+//! constructor. The next artifact surface is a [`VersionedArtifact`] impl,
+//! that macro invocation, and three one-line delegations, and the gate
+//! semantics cannot drift between roots because every root routes through
+//! the same defaults.
 //!
 //! The module also owns the two small pieces of vocabulary-level
 //! machinery every artifact file shares: the [`is_false`]
@@ -22,10 +27,67 @@ use crate::IrError;
 
 /// A versioned artifact root: the top-level type of a serialized
 /// `.rex.json` artifact, stamped with and gated on a `formatVersion`.
+///
+/// The default methods below are the one implementation of the wire
+/// plumbing; each root keeps a public inherent method of the same name
+/// (external consumers — the driver, the backends, the CLI — cannot see
+/// this `pub(crate)` trait) whose body delegates here.
 pub(crate) trait VersionedArtifact {
     /// The format version this root writes and accepts.
     const FORMAT_VERSION: u32;
+
+    /// Serializes the artifact to pretty-printed (2-space indent) JSON.
+    fn to_json_pretty(&self) -> Result<String, IrError>
+    where
+        Self: Serialize,
+    {
+        to_json_pretty(self)
+    }
+
+    /// Serializes the artifact to compact JSON.
+    fn to_json(&self) -> Result<String, IrError>
+    where
+        Self: Serialize,
+    {
+        to_json(self)
+    }
+
+    /// Deserializes a versioned artifact from JSON, rejecting artifacts
+    /// whose `formatVersion` is absent or not
+    /// [`VersionedArtifact::FORMAT_VERSION`] for `Self`.
+    fn from_json(json: &str) -> Result<Self, IrError>
+    where
+        Self: DeserializeOwned + Sized,
+    {
+        from_json(json)
+    }
 }
+
+/// Generates an artifact root's `Default` impl from its inherent
+/// constructor: `default_format_version!(Model);` for the usual
+/// argument-less `new()`, or
+/// `default_format_version!(IfmlModel, Self::new(...));` with the
+/// constructor call for the root whose `new()` takes arguments. Every
+/// root's `Default` must stamp its format version via that constructor —
+/// never hand-write a `Default` that bypasses it.
+macro_rules! default_format_version {
+    ($root:ident) => {
+        impl Default for $root {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+    };
+    ($root:ident, $new_call:expr) => {
+        impl Default for $root {
+            fn default() -> Self {
+                $new_call
+            }
+        }
+    };
+}
+
+pub(crate) use default_format_version;
 
 /// Serializes an artifact to pretty-printed (2-space indent) JSON.
 pub(crate) fn to_json_pretty<T: Serialize + ?Sized>(value: &T) -> Result<String, IrError> {
