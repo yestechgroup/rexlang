@@ -56,17 +56,12 @@ pub(crate) fn parse_date_text(text: &str) -> Option<(i32, u32, u32)> {
     Some((year, month, day))
 }
 
-/// Days from 1970-01-01 to `y-m-d` (Hinnant's `days_from_civil`), as `i64`;
-/// `None` when the value does not fit `i32`. Mirrors the runtime's calendar.
+/// Days from 1970-01-01 to `y-m-d` (Hinnant's `days_from_civil`); `None`
+/// when the value does not fit `i32`. Delegates to the shared rex-dates
+/// core — the same arithmetic the runtime's `Date` uses — and adds the
+/// checked `i32` narrow the checker's `i32` year domain requires.
 pub(crate) fn days_from_civil(y: i32, m: u32, d: u32) -> Option<i32> {
-    let y = i64::from(y) - i64::from(m <= 2);
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let mp = i64::from(if m > 2 { m - 3 } else { m + 9 });
-    let doy = (153 * mp + 2) / 5 + i64::from(d) - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
-    i32::try_from(days).ok()
+    i32::try_from(rex_dates::days_from_civil(i64::from(y), m, d)).ok()
 }
 
 /// Whether an expression is an integer *literal* (optionally negated): the

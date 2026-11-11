@@ -1,0 +1,12 @@
+[package]
+name = "rex-dates"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared calendar leaf: Hinnant civil-date day-number conversions"
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
