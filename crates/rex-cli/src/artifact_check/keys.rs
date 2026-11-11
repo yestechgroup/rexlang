@@ -1,6 +1,7 @@
 //! The structural-key scan: the sorted camelCase vocabulary and the
 //! snake_case shadow detector.
 
+use rex_backend_common::camel_case;
 use serde_json::Value;
 
 /// `packages`/`blocks` sanity: an array of objects each carrying a string
@@ -204,26 +205,4 @@ pub(super) fn scan_snake_case_keys(value: &Value, errors: &mut Vec<String>) {
         }
         _ => {}
     }
-}
-
-/// `format_version` -> `formatVersion` (first segment lowercase, the rest
-/// capitalized).
-fn camel_case(key: &str) -> String {
-    let mut out = String::with_capacity(key.len());
-    for (index, segment) in key
-        .split('_')
-        .filter(|segment| !segment.is_empty())
-        .enumerate()
-    {
-        let mut chars = segment.chars();
-        if let Some(first) = chars.next() {
-            if index == 0 {
-                out.extend(first.to_lowercase());
-            } else {
-                out.extend(first.to_uppercase());
-            }
-            out.push_str(chars.as_str());
-        }
-    }
-    out
 }

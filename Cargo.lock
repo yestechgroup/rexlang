@@ -2669,6 +2669,7 @@ dependencies = [
  "anyhow",
  "clap",
  "rex-backend-cedar",
+ "rex-backend-common",
  "rex-backend-jsonschema",
  "rex-backend-rust",
  "rex-diagnostics",

@@ -74,6 +74,33 @@ pub fn snake_case(name: &str) -> String {
     out
 }
 
+/// `format_version` -> `formatVersion` (first segment lowercase, the rest
+/// capitalized).
+///
+/// The inverse of [`snake_case`] on every structural wire-format key: the
+/// artifact check's snake_case-shadow detector uses it to name the camelCase
+/// key a snake_case spelling shadows, so it lives beside [`snake_case`] with
+/// the round trip pinned by a test.
+pub fn camel_case(key: &str) -> String {
+    let mut out = String::with_capacity(key.len());
+    for (index, segment) in key
+        .split('_')
+        .filter(|segment| !segment.is_empty())
+        .enumerate()
+    {
+        let mut chars = segment.chars();
+        if let Some(first) = chars.next() {
+            if index == 0 {
+                out.extend(first.to_lowercase());
+            } else {
+                out.extend(first.to_uppercase());
+            }
+            out.push_str(chars.as_str());
+        }
+    }
+    out
+}
+
 /// Writes a backend's generated files (relative path -> contents) into
 /// `out_dir`, creating parent directories as needed. Iteration follows
 /// the map's key order, so the write order is deterministic.
@@ -113,6 +140,185 @@ mod tests {
         assert_eq!(snake_case("books"), "books");
         assert_eq!(snake_case("Library"), "library");
         assert_eq!(snake_case("HTTPServer"), "http_server");
+    }
+
+    #[test]
+    fn camel_case_conversion() {
+        assert_eq!(camel_case("format_version"), "formatVersion");
+        assert_eq!(camel_case("get_book"), "getBook");
+        // The first segment is lowercased by contract, so acronym-initial
+        // snake spellings do not round-trip to the all-caps form.
+        assert_eq!(camel_case("url_count"), "urlCount");
+    }
+
+    /// Every structural (non model-defined) key of the IR, actor, DDD design,
+    /// event, deployment, and use-case wire formats — the corpus the
+    /// snake_case-shadow detector compares against. Copied verbatim from
+    /// `rex-cli/src/artifact_check/keys.rs`; the two lists must agree.
+    const STRUCTURAL_KEYS: &[&str] = &[
+        "actors",
+        "anchor",
+        "annotations",
+        "applicabilityRules",
+        "application",
+        "authorizedRoles",
+        "autoComplete",
+        "base",
+        "blocks",
+        "bodies",
+        "builtin",
+        "cache",
+        "capabilities",
+        "capability",
+        "caseFile",
+        "cases",
+        "cedar",
+        "channels",
+        "children",
+        "class",
+        "classes",
+        "componentType",
+        "composition",
+        "constraints",
+        "consumer",
+        "context",
+        "convert",
+        "create",
+        "datatypes",
+        "default",
+        "definitionRef",
+        "delegations",
+        "dependencies",
+        "description",
+        "designs",
+        "detailFields",
+        "details",
+        "effect",
+        "end",
+        "entries",
+        "enums",
+        "eventType",
+        "events",
+        "extends",
+        "facets",
+        "features",
+        "finite",
+        "first",
+        "flags",
+        "format",
+        "formatVersion",
+        "from",
+        "functions",
+        "grants",
+        "hierarchyField",
+        "id",
+        "ifPart",
+        "inputParams",
+        "interfaces",
+        "isDefault",
+        "isDerived",
+        "isId",
+        "isLandmark",
+        "isModal",
+        "isReadOnly",
+        "isXor",
+        "key",
+        "kind",
+        "label",
+        "labelField",
+        "labelFields",
+        "literals",
+        "lower",
+        "manualActivation",
+        "manualActivationRule",
+        "maxDepth",
+        "maxLength",
+        "maximum",
+        "message",
+        "messages",
+        "minLength",
+        "minimum",
+        "moduleUses",
+        "modules",
+        "multiplicity",
+        "name",
+        "neverBoth",
+        "nonPersistent",
+        "objects",
+        "obligations",
+        "occurrences",
+        "onParts",
+        "operation",
+        "operations",
+        "opposite",
+        "optimisticLocking",
+        "outputParams",
+        "packages",
+        "params",
+        "participant",
+        "pattern",
+        "payload",
+        "planItems",
+        "planningMode",
+        "planningTables",
+        "platform",
+        "processRef",
+        "publishes",
+        "purposes",
+        "realizes",
+        "repetitionRule",
+        "repository",
+        "requiredRole",
+        "requiredRule",
+        "requires",
+        "returnMultiplicity",
+        "returnType",
+        "rexVersion",
+        "schemaName",
+        "sentryRef",
+        "services",
+        "source",
+        "steps",
+        "stereotype",
+        "subcommands",
+        "subject",
+        "subscriptions",
+        "successions",
+        "target",
+        "targetBindings",
+        "taskType",
+        "then",
+        "to",
+        "type",
+        "typeName",
+        "unique",
+        "upper",
+        "useCases",
+        "value",
+        "valueFields",
+        "version",
+        "vocabularies",
+        "when",
+    ];
+
+    #[test]
+    fn camel_case_then_snake_case_round_trips_every_structural_key() {
+        for key in STRUCTURAL_KEYS {
+            // The detector maps a snake_case spelling to the camelCase key
+            // it shadows, so the corpus key must be recoverable from its
+            // snake_case spelling and back — in both directions.
+            let snake = snake_case(key);
+            assert_eq!(
+                camel_case(&snake),
+                *key,
+                "snake_case then camel_case broke {key:?}"
+            );
+            assert_eq!(
+                snake_case(&camel_case(&snake)),
+                snake,
+                "camel_case then snake_case broke {key:?}"
+            );
+        }
     }
 
     #[test]
