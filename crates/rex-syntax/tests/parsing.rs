@@ -1653,3 +1653,65 @@ fn escaped_sigil_is_an_ordinary_identifier() {
     let result = parse(source);
     assert!(result.errors.is_empty(), "{:?}", result.errors);
 }
+
+#[test]
+fn a_class_may_declare_a_table_annotation() {
+    let source = "package demo\n\nclass PayRunType table \"pay_run_type\" { String name }";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let declarations = &result.ast.expect("ast").declarations;
+    let class = expect_class(&declarations[0], "PayRunType");
+    assert_eq!(class.table.as_deref(), Some("pay_run_type"));
+
+    // The annotation sits before `extends` and stays optional.
+    let source = "package demo\n\nclass A table \"a_table\" extends B { int n }";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let model = result.ast.expect("ast");
+    let class = expect_class(&model.declarations[0], "A");
+    assert_eq!(class.table.as_deref(), Some("a_table"));
+    assert_eq!(class.extends.len(), 1);
+
+    // Without the annotation the field stays `None`.
+    let source = "package demo\n\nclass A { int n }";
+    let result = parse(source);
+    let model = result.ast.expect("ast");
+    let class = expect_class(&model.declarations[0], "A");
+    assert_eq!(class.table, None);
+}
+
+#[test]
+fn table_stays_a_contextual_identifier() {
+    // The annotation is recognized only directly after the class name —
+    // `table` remains usable as a class name, a feature name, and an
+    // extends target (the `id`/`readonly` contextual precedent).
+    let source = "package demo\n\nclass table { String table }";
+    let result = parse(source);
+    assert!(
+        result.errors.is_empty(),
+        "`table` must remain usable as an identifier: {:?}",
+        result.errors
+    );
+    let declarations = &result.ast.expect("ast").declarations;
+    let class = expect_class(&declarations[0], "table");
+    assert_eq!(class.table, None, "no annotation without a string");
+    assert_eq!(class.features.len(), 1);
+
+    // An escaped `^table` is an ordinary identifier, never the annotation.
+    let source = "package demo\n\nclass ^table { int n }";
+    let result = parse(source);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let model = result.ast.expect("ast");
+    expect_class(&model.declarations[0], "table");
+}
+
+#[test]
+fn a_table_annotation_is_class_grammar_only() {
+    // Enums have no table: `table` after the enum name is a syntax error.
+    let source = "package demo\n\nenum E table \"x\" { A = 0 }";
+    let result = parse(source);
+    assert!(
+        !result.errors.is_empty(),
+        "`table` must not parse on an enum declaration"
+    );
+}

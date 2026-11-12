@@ -267,6 +267,12 @@ pub struct ClassDef {
     /// serialized in instance JSON. Additive; omitted when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub operations: Vec<Operation>,
+    /// The declared `table "…"` storage-name override (issue rexlang#177).
+    /// `None` means consumers derive the table from the class's stripped
+    /// module name themselves; `Some` is the authoritative spelling and must
+    /// not be re-derived. Additive; omitted when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table_name: Option<String>,
 }
 
 impl ClassDef {
@@ -278,9 +284,16 @@ impl ClassDef {
             extends,
             features,
             operations: Vec::new(),
+            table_name: None,
         };
         class.assign_feature_ids();
         class
+    }
+
+    /// Chainable setter declaring the class's storage table (`table "…"`).
+    pub fn with_table_name(mut self, table_name: impl Into<String>) -> Self {
+        self.table_name = Some(table_name.into());
+        self
     }
 
     /// (Re)assigns every [`Feature::id`] to its 0-based declaration index.

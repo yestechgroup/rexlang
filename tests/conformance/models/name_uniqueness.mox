@@ -1,0 +1,28 @@
+/// Conformance: the stripped-name uniqueness shapes (issue rexlang#177) in
+/// one compiling package — the entity + contained-value-object exemption
+/// (`PayRun` contains `PayRunType`, so the pair that strips to `pay_run`
+/// compiles) and the `table "…"` override (`StatusLabel` declares its
+/// storage table, which flows through the IR as `tableName` so consumers
+/// stop re-deriving it; its derived default would be `status_label`). The
+/// colliding shapes themselves are compile errors (E0300/E0301) and live in
+/// the driver's `domain_names` test suite, never in a compiling fixture.
+package nz.example.payroll
+
+class PayRun {
+    id String reference
+    int total
+    contains PayRunType items
+}
+
+class PayRunType {
+    String name
+}
+
+enum PayRunStatusType {
+    Draft = 0
+    Approved = 1
+}
+
+class StatusLabel table "pay_run_status_label" {
+    String label
+}

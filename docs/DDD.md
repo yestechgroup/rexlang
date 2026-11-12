@@ -45,7 +45,12 @@ docs):
   (`{"name": ..., "type": ...}`) — there are no parallel wire-level
   signature types.
 - Unknown fields are ignored on deserialize; every field added after v1
-  must keep the `#[serde(default)]` + skip discipline.
+  must keep the `#[serde(default)]` + skip discipline. The rexlang#176/#180
+  additions ride that rule: an operation's `transition` binding
+  (`TransitionRef`) and its resolved guard paths (`conditionPaths`,
+  `ConditionPath` rows with adjacently tagged scopes) are absent from every
+  artifact that does not declare them — body-less and machine-less models
+  stay byte-identical, `DDD_MODEL_FORMAT_VERSION` stays 1.
 - A repository operation carries **exactly one** of a built-in op
   (`"builtin"`) or a declared signature (`returnType`/`params`).
 
@@ -107,18 +112,52 @@ Lexical and structural rules:
   carry a `capability a, b` clause, an `invokes a.b, c` clause (the
   decision services the operation invokes), and an `emits A, B` clause;
   delegated service operations may carry all three clauses too (they are
-  service operations), while declared repository operations take neither
-  (the wire artifact's repository operations carry no capabilities,
-  invocations, or emissions, so accepting one would silently drop data). A
+  service operations), plus the `transition` binding described below,
+  while declared repository operations take neither (the wire artifact's
+  repository operations carry no capabilities, invocations, emissions, or
+  transition bindings, so accepting one would silently drop data). A
   service operation's clauses are fixed in the canonical order
-  `capability? invokes? emits? when?` — the order the formatter emits, so
-  a source writing `when` before `emits` is a syntax error, not a
-  formatting opportunity. A service body may also declare decision
+  `capability? invokes? emits? transition? when?` — the order the
+  formatter emits, so a source writing `when` before `emits` (or
+  `transition` anywhere but between `emits` and `when`) is a syntax error,
+  not a formatting opportunity. A service body may also declare decision
   dependencies with `inject decision <qualified-name>;` — the second
   `inject` form, alongside the plain `inject <name>;` dependency form
   (`decision` is contextual: special only right after `inject`,
   `^decision` escapes; `invokes` is special only in the clause position,
   `^invokes` escapes).
+- **Transition binding** (issue
+  [#176](https://github.com/yestechgroup/rexlang/issues/176)) — a
+  *delegated* operation may carry `transition <Trigger>`, the explicit
+  declaration of the machine-bound transition the delegation fires
+  (replacing the consumer's per-state inference):
+
+  ```
+  service PayRunService {
+      inject PayRunRepository;
+      submit  => PayRunRepository.save transition Submit;
+      reverse => PayRunRepository.save transition PayRunStatus.Reverse;
+  }
+  ```
+
+  The machine is the one bound to the delegation target's repository
+  design; the trigger must be one that machine declares — an explicit
+  `via` name or a bare arrow's derived name (the lowerCamel of the target
+  state), never a name that is both (that binding is ambiguous and
+  refused). The qualified spelling names the machine by its **enum type
+  name** — `PayRunStatus.Reverse`, not a machine name, because rexlang
+  machine declarations are field-named (`machine status: PayRunStatus`) so
+  a machine-name qualifier does not exist as authored. A module carrying
+  more than one machine-bearing design **requires** the qualifier (E0352);
+  a binding on a declared operation, or on a delegation that is not a
+  repository `save`, is refused (E0351); an unknown trigger is E0350 with
+  the declared trigger vocabulary (did-you-mean included). The artifact
+  carries the binding as authored — `TransitionRef { trigger, machine }`
+  on the operation (issue [#143](https://github.com/yestechgroup/rexlang/issues/143)'s
+  lowering contract; see "The lowering contract" below). A binding that
+  resolves also pins the machine's class as the operation's own-record
+  condition scope — the multi-machine guard shape of issue
+  [#180](https://github.com/yestechgroup/rexlang/issues/180).
 - A service or repository operation may carry a leading `protected`
   modifier (Sculptor's visibility): the operation stays off the public
   interface. `protected` is contextual — in leading position it is the
@@ -330,17 +369,61 @@ read `status == AwaitingApproval`, never `status == "AwaitingApproval"`.
 The string literal is a type error under the same-type equality rule (R2 of
 `docs/EXPRESSIONS.md`); the anti-magic-strings stance is deliberate. The enum-literal namespace (rule L3 of `docs/EXPRESSIONS.md`) is the general typed spelling beyond a machine's own bound states: `status == PayRunStatus.Draft` names any declared member of the field's enum as a typed value, and a string literal that names no declared member is the closed-set membership error rather than the generic mismatch. Edge
 guards bind only the machine's own states (a foreign machine's states are
-unbound — cross-entity state references are a type error). A service
-operation is not aggregate-scoped, so its condition requires the module to
-have **exactly one** machine-bearing design, and that design's class is the
-condition's `self` scope. Two machines in one module declaring the same
-state name is an ambiguous-binding error: the name stops binding, with one
-error saying so. The same binding is the membership check on guard
-literals: an equality against the machine's field must name a declared
-state — an enum member the machine never declares is unbound (a type
-error), because a state this machine can never hold is a modeling defect,
-not a value. Comparisons against other features are not machine-checked:
-their name operands resolve as features.
+unbound — cross-entity state references are a type error). Comparisons
+against other features are not machine-checked: their name operands
+resolve as features.
+
+**Condition scoping** (issue
+[#180](https://github.com/yestechgroup/rexlang/issues/180)) — a service
+operation's `when` guard is not single-entity. Three scoping regimes, by
+the module's machine count:
+
+- **One machine-bearing design** (the original shape): that design's class
+  is the guard's implicit `self`; bare feature names and machine states
+  resolve against it. A guard with no injected path lowers no
+  `conditionPaths` — the resolution is derivable from the artifact's
+  machine alone.
+- **No machine-bearing design**: an op-level guard has no own-record scope
+  at all and is refused (`does not have exactly one machine-bearing
+  design`), unless a resolved `transition` binding pins the scope (the
+  joint shape with issue #176 above).
+- **Several machine-bearing designs** (multi-machine): there is no
+  implicit self — bare names must resolve *uniquely*:
+  - machine states bind when exactly one machine of the module declares
+    the name; a state two machines declare never binds, and referencing it
+    unqualified is the `E0354` ambiguous-machine-scope error with the
+    `qualify as `<EnumType>.<State>`` help — the enum-literal spelling
+    (`PayRunStatus.Draft`) resolves it;
+  - each machine's bound field is addressable two ways: by its authored
+    field name when that name is unique across the module's machines, and
+    always by the **enum-derived spelling** — the lowerCamel of the
+    machine's enum type name (`machine status: PayRunStatus` →
+    `payRunStatus`). A field name two machines bind (`status` on both
+    designs) is the `E0354` error unqualified, with the spellings in the
+    help;
+  - a qualified path (`TimecardRepository.status`) resolves against the
+    service's injected repositories — the first segment must match an
+    injection name **exactly as declared** (case-sensitive; a near-miss is
+    the `E0353` unknown-condition-path error with the did-you-mean), the
+    repository must be designed in the same module, and the remaining
+    segments are fields of the repository's class (`E0353` names the class
+    and suggests when a segment is no such field). A path that resolves
+    but mistypes is ordinary typing: the same-type equality error, spanned
+    on the condition.
+
+**Resolved condition paths.** The artifact carries the guard's resolution
+as `conditionPaths` on the operation — `ConditionPath { scope, field,
+fieldType }` rows, scope adjacently tagged `{"type":"ownRecord"}` or
+`{"type":"injected","value":{"repository":…,"class":…}}` (the `repository`
+is the injection name as declared, the `class` the repository design's
+class; `field` is the dotted remainder, `fieldType` the field's declared
+type). A row lowers exactly when the path's resolution is **not derivable
+from the artifact alone**: injected paths always (the repository→class
+binding is design knowledge the domain model does not carry), and
+own-record paths in a multi-machine module (where the owning machine is
+not a priori derivable). The `condition` source string stays verbatim;
+consumers build on the resolved form (issue #143's lowering contract)
+instead of re-parsing guards.
 
 **Artifact shape.** The machine lowers to `machine` on the design (a
 `rex_ir::ddd::StateMachine`): the bound `field`, the enum `TypeRef`, the
@@ -408,6 +491,38 @@ behavior declared on them is almost always behavior that belongs on the
 aggregate's class or on a service. The escape hatch is unchanged: a
 body-less `op` stays the abstract hook implemented by hand in target code
 (the "Gap classes" divergence below).
+
+## The lowering contract (issue #143)
+
+ rexlang aligns with
+[codegraph#590](https://github.com/magick93/codegraph): **public service
+operations lower to capability-gated routes downstream** — the generator
+emits one route per public operation, guarded by the operation's declared
+capabilities, with server-side `when`/`never_both` enforcement. rexlang's
+role is to make the surface the route is built from *declarative*, which
+issues [#176](https://github.com/yestechgroup/rexlang/issues/176) and
+[#180](https://github.com/yestechgroup/rexlang/issues/180) complete:
+
+- the declared `transition` (`TransitionRef`) is the lowering contract for
+  the machine-bound transition a delegated `save` fires — the consumer
+  lowers the declared trigger verbatim (state patch = the trigger's target
+  state, conflicts via the machine guard) and pins it in its hurl/openapi
+  contracts, instead of guessing from state names;
+- the resolved condition paths (`conditionPaths`) are the lowering
+  contract for the guard: injected-scope reads go through the injected
+  repository on the handler's already-loaded context, own-record reads
+  through the bound entity — a closed subset the refusal of which names
+  the construct.
+
+Until an in-tree `.ddd` lowering exists, compiles therefore add **no
+"lowers to nothing" diagnostics**: the artifact is the contract, and the
+consumer owns the route emission. A `protected` operation stays legal but
+off the public interface — a capability or transition carried only by
+`protected` operations reads as dead to the coverage pass, whose
+warning-severity lint (`grantedCapabilityUncarried`, the
+[rexlang#128](https://github.com/yestechgroup/rexlang/issues/128)
+asymmetry) is the existing dead-trigger WARN; no new diagnostic bridges
+the gap.
 
 ## Capabilities and the actor dimension
 
@@ -748,6 +863,15 @@ commits two goldens: `payrun.ddd.json` (the design artifact) and
 `payrun.xstate.json` (the lowered xstate-ir machine), byte-compared by
 `crates/rex-driver/tests/ddd_machine_golden.rs`; the machine validation
 rules are pinned by `crates/rex-driver/tests/ddd_machines.rs`.
+
+The multi-machine pair `timesheet.mox`/`timesheet.ddd` (formatter-canonical)
+is the transition-binding and condition-scoping fixture (issues
+rexlang#176/#180): two machine-bearing designs in one module, qualified
+transition bindings, an injected-repository SoD guard, and the enum
+-derived own-record spelling. Its committed golden `timesheet.ddd.json`
+carries the `transition` and `conditionPaths` fields; the acceptance rules
+are pinned by `crates/rex-driver/tests/ddd_transitions.rs` and
+`crates/rex-driver/tests/ddd_conditions.rs`.
 
 The `examples/` side ships `support.ddd` (entity/value/dto designs,
 searches, capabilities validated against `support.actor` through

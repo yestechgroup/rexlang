@@ -232,6 +232,7 @@ impl<'src> Formatter<'src> {
                 self.scan_ddd_capabilities();
                 self.scan_ddd_invokes();
                 self.scan_ddd_emits();
+                self.scan_ddd_transition();
                 if self.take_if(|token| matches!(token, Token::When)) {
                     self.scan_raw_parens();
                 }
@@ -301,6 +302,22 @@ impl<'src> Formatter<'src> {
         while self.take_if(|token| matches!(token, Token::Comma)) {
             self.take_name();
         }
+    }
+
+    /// Consumes and emits an optional `transition <Trigger>` clause, kept
+    /// on the operation's line: the canonical position between the `emits`
+    /// clause and the `when` guard (the parser enforces that order, so
+    /// re-emitting in scan order is the canonical order; issue
+    /// rexlang#176). `transition` is a contextual word — an ordinary
+    /// identifier everywhere else — so the scan matches the
+    /// [`ddd::TRANSITION`] identifier, not a keyword token. The binding is
+    /// one name or a dotted `EnumType.Trigger` pair, re-emitted as written.
+    /// Repository operations never take the clause.
+    pub(crate) fn scan_ddd_transition(&mut self) {
+        if !self.take_if(|token| matches!(token, Token::Ident(ddd::TRANSITION))) {
+            return;
+        }
+        self.scan_qname();
     }
 
     /// Like [`Formatter::scan_params`], but for `.ddd` parameters, which may

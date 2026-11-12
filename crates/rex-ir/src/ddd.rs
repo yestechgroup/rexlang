@@ -289,11 +289,27 @@ pub struct ServiceOperation {
     /// parentheses (the `when`-condition rule); typing is a driver concern.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub condition: Option<String>,
+    /// The resolved field paths of the `when` condition (issue rexlang#180):
+    /// every path whose resolution a consumer cannot re-derive from the
+    /// artifact alone — injected-scope paths always (the repository→class
+    /// binding is design knowledge), own-record paths only in a module with
+    /// several machine-bearing designs (where the owning machine is not a
+    /// priori derivable). A single-machine module's own-record guard lowers
+    /// none. Resolved form, so consumers never re-parse [`Self::condition`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub condition_paths: Vec<ConditionPath>,
+    /// The declared transition binding of a delegated operation (issue
+    /// rexlang#176): `name => Repository.save transition <Trigger>` — the
+    /// machine-bound transition the delegation fires, validated by the
+    /// driver against the target repository's designed machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition: Option<TransitionRef>,
 }
 
 impl ServiceOperation {
     /// Creates an operation with no return type, parameters, delegation,
-    /// capabilities, invoked decision services, or emitted events.
+    /// capabilities, invoked decision services, emitted events, condition
+    /// paths, or transition binding.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -306,6 +322,8 @@ impl ServiceOperation {
             emits: Vec::new(),
             invokes: Vec::new(),
             condition: None,
+            condition_paths: Vec::new(),
+            transition: None,
         }
     }
 
@@ -331,6 +349,106 @@ impl ServiceOperation {
     pub fn with_invokes(mut self, invokes: Vec<String>) -> Self {
         self.invokes = invokes;
         self
+    }
+
+    /// Chainable setter for the resolved condition paths (issue rexlang#180).
+    pub fn with_condition_paths(mut self, paths: Vec<ConditionPath>) -> Self {
+        self.condition_paths = paths;
+        self
+    }
+
+    /// Chainable setter for the declared transition binding (issue
+    /// rexlang#176).
+    pub fn with_transition(mut self, transition: Option<TransitionRef>) -> Self {
+        self.transition = transition;
+        self
+    }
+}
+
+/// The explicit transition binding of a delegated [`ServiceOperation`]
+/// (issue rexlang#176): `submit => PayRunRepository.save transition Submit`
+/// — or, in a multi-machine module, `transition PayRunStatus.Reverse`,
+/// qualified by the machine's **enum type name** (rexlang machine
+/// declarations are field-named — `machine status: PayRunStatus` — so a
+/// machine-name qualifier does not exist as authored). The driver validates
+/// the trigger against the machine bound to the delegation target's
+/// repository design; the artifact keeps the names exactly as authored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransitionRef {
+    /// The trigger name as written — an explicit `via` trigger or a bare
+    /// arrow's derived name (the lowerCamel of the target state).
+    pub trigger: String,
+    /// The machine qualifier — the enum type name when the source wrote the
+    /// qualified spelling (`PayRunStatus.Reverse`), `None` when unqualified
+    /// (`Submit`). Required in a multi-machine module.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
+}
+
+impl TransitionRef {
+    /// Creates an unqualified transition reference.
+    pub fn new(trigger: impl Into<String>) -> Self {
+        Self {
+            trigger: trigger.into(),
+            machine: None,
+        }
+    }
+
+    /// Chainable setter for the machine qualifier.
+    pub fn with_machine(mut self, machine: Option<String>) -> Self {
+        self.machine = machine;
+        self
+    }
+}
+
+/// The resolved scope of one [`ConditionPath`] (issue rexlang#180).
+///
+/// Adjacently tagged: `{"type":"ownRecord"}` for a field of the op's bound
+/// entity, `{"type":"injected","value":{"repository":...,"class":...}}` for
+/// a field reached through an injected repository (the path's first segment
+/// is the injection name as declared; `class` is the repository design's
+/// class).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "camelCase")]
+pub enum ConditionScope {
+    /// A field of the op's own record (the bound entity).
+    OwnRecord,
+    /// A field reached through an injected repository.
+    #[serde(rename_all = "camelCase")]
+    Injected {
+        /// The injection name exactly as declared (`inject TimecardRepository;`).
+        repository: String,
+        /// The class the repository design binds.
+        class: String,
+    },
+}
+
+/// One resolved field path of a [`ServiceOperation`]'s `when` condition
+/// (issue rexlang#180). The scope records where the path resolves, the
+/// field the dotted remainder (single segments in the common case), and the
+/// field's declared type — the lowering contract consumers build on, so
+/// they never re-parse the condition source string.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConditionPath {
+    /// Where the path resolves.
+    pub scope: ConditionScope,
+    /// The field path — one segment (`status`) or a dotted chain
+    /// (`holder.name`) under the scope's root.
+    pub field: String,
+    /// The field's declared type.
+    pub field_type: TypeRef,
+}
+
+impl ConditionPath {
+    /// Creates a condition path.
+    pub fn new(scope: ConditionScope, field: impl Into<String>, field_type: TypeRef) -> Self {
+        Self {
+            scope,
+            field: field.into(),
+            field_type,
+        }
     }
 }
 
@@ -1017,6 +1135,8 @@ mod tests {
                             emits: vec!["LoanStateChanged".to_string()],
                             invokes: vec!["RiskScore".to_string()],
                             condition: None,
+                            condition_paths: Vec::new(),
+                            transition: None,
                         },
                         ServiceOperation {
                             name: "renew".to_string(),
@@ -1032,6 +1152,8 @@ mod tests {
                             emits: Vec::new(),
                             invokes: Vec::new(),
                             condition: None,
+                            condition_paths: Vec::new(),
+                            transition: None,
                         },
                     ],
                     dependencies: vec![
@@ -1132,6 +1254,68 @@ mod tests {
             "signatures reuse the IR TypeRef adjacent tagging: {json}"
         );
         assert!(!json.contains('_'), "no snake_case keys: {json}");
+    }
+
+    /// The transition binding and the resolved condition paths serialize in
+    /// the wire shapes of issues rexlang#176/#180: camelCase keys, the
+    /// unqualified `machine` omitted, and the adjacent tagging of
+    /// `ConditionScope` (`{"type":"ownRecord"}` /
+    /// `{"type":"injected","value":{...}}`).
+    #[test]
+    fn transition_refs_and_condition_paths_serialize_as_advertised() {
+        let unqualified = TransitionRef::new("Submit");
+        assert_eq!(
+            serde_json::to_string(&unqualified).expect("serialize"),
+            r#"{"trigger":"Submit"}"#,
+            "an unqualified binding omits `machine`"
+        );
+        let qualified =
+            TransitionRef::new("Reverse").with_machine(Some("PayRunStatus".to_string()));
+        assert_eq!(
+            serde_json::to_string(&qualified).expect("serialize"),
+            r#"{"trigger":"Reverse","machine":"PayRunStatus"}"#
+        );
+
+        let own = ConditionPath::new(
+            ConditionScope::OwnRecord,
+            "status",
+            TypeRef::Enum {
+                package: "nz.example.payroll".to_string(),
+                name: "PayRunStatus".to_string(),
+            },
+        );
+        assert_eq!(
+            serde_json::to_string(&own).expect("serialize"),
+            r#"{"scope":{"type":"ownRecord"},"field":"status","fieldType":{"type":"enum","value":{"package":"nz.example.payroll","name":"PayRunStatus"}}}"#
+        );
+        let injected = ConditionPath::new(
+            ConditionScope::Injected {
+                repository: "TimecardRepository".to_string(),
+                class: "Timecard".to_string(),
+            },
+            "status",
+            TypeRef::Enum {
+                package: "nz.example.payroll".to_string(),
+                name: "TimecardStatus".to_string(),
+            },
+        );
+        assert_eq!(
+            serde_json::to_string(&injected).expect("serialize"),
+            r#"{"scope":{"type":"injected","value":{"repository":"TimecardRepository","class":"Timecard"}},"field":"status","fieldType":{"type":"enum","value":{"package":"nz.example.payroll","name":"TimecardStatus"}}}"#
+        );
+
+        // Both round-trip: the wire forms reload as the same values.
+        let round: ConditionPath =
+            serde_json::from_str(&serde_json::to_string(&injected).unwrap()).expect("reload");
+        assert_eq!(round, injected);
+
+        // Absence is byte-silent: an operation with no paths and no binding
+        // serializes without the new keys (the golden discipline — existing
+        // artifacts stay byte-identical).
+        let plain = ServiceOperation::new("approve");
+        let json = serde_json::to_string(&plain).expect("serialize");
+        assert!(!json.contains("conditionPaths"), "{json}");
+        assert!(!json.contains("transition"), "{json}");
     }
 
     #[test]

@@ -204,19 +204,27 @@ fn the_diagnostic_emission_order_is_stable() {
     // Filled from the current behavior — this test characterizes the
     // emission order so the stage decomposition of `compile_ddd_file`
     // cannot perturb it. The stages in order: the prologue (import
-    // buckets), rule 1, module `alpha`'s machine scopes / service-condition
-    // scope / services / designs / searches, modules `beta` and the
-    // duplicate `alpha`, then the deferred validations (rule 11 binding,
-    // rule 6, rule 13, rule 9, rule 8).
+    // buckets), rule 1, module `alpha`'s machine scopes / services (the
+    // condition scope check emits only for a module with no machine, and
+    // the condition path walker reports the scoped-guard findings) /
+    // designs / searches, modules `beta` and the duplicate `alpha`, then
+    // the deferred validations (rule 11 binding, rule 6, rule 13, rule 9,
+    // rule 8).
     let expected: Vec<(Severity, String)> = vec![
                     (Severity::Error, "imported file \"missing.mox\" was not provided".to_string()),
                     (Severity::Error, "unknown base package 'nz.example.nowhere'".to_string()),
                     (Severity::Error, "ambiguous state name 'Open' in module 'alpha': it is declared by more than one machine, so conditions cannot bind it".to_string()),
                     (Severity::Error, "ambiguous state name 'Held' in module 'alpha': it is declared by more than one machine, so conditions cannot bind it".to_string()),
-                    (Severity::Error, "operation 'zap' of service 'Checkout' carries a `when` condition, but module 'alpha' does not have exactly one machine-bearing design to scope it".to_string()),
                     (Severity::Error, "unknown type 'Mystery'".to_string()),
                     (Severity::Error, "duplicate operation 'twice' in service 'Checkout'".to_string()),
-                    (Severity::Error, "invalid condition in operation 'zap' of service 'Checkout': unknown name `state`".to_string()),
+                    // rexlang#180 relaxed the single-machine condition scope:
+                    // module `alpha` carries two machines, so the old
+                    // "does not have exactly one machine-bearing design"
+                    // error is gone and `zap`'s guard is scoped instead —
+                    // `state` resolves (a unique machine field), `Open` is
+                    // the ambiguous-state E0354 at the reference site (the
+                    // checker's duplicate unknown-name error is suppressed).
+                    (Severity::Error, "E0354 ambiguous machine scope: 'Open' is declared by more than one machine in module 'alpha'".to_string()),
                     (Severity::Error, "unknown type 'Ghost'".to_string()),
                     (Severity::Error, "value design 'Money': feature 'cents' is not readonly; a value object is immutable".to_string()),
                     (Severity::Error, "duplicate design for class 'Money'".to_string()),

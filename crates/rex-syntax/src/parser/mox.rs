@@ -186,6 +186,16 @@ pub(crate) fn annotation_decl<'src>(
         })
 }
 
+/// The contextual `table` annotation of a class declaration: the ordinary
+/// identifier `table` directly followed by a string literal, in the one
+/// grammar position after the class name (`table` stays usable as a class,
+/// feature, or enum name everywhere else — the `id`/`readonly` contextual
+/// identifier precedent).
+pub(crate) fn table_annotation<'src>(
+) -> impl Parser<'src, Tokens<'src>, String, MoxExtra<'src>> + Clone {
+    select! { Token::Ident(text) if text == "table" => () }.ignore_then(string_lit())
+}
+
 pub(crate) fn class_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>> + Clone {
     let extends = {
         let rest = kw(Token::Comma)
@@ -199,14 +209,16 @@ pub(crate) fn class_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExt
     };
     kw(Token::Class)
         .ignore_then(name())
+        .then(table_annotation().or_not())
         .then(extends.or_not())
         .then_ignore(kw(Token::LBrace))
         .then(feature().repeated().collect::<Vec<_>>())
         .then_ignore(kw(Token::RBrace))
-        .map_with(|((name, extends), features), e| {
+        .map_with(|(((name, table), extends), features), e| {
             Decl::Class(ClassDecl {
                 name,
                 doc: None,
+                table,
                 extends: extends.unwrap_or_default(),
                 features: features.into_iter().flatten().collect(),
                 span: e.span(),

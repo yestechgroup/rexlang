@@ -69,8 +69,10 @@
 //! annotation_decl  := "annotation" string ("as" name)?
 //! import_schema_decl := "import" "schema" string ("as" name)?
 //! import_sigil_decl  := "import" "sigil" string
-//! class_decl       := "class" name ("extends" type_ref ("," type_ref)*)?
+//! class_decl       := "class" name table_annotation?
+//!                     ("extends" type_ref ("," type_ref)*)?
 //!                     "{" feature* "}"
+//! table_annotation := "table" string
 //! feature          := modifier* ( containment | reference | container
 //!                               | op_decl | derived_decl | attribute )
 //! modifier         := "id" | "readonly"
@@ -120,6 +122,11 @@
 //! * Constraint keywords each at most once per block; `unique` takes no
 //!   value (a literal after it is an error) and is the collection-level
 //!   constraint.
+//! * `table` (the class annotation) is an ordinary identifier in every
+//!   other position — a class, feature, or enum may still be named `table`.
+//!   The annotation is recognized only directly after the class name and at
+//!   most once; it is a class declaration's grammar only (`enum` has no
+//!   table).
 //! * In a `datatype_block`, `format`, `create`, and `convert` each appear at
 //!   most once, and a binding target literally named `format` is an error —
 //!   the unescaped key declares the format (only writable escaped,
@@ -190,10 +197,11 @@
 //! service_decl      := "service" name "{" service_member* "}"
 //! service_member    := service_op | inject_decl
 //! service_op        := "protected"? signature capability_clause?
-//!                      invokes_clause? emits_clause? guard_clause? ";"
+//!                      invokes_clause? emits_clause? transition_clause?
+//!                      guard_clause? ";"
 //!                    | "protected"? name "=>" qualified_name
 //!                      capability_clause? invokes_clause? emits_clause?
-//!                      guard_clause? ";"
+//!                      transition_clause? guard_clause? ";"
 //! inject_decl       := "inject" name ";"
 //!                    | "inject" "decision" qualified_name ";"
 //! signature         := type_ref multiplicity? name
@@ -202,6 +210,7 @@
 //! capability_clause := "capability" name ("," name)*
 //! invokes_clause    := "invokes" qualified_name ("," qualified_name)*
 //! emits_clause      := "emits" name ("," name)*
+//! transition_clause := "transition" name ("." name)?
 //! design_decl       := "abstract"? stereotype name design_flag*
 //!                      repository_decl? machine_decl?
 //! stereotype        := "entity" | "value" | "dto"
@@ -245,13 +254,20 @@
 //!   `emits` clause (the wire artifact carries none, so accepting one
 //!   would silently drop data); a delegated op may be named `save` etc. —
 //!   contextual words. A service operation's clauses are fixed in the
-//!   canonical order `capability? invokes? emits? when?`: `invokes` names
+//!   canonical order `capability? invokes? emits? transition? when?`:
+//!   `invokes` names
 //!   the decision services the operation invokes (the `.dmn` dimension,
 //!   loosely coupled to the decision surface), `emits` names the events
 //!   the operation produces, loosely coupled to the `.evt` layer — the
 //!   `.ddd` compile has no event bucket, so existence/coverage resolve in
 //!   the union integrity pass (`rex_driver::check_integrity`,
-//!   `docs/DDD.md`).
+//!   `docs/DDD.md`). `transition` is the delegated operation's explicit
+//!   transition binding (issue rexlang#176): `transition Submit` or, in a
+//!   multi-machine module, `transition PayRunStatus.Reverse` — the
+//!   qualifier is the machine's **enum type name** (machine declarations
+//!   are field-named, so a machine-name qualifier does not exist as
+//!   authored). A clause order violation is a syntax error, not a
+//!   formatting opportunity.
 //! * `design_flag`s and the single-member search lines (`entity`, `ranking`,
 //!   `analyzer`, `pagination`) are idempotent on repeat — the first
 //!   declaration wins; repeated `text`/`filters`/`sort`/`document`/
@@ -998,6 +1014,7 @@ mod grammar_doc_tests {
             ddd::DECISION,
             ddd::EMITS,
             ddd::INVOKES,
+            ddd::TRANSITION,
             ddd::PROTECTED,
             ddd::MACHINE,
             ddd::INITIAL,

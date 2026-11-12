@@ -249,6 +249,49 @@ fn compile_ddd_with(
 ///     `imported decision model "<path>" was not provided`; an empty
 ///     bucket is the plain compile's behavior — `.dmn` imports are not
 ///     domains and lower nothing.
+/// 18. **Transition bindings** (E0350–E0352, the `rex_diagnostics::ddd`
+///     codes, issue rexlang#176) — a service operation's `transition`
+///     clause is legal only on a delegation to a repository `save` of the
+///     same module (a declared operation, or a delegation rule 8 already
+///     rejects, is refused or silently skipped — no cascade). The machine
+///     is the one bound to the target repository's designed class; the
+///     trigger must be one that machine declares — an explicit `via` name
+///     or a bare arrow's derived name (the lowerCamel of the target
+///     state), never a name that is both explicit and derived (ambiguous,
+///     so it binds nothing). A module carrying more than one machine
+///     -bearing design requires the qualifier, spelled with the machine's
+///     **enum type name** (`transition PayRunStatus.Reverse` — machine
+///     declarations are field-named, so a machine-name qualifier does not
+///     exist as authored). The binding lowers as authored (`TransitionRef`
+///     on the operation), and a binding that resolves pins the machine's
+///     class as the operation's own-record condition scope — rule 19's
+///     joint shape. Public service operations lower to capability-gated
+///     routes downstream (issue rexlang#143, aligned with codegraph#590):
+///     the binding and the resolved condition paths are the lowering
+///     contract consumers build on, and until an in-tree `.ddd` lowering
+///     exists compiles add no "lowers to nothing" diagnostics —
+///     `protected` carriers stay legal-but-dead under the existing
+///     warning-severity coverage lint.
+/// 19. **Condition scoping** (E0353/E0354, issue rexlang#180) — a service
+///     operation's `when` guard is scoped by the module's machine count:
+///     one machine-bearing design scopes the guard on that class (the
+///     machine-bound rule); **no** machine-bearing design refuses an
+///     op-level guard outright (unless a transition binding pins the
+///     scope); **several** admit a guard whose every referenced name
+///     resolves uniquely — machine states bind when exactly one machine
+///     declares the name (else the `E0354` ambiguous-machine-scope error,
+///     qualified as `<EnumType>.<State>`), each machine's bound field
+///     binds bare when its name is unique and always under the
+///     enum-derived spelling (lowerCamel of the machine's enum type name),
+///     and a qualified path (`TimecardRepository.status`) resolves against
+///     the service's injected repositories — first segment the injection
+///     name exactly as declared, remaining segments fields of the
+///     repository's designed class (`E0353` otherwise; a resolved path
+///     that mistypes is the ordinary same-type error). The resolution
+///     lowers as `conditionPaths` on the operation — injected paths
+///     always, own-record paths only in a multi-machine module (where the
+///     owning machine is not derivable from the artifact alone); the
+///     `condition` source string stays verbatim.
 /// ## Aggregate derivation
 ///
 /// The aggregate boundary derives from the domain model's containment

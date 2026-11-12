@@ -26,9 +26,9 @@
 //!
 //! The remaining single words ([`APPLICATION`], [`BASE`], [`MODULE`],
 //! [`SERVICE`], [`SEARCH`], [`ABSTRACT`], [`REPOSITORY`], [`INJECT`],
-//! [`DECISION`], [`EMITS`], [`INVOKES`], [`BOOST`], [`ANALYZER`],
-//! [`LIMIT`], [`MAX`], [`CURSOR`]) are matched on both sides at fixed
-//! grammar positions; they carry no canonical order.
+//! [`DECISION`], [`EMITS`], [`INVOKES`], [`TRANSITION`], [`BOOST`],
+//! [`ANALYZER`], [`LIMIT`], [`MAX`], [`CURSOR`]) are matched on both sides
+//! at fixed grammar positions; they carry no canonical order.
 //! The `ranking` value words (`bm25`, `tfIdf`, `exact`, `custom`) are
 //! parser-only — the formatter re-emits whatever follows the `ranking`
 //! keyword — so they stay in the parser alone.
@@ -78,10 +78,24 @@ pub(crate) const INVOKES: &str = "invokes";
 /// existence/coverage resolve in the union integrity pass, never at the
 /// wire layer). A contextual word like the rest: special only in the
 /// clause position between a service operation's `invokes` clause and its
-/// `when` guard, an ordinary identifier everywhere else. Repository
-/// operations take no `emits` clause (the wire artifact's repository
-/// operations carry none, so accepting one would silently drop data).
+/// `transition` binding, an ordinary identifier everywhere else.
+/// Repository operations take no `emits` clause (the wire artifact's
+/// repository operations carry none, so accepting one would silently drop
+/// data).
 pub(crate) const EMITS: &str = "emits";
+/// The `transition <Trigger>` clause of a delegated service operation
+/// (issue rexlang#176): the explicit transition binding — the machine-bound
+/// transition the `=> <target>.<operation>` delegation fires. The
+/// qualified spelling `transition <EnumType>.<Trigger>` names the machine
+/// by its **enum type name** (rexlang machine declarations are field-named
+/// — `machine status: PayRunStatus` — so a machine-name qualifier does not
+/// exist as authored); multi-machine modules require it. A contextual word
+/// like the rest: special only in the clause position between a service
+/// operation's `emits` clause and its `when` guard, an ordinary identifier
+/// everywhere else. The binding is legal only on a delegation to a
+/// repository `save` — the driver validates the trigger against the
+/// machine bound to the target's repository design.
+pub(crate) const TRANSITION: &str = "transition";
 /// The optional `protected` visibility modifier of a service or repository
 /// operation (Sculptor's `protected` — the operation stays off the public
 /// interface). A contextual word like the rest: in leading position it is
