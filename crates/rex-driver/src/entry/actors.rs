@@ -30,7 +30,7 @@ pub fn compile_actors(
 /// The body of [`compile_actors`], parameterized over the provided
 /// import content for the domain files (see [`compile_file`] for the shape)
 /// and the designs [`compile_actors_str_with_designs`] validates grant
-/// coverage against.
+/// coverage and noun classification against.
 fn compile_actors_with(
     db: &dyn Db,
     actor: SourceFile,
@@ -98,15 +98,24 @@ pub fn compile_actors_str(
     compile_actors_str_with_designs(actor_path, actor_source, domains, imports, &[])
 }
 
-/// Like [`compile_actors_str`], but every capability a grant — or a
-/// delegation — hands out must be carried by at least one operation or
-/// search across `designs`, else the grant entry's diagnostic names the
-/// dangling capability with the span of its reference (capability coverage,
-/// issue rexlang#128's J4 at compile time). Each design is a pre-compiled
-/// [`rex_ir::ddd::DddModel`]; capability names pool across all of them. An
-/// empty slice keeps [`compile_actors_str`]'s behavior exactly — the check
-/// is opt-in, so a host compiling a policy without its application's
-/// designs never sees coverage diagnostics.
+/// Like [`compile_actors_str`], but the provided designs join the compile
+/// two ways (both opt-in — an empty slice keeps [`compile_actors_str`]'s
+/// behavior exactly, and every check stays silent unless every imported
+/// domain lowered):
+///
+/// * **grant coverage** (rexlang#128's J4): every capability a grant — or
+///   a delegation — hands out must be carried by at least one operation or
+///   search across `designs`, else the grant entry's diagnostic names the
+///   dangling capability with the span of its reference;
+/// * **noun classification** (rexlang#144): each capability's resolved
+///   class joins the aggregate machinery, and a class some design marks a
+///   contained, repository-holding entity warns toward its aggregate root
+///   (codegraph#596 hangs non-root bindings); value and root verdicts are
+///   clean, no verdict stays silent, and the warning never blocks the
+///   artifact.
+///
+/// Each design is a pre-compiled [`rex_ir::ddd::DddModel`]; capability
+/// names pool across all of them.
 pub fn compile_actors_str_with_designs(
     actor_path: &str,
     actor_source: &str,

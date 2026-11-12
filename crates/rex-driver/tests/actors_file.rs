@@ -1593,3 +1593,334 @@ fn inline_domain_blocks_join_coverage_under_their_own_file() {
         &DOMAIN[span.start..span.end]
     );
 }
+
+// --- capability noun classification (rexlang#144) ----------------------------
+//
+// The designs bucket also classifies capability nouns against the
+// aggregates: a capability granted on a class that some pooled design
+// marks a contained, repository-holding entity warns toward its aggregate
+// root (codegraph#596 hangs non-root bindings). Value and root verdicts
+// are clean; without designs the join is silent (opt-in house style).
+
+/// A domain with containment: Library owns Books, Books own Chapters;
+/// Money is a value-shaped spare class.
+const AGGREGATE_DOMAIN: &str = r#"
+package rex.support.domain
+
+class Library {
+    String name
+    contains Book[] books opposite library
+}
+
+class Book {
+    container Library library opposite books
+    String title
+    contains Chapter[] chapters opposite book
+}
+
+class Chapter {
+    container Book book opposite chapters
+    String heading
+}
+
+class Money {
+    readonly int cents
+}
+"#;
+
+/// The root design, alone in its file: rule 6 sees only this file's
+/// designs, so the standalone design compile is clean.
+const LIBRARY_DESIGN: &str = r#"
+import "aggregate.mox";
+
+application Support {
+    base rex.support.domain
+
+    module desk {
+        entity Library repository LibraryRepository {
+            findById;
+        }
+    }
+}
+"#;
+
+/// The member design, alone in ITS file: Book holds a repository and
+/// nothing here contains it, so the standalone design compile is clean
+/// too — the non-root verdict exists only once an actor join pools both
+/// files' designs.
+const BOOK_DESIGN: &str = r#"
+import "aggregate.mox";
+
+application Support {
+    base rex.support.domain
+
+    module desk {
+        entity Book repository BookRepository {
+            findById;
+        }
+    }
+}
+"#;
+
+/// The chapter design: transitively contained (Library → Book → Chapter).
+const CHAPTER_DESIGN: &str = r#"
+import "aggregate.mox";
+
+application Support {
+    base rex.support.domain
+
+    module desk {
+        entity Chapter repository ChapterRepository {
+            findById;
+        }
+    }
+}
+"#;
+
+/// Book designed as a bare entity — no repository, so it is not a root
+/// candidate and gets no verdict (the rule-6 predicate convicts
+/// repository holders only).
+const PLAIN_BOOK_DESIGN: &str = r#"
+import "aggregate.mox";
+
+application Support {
+    base rex.support.domain
+
+    module desk {
+        entity Book
+    }
+}
+"#;
+
+/// Money designed as a value object (its features are `readonly`, per the
+/// value contract).
+const MONEY_DESIGN: &str = r#"
+import "aggregate.mox";
+
+application Support {
+    base rex.support.domain
+
+    module desk {
+        value Money
+    }
+}
+"#;
+
+/// Compiles the actor source against the aggregate domain with every
+/// design compiled against the same domain (entity designs target domain
+/// classes, unlike the coverage fixtures' service-only designs).
+fn compile_with_aggregate_designs(actor_source: &str, designs: &[&str]) -> ActorCompilation {
+    let domains = [("aggregate.mox".to_string(), AGGREGATE_DOMAIN.to_string())];
+    let models: Vec<rex_ir::ddd::DddModel> = designs
+        .iter()
+        .map(|source| {
+            rex_driver::compile_ddd_str(
+                "design.ddd",
+                source,
+                &domains,
+                &rex_driver::DomainImports::default(),
+            )
+            .model
+            .expect("standalone design compiles")
+        })
+        .collect();
+    compile_actors_str_with_designs(
+        "support.actor",
+        actor_source,
+        &domains,
+        &rex_driver::DomainImports::default(),
+        &models,
+    )
+}
+
+#[test]
+fn capability_on_a_contained_entity_warns_toward_the_root() {
+    let source = concat!(
+        "import \"aggregate.mox\"\n",
+        "\n",
+        "actors Support {\n",
+        "    actor Librarian\n",
+        "\n",
+        "    capability ReadBook on Book\n",
+        "}\n",
+    );
+    // Both designs are clean standalone (rule 6 only sees one file's
+    // designs); pooled by the actor join, Book is a repository holder
+    // contained by Library — exactly the non-root verdict the language
+    // must know about.
+    let compilation = compile_with_aggregate_designs(source, &[LIBRARY_DESIGN, BOOK_DESIGN]);
+    let (path, diagnostic) = single(&compilation, "non-root aggregate member");
+    assert_eq!(path, "support.actor");
+    assert_eq!(diagnostic.severity, Severity::Warning);
+    assert!(
+        diagnostic.message.contains(
+            "capability `ReadBook` is granted on `Book`, a non-root aggregate member of `Library`"
+        ),
+        "the message names the capability, the class, and the root: {:?}",
+        diagnostic.message
+    );
+    let span = span_of(source, "on Book", 0);
+    let class_span = {
+        let start = span.start + "on ".len();
+        (start..start + "Book".len()).into()
+    };
+    assert_eq!(
+        diagnostic.span,
+        Some(class_span),
+        "the span lands on the capability's class"
+    );
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("grant the capability on the aggregate root `Library` instead"),
+    );
+    // Warnings never block the artifact.
+    assert!(compilation.model.is_some());
+}
+
+#[test]
+fn capability_on_the_aggregate_root_is_clean() {
+    let source = concat!(
+        "import \"aggregate.mox\"\n",
+        "\n",
+        "actors Support {\n",
+        "    actor Librarian\n",
+        "\n",
+        "    capability ManageLibrary on Library\n",
+        "}\n",
+    );
+    let compilation = compile_with_aggregate_designs(source, &[LIBRARY_DESIGN, BOOK_DESIGN]);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "an aggregate root is a sanctioned grant target: {:?}",
+        compilation.diagnostics
+    );
+    assert!(compilation.model.is_some());
+}
+
+#[test]
+fn capability_on_a_value_design_is_clean() {
+    let source = concat!(
+        "import \"aggregate.mox\"\n",
+        "\n",
+        "actors Support {\n",
+        "    actor Librarian\n",
+        "\n",
+        "    capability PriceTag on Money\n",
+        "}\n",
+    );
+    let compilation = compile_with_aggregate_designs(source, &[MONEY_DESIGN]);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "a value object is a sanctioned grant target: {:?}",
+        compilation.diagnostics
+    );
+}
+
+#[test]
+fn noun_classification_is_silent_without_designs() {
+    // The plain compile: no designs bucket, so the join never fires —
+    // byte-identical to the pre-#144 behavior.
+    let source = concat!(
+        "import \"aggregate.mox\"\n",
+        "\n",
+        "actors Support {\n",
+        "    actor Librarian\n",
+        "\n",
+        "    capability ReadBook on Book\n",
+        "}\n",
+    );
+    let compilation = compile(source, &[("aggregate.mox", AGGREGATE_DOMAIN)]);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "no designs: no classification: {:?}",
+        compilation.diagnostics
+    );
+}
+
+#[test]
+fn transitive_containment_names_the_top_root() {
+    let source = concat!(
+        "import \"aggregate.mox\"\n",
+        "\n",
+        "actors Support {\n",
+        "    actor Librarian\n",
+        "\n",
+        "    capability PeekChapter on Chapter\n",
+        "}\n",
+    );
+    // Chapter sits two links down (Library → Book → Chapter); the verdict
+    // is transitive over the containment closure, exactly rule 6's
+    // predicate, and the named root is the chain's unique top.
+    let compilation = compile_with_aggregate_designs(source, &[LIBRARY_DESIGN, CHAPTER_DESIGN]);
+    let (_, diagnostic) = single(&compilation, "non-root aggregate member of `Library`");
+    assert_eq!(diagnostic.severity, Severity::Warning);
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("grant the capability on the aggregate root `Library` instead"),
+    );
+}
+
+#[test]
+fn containment_without_an_entity_design_grants_a_clean_root() {
+    // Book's repository holder with NO Library design anywhere: no
+    // stereotyped entity contains it, so the verdict is Root — the same
+    // allowance rule 6 gives a repository without a container design.
+    let source = concat!(
+        "import \"aggregate.mox\"\n",
+        "\n",
+        "actors Support {\n",
+        "    actor Librarian\n",
+        "\n",
+        "    capability ReadBook on Book\n",
+        "}\n",
+    );
+    let compilation = compile_with_aggregate_designs(source, &[BOOK_DESIGN]);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "containment needs a stereotyped entity container: {:?}",
+        compilation.diagnostics
+    );
+}
+
+#[test]
+fn an_entity_without_a_repository_stays_silent() {
+    // Book designed as a bare entity: not a root candidate, so the
+    // classification gives no verdict — the rule-6 predicate convicts
+    // repository holders only, and no new predicate is invented here.
+    let source = concat!(
+        "import \"aggregate.mox\"\n",
+        "\n",
+        "actors Support {\n",
+        "    actor Librarian\n",
+        "\n",
+        "    capability ReadBook on Book\n",
+        "}\n",
+    );
+    let compilation = compile_with_aggregate_designs(source, &[LIBRARY_DESIGN, PLAIN_BOOK_DESIGN]);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "a repository-less entity carries no verdict: {:?}",
+        compilation.diagnostics
+    );
+}
+
+#[test]
+fn an_undesigned_class_stays_silent() {
+    // Chapter has no design in the bucket: no verdict, whatever the other
+    // designs say.
+    let source = concat!(
+        "import \"aggregate.mox\"\n",
+        "\n",
+        "actors Support {\n",
+        "    actor Librarian\n",
+        "\n",
+        "    capability TidyChapter on Chapter\n",
+        "}\n",
+    );
+    let compilation = compile_with_aggregate_designs(source, &[LIBRARY_DESIGN, BOOK_DESIGN]);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "a class without a design stays silent: {:?}",
+        compilation.diagnostics
+    );
+}

@@ -40,6 +40,11 @@ use services::{
     rule_9_resolve_injects,
 };
 
+// The capability-noun classification the actor join reads (rexlang#144):
+// the module stays private (its rule functions are ddd-internal), but the
+// table is shared crate-wide.
+pub(crate) use graph::{AggregateVerdict, NounClassification};
+
 /// A service declared anywhere in the application, for cross-reference
 /// validation (delegations, injects).
 struct ServiceEntry {
@@ -458,8 +463,9 @@ fn rule_1_base_package(
 /// imported domains' packages merged into one namespace. `None` unless
 /// every domain lowered (rule 6's discipline: a domain that failed to
 /// lower may hide structure, and a wrong verdict is worse than none — its
-/// domain diagnostics already block the artifact).
-fn union_model(domains: &[DomainUnit]) -> Option<rex_ir::Model> {
+/// domain diagnostics already block the artifact). The actor file compile
+/// reads it for the capability-noun classification (rexlang#144).
+pub(crate) fn union_model(domains: &[DomainUnit]) -> Option<rex_ir::Model> {
     all_domains_lowered(domains).then(|| {
         let mut model = rex_ir::Model::new();
         for unit in domains {

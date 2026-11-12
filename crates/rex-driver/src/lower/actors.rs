@@ -9,6 +9,7 @@ use rex_ir as ir;
 use rex_syntax::ast as mox;
 use rex_syntax::Span;
 
+use crate::ddd::{AggregateVerdict, NounClassification};
 use crate::diagnostic::{Diagnostic, DiagnosticCode};
 
 use super::*;
@@ -16,14 +17,19 @@ use super::*;
 /// capability class resolution against the given [`Scope`], grant-entry
 /// capability checks, `when` condition syntax checks (type checking is
 /// deferred — see [`PendingCondition`]), and `never_both` shape checks.
-/// Cross-declaration rules (cycles, separation of duty, self-narrowing) run
-/// in the passes below, per-block for single-file compiles and over the
-/// union for `.actor` compiles.
+/// With `classification` provided (rexlang#144), every capability's
+/// resolved class joins the aggregate machinery: a non-root aggregate
+/// member warns toward its root (value and root verdicts are clean, no
+/// verdict is silent — the #119 lint channel). Cross-declaration rules
+/// (cycles, separation of duty, self-narrowing) run in the passes below,
+/// per-block for single-file compiles and over the union for `.actor`
+/// compiles.
 pub(crate) fn lower_actors(
     decl: &mox::ActorsDecl,
     source: &str,
     file: &str,
     scope: &Scope<'_>,
+    classification: Option<&NounClassification>,
     diags: &mut Vec<Diagnostic>,
 ) -> (ActorsRecord, Vec<PendingCondition>) {
     let mut def = ir::ActorsDef::new(decl.name.text.clone());
@@ -102,6 +108,34 @@ pub(crate) fn lower_actors(
                         Some(capability.class.span),
                     )
                     .with_help("capabilities are granted on class instances"),
+                );
+            }
+        }
+        // Aggregate classification (rexlang#144): with designs provided,
+        // the capability's class joins the aggregate machinery — granting
+        // on a non-root member hangs generation bindings (codegraph#596),
+        // so the noun warns toward its root. The verdict rides the
+        // resolution (a failed or non-class noun has no verdict to join).
+        if let (Some((package, class)), Some(classification)) = (&class, classification) {
+            if let Some(AggregateVerdict::NonRoot { root }) = classification.verdict(package, class)
+            {
+                let member = format!(
+                    "capability `{}` is granted on `{}`, a non-root aggregate member",
+                    capability.name.text,
+                    capability.class.name.full_name()
+                );
+                let (message, help) = match root {
+                    Some((_, root)) => (
+                        format!("{member} of `{root}`"),
+                        format!("grant the capability on the aggregate root `{root}` instead"),
+                    ),
+                    None => (
+                        member,
+                        "grant the capability on the containing aggregate root instead".to_string(),
+                    ),
+                };
+                diags.push(
+                    Diagnostic::warning(message, Some(capability.class.span)).with_help(help),
                 );
             }
         }

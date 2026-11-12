@@ -11,6 +11,7 @@ use rex_ir as ir;
 use rex_syntax::ast as mox;
 use rex_syntax::Span;
 
+use crate::ddd::NounClassification;
 use crate::diagnostic::Diagnostic;
 use crate::pipeline;
 
@@ -323,8 +324,14 @@ pub(crate) fn compile_multi(
             match decl {
                 mox::Decl::Vocabulary(_) => {}
                 mox::Decl::Actors(decl) => {
-                    let (record, conditions) =
-                        lower_actors(decl, file.source, file.path, &scope, &mut buckets[index]);
+                    let (record, conditions) = lower_actors(
+                        decl,
+                        file.source,
+                        file.path,
+                        &scope,
+                        None,
+                        &mut buckets[index],
+                    );
                     actors.push(record);
                     actor_files.push(index);
                     pending.extend(conditions);
@@ -734,8 +741,14 @@ pub(crate) fn compile_union_per_file(
             match decl {
                 mox::Decl::Vocabulary(_) => {}
                 mox::Decl::Actors(decl) => {
-                    let (record, conditions) =
-                        lower_actors(decl, file.source, file.path, &scope, &mut buckets[index]);
+                    let (record, conditions) = lower_actors(
+                        decl,
+                        file.source,
+                        file.path,
+                        &scope,
+                        None,
+                        &mut buckets[index],
+                    );
                     actors.push(record);
                     actor_files.push(index);
                     pending.extend(conditions.into_iter().map(|condition| (index, condition)));
@@ -1081,7 +1094,8 @@ pub(crate) fn compile(
         match decl {
             mox::Decl::Vocabulary(_) => {}
             mox::Decl::Actors(decl) => {
-                let (record, conditions) = lower_actors(decl, source, path, &scope, &mut diags);
+                let (record, conditions) =
+                    lower_actors(decl, source, path, &scope, None, &mut diags);
                 actors.push(record);
                 pending.extend(conditions);
             }
@@ -1190,7 +1204,14 @@ pub(crate) fn compile(
 ///    must be carried by an operation or search of some design, else the
 ///    grant entry's diagnostic names the dangling capability spanned on its
 ///    reference (`grantedCapabilityUncarried`); an empty slice is silent;
-/// 6. any error (in any file) blocks the artifact.
+/// 6. capability-noun classification (rexlang#144): with `designs`
+///    provided — and every domain lowered, the rule-6 discipline — each
+///    capability's resolved class joins the aggregate machinery, and a
+///    class some design marks a contained, repository-holding entity
+///    warns on the capability's class span toward its aggregate root;
+///    value and root verdicts are clean, and no verdict (no design, a dto,
+///    a repository-less entity) stays silent;
+/// 7. any error (in any file) blocks the artifact.
 ///
 /// Returns the actor model (or `None`) plus diagnostics from every file,
 /// each tagged with its path. Duplicate diagnostics (a domain already
@@ -1229,6 +1250,17 @@ pub(crate) fn compile_actor_file(
         packages: &packages,
     };
 
+    // The aggregate classification of capability nouns (rexlang#144): only
+    // when designs are provided and every domain lowered — the rule-6
+    // discipline (a domain that failed to lower may hide containment, and
+    // a wrong verdict is worse than none; its diagnostics already block
+    // the artifact). An empty design slice is the exact plain behavior.
+    let classification = if designs.is_empty() {
+        None
+    } else {
+        crate::ddd::union_model(domains).map(|union| NounClassification::classify(designs, &union))
+    };
+
     // Lower the union policy set: actor-file blocks first, then each
     // domain's inline blocks.
     let mut records: Vec<ActorsRecord> = Vec::new();
@@ -1237,7 +1269,14 @@ pub(crate) fn compile_actor_file(
     {
         let mut lower_block = |decl: &mox::ActorsDecl, source: &str, file: &str| {
             let mut local = Vec::new();
-            let (record, conditions) = lower_actors(decl, source, file, &scope, &mut local);
+            let (record, conditions) = lower_actors(
+                decl,
+                source,
+                file,
+                &scope,
+                classification.as_ref(),
+                &mut local,
+            );
             diags.extend(local.into_iter().map(|d| (file.to_string(), d)));
             records.push(record);
             pending.extend(conditions);
