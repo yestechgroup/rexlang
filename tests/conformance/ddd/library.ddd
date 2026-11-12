@@ -63,7 +63,7 @@ application Library {
                 max 100
                 cursor
             }
-            capability SearchMedia
+            capability SearchMedia, SearchMediaAdmin
         }
     }
     module person {

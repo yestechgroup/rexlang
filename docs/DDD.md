@@ -129,9 +129,10 @@ Lexical and structural rules:
   `Book[0,3]`) lower into the artifact's cardinality slots
   (`returnMultiplicity` / parameter `multiplicity`).
 - A `search` projection's members may appear in any order (the formatter
-  canonicalizes them); repeated `text`/`filters`/`sort`/`document` clauses
-  merge, and repeats of the single members (`entity`, `ranking`,
-  `analyzer`, `pagination`) are idempotent — the first declaration wins.
+  canonicalizes them); repeated `text`/`filters`/`sort`/`document`/
+  `capability` clauses merge, and repeats of the single members (`entity`,
+  `ranking`, `analyzer`, `pagination`) are idempotent — the first
+  declaration wins.
 - A document entry's expression is captured **raw** (tokens up to the `;`,
   nested brackets and string literals respected) and stored verbatim in the
   artifact; parsing and type-checking it is the driver's job (rule 11). The
@@ -681,7 +682,7 @@ application Library {
                 max 100
                 cursor
             }
-            capability SearchMedia
+            capability SearchMedia, SearchMediaAdmin
         }
     }
     module person {

@@ -159,7 +159,8 @@ pub(crate) enum SearchMemberKind {
     Analyzer,
     /// `pagination { ... }`
     Pagination,
-    /// the `capability <name>` clause
+    /// the `capability <name> (, <name>)*` clause — the same list grammar
+    /// a service operation takes
     Capability,
 }
 
