@@ -83,6 +83,10 @@ impl TypeChecker {
                 self.lambda_is_boolean(kind, &body, receiver, errors)?;
                 Ty::boolean()
             }
+            AlgebraKind::All => {
+                self.lambda_is_boolean(kind, &body, receiver, errors)?;
+                Ty::boolean()
+            }
         };
         self.wrap_optional(result, optional_safe)
     }

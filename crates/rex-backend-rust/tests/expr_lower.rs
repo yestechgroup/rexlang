@@ -377,6 +377,15 @@ fn a4_any_folds_to_a_bool() {
 }
 
 #[test]
+fn a4_all_folds_to_a_bool() {
+    lower_in(
+        "Library",
+        "books.all(b => b.pages > 300)",
+        "self.books.clone().iter().all(|b| (res.book(*b).map(|o| o.pages).expect(\"dangling `Book` id\") > 300i32))",
+    );
+}
+
+#[test]
 fn a5_size_is_the_len_cast_to_i32() {
     lower_in("Library", "books.size()", "self.books.clone().len() as i32");
 }

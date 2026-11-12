@@ -46,6 +46,7 @@ pub mod checker;
 pub mod error;
 pub mod lexer;
 pub mod parser;
+pub mod stmt;
 pub mod types;
 
 pub use ast::{AlgebraKind, BinOp, Expr, ExprKind, Span, Spanned, UnOp};
@@ -59,4 +60,5 @@ pub use checker::{
 };
 pub use error::{ExprError, ParseResult};
 pub use parser::parse;
+pub use stmt::{check_stmt_body, BodyRaise, Stmt, StmtBody, StmtReceiver};
 pub use types::{NamedKind, Ty};

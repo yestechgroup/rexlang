@@ -617,6 +617,7 @@ fn algebra_types_follow_a1_to_a6() {
                                                                        // A3 with a boolean lambda: List(boolean)
     assert_ty("library.books.map(b => b.pages > 5)", Ty::boolean().list());
     assert_ty("library.books.any(b => b.pages > 500)", Ty::boolean()); // A4
+    assert_ty("library.books.all(b => b.pages > 500)", Ty::boolean()); // A4
     assert_ty("library.books.first()", book().optional()); // A1
     assert_ty("library.books.first(b => b.pages > 10)", book().optional());
     assert_ty("library.books.map(b => b.pages).sum()", Ty::int()); // A6
@@ -626,9 +627,10 @@ fn algebra_types_follow_a1_to_a6() {
 fn algebra_requires_collections_and_matching_lambdas() {
     // algebra on a non-list
     assert_err("book.pages.size()", "collection");
-    // filter/any/first lambdas must produce boolean
+    // filter/any/all/first lambdas must produce boolean
     assert_err("library.books.filter(b => b.pages)", "boolean");
     assert_err("library.books.any(b => b.pages)", "boolean");
+    assert_err("library.books.all(b => b.pages)", "boolean");
     // sum requires a numeric element type (A6)
     assert_err("library.books.sum()", "numeric");
     assert_err("library.books.map(b => b.title).sum()", "numeric");
