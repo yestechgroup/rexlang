@@ -27,8 +27,25 @@ pub(crate) fn check_pending_conditions(
             continue;
         }
         let checker = TypeChecker::new(context.clone()).with_self(package, class);
-        match checker.type_of(parsed.ast.as_ref().expect("ast checked above")) {
-            Ok(ty) if ty == Ty::boolean() => {}
+        let ast = parsed.ast.as_ref().expect("ast checked above");
+        match checker.type_of(ast) {
+            Ok(ty) if ty == Ty::boolean() => {
+                // The use-based guard lint (issue #142): a String-typed
+                // operand compared to a string literal in a capability
+                // `when` warns that the field could be an enum.
+                for lint in checker.guard_string_lints(ast) {
+                    let start = (condition.base + lint.span.start)
+                        .clamp(condition.inner_start, condition.inner_end);
+                    let end = (condition.base + lint.span.end).clamp(start, condition.inner_end);
+                    diags.push((
+                        condition.file.clone(),
+                        Diagnostic::warning(
+                            format!("invalid `when` condition: {}", lint.message),
+                            Some((start..end).into()),
+                        ),
+                    ));
+                }
+            }
             Ok(ty) => diags.push((
                 condition.file.clone(),
                 Diagnostic::error(

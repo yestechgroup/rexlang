@@ -785,7 +785,15 @@ fn check_step_guard(
     };
     let checker = rex_expr::TypeChecker::new(types.clone()).with_self(package, name);
     match checker.type_of(&ast) {
-        Ok(ty) if ty == rex_expr::Ty::boolean() => Some(interior),
+        Ok(ty) if ty == rex_expr::Ty::boolean() => {
+            // The use-based guard lint (issue #142): a String-typed operand
+            // compared to a string literal in a step `when` warns that the
+            // field could be an enum.
+            for lint in checker.guard_string_lints(&ast) {
+                local.push(Diagnostic::warning(&lint.message, Some(span)).with_help(help.clone()));
+            }
+            Some(interior)
+        }
         Ok(ty) => {
             local.push(
                 Diagnostic::error(

@@ -7,6 +7,7 @@
 //! Additional entries for the same mox path are candidates; the driver
 //! selects the transitive namespace closure the named file needs.
 
+use rex_driver::diagnostic::Severity;
 use rex_driver::{compile_files, compile_str, render};
 use rex_ir::{FeatureKind, TypeRef};
 
@@ -950,9 +951,24 @@ fn actor_pipeline_resolves_sigil_domain_types() {
             sigil: sigil_imports(),
         },
     );
+    // Clean except the use-based guard lint (issue #142): `id` is a plain
+    // String rosetta feature compared to a literal in the capability
+    // `when`, so the comparison warns that the field could be an enum.
+    // A warning, not an error — the actor model still lowers.
+    let warnings: Vec<_> = compilation
+        .diagnostics
+        .iter()
+        .filter(|(_, diagnostic)| diagnostic.severity == Severity::Warning)
+        .map(|(_, diagnostic)| &diagnostic.message)
+        .collect();
+    assert_eq!(warnings.len(), 1, "{:?}", compilation.diagnostics);
+    assert!(warnings[0].contains("`id`"), "{warnings:?}");
     assert!(
-        compilation.diagnostics.is_empty(),
-        "unexpected diagnostics: {:?}",
+        compilation
+            .diagnostics
+            .iter()
+            .all(|(_, diagnostic)| diagnostic.severity != Severity::Error),
+        "expected no errors: {:?}",
         compilation.diagnostics
     );
     let model = compilation.model.expect("actor model lowered");

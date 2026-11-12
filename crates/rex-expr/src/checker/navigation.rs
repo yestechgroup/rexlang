@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use rex_ir::{Feature, Operation, PrimitiveType, TypeRef};
 
-use crate::ast::{Expr, Spanned};
+use crate::ast::{Expr, ExprKind, Spanned};
 use crate::error::ExprError;
 use crate::types::{NamedKind, Ty};
 
@@ -46,9 +46,90 @@ impl TypeChecker {
         name: &Spanned<String>,
         errors: &mut Vec<ExprError>,
     ) -> Checked {
+        // Rule L3 (the enum-literal namespace): `EnumName.Member` — a dotted
+        // name whose receiver is not a scope binding — resolves through the
+        // enum-member registry and types as the enum. Scope wins: a bound
+        // name takes the ordinary feature-access path below. The `?.`
+        // spelling is accepted but meaningless here (a literal is never
+        // absent), so the result is never optional-wrapped.
+        if let ExprKind::Name(enum_name) = &receiver.kind {
+            if !scope.iter().any(|(bound, _)| bound == enum_name) {
+                match self.enum_namespace(enum_name, name, errors) {
+                    Ok(Some(ty)) => return Ok(ty),
+                    Ok(None) => {}
+                    Err(()) => return Err(()),
+                }
+            }
+        }
         let target = self.receiver_target(scope, receiver, optional_safe, name, errors)?;
         let ty = self.feature_ty(&target, name, errors)?;
         self.wrap_optional(ty, optional_safe)
+    }
+
+    /// The backend-facing mirror of the L3 namespace path: the enum type of
+    /// `EnumName.Member` when the bare enum name is uniquely
+    /// member-registered and `member` is a declared literal; `None`
+    /// otherwise (scope bindings and unregistered names stay ordinary
+    /// names). Public so the Rust lowering branches on exactly the
+    /// resolution the checker used.
+    pub fn enum_literal_ty(&self, enum_name: &str, member: &str) -> Option<Ty> {
+        let matches = self.context.enums_named(enum_name);
+        let [(package, name)] = matches.as_slice() else {
+            return None;
+        };
+        let members = self.context.enum_members(package, name)?;
+        members
+            .iter()
+            .any(|literal| literal == member)
+            .then(|| Ty::named(NamedKind::Enum, package.clone(), name.clone()))
+    }
+
+    /// The L3 namespace resolution of `EnumName.Member`: `Ok(Some(ty))`
+    /// when the member is declared (the enum's type), `Ok(None)` when the
+    /// name is not a member-registered enum at all (the caller falls
+    /// through to the ordinary unknown-name error), `Err(())` with the
+    /// error already pushed for an undeclared member or an ambiguous
+    /// bare name. Bare names resolve across the whole index — the
+    /// package-function precedent: exactly one match resolves, more are
+    /// an error naming every declaring package.
+    fn enum_namespace(
+        &self,
+        enum_name: &str,
+        member: &Spanned<String>,
+        errors: &mut Vec<ExprError>,
+    ) -> Result<Option<Ty>, ()> {
+        let matches = self.context.enums_named(enum_name);
+        let [(package, name)] = matches.as_slice() else {
+            if matches.len() > 1 {
+                let packages = matches
+                    .iter()
+                    .map(|(package, _)| package.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                errors.push(ExprError::new(
+                    format!("ambiguous enum `{enum_name}`: declared in {packages}"),
+                    member.span,
+                ));
+                return Err(());
+            }
+            return Ok(None);
+        };
+        let members = self
+            .context
+            .enum_members(package, name)
+            .expect("registry key implies members");
+        if members.iter().any(|literal| literal == &member.value) {
+            return Ok(Some(Ty::named(
+                NamedKind::Enum,
+                package.clone(),
+                name.clone(),
+            )));
+        }
+        errors.push(ExprError::new(
+            not_a_literal_message(&member.value, name, members),
+            member.span,
+        ));
+        Err(())
     }
 
     /// Resolves a feature on a class-typed target and types it per the IR

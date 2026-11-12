@@ -3,9 +3,9 @@
 
 use rex_ir::PrimitiveType;
 
-use crate::ast::{BinOp, Expr, Span};
+use crate::ast::{BinOp, Expr, ExprKind, Span};
 use crate::error::ExprError;
-use crate::types::Ty;
+use crate::types::{NamedKind, Ty};
 
 use super::*;
 
@@ -272,6 +272,20 @@ impl TypeChecker {
         let long = Ty::long();
         let float = Ty::float();
         let double = Ty::double();
+
+        // Rule L3 (closed membership): a string literal against an
+        // enum-typed operand is diagnosed against the enum's declared
+        // members — a non-member is the closed-set error (the V13
+        // discipline), never the generic mismatch below. A declared member
+        // still fails the same-type rule: the typed spelling for enum
+        // comparisons is the dotted namespace form, never a bare string
+        // (the anti-magic-strings stance). When the host registered the
+        // enum kind without members, the check defers silently to R2.
+        if let Some(error) = self.enum_membership(lhs, rhs, &lhs_ty, &rhs_ty) {
+            errors.push(error);
+            return Err(());
+        }
+
         let comparable = lhs_ty == Ty::Null
             || rhs_ty == Ty::Null
             || lhs_ty == rhs_ty
@@ -291,6 +305,41 @@ impl TypeChecker {
             return Err(());
         }
         Ok(Ty::boolean())
+    }
+
+    /// The L3 membership diagnosis of one equality pair over already-checked
+    /// operand types: `Some(error)` when one side is a string literal, the
+    /// other side a plain enum-typed value, and the literal names no
+    /// declared member. `Option`/`List`-wrapped enums and member-less
+    /// registrations defer to the ordinary rules.
+    fn enum_membership(
+        &self,
+        lhs: &Expr,
+        rhs: &Expr,
+        lhs_ty: &Ty,
+        rhs_ty: &Ty,
+    ) -> Option<ExprError> {
+        let (literal, literal_span, other_ty) = match (&lhs.kind, &rhs.kind) {
+            (ExprKind::String(text), _) => (text, lhs.span, rhs_ty),
+            (_, ExprKind::String(text)) => (text, rhs.span, lhs_ty),
+            _ => return None,
+        };
+        let Ty::Named {
+            kind: NamedKind::Enum,
+            package,
+            name,
+        } = other_ty
+        else {
+            return None;
+        };
+        let members = self.context.enum_members(package, name)?;
+        if members.iter().any(|member| member == literal) {
+            return None;
+        }
+        Some(ExprError::new(
+            not_a_literal_message(&format!("\"{literal}\""), name, members),
+            literal_span,
+        ))
     }
 
     pub(crate) fn logic(

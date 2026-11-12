@@ -1369,7 +1369,15 @@ impl<'a> Lowerer<'a> {
                 );
             }
             for enum_ in &content.enums {
-                context.insert_named(namespace, &enum_.name, rex_expr::NamedKind::Enum);
+                context.insert_enum(
+                    namespace,
+                    &enum_.name,
+                    enum_
+                        .literals
+                        .iter()
+                        .map(|literal| literal.name.clone())
+                        .collect(),
+                );
             }
             for datatype in &content.datatypes {
                 context.insert_named(namespace, &datatype.name, rex_expr::NamedKind::Datatype);
@@ -1379,11 +1387,22 @@ impl<'a> Lowerer<'a> {
             }
         }
         for (name, definition) in &self.builtins {
-            let kind = match definition {
-                BuiltinDef::Datatype(_) => rex_expr::NamedKind::Datatype,
-                BuiltinDef::Enum(_) => rex_expr::NamedKind::Enum,
-            };
-            context.insert_named(BUILTIN_NAMESPACE, name, kind);
+            match definition {
+                BuiltinDef::Datatype(_) => {
+                    context.insert_named(BUILTIN_NAMESPACE, name, rex_expr::NamedKind::Datatype);
+                }
+                BuiltinDef::Enum(enum_def) => {
+                    context.insert_enum(
+                        BUILTIN_NAMESPACE,
+                        name,
+                        enum_def
+                            .literals
+                            .iter()
+                            .map(|literal| literal.name.clone())
+                            .collect(),
+                    );
+                }
+            }
         }
         context
     }

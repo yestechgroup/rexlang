@@ -754,17 +754,26 @@ fn check_when(
     }
     let ast = parsed.ast?;
     let checker = rex_expr::TypeChecker::new(types.clone()).with_self("", case);
+    let when_help = format!("in the `when` of plan item '{item}' in case '{case}'");
     match checker.type_of(&ast) {
-        Ok(ty) if ty == Ty::boolean() => Some(interior),
+        Ok(ty) if ty == Ty::boolean() => {
+            // The use-based guard lint (issue #142): a String-typed
+            // operand compared to a string literal in a criterion `when`
+            // warns that the field could be an enum.
+            for lint in checker.guard_string_lints(&ast) {
+                local.push(
+                    Diagnostic::warning(&lint.message, Some(span)).with_help(when_help.clone()),
+                );
+            }
+            Some(interior)
+        }
         Ok(ty) => {
             local.push(
                 Diagnostic::error(
                     format!("criterion condition must be boolean, found {ty}"),
                     Some(span),
                 )
-                .with_help(format!(
-                    "in the `when` of plan item '{item}' in case '{case}'"
-                )),
+                .with_help(when_help),
             );
             Some(interior)
         }
