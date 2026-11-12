@@ -99,19 +99,39 @@ pub(crate) fn actors_block<'src>(
     let effect = kw(Token::Permit)
         .to(Effect::Permit)
         .or(kw(Token::Forbid).to(Effect::Forbid));
-    let effect_entry = effect
+    // The session-kind modifier, folded together with the capability name
+    // it precedes (rexlang#181 part B). `human` is contextual — it is the
+    // modifier iff the *next* token is a valid capability-name token
+    // (`Ident`/`IdentEscaped`), otherwise it is itself the capability name
+    // (`permit human when (...)`, `permit human obligation done`). `agent`
+    // is the real keyword: a capability named `agent` needs the `^agent`
+    // escape, so an unescaped `agent` here is always the modifier. The
+    // alternatives are ordered human → agent → plain, and each starts from
+    // the same input (chumsky backtracks), so a failed modifier attempt
+    // falls back to the plain name.
+    let human_cap = select! { Token::Ident(text) if text == "human" => SessionKindModifier::Human }
         .then(name())
+        .map(|(modifier, capability)| (Some(modifier), capability));
+    let agent_cap = kw(Token::Agent)
+        .ignore_then(name())
+        .map(|capability| (Some(SessionKindModifier::Agent), capability));
+    let plain_cap = name().map(|capability| (None, capability));
+    let effect_entry = effect
+        .then(choice((human_cap, agent_cap, plain_cap)))
         .then(kw(Token::When).ignore_then(raw_parens()).or_not())
         .then(obligation.repeated().collect::<Vec<_>>())
-        .map_with(|(((effect, capability), when), obligations), e| {
-            GrantEntryDecl::Effect(GrantEffectDecl {
-                effect,
-                capability,
-                when,
-                obligations,
-                span: e.span(),
-            })
-        });
+        .map_with(
+            |(((effect, (session_kind, capability)), when), obligations), e| {
+                GrantEntryDecl::Effect(GrantEffectDecl {
+                    effect,
+                    session_kind,
+                    capability,
+                    when,
+                    obligations,
+                    span: e.span(),
+                })
+            },
+        );
     let cedar_entry = kw(Token::Cedar)
         .then(raw_body())
         .map_with(|(target_span, span), _| {

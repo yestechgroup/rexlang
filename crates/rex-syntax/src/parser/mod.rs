@@ -148,8 +148,9 @@
 //! obligation_decl := "obligation" name
 //! grant_decl      := "grant" name "{" grant_entry* "}"
 //! grant_entry     := effect_entry | cedar_entry
-//! effect_entry    := ("permit" | "forbid") name ("when" raw_parens)?
-//!                    obligation*
+//! effect_entry    := ("permit" | "forbid") session_kind? name
+//!                    ("when" raw_parens)? obligation*
+//! session_kind    := "human" | "agent"
 //! obligation      := "obligation" name
 //! cedar_entry     := "cedar" raw_body
 //! delegation_decl := "delegation" name "{" "from" name "to" name
@@ -160,6 +161,17 @@
 //!
 //! * The body items may be interleaved in any order; the AST folds them into
 //!   per-kind lists.
+//! * `session_kind` is the optional session-kind modifier of an effect
+//!   entry (rexlang#181 part B). `agent` is the real lexer keyword — a
+//!   capability named `agent` needs the `^agent` escape, so an unescaped
+//!   `agent` there is always the modifier. `human` is *contextual*: it is
+//!   the modifier iff the next token is a valid capability-name token
+//!   (`name`), so `permit human X` restricts to human sessions while
+//!   `permit human when (...)` permits a capability literally named
+//!   `human` with a guard (and `permit human obligation done` attaches an
+//!   obligation to the capability `human`). Unknown kind words
+//!   (`permit robot X`) are parse errors: only `human` and `agent` are
+//!   accepted, and the trailing name has no rule to bind it.
 //! * The delegation shape above is the only *valid* one; the parser accepts
 //!   any item order and reports misplaced/duplicate `from`/`to`/`purpose`
 //!   lines and `cedar` entries (not allowed inside a delegation) as errors.
@@ -911,16 +923,18 @@ mod grammar_doc_tests {
 
     /// Contextual words the grammar quotes that are *not* lexer keywords and
     /// not covered by a table below: feature modifiers, the import sigils,
-    /// the delegation `to`, the datatype block words, `unique`, the `.evt`
+    /// the delegation `to`, the session-kind modifier `human` (rexlang#181),
+    /// the datatype block words, `unique`, the `.evt`
     /// subscription/channel words plus the slice-2 clause words, and the
     /// parser-only `ranking` values (`crate::ddd` documents them as
     /// parser-only).
-    const CONTEXTUAL_WORDS: [&str; 32] = [
+    const CONTEXTUAL_WORDS: [&str; 33] = [
         "id",
         "readonly",
         "schema",
         "sigil",
         "to",
+        "human",
         "create",
         "convert",
         "format",
