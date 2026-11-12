@@ -394,6 +394,35 @@ what follows is what they mean.
 Multiplicity shorthand: `[]` = `[0..*]`; absent: attributes are `1..1`,
 `contains`/`refers` are `0..*`, `container` and `derived` are `0..1`.
 
+A class may declare its storage table right after the name:
+`class PayRunStatus table "pay_run_status" { ... }` (the `table_annotation`
+production of `class_decl`, normative in the parser module docs). The
+driver carries the override verbatim as the IR's
+`ClassDef.tableName`; without it, consumers derive the table from the
+class's stripped module name, exactly as they derive the module path
+itself. `table` is an ordinary identifier everywhere else — a class,
+feature, or enum may still be named `table` — and the annotation is class
+grammar only (enums have no table).
+
+Downstream, consumers derive one module path per declaration: the name
+with one trailing `Type` suffix removed, then snake_case. `PayRun` and
+`PayRunType` both strip to `pay_run`; `TypeWriter` keeps its name (the
+suffix strips only at the end, once); `PayRunTypeType` strips to
+`pay_run_type`. Two declarations in one package that strip to the same
+identifier — classes or enums, in any combination — would generate the
+same module path and one overwrites the other, so the compiler rejects
+the pair (E0300, spanning the later declaration and naming both).
+Classes that map to the same *effective* table name (a declared `table`
+override, else the derived default) are rejected the same way (E0301) —
+without an override this is implied by a stripped-name collision, so
+E0301 fires only when an override forces two distinct module names onto
+one table. A pair where either class is a **containment target** (some
+class declares a `contains` feature targeting it) is exempt: a contained
+value object shares its owner's module downstream by design, so the
+entity + value-object pairing (`PayRun` containing `PayRunType`)
+compiles. Rename one of the declarations to resolve an E0300; give one
+class a distinct `table "…"` to resolve an E0301.
+
 ### Primitives and the `date` type
 
 Attribute, parameter, and facet positions admit the built-in primitives

@@ -514,6 +514,27 @@ fn idempotent_on_conformance_library() {
 }
 
 #[test]
+fn table_annotation_renders_on_the_class_line_and_fixpoints() {
+    // The `table "…"` annotation stays on the declaration's first line,
+    // between the class name and any `extends` clause.
+    let formatted = fmt("class PayRunType\n\ntable  \"pay_run_type\"\n{\n    String name\n}");
+    assert_eq!(
+        formatted,
+        "class PayRunType table \"pay_run_type\" {\n    String name\n}\n"
+    );
+    assert_eq!(fmt(&formatted), formatted, "not a fixpoint");
+
+    // Before `extends`.
+    let formatted = fmt("class A table \"a\" extends B { }");
+    assert_eq!(formatted, "class A table \"a\" extends B {}\n");
+    assert_eq!(fmt(&formatted), formatted, "not a fixpoint");
+
+    // An escaped `^table` is a name, never the annotation.
+    let formatted = fmt("class ^table { int n }");
+    assert_eq!(formatted, "class ^table {\n    int n\n}\n");
+}
+
+#[test]
 fn idempotent_on_conformance_currency() {
     assert_idempotent(include_str!(
         "../../../tests/conformance/models/currency.mox"

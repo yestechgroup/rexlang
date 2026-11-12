@@ -69,8 +69,10 @@
 //! annotation_decl  := "annotation" string ("as" name)?
 //! import_schema_decl := "import" "schema" string ("as" name)?
 //! import_sigil_decl  := "import" "sigil" string
-//! class_decl       := "class" name ("extends" type_ref ("," type_ref)*)?
+//! class_decl       := "class" name table_annotation?
+//!                     ("extends" type_ref ("," type_ref)*)?
 //!                     "{" feature* "}"
+//! table_annotation := "table" string
 //! feature          := modifier* ( containment | reference | container
 //!                               | op_decl | derived_decl | attribute )
 //! modifier         := "id" | "readonly"
@@ -120,6 +122,11 @@
 //! * Constraint keywords each at most once per block; `unique` takes no
 //!   value (a literal after it is an error) and is the collection-level
 //!   constraint.
+//! * `table` (the class annotation) is an ordinary identifier in every
+//!   other position — a class, feature, or enum may still be named `table`.
+//!   The annotation is recognized only directly after the class name and at
+//!   most once; it is a class declaration's grammar only (`enum` has no
+//!   table).
 //! * In a `datatype_block`, `format`, `create`, and `convert` each appear at
 //!   most once, and a binding target literally named `format` is an error —
 //!   the unescaped key declares the format (only writable escaped,

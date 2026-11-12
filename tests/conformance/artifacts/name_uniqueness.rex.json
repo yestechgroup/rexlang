@@ -1,0 +1,140 @@
+{
+  "formatVersion": 1,
+  "rexVersion": "0.1.0",
+  "packages": [
+    {
+      "name": "nz.example.payroll",
+      "description": "Conformance: the stripped-name uniqueness shapes (issue rexlang#177) in\none compiling package — the entity + contained-value-object exemption\n(`PayRun` contains `PayRunType`, so the pair that strips to `pay_run`\ncompiles) and the `table \"…\"` override (`StatusLabel` declares its\nstorage table, which flows through the IR as `tableName` so consumers\nstop re-deriving it; its derived default would be `status_label`). The\ncolliding shapes themselves are compile errors (E0300/E0301) and live in\nthe driver's `domain_names` test suite, never in a compiling fixture.",
+      "annotations": [],
+      "enums": [
+        {
+          "name": "PayRunStatusType",
+          "literals": [
+            {
+              "name": "Draft",
+              "value": 0
+            },
+            {
+              "name": "Approved",
+              "value": 1
+            }
+          ]
+        }
+      ],
+      "datatypes": [],
+      "interfaces": [],
+      "classes": [
+        {
+          "name": "PayRun",
+          "extends": [],
+          "features": [
+            {
+              "id": 0,
+              "name": "reference",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": true,
+              "isReadOnly": false
+            },
+            {
+              "id": 1,
+              "name": "total",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "int"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            },
+            {
+              "id": 2,
+              "name": "items",
+              "kind": "containment",
+              "type": {
+                "type": "class",
+                "value": {
+                  "package": "nz.example.payroll",
+                  "name": "PayRunType"
+                }
+              },
+              "multiplicity": {
+                "lower": 0,
+                "upper": "unbounded"
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            }
+          ]
+        },
+        {
+          "name": "PayRunType",
+          "extends": [],
+          "features": [
+            {
+              "id": 0,
+              "name": "name",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            }
+          ]
+        },
+        {
+          "name": "StatusLabel",
+          "extends": [],
+          "features": [
+            {
+              "id": 0,
+              "name": "label",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            }
+          ],
+          "tableName": "pay_run_status_label"
+        }
+      ]
+    }
+  ]
+}
