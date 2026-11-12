@@ -36,6 +36,13 @@ const TIMESHEET_DESIGN_PATH: &str = "tests/conformance/ddd/timesheet.ddd";
 const TIMESHEET_DOMAIN_PATH: &str = "tests/conformance/ddd/timesheet.mox";
 const TIMESHEET_ARTIFACT_PATH: &str = "tests/conformance/ddd/timesheet.ddd.json";
 
+/// The rexlang#179 fixture: module-level `extend PayRun` child operations
+/// over the aggregate's contained collection/scalar children; its golden
+/// carries `childOperations` and each operation's `childScope`.
+const CHILDOPS_DESIGN_PATH: &str = "tests/conformance/ddd/childops.ddd";
+const CHILDOPS_DOMAIN_PATH: &str = "tests/conformance/ddd/childops.mox";
+const CHILDOPS_ARTIFACT_PATH: &str = "tests/conformance/ddd/childops.ddd.json";
+
 /// Compiles one `(design, domain)` fixture pair the way the CLI resolves
 /// the import (paths relative to the design file) and returns the lowered
 /// artifact, failing on any diagnostic.
@@ -125,6 +132,42 @@ fn conformance_timesheet_matches_golden_artifact() {
     assert_eq!(transition.machine.as_deref(), Some("PayRunStatus"));
     assert_eq!(submit.condition_paths.len(), 2);
     assert_golden_artifact(model, TIMESHEET_ARTIFACT_PATH, TIMESHEET_DESIGN_PATH);
+}
+
+/// The rexlang#179 child-operation fixture: the `extend PayRun` blocks lower
+/// onto the root's design as `childOperations`, each naming the child
+/// feature and its resolved class; ordinary service operations stay
+/// untouched.
+#[test]
+fn conformance_childops_matches_golden_artifact() {
+    let model = compile_fixture(CHILDOPS_DESIGN_PATH, CHILDOPS_DOMAIN_PATH);
+    let design = model.modules[0]
+        .designs
+        .iter()
+        .find(|design| design.class == "PayRun")
+        .expect("the PayRun design");
+    assert_eq!(
+        design
+            .child_operations
+            .iter()
+            .map(|operation| operation.name.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "addLine",
+            "removeLine",
+            "recalculateLine",
+            "describeLine",
+            "annotate"
+        ],
+    );
+    assert_eq!(
+        design.child_operations[0]
+            .child_scope
+            .as_ref()
+            .map(|scope| (scope.feature.as_str(), scope.class.as_str())),
+        Some(("lines", "nz.example.payroll.PayRunLine")),
+    );
+    assert_golden_artifact(model, CHILDOPS_ARTIFACT_PATH, CHILDOPS_DESIGN_PATH);
 }
 
 #[test]

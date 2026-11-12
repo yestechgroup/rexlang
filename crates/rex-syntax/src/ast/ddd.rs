@@ -55,6 +55,10 @@ pub struct DddModule {
     pub designs: Vec<DddDesign>,
     /// Search projections in source order.
     pub searches: Vec<DddSearch>,
+    /// Module-level `extend <Class> { ... }` child-operation blocks in
+    /// source order (issue rexlang#179). Several blocks may target one
+    /// class; the driver merges them onto that class's design.
+    pub extends: Vec<DddExtend>,
     /// Span of the whole declaration, `module` keyword included.
     pub span: Span,
 }
@@ -162,6 +166,54 @@ pub struct DddParam {
     /// The parameter name.
     pub name: Name,
     /// Span covering the whole parameter.
+    pub span: Span,
+}
+
+/// A module-level `extend <Class> { ... }` block (issue rexlang#179):
+/// child-scoped operations over an aggregate root's contained children —
+/// `boolean addLine(PayRunLineDraft line) => lines.add;` means "reach the
+/// `lines` child collection through the root and `add` to it". A class may
+/// carry several blocks; the driver merges them in source order onto the
+/// class's design.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DddExtend {
+    /// The aggregate-root class being extended.
+    pub class: Name,
+    /// The child operations in source order.
+    pub operations: Vec<DddChildOp>,
+    /// Span of the whole block, `extend` keyword included.
+    pub span: Span,
+}
+
+/// One `("protected")? signature => feature.action guard_clause? ";"` child
+/// operation of a [`DddExtend`]. The signature reuses the service-operation
+/// production; the dotted pair names the root's child feature and the
+/// action to perform on it (`add`, `remove`, `save` — a closed set the
+/// driver validates against the feature's multiplicity).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DddChildOp {
+    /// The operation name.
+    pub name: Name,
+    /// The declared return type (the child-op signature always declares
+    /// one, like a declared service operation).
+    pub return_type: TypeRef,
+    /// Multiplicity annotation on the return type, if any.
+    pub multiplicity: Option<Multiplicity>,
+    /// Parameters in source order.
+    pub params: Vec<DddParam>,
+    /// The root class's child feature the operation acts on (`lines`).
+    pub feature: Name,
+    /// The action word (`add`, `remove`, `save`), validated by the driver.
+    pub action: Name,
+    /// `true` for the `protected` modifier: the operation stays off the
+    /// public interface (Sculptor's visibility).
+    pub is_protected: bool,
+    /// The `when ( ... )` guard condition: a `raw_parens` span (parens
+    /// included, expression inside deliberately unparsed — slicing and
+    /// type-checking it is the driver's job, against the declared
+    /// parameters and the child class as `self`).
+    pub condition: Option<Span>,
+    /// Span of the whole operation, `;` included.
     pub span: Span,
 }
 

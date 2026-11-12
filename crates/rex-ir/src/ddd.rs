@@ -41,6 +41,13 @@
 //!   and its `guard`/an operation's `condition` are the `when`-condition
 //!   rule: verbatim source text between the parentheses, typed by the
 //!   driver.
+//! - **Child-scoped operations.** A [`Design`] may carry child operations
+//!   ([`Design::child_operations`]) declared by module-level `extend
+//!   <Class>` blocks (issue rexlang#179): operations over the aggregate's
+//!   contained children, each naming the child feature and its resolved
+//!   class through [`ServiceOperation::child_scope`] ([`ChildRef`]). The
+//!   action (`add`, `remove`, `save`) is validated by the driver at
+//!   generate time and is not part of the wire shape.
 //! - **Equality policy.** Like every artifact root, [`DddModel`] derives
 //!   [`Eq`] (wire contract rule 14): the one floating-point field in any
 //!   artifact — [`SearchField::boost`] — is wrapped in the ordered
@@ -304,12 +311,20 @@ pub struct ServiceOperation {
     /// driver against the target repository's designed machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transition: Option<TransitionRef>,
+    /// The child-scoped target of a module-level `extend <Class>` operation
+    /// (issue rexlang#179): `boolean addLine(PayRunLineDraft line) =>
+    /// lines.add` lowers with the root's child feature (`lines`) and the
+    /// resolved child class. `None` for every ordinary service operation
+    /// (the additive-field discipline: absent from body-less artifacts, so
+    /// existing goldens stay byte-identical).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_scope: Option<ChildRef>,
 }
 
 impl ServiceOperation {
     /// Creates an operation with no return type, parameters, delegation,
     /// capabilities, invoked decision services, emitted events, condition
-    /// paths, or transition binding.
+    /// paths, transition binding, or child scope.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -324,6 +339,7 @@ impl ServiceOperation {
             condition: None,
             condition_paths: Vec::new(),
             transition: None,
+            child_scope: None,
         }
     }
 
@@ -363,6 +379,12 @@ impl ServiceOperation {
         self.transition = transition;
         self
     }
+
+    /// Chainable setter for the child-scoped target (issue rexlang#179).
+    pub fn with_child_scope(mut self, child_scope: Option<ChildRef>) -> Self {
+        self.child_scope = child_scope;
+        self
+    }
 }
 
 /// The explicit transition binding of a delegated [`ServiceOperation`]
@@ -399,6 +421,39 @@ impl TransitionRef {
     pub fn with_machine(mut self, machine: Option<String>) -> Self {
         self.machine = machine;
         self
+    }
+}
+
+/// The child-scoped target of a module-level `extend <Class>` operation
+/// (issue rexlang#179).
+///
+/// An `extend PayRun { boolean addLine(PayRunLineDraft line) => lines.add; }`
+/// block declares root-side operations over the aggregate's contained
+/// children; the lowered operation carries the root's child feature
+/// ([`ChildRef::feature`], as authored) and the child class that feature
+/// resolves to ([`ChildRef::class`], package-qualified — the
+/// [`Delegation::target`] convention). The *action* (`add`, `remove`,
+/// `save`) is a generate-time concern the driver validates; it is not part
+/// of the wire shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChildRef {
+    /// The root class's child feature name, exactly as declared in the
+    /// domain model (`lines`).
+    pub feature: String,
+    /// The child class the feature resolves to, package-qualified
+    /// (`nz.example.payroll.PayRunLine`).
+    pub class: String,
+}
+
+impl ChildRef {
+    /// Creates a child reference from the feature name and its resolved
+    /// class's full name.
+    pub fn new(feature: impl Into<String>, class: impl Into<String>) -> Self {
+        Self {
+            feature: feature.into(),
+            class: class.into(),
+        }
     }
 }
 
@@ -544,10 +599,18 @@ pub struct Design {
     /// The class's lifecycle state machine, when designed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<StateMachine>,
+    /// Child-scoped operations declared by the module's `extend <Class>`
+    /// blocks (issue rexlang#179), in declaration order: root-side
+    /// operations over the aggregate's contained children. Each carries a
+    /// [`ChildRef`] in [`ServiceOperation::child_scope`]. Additive; an
+    /// extend-less design omits the key (the byte-identical discipline).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub child_operations: Vec<ServiceOperation>,
 }
 
 impl Design {
-    /// Creates a concrete design with default flags and no repository.
+    /// Creates a concrete design with default flags, no repository, no
+    /// machine, and no child operations.
     pub fn new(class: impl Into<String>, stereotype: Stereotype) -> Self {
         Self {
             class: class.into(),
@@ -556,7 +619,14 @@ impl Design {
             flags: DesignFlags::default(),
             repository: None,
             machine: None,
+            child_operations: Vec::new(),
         }
+    }
+
+    /// Chainable setter for the child-scoped operations (issue rexlang#179).
+    pub fn with_child_operations(mut self, child_operations: Vec<ServiceOperation>) -> Self {
+        self.child_operations = child_operations;
+        self
     }
 }
 
@@ -1137,6 +1207,7 @@ mod tests {
                             condition: None,
                             condition_paths: Vec::new(),
                             transition: None,
+                            child_scope: None,
                         },
                         ServiceOperation {
                             name: "renew".to_string(),
@@ -1154,6 +1225,7 @@ mod tests {
                             condition: None,
                             condition_paths: Vec::new(),
                             transition: None,
+                            child_scope: None,
                         },
                     ],
                     dependencies: vec![
@@ -1193,6 +1265,7 @@ mod tests {
                             ],
                         }),
                         machine: None,
+                        child_operations: Vec::new(),
                     },
                     Design {
                         class: "Money".to_string(),
@@ -1201,6 +1274,7 @@ mod tests {
                         flags: DesignFlags::default(),
                         repository: None,
                         machine: None,
+                        child_operations: Vec::new(),
                     },
                     Design {
                         class: "LoanSummary".to_string(),
@@ -1214,6 +1288,7 @@ mod tests {
                         },
                         repository: None,
                         machine: None,
+                        child_operations: Vec::new(),
                     },
                 ],
                 searches: Vec::new(),
@@ -1318,6 +1393,47 @@ mod tests {
         assert!(!json.contains("transition"), "{json}");
     }
 
+    /// Issue rexlang#179's additive fields are byte-silent when absent: a
+    /// body-less design and an operation with no child scope serialize
+    /// exactly as before the fields existed, and the populated forms use
+    /// the documented camelCase wire shapes.
+    #[test]
+    fn child_scope_and_child_operations_are_absent_unless_declared() {
+        let design = Design::new("Money", Stereotype::Value);
+        assert_eq!(
+            serde_json::to_string(&design).expect("serialize"),
+            r#"{"class":"Money","stereotype":"value"}"#,
+            "a child-operation-less design omits the key"
+        );
+        let op = ServiceOperation::new("approve");
+        assert_eq!(
+            serde_json::to_string(&op).expect("serialize"),
+            r#"{"name":"approve"}"#,
+            "an unscoped operation omits `childScope`"
+        );
+
+        let scoped = ServiceOperation::new("addLine").with_child_scope(Some(ChildRef::new(
+            "lines",
+            "nz.example.payroll.PayRunLine",
+        )));
+        let json = serde_json::to_string(&scoped).expect("serialize");
+        assert_eq!(
+            json,
+            r#"{"name":"addLine","childScope":{"feature":"lines","class":"nz.example.payroll.PayRunLine"}}"#
+        );
+        let parsed: ServiceOperation = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, scoped);
+
+        let design = Design::new("PayRun", Stereotype::Entity).with_child_operations(vec![scoped]);
+        let json = serde_json::to_string(&design).expect("serialize");
+        assert_eq!(
+            json,
+            r#"{"class":"PayRun","stereotype":"entity","childOperations":[{"name":"addLine","childScope":{"feature":"lines","class":"nz.example.payroll.PayRunLine"}}]}"#
+        );
+        let parsed: Design = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, design);
+    }
+
     #[test]
     fn builtin_ops_serialize_as_camel_case_strings() {
         assert_eq!(
@@ -1369,6 +1485,7 @@ mod tests {
             flags: DesignFlags::default(),
             repository: None,
             machine: None,
+            child_operations: Vec::new(),
         };
         assert_eq!(
             serde_json::to_string(&design).expect("serialize"),
@@ -1391,6 +1508,7 @@ mod tests {
             },
             repository: None,
             machine: None,
+            child_operations: Vec::new(),
         };
         assert_eq!(
             serde_json::to_string(&design).expect("serialize"),

@@ -194,6 +194,7 @@
 //! base_decl         := "base" qualified_name
 //! module_decl       := "module" name "{" module_member* "}"
 //! module_member     := service_decl | design_decl | search_decl
+//!                    | extend_decl
 //! service_decl      := "service" name "{" service_member* "}"
 //! service_member    := service_op | inject_decl
 //! service_op        := "protected"? signature capability_clause?
@@ -240,6 +241,9 @@
 //! search_field      := qualified_name ("boost" int)? ("analyzer" string)?
 //! document_entry    := name "=" raw_expr ";"
 //! pagination_member := "limit" int | "max" int | "cursor"
+//! extend_decl       := "extend" name "{" child_op* "}"
+//! child_op          := "protected"? signature "=>" name "." name
+//!                      guard_clause? ";"
 //! ```
 //!
 //! * Every `.ddd` word above is a **contextual identifier** (the `id`/
@@ -293,6 +297,15 @@
 //!   guard/op state references, the bound feature and its enum) and derives
 //!   the workflow actions (`via` names; bare arrows get a documented
 //!   derivation) — see `docs/DDD.md`.
+//! * An `extend_decl` (issue rexlang#179) declares child-scoped operations
+//!   over an aggregate root's contained children: the `signature` is the
+//!   service-operation production, and the dotted pair names the root's
+//!   child feature and the action (`add`, `remove`, `save` — the closed
+//!   vocabulary the driver validates against the feature's multiplicity).
+//!   Blocks may repeat for one class and merge in source order; the target
+//!   must be an aggregate root designed in the same module (the driver's
+//!   `E0358`). A `child_op`'s `when` guard types against the operation's
+//!   parameters and the child feature's target class as `self`.
 //!
 //! ## `.evt` event-contract sources ([`parse_evt`])
 //!
@@ -1025,6 +1038,7 @@ mod grammar_doc_tests {
             ddd::LIMIT,
             ddd::MAX,
             ddd::CURSOR,
+            ddd::EXTEND,
         ]);
         for (keyword, _) in ddd::STEREOTYPES {
             words.push(keyword);
@@ -1219,5 +1233,9 @@ mod grammar_doc_tests {
                 check(keyword);
             }
         }
+        // The single-word `.ddd` keywords have no table (they sit at fixed
+        // grammar positions), so the extend keyword is checked explicitly
+        // (issue rexlang#179).
+        check(ddd::EXTEND);
     }
 }

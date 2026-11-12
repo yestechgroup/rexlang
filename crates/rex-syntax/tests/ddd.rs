@@ -2056,3 +2056,182 @@ fn invokes_and_decision_stay_contextual_identifiers() {
     assert!(formatted.contains("inject ^decision;"), "{formatted}");
     assert!(formatted.contains("boolean ^invokes();"), "{formatted}");
 }
+
+// --- child-scoped extend blocks (issue rexlang#179) ---------------------------
+
+/// A module with two `extend` blocks over one aggregate root: a collection
+/// child with `add`/`remove`/`save` actions (one `protected`, one guarded),
+/// and a scalar child with `save`.
+const EXTEND: &str = r#"
+import "payroll.mox";
+
+application Payroll {
+
+    base nz.example.payroll
+
+    module payroll {
+        entity PayRun repository PayRunRepository {
+            findById;
+        }
+        extend PayRun {
+            boolean addLine(PayRunLineDraft line) => lines.add;
+            protected boolean removeLine(String lineId) => lines.remove when (lineId != "");
+        }
+        extend PayRun {
+            boolean saveLine(PayRunLineDraft line) => lines.save;
+        }
+    }
+}
+"#;
+
+#[test]
+fn extend_blocks_parse_with_child_operations() {
+    let result = parse_ddd(EXTEND);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let module = expect_module(&file, "payroll");
+    assert_eq!(module.extends.len(), 2, "both blocks are kept in order");
+
+    let first = &module.extends[0];
+    assert_eq!(first.class.text, "PayRun");
+    assert_eq!(first.operations.len(), 2);
+
+    let add = &first.operations[0];
+    assert_eq!(add.name.text, "addLine");
+    assert_eq!(add.return_type.name.full_name(), "boolean");
+    assert_eq!(add.params[0].name.text, "line");
+    assert_eq!(add.params[0].type_ref.name.full_name(), "PayRunLineDraft");
+    assert_eq!(add.feature.text, "lines");
+    assert_eq!(add.action.text, "add");
+    assert!(!add.is_protected);
+    assert!(add.condition.is_none());
+
+    let remove = &first.operations[1];
+    assert!(remove.is_protected);
+    assert_eq!(remove.action.text, "remove");
+    assert_eq!(
+        span_text(EXTEND, remove.condition.expect("the guard")),
+        "(lineId != \"\")"
+    );
+
+    assert_eq!(module.extends[1].operations[0].action.text, "save");
+}
+
+#[test]
+fn extend_formats_canonically_and_is_idempotent() {
+    let canonical = concat!(
+        "import \"payroll.mox\";\n",
+        "\n",
+        "application Payroll {\n",
+        "    base nz.example.payroll\n",
+        "    module payroll {\n",
+        "        entity PayRun repository PayRunRepository {\n",
+        "            findById;\n",
+        "        }\n",
+        "        extend PayRun {\n",
+        "            boolean addLine(PayRunLineDraft line) => lines.add;\n",
+        "            protected boolean removeLine(String lineId) => lines.remove when (lineId != \"\");\n",
+        "        }\n",
+        "        extend PayRun {\n",
+        "            boolean saveLine(PayRunLineDraft line) => lines.save;\n",
+        "        }\n",
+        "    }\n",
+        "}\n",
+    );
+    let formatted = fmt_ddd(EXTEND);
+    assert_eq!(formatted, canonical, "extend layout drifted");
+    assert_eq!(fmt_ddd(&formatted), formatted, "formatting is a fixpoint");
+    assert_eq!(
+        parse_ddd(&formatted).errors.len(),
+        0,
+        "the canonical form parses"
+    );
+}
+
+#[test]
+fn child_op_without_an_action_is_an_error() {
+    let source = r#"
+import "payroll.mox"
+
+application Payroll {
+    base nz.example.payroll
+    module payroll {
+        entity PayRun repository PayRunRepository {
+            findById;
+        }
+        extend PayRun {
+            boolean addLine(PayRunLineDraft line) => lines;
+        }
+    }
+}
+"#;
+    let result = parse_ddd(source);
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.message.contains("expected `feature.action`")),
+        "a one-segment child target is a syntax error: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn extend_remains_a_contextual_identifier() {
+    // `extend` is an ordinary name everywhere but module-member position.
+    let source = r#"
+application Payroll {
+    module payroll {
+        entity extend
+    }
+}
+"#;
+    let result = parse_ddd(source);
+    assert!(
+        result.errors.is_empty(),
+        "a design may be named `extend`: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    assert_eq!(
+        expect_module(&file, "payroll").designs[0].class.text,
+        "extend"
+    );
+}
+
+#[test]
+fn a_junk_child_operation_recovers_within_the_extend_block() {
+    let source = r#"
+import "payroll.mox"
+
+application Payroll {
+    base nz.example.payroll
+    module payroll {
+        extend PayRun {
+            nope;
+            boolean addLine(PayRunLineDraft line) => lines.add;
+        }
+    }
+}
+"#;
+    let result = parse_ddd(source);
+    assert!(
+        !result.errors.is_empty(),
+        "the junk line is reported, not silently dropped"
+    );
+    let file = result.ast.expect("the file still parses");
+    let module = expect_module(&file, "payroll");
+    assert_eq!(
+        module.extends[0]
+            .operations
+            .iter()
+            .map(|operation| operation.name.text.as_str())
+            .collect::<Vec<_>>(),
+        ["addLine"],
+        "the valid operation after the junk still parses"
+    );
+}

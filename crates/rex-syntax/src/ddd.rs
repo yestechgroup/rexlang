@@ -25,10 +25,10 @@
 //!   [`search_member_kind`].
 //!
 //! The remaining single words ([`APPLICATION`], [`BASE`], [`MODULE`],
-//! [`SERVICE`], [`SEARCH`], [`ABSTRACT`], [`REPOSITORY`], [`INJECT`],
-//! [`DECISION`], [`EMITS`], [`INVOKES`], [`TRANSITION`], [`BOOST`],
-//! [`ANALYZER`], [`LIMIT`], [`MAX`], [`CURSOR`]) are matched on both sides
-//! at fixed grammar positions; they carry no canonical order.
+//! [`SERVICE`], [`SEARCH`], [`EXTEND`], [`ABSTRACT`], [`REPOSITORY`],
+//! [`INJECT`], [`DECISION`], [`EMITS`], [`INVOKES`], [`TRANSITION`],
+//! [`BOOST`], [`ANALYZER`], [`LIMIT`], [`MAX`], [`CURSOR`]) are matched on
+//! both sides at fixed grammar positions; they carry no canonical order.
 //! The `ranking` value words (`bm25`, `tfIdf`, `exact`, `custom`) are
 //! parser-only — the formatter re-emits whatever follows the `ranking`
 //! keyword — so they stay in the parser alone.
@@ -50,6 +50,13 @@ pub(crate) const MODULE: &str = "module";
 pub(crate) const SERVICE: &str = "service";
 /// The `search <name> { ... }` keyword of a module body.
 pub(crate) const SEARCH: &str = "search";
+/// The `extend <Class> { ... }` keyword of a module body (issue
+/// rexlang#179): module-level child-scoped operations over an aggregate
+/// root's contained children (`add`/`remove`/`save`). A contextual word
+/// like the rest — special only in module-member position, an ordinary
+/// identifier everywhere else (`^extend` escapes). A class may carry
+/// several `extend` blocks; they merge in source order.
+pub(crate) const EXTEND: &str = "extend";
 /// The optional `abstract` modifier of a design declaration.
 pub(crate) const ABSTRACT: &str = "abstract";
 /// The `repository <name> { ... }` keyword of a design declaration.

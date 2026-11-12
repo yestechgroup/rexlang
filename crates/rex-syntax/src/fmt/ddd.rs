@@ -62,6 +62,7 @@ impl<'src> Formatter<'src> {
                 self.scan_body(BodyKind::DddService);
             }
             Some(Token::Ident(ddd::SEARCH)) => self.scan_ddd_search(),
+            Some(Token::Ident(ddd::EXTEND)) => self.scan_ddd_extend(),
             Some(Token::Ident(text)) if ddd::starts_design_decl(text) => self.scan_ddd_design(),
             _ => {
                 // Junk always consumes the front token first (the stop set
@@ -400,6 +401,64 @@ impl<'src> Formatter<'src> {
         self.take_name();
         self.reorder_ddd_search_members();
         self.scan_body(BodyKind::DddSearch);
+    }
+
+    /// Consumes and emits one module-level `extend <Class> { ... }` block
+    /// (issue rexlang#179). The header expands like the `service`/design
+    /// headers; each child operation is one canonical line
+    /// (`op signature => feature.action when (...) ;`, the service-op
+    /// layout).
+    pub(crate) fn scan_ddd_extend(&mut self) {
+        self.advance(); // the `extend` keyword
+        self.take_name();
+        self.scan_body(BodyKind::DddExtend);
+    }
+
+    /// One child operation of an `extend` body:
+    /// `protected? type_ref multiplicity? name(params) "=>"
+    /// feature.action when? ";"` — the declared-service-operation layout
+    /// followed by the dotted child target.
+    pub(crate) fn scan_ddd_child_op_item(&mut self) {
+        match self.peek_tok() {
+            Some(Token::Ident(_) | Token::IdentEscaped(_)) => {
+                // An optional `protected` modifier precedes the operation
+                // (contextual: anywhere else it is an ordinary name, and
+                // `advance()` re-emits it verbatim).
+                if matches!(self.peek_tok(), Some(Token::Ident(ddd::PROTECTED))) {
+                    self.advance();
+                }
+                // The signature: return type, optional multiplicity, the
+                // operation name, and the parameters.
+                self.scan_qname();
+                self.scan_multiplicity();
+                self.take_name();
+                self.scan_ddd_params();
+                if self.take_if(|token| matches!(token, Token::FatArrow)) {
+                    // The `<feature>.<action>` pair, re-emitted as written.
+                    self.scan_qname();
+                }
+                if self.take_if(|token| matches!(token, Token::When)) {
+                    self.scan_raw_parens();
+                }
+                self.take_if(|token| matches!(token, Token::Other(';')));
+            }
+            _ => {
+                // Junk always consumes the front token first (the stop set
+                // contains identifiers, and the body loop cannot make
+                // progress otherwise) — unless the front is the body's
+                // closing `}` (or the stream ended), which the loop breaks
+                // on; a drained trailing comment may have just revealed it.
+                if !matches!(self.peek_tok(), Some(Token::RBrace) | None) {
+                    self.advance();
+                    self.scan_junk_until(|token| {
+                        matches!(
+                            token,
+                            Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_)
+                        )
+                    });
+                }
+            }
+        }
     }
 
     /// Rewrites the node stream of the search body ahead of the formatter

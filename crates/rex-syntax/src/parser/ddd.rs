@@ -986,12 +986,104 @@ pub(crate) fn ddd_search_decl<'src>(
         })
 }
 
+/// One child operation of an `extend` block (issue rexlang#179):
+/// `("protected")? signature "=>" child_feature "." child_action
+/// guard_clause? ";"`. The signature is the shared [`ddd_signature`]
+/// production; the dotted pair is exactly two names — the root's child
+/// feature and the action word. `protected` is the optional modifier the
+/// service/repository operations take. The action's closed vocabulary
+/// (`add`, `remove`, `save`) and the feature's existence are driver
+/// concerns.
+pub(crate) fn ddd_child_op<'src>(
+) -> impl Parser<'src, Tokens<'src>, DddChildOp, MoxExtra<'src>> + Clone {
+    let target = name()
+        .then(kw(Token::Dot).ignore_then(name()).or_not())
+        .map_with(|(feature, action), e| (feature, action, e.span()))
+        .validate(|(feature, action, span), _e, emitter| match action {
+            Some(action) => (feature, action),
+            None => {
+                emitter.emit(Rich::custom(span, "expected `feature.action`"));
+                let action = Name {
+                    text: String::new(),
+                    span,
+                    escaped: false,
+                };
+                (feature, action)
+            }
+        });
+    ddd_keyword(ddd::PROTECTED)
+        .or_not()
+        .then(ddd_signature())
+        .then_ignore(kw(Token::FatArrow))
+        .then(target)
+        .then(ddd_guard_clause().or_not())
+        .then_ignore(kw(Token::Other(';')))
+        .map_with(
+            |(((protected, signature), (feature, action)), condition), e| {
+                let (type_ref, multiplicity, name, params) = signature;
+                DddChildOp {
+                    name,
+                    return_type: type_ref,
+                    multiplicity,
+                    params,
+                    feature,
+                    action,
+                    is_protected: protected.is_some(),
+                    condition,
+                    span: e.span(),
+                }
+            },
+        )
+}
+
+/// Consumes a run of tokens that cannot start or continue a child
+/// operation, stopping before the body's closing `}` and before
+/// identifiers (which could begin the next operation). Always consumes at
+/// least one token.
+pub(crate) fn junk_ddd_child_op<'src>(
+) -> impl Parser<'src, Tokens<'src>, (), MoxExtra<'src>> + Clone {
+    let first = select! { t if !matches!(t, Token::RBrace) => () };
+    let rest = select! {
+        t if !matches!(t, Token::RBrace | Token::Ident(_) | Token::IdentEscaped(_)) => ()
+    };
+    first
+        .ignore_then(rest.repeated().ignored())
+        .validate(|(), e, emitter| {
+            emitter.emit(Rich::custom(e.span(), "expected a child operation"));
+        })
+}
+
+/// A module-level `extend <Class> { ... }` block of child operations
+/// (issue rexlang#179). The body is a run of [`ddd_child_op`]s (with junk
+/// recovery between them); the driver validates the target (an entity
+/// design with a repository in the same module) and each operation.
+pub(crate) fn ddd_extend_decl<'src>(
+) -> impl Parser<'src, Tokens<'src>, DddExtend, MoxExtra<'src>> + Clone {
+    ddd_keyword(ddd::EXTEND)
+        .ignore_then(name())
+        .then_ignore(kw(Token::LBrace))
+        .then(
+            ddd_child_op()
+                .map(Some)
+                .or(junk_ddd_child_op().to(None))
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .then_ignore(kw(Token::RBrace))
+        .map_with(|(class, operations), e| DddExtend {
+            class,
+            operations: operations.into_iter().flatten().collect(),
+            span: e.span(),
+        })
+}
+
 /// One member of a `module` body.
 #[derive(Clone)]
 pub(crate) enum DddModuleMember {
     Service(DddService),
     Design(DddDesign),
     Search(DddSearch),
+    Extend(DddExtend),
 }
 
 /// Consumes a run of tokens that cannot start or continue a module member,
@@ -1017,6 +1109,7 @@ pub(crate) fn ddd_module_member<'src>(
         ddd_service_decl().map(DddModuleMember::Service),
         ddd_design_decl().map(DddModuleMember::Design),
         ddd_search_decl().map(DddModuleMember::Search),
+        ddd_extend_decl().map(DddModuleMember::Extend),
     ))
     .map(Some)
     .or(junk_ddd_module_member().to(None))
@@ -1034,11 +1127,13 @@ pub(crate) fn ddd_module_decl<'src>(
             let mut services = Vec::new();
             let mut designs = Vec::new();
             let mut searches = Vec::new();
+            let mut extends = Vec::new();
             for member in members {
                 match member {
                     Some(DddModuleMember::Service(service)) => services.push(service),
                     Some(DddModuleMember::Design(design)) => designs.push(design),
                     Some(DddModuleMember::Search(search)) => searches.push(search),
+                    Some(DddModuleMember::Extend(extend)) => extends.push(extend),
                     None => {}
                 }
             }
@@ -1047,6 +1142,7 @@ pub(crate) fn ddd_module_decl<'src>(
                 services,
                 designs,
                 searches,
+                extends,
                 span: e.span(),
             }
         })

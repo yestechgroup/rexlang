@@ -2,9 +2,10 @@
 //! `compile_ddd_file`: one design engineered to trip diagnostics in every
 //! stage — the prologue (import buckets), rule 1, the per-module machine
 //! scopes, the per-declaration lowering stages (services, designs with
-//! rules 2/3/4/5/12/14/15, searches with rule 11), and the deferred
-//! validations (rules 11-binding, 6, 13, 9, 8, 10) — with the exact
-//! sequence of severities and messages pinned.
+//! rules 2/3/4/5/12/14/15 and the `extend` child-operation blocks of
+//! rexlang#179, searches with rule 11), and the deferred validations
+//! (rules 11-binding, 6, 13, 9, 8, 10) — with the exact sequence of
+//! severities and messages pinned.
 //!
 //! The stage decomposition of `compile_ddd_file` must keep this sequence
 //! byte-identical: the goldens pin artifacts, this pins the interleaving.
@@ -108,6 +109,10 @@ application Order {
             terminal Held;
         }
         entity Money
+
+        extend Item {
+            boolean addWidget(String id) => widgets.add;
+        }
 
         search AlphaSearch {
             entity Item
@@ -241,6 +246,9 @@ fn the_diagnostic_emission_order_is_stable() {
                     (Severity::Error, "scaffolded entity 'Cart' declares no repository".to_string()),
                     (Severity::Error, "machine 'status' binds feature 'status' of 'Cart', which does not exist".to_string()),
                     (Severity::Error, "duplicate design for class 'Money'".to_string()),
+                    // Stage 5b: the `extend` block's diagnostics ride the
+                    // design stage, after every design of the module.
+                    (Severity::Error, "E0355 unknown child feature 'widgets' on 'Item'".to_string()),
                     (Severity::Error, "unknown text field 'ghost' on 'Item'".to_string()),
                     (Severity::Error, "boost of text field 'sku' must be at least 1".to_string()),
                     (Severity::Error, "analyzer of text field 'sku' must not be empty".to_string()),

@@ -1,0 +1,32 @@
+package nz.example.payroll
+
+enum PayRunStatus {
+    Draft as "D" = 0
+    Calculated as "C" = 1
+    Posted as "O" = 2
+}
+
+class PayRun {
+    PayRunStatus status
+    int total
+    contains PayRunLine[] lines opposite payRun
+    contains PayRunNote[0..1] note opposite payRun
+}
+
+class PayRunLine {
+    container PayRun payRun opposite lines
+    String description
+    int quantity
+    int unitCost
+}
+
+class PayRunNote {
+    container PayRun payRun opposite note
+    String text
+}
+
+class PayRunLineDraft {
+    String description
+    int quantity
+    int unitCost
+}
