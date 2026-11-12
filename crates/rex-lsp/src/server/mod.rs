@@ -28,15 +28,18 @@ const SOURCE_NAME: &str = "rexlang";
 /// open time. `.mox` drives the salsa session; `.ifml` gets the rex-ifml
 /// one-shot compile; `.ddd` gets the one-shot design compile (diagnostics
 /// only — no navigation yet); `.actor` gets the policy compile with grant
-/// coverage against the directory's designs (rexlang#128); anything else
-/// publishes no diagnostics (an unknown file kind must never produce
-/// bogus `.mox` errors).
+/// coverage against the directory's designs (rexlang#128); `.dmn` gets the
+/// decision-model compile (diagnostics only — its markdown tables read
+/// from disk next to the document, rexlang#151); anything else publishes
+/// no diagnostics (an unknown file kind must never produce bogus `.mox`
+/// errors).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Surface {
     Mox,
     Ifml,
     Ddd,
     Actor,
+    Dmn,
     Other,
 }
 
@@ -46,6 +49,7 @@ fn surface_for(uri: &Url) -> Surface {
         Some("ifml") => Surface::Ifml,
         Some("ddd") => Surface::Ddd,
         Some("actor") => Surface::Actor,
+        Some("dmn") => Surface::Dmn,
         _ => Surface::Other,
     }
 }
@@ -124,7 +128,7 @@ impl LanguageServer for RexBackend {
                     text_document.text.clone(),
                 ))
             }
-            Surface::Ifml | Surface::Ddd | Surface::Actor | Surface::Other => None,
+            Surface::Ifml | Surface::Ddd | Surface::Actor | Surface::Dmn | Surface::Other => None,
         };
         self.documents.lock().unwrap().insert(
             uri.clone(),
@@ -178,12 +182,18 @@ impl LanguageServer for RexBackend {
         params: DocumentFormattingParams,
     ) -> tower_lsp::jsonrpc::Result<Option<Vec<TextEdit>>> {
         let uri = params.text_document.uri;
+        // Per-surface formatter dispatch; a surface without a formatter
+        // (or a `.dmn` that no longer parses) yields no edit.
         let formatted = {
             let documents = self.documents.lock().unwrap();
-            documents
-                .get(&uri)
-                .filter(|document| document.surface == Surface::Ifml)
-                .map(|document| rex_ifml::format_ifml(&document.text))
+            match documents.get(&uri) {
+                Some(document) => match document.surface {
+                    Surface::Ifml => Some(rex_ifml::format_ifml(&document.text)),
+                    Surface::Dmn => rex_syntax::format_dmn(&document.text).ok(),
+                    _ => None,
+                },
+                None => None,
+            }
         };
         let Some(formatted) = formatted else {
             return Ok(None);
