@@ -227,7 +227,7 @@
 //!                                | "custom" string)
 //!                    | "analyzer" string
 //!                    | "pagination" "{" pagination_member* "}"
-//!                    | "capability" name
+//!                    | "capability" name ("," name)*
 //! search_field      := qualified_name ("boost" int)? ("analyzer" string)?
 //! document_entry    := name "=" raw_expr ";"
 //! pagination_member := "limit" int | "max" int | "cursor"
@@ -254,8 +254,9 @@
 //!   `docs/DDD.md`).
 //! * `design_flag`s and the single-member search lines (`entity`, `ranking`,
 //!   `analyzer`, `pagination`) are idempotent on repeat — the first
-//!   declaration wins; repeated `text`/`filters`/`sort`/`document` clauses
-//!   merge. A flag may be written negated (`!auditable`): the negation is
+//!   declaration wins; repeated `text`/`filters`/`sort`/`document`/
+//!   `capability` clauses merge. A flag may be written negated
+//!   (`!auditable`): the negation is
 //!   the opt-out from a flag that defaults on — whether a `!flag` is
 //!   *meaningful* (and each flag's default) is the driver's rule 4.
 //! * `base` must be the application's first member; a duplicate or late

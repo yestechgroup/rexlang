@@ -313,7 +313,8 @@
             "cursor": true
           },
           "capabilities": [
-            "SearchMedia"
+            "SearchMedia",
+            "SearchMediaAdmin"
           ]
         }
       ]

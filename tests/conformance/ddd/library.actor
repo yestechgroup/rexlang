@@ -5,4 +5,5 @@ actors Library {
 
     capability BorrowMedia on Media
     capability SearchMedia on Movie
+    capability SearchMediaAdmin on Movie
 }

@@ -744,7 +744,7 @@ pub(crate) enum DddSearchMember {
     Ranking(DddRanking),
     Analyzer(String),
     Pagination(DddPagination),
-    Capability(Name),
+    Capability(Vec<Name>),
 }
 
 /// Consumes a run of tokens that cannot start or continue a search member,
@@ -774,9 +774,11 @@ pub(crate) fn member_keyword(keyword: Option<&'static str>) -> &'static str {
 /// from [`ddd::SEARCH_MEMBERS`] in the table's order — the same order the
 /// formatter canonicalizes a search body to — so the parse order and the
 /// canonical order cannot drift apart. Repeated `text`, `filters`, `sort`,
-/// and `document` clauses merge into their lists; `entity`, `ranking`,
-/// `analyzer`, and `pagination` are single — a repeat is idempotent, the
-/// first declaration wins (the design-flags precedent).
+/// `document`, and `capability` clauses merge into their lists; `entity`,
+/// `ranking`, `analyzer`, and `pagination` are single — a repeat is
+/// idempotent, the first declaration wins (the design-flags precedent). The
+/// `capability` clause is the same [`ddd_capabilities()`] grammar a service
+/// operation takes (rexlang#145): one clause grammar for both surfaces.
 pub(crate) fn ddd_search_member<'src>(
 ) -> impl Parser<'src, Tokens<'src>, Vec<DddSearchMember>, MoxExtra<'src>> + Clone {
     let alternatives: Vec<Boxed<'src, 'src, Tokens<'src>, Vec<DddSearchMember>, MoxExtra<'src>>> =
@@ -839,9 +841,8 @@ pub(crate) fn ddd_search_member<'src>(
                 ddd::SearchMemberKind::Pagination => ddd_pagination()
                     .map(|pagination| vec![DddSearchMember::Pagination(pagination)])
                     .boxed(),
-                ddd::SearchMemberKind::Capability => kw(Token::Capability)
-                    .ignore_then(name())
-                    .map(|capability| vec![DddSearchMember::Capability(capability)])
+                ddd::SearchMemberKind::Capability => ddd_capabilities()
+                    .map(|caps| vec![DddSearchMember::Capability(caps)])
                     .boxed(),
             })
             .collect();
@@ -917,7 +918,7 @@ pub(crate) fn ddd_search_decl<'src>(
                             search.pagination = Some(pagination);
                         }
                     }
-                    DddSearchMember::Capability(name) => search.capabilities.push(name),
+                    DddSearchMember::Capability(names) => search.capabilities.extend(names),
                 }
             }
             search

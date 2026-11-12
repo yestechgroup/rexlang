@@ -848,7 +848,8 @@ fn formatted_output_round_trips_structurally() {
 /// A full-featured search projection: every member kind, out of canonical
 /// order (the formatter reorders), a concat document entry, a brace-bearing
 /// conditional document entry, a `;` inside a string literal, per-field
-/// boost/analyzer, the camelCase `tfIdf` keyword, and a capability clause.
+/// boost/analyzer, the camelCase `tfIdf` keyword, and a multi-name
+/// capability clause — the same clause grammar a service operation takes.
 const SEARCH: &str = r#"
 import "library.mox"
 
@@ -856,7 +857,7 @@ application Library {
     module media {
         // a leading line comment
         search MediaSearch {
-            capability SearchMedia
+            capability SearchMedia, SearchMediaAdmin
             pagination {
                 cursor
                 max 100
@@ -953,9 +954,49 @@ fn search_decl_parses_with_all_members() {
             .iter()
             .map(|name| name.text.as_str())
             .collect::<Vec<_>>(),
-        vec!["SearchMedia"]
+        vec!["SearchMedia", "SearchMediaAdmin"]
     );
     assert!(search.doc.is_none(), "`//` comments are not doc runs");
+}
+
+#[test]
+fn search_capability_clause_accepts_a_list_and_clauses_merge() {
+    // The unified clause grammar: a search's `capability` clause takes the
+    // same `capability <name> (, <name>)*` list a service operation takes,
+    // and repeated clauses merge into one list (the `text`/`filters`
+    // precedent) instead of shadowing each other.
+    let source = concat!(
+        "application A {\n",
+        "    module m {\n",
+        "        search S {\n",
+        "            entity Book\n",
+        "            capability ReadBooks, LendBooks\n",
+        "            capability RenewLoans\n",
+        "        }\n",
+        "    }\n",
+        "}\n",
+    );
+    let result = parse_ddd(source);
+    assert!(
+        result.errors.is_empty(),
+        "a capability list in a search must parse: {:?}",
+        result.errors
+    );
+    let search = &result
+        .ast
+        .expect("expected an AST")
+        .application
+        .unwrap()
+        .modules[0]
+        .searches[0];
+    assert_eq!(
+        search
+            .capabilities
+            .iter()
+            .map(|name| name.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["ReadBooks", "LendBooks", "RenewLoans"]
+    );
 }
 
 #[test]
@@ -1068,7 +1109,7 @@ fn search_formats_canonically_and_is_idempotent() {
             "                max 100\n",
             "                limit 20\n",
             "            }\n",
-            "            capability SearchMedia\n",
+            "            capability SearchMedia, SearchMediaAdmin\n",
             "        }\n",
             "    }\n",
             "}\n",
