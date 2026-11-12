@@ -28,7 +28,7 @@
 //! Classification is **shape-sniffing**, not self-declared: no artifact kind
 //! except instances carries a root `$type` discriminator. The precedence is
 //! documented on [`check`], and
-//! [`tests::classification_table_over_all_artifact_kinds`] pins it for every
+//! `tests::classification_table_over_all_artifact_kinds` pins it for every
 //! kind — including the two shapes an [`rex_ir::ifml::IfmlModel`] artifact
 //! collides with (the empty form and the module-only form; see the table).
 

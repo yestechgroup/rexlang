@@ -31,17 +31,18 @@
 //! Resolution results live in the index
 //! ([`ModuleUseSite::resolved_module`]) — the returned model is the main
 //! file's own parse, unchanged, so artifacts stay byte-identical. See
-//! [`resolve`] for the semantics and the diagnostic codes.
+//! `resolve` for the semantics and the diagnostic codes.
 //!
 //! # Type-checking
 //!
 //! [`check_ifml`] re-checks the type-checkable expressions of a compiled
 //! model against an optional domain model (the union `rex_ir::Model` every
-//! domain surface lowers into), via `rex_expr`'s [`DomainTypes`] — the same
+//! domain surface lowers into), via `rex_expr`'s
+//! [`DomainTypes`](rex_expr::DomainTypes) — the same
 //! checker `.mox` operation bodies use. Constructs the shared expression
 //! language cannot type (bare calls such as `today()`, regex operators,
 //! non-integral numbers) are silently skipped, still deferred to generation
-//! time. See [`check`] for the walk order and diagnostic codes.
+//! time. See `check` for the walk order and diagnostic codes.
 //!
 //! # Transitional architecture
 //!
@@ -49,9 +50,9 @@
 //! separate syntax tree in this crate yet. A future re-platform onto a
 //! chumsky/spanned AST (the `rex-syntax` approach) will introduce a proper
 //! syntax → IR lowering; until then spans survive only on
-//! `PropertyAssignment::span` and the [`index`] side-table (never
+//! `PropertyAssignment::span` and the `index` side-table (never
 //! serialized), and module resolution is a post-parse stage
-//! ([`resolve`]) rather than a lowering pass.
+//! (`resolve`) rather than a lowering pass.
 //!
 //! # Downstream compatibility
 //!

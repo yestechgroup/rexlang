@@ -58,7 +58,7 @@ use schema::schema_json;
 /// This is the pair API: the policy dimension ([`ActorModel`], produced by
 /// compiling an `.actor` file or collected from inline blocks) is consumed
 /// separately from the domain dimension ([`Model`]). Capability classes are
-/// looked up by their resolved, package-qualified [`TypeRef`] across all
+/// looked up by their resolved, package-qualified [`TypeRef`](rex_ir::TypeRef) across all
 /// packages of `model`.
 ///
 /// Returns a map of file name to contents: `<Block>.cedar` and

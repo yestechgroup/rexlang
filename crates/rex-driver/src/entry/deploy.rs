@@ -49,7 +49,7 @@ use crate::session::{parse_deploy_query, Database, SourceFile};
 /// - [`compile_deploy_str`] — parse and validate in one call; there is no
 ///   domain lowering to memoize, so the salsa layer is parse-only
 ///   ([`parse_deploy_query`]).
-/// - [`compile_deploy_file`](crate::deploy) — the salsa-free engine the
+/// - `compile_deploy_file` — the salsa-free engine the
 ///   entry point calls.
 ///
 /// ## Resolution semantics

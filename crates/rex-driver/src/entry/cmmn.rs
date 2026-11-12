@@ -82,7 +82,7 @@ fn compile_cmmn_with(
 ///
 /// * **Case-file items** resolve their declared types against the union
 ///   namespace of the imported domains (the same rule `.evt` fields
-///   follow) — the shared [`crate::lower::resolve_ddd_type`] helper, never
+///   follow) — the shared `resolve_ddd_type` helper, never
 ///   a re-implementation. Ambiguity across packages is an error naming the
 ///   qualification.
 /// * **Roles** are case-local. An optional `as <actor>` binding must name

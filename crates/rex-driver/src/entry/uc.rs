@@ -125,7 +125,7 @@ fn compile_usecase_with(
 /// - [`compile_usecase`] / [`parse_usecase_query`] — the salsa-tracked
 ///   queries the one-shot wrapper runs on a fresh [`Database`]; the tracked
 ///   surface carries no cross-surface artifacts.
-/// - [`compile_usecase_file`](crate::usecases) — the salsa-free engine the
+/// - `compile_usecase_file` — the salsa-free engine the
 ///   entry point calls.
 ///
 /// ## Resolution semantics
@@ -136,7 +136,7 @@ fn compile_usecase_with(
 /// directory. Domains lower through the ordinary pipeline against the
 /// **union namespace of all imports** (the same rule multi-file `.mox`
 /// compiles follow). Participant and payload types resolve against that
-/// union through the shared helper [`resolve_ddd_type`](crate::lower::resolve_ddd_type): the
+/// union through the shared helper `resolve_ddd_type`: the
 /// `rex-syntax` primitives resolve everywhere; every other reference
 /// follows the `.mox` cross-package rules (a bare single-segment name must
 /// be unique across all domain packages, a qualified `pkg.Name` must match
