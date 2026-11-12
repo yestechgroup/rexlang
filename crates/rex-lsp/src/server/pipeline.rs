@@ -1,8 +1,9 @@
 //! Document state, compilation, and diagnostic plumbing: the
 //! `RexBackend` methods behind every LSP capability — the per-surface
 //! publish pipeline, the `.ifml` lenient compile and import closure, the
-//! `.ddd` domain-source resolution, and the snapshot/lock adapters the
-//! request handlers run through.
+//! `.ddd`/`.dmn` domain-source resolution and the `.dmn` decision-table
+//! reader, and the snapshot/lock adapters the request handlers run
+//! through.
 
 use rex_driver::NavigationIndex;
 use tower_lsp::lsp_types::*;
@@ -26,6 +27,16 @@ pub(super) struct IfmlImportClosure {
     /// URL (or identity string) of every fetched import — the transitive
     /// import set.
     pub(super) import_urls: Vec<String>,
+}
+
+/// The gathered compile inputs of one open `.dmn` document (see
+/// [`RexBackend::dmn_sources_for`]): the imported `.mox` domain sources,
+/// the import bundle their own `import schema`/`import sigil` declarations
+/// need, and the decision-table contents the `logic table` clauses name.
+pub(super) struct DmnSources {
+    domains: Vec<(String, String)>,
+    imports: rex_driver::DomainImports,
+    tables: Vec<(String, String)>,
 }
 
 /// The compiled state of one open `.ifml` document for the navigation
@@ -159,6 +170,31 @@ impl RexBackend {
                 .map(|(_, diagnostic)| to_lsp_diagnostic(diagnostic, &map))
                 .collect()
             }
+            Surface::Dmn => {
+                // The driver keys by the disk path when the document lives
+                // on disk — the CLI's semantics, where imports resolve
+                // lexically against the real path and sibling designs pool
+                // this artifact by the same key. The URI string stays the
+                // fallback for documents that have none (and remains the
+                // publish filter).
+                let driver_path = uri
+                    .to_file_path()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|_| uri.as_str().to_string());
+                let sources = self.dmn_sources_for(uri, &text);
+                rex_driver::compile_dmn_str(
+                    &driver_path,
+                    &text,
+                    &sources.domains,
+                    &sources.imports,
+                    &sources.tables,
+                )
+                .diagnostics
+                .iter()
+                .filter(|(file, _)| file == &driver_path)
+                .map(|(_, diagnostic)| to_lsp_diagnostic(diagnostic, &map))
+                .collect()
+            }
             Surface::Other => Vec::new(),
         };
         self.client
@@ -275,6 +311,42 @@ impl RexBackend {
         }
         let imports = domain_import_bundle(&domains);
         (domains, imports)
+    }
+
+    /// The `.mox` domains one open `.dmn` decision model imports (open
+    /// documents win over disk), the import bundle its compile resolves
+    /// against, and the decision-table contents its `logic table` clauses
+    /// name — read from disk next to the document through
+    /// [`dmn_table_sources`]. A table file that cannot be read is not
+    /// provided: the driver's unprovided-table diagnostic (E0209) names
+    /// the written path.
+    pub(super) fn dmn_sources_for(&self, uri: &Url, text: &str) -> DmnSources {
+        let mut domains: Vec<(String, String)> = Vec::new();
+        let mut tables: Vec<(String, String)> = Vec::new();
+        if let Ok(path) = uri.to_file_path() {
+            let path_key = path.display().to_string();
+            let mut fetch =
+                |resolved: &str| -> Option<String> { self.fetch_open_or_disk(resolved) };
+            domains = rex_driver::project::gather_domain_sources(
+                &path_key,
+                text,
+                |source| {
+                    rex_syntax::parse_dmn(source)
+                        .ast
+                        .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
+                        .unwrap_or_default()
+                },
+                &mut fetch,
+            );
+            if let Some(dir) = path.parent() {
+                tables = dmn_table_sources(dir, text);
+            }
+        }
+        DmnSources {
+            imports: domain_import_bundle(&domains),
+            domains,
+            tables,
+        }
     }
 
     /// The text for a resolved path — the open document that lives there
@@ -414,7 +486,8 @@ impl RexBackend {
     /// against). Gathered exactly like [`RexBackend::sibling_design_models`]
     /// (open documents win over disk); a sibling that fails to compile
     /// contributes nothing. Decision tables resolve from disk next to each
-    /// sibling — an unprovided table names it and the sibling drops out.
+    /// sibling through [`dmn_table_sources`] — an unprovided table names it
+    /// and the sibling drops out.
     fn sibling_decision_models(&self, except: &Url) -> Vec<(String, rex_ir::dmn::DmnModel)> {
         let Ok(path) = except.to_file_path() else {
             return Vec::new();
@@ -435,33 +508,10 @@ impl RexBackend {
                 },
                 &mut fetch,
             );
-            let tables: Vec<(String, String)> = rex_syntax::parse_dmn(&text)
-                .ast
-                .and_then(|ast| ast.model)
-                .map(|model| {
-                    model
-                        .decisions
-                        .iter()
-                        .filter_map(|decision| match &decision.logic {
-                            Some(rex_syntax::DmnLogic::Table { source, .. }) => {
-                                Some(source.clone())
-                            }
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default()
-                .into_iter()
-                .filter_map(|written| {
-                    let resolved = sibling
-                        .parent()
-                        .map(|dir| dir.join(&written))
-                        .unwrap_or_else(|| std::path::PathBuf::from(&written));
-                    std::fs::read_to_string(resolved)
-                        .ok()
-                        .map(|content| (written, content))
-                })
-                .collect();
+            let tables = sibling
+                .parent()
+                .map(|dir| dmn_table_sources(dir, &text))
+                .unwrap_or_default();
             let compilation = rex_driver::compile_dmn_str(
                 &key,
                 &text,
@@ -670,6 +720,40 @@ pub(super) fn to_lsp_diagnostic(
         tags: None,
         data,
     }
+}
+
+/// The decision-table contents a `.dmn` source names: every `logic table
+/// "<path>"` clause of a decision, resolved relative to `dir` and read
+/// from disk, keyed by the path **as written** — the CLI's `table_sources`
+/// reader, ported (rex-lsp must not depend on rex-cli; the driver stays
+/// filesystem-free). A table file that cannot be read is skipped: the
+/// driver's unprovided-table diagnostic (E0209) names the written path.
+/// Duplicated table references are gathered once.
+fn dmn_table_sources(dir: &std::path::Path, source: &str) -> Vec<(String, String)> {
+    let written: Vec<String> = rex_syntax::parse_dmn(source)
+        .ast
+        .and_then(|ast| ast.model)
+        .map(|model| {
+            model
+                .decisions
+                .iter()
+                .filter_map(|decision| match &decision.logic {
+                    Some(rex_syntax::DmnLogic::Table { source, .. }) => Some(source.clone()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut tables: Vec<(String, String)> = Vec::new();
+    for table in written {
+        if tables.iter().any(|(name, _)| *name == table) {
+            continue;
+        }
+        if let Ok(content) = std::fs::read_to_string(dir.join(&table)) {
+            tables.push((table, content));
+        }
+    }
+    tables
 }
 
 /// The import bundle for gathered domain sources: the domains' own
