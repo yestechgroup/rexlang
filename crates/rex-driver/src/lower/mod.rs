@@ -20,6 +20,7 @@ pub(crate) mod classes;
 pub(crate) mod compile;
 pub(crate) mod conditions;
 pub(crate) mod imports;
+pub(crate) mod names;
 pub(crate) mod resolve;
 pub(crate) mod vocabulary;
 

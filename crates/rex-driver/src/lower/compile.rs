@@ -369,6 +369,33 @@ pub(crate) fn compile_multi(
     let mut tagged: Vec<(String, Diagnostic)> = Vec::new();
     detect_inheritance_cycles(&classes, &mut tagged);
     validate_opposites(&classes, &mut tagged);
+    // Stripped-name uniqueness (issue rexlang#177), per package: only the
+    // error-free files' declarations participate (a file with errors is
+    // dropped downstream, so it can neither collide nor anchor containment).
+    let healthy: HashSet<&str> = files
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !buckets[*index].iter().any(Diagnostic::is_error))
+        .map(|(_, file)| file.path)
+        .collect();
+    let kept_classes = classes
+        .iter()
+        .filter(|class| healthy.contains(class.file.as_str()));
+    let enum_entries = winning_enums.iter().filter_map(|(index, decl)| {
+        if !healthy.contains(files[*index].path) {
+            return None;
+        }
+        let package_index = file_package[*index].expect("enum files declare a package");
+        Some((
+            packages[package_index].name.as_str(),
+            files[*index].path,
+            *decl,
+        ))
+    });
+    tagged.extend(names::check_name_uniqueness(&names::name_records(
+        kept_classes,
+        enum_entries,
+    )));
 
     // Inline actors blocks from every file join one union policy set: cycle
     // detection runs per block first; separation of duty, self-narrowing,
@@ -788,6 +815,33 @@ pub(crate) fn compile_union_per_file(
     let mut tagged: Vec<(String, Diagnostic)> = Vec::new();
     detect_inheritance_cycles(&classes, &mut tagged);
     validate_opposites(&classes, &mut tagged);
+    // Stripped-name uniqueness (issue rexlang#177), per package: only the
+    // error-free files' declarations participate (a file with errors is
+    // dropped downstream, so it can neither collide nor anchor containment).
+    let union_healthy: HashSet<&str> = files
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !buckets[*index].iter().any(Diagnostic::is_error))
+        .map(|(_, file)| file.path)
+        .collect();
+    let kept_classes = classes
+        .iter()
+        .filter(|class| union_healthy.contains(class.file.as_str()));
+    let enum_entries = winning_enums.iter().filter_map(|(index, decl)| {
+        if !union_healthy.contains(files[*index].path) {
+            return None;
+        }
+        let package_index = file_package[*index].expect("enum files declare a package");
+        Some((
+            packages[package_index].name.as_str(),
+            files[*index].path,
+            *decl,
+        ))
+    });
+    tagged.extend(names::check_name_uniqueness(&names::name_records(
+        kept_classes,
+        enum_entries,
+    )));
 
     // Inline actors blocks from every file join one union policy set: cycle
     // detection runs per block first; separation of duty, self-narrowing,
@@ -1124,6 +1178,24 @@ pub(crate) fn compile(
     detect_inheritance_cycles(&classes, &mut class_diags);
     validate_opposites(&classes, &mut class_diags);
     diags.extend(class_diags.into_iter().map(|(_, diagnostic)| diagnostic));
+
+    // Stripped-name uniqueness (issue rexlang#177), per package over classes
+    // and enums. The no-verdict discipline: a model that already failed to
+    // lower adds no cascading noise — the check runs only when every
+    // diagnostic so far is clean, because a broken model can hide
+    // containment and produce wrong verdicts.
+    if !diags.iter().any(Diagnostic::is_error) {
+        let enum_entries = model.declarations.iter().filter_map(|decl| match decl {
+            mox::Decl::Enum(enum_decl) => Some((package.as_str(), path, enum_decl)),
+            _ => None,
+        });
+        let records = names::name_records(&classes, enum_entries);
+        diags.extend(
+            names::check_name_uniqueness(&records)
+                .into_iter()
+                .map(|(_, diagnostic)| diagnostic),
+        );
+    }
 
     // Actors validation: name-resolution errors were emitted during
     // lowering; cycle detection runs before the ancestor walks, which are

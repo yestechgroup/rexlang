@@ -48,6 +48,10 @@ const MODELS: &[(&str, &str)] = &[
         "tests/conformance/models/import_schema.mox",
         "tests/conformance/artifacts/import_schema.rex.json",
     ),
+    (
+        "tests/conformance/models/name_uniqueness.mox",
+        "tests/conformance/artifacts/name_uniqueness.rex.json",
+    ),
 ];
 
 /// The one conformance model with `import schema` declarations. The driver
@@ -195,6 +199,30 @@ fn currency_lockfile_digest_matches_vendored_snapshot() {
         entry.digest,
         rex_vocab::digest(&snapshot),
         "lockfile digest must match the committed snapshot bytes"
+    );
+}
+
+/// The name-uniqueness conformance model pins the override's IR flow: the
+/// contained value object (the exemption shape) keeps deriving —
+/// `table_name` stays `None` — while the `table "…"` override rides
+/// verbatim (issue rexlang#177).
+#[test]
+fn name_uniqueness_model_carries_the_table_override() {
+    let model = compile_conformance_model("tests/conformance/models/name_uniqueness.mox");
+    let package = &model.packages[0];
+    assert_eq!(package.name, "nz.example.payroll");
+
+    let by_name = |name: &str| -> &rex_ir::ClassDef {
+        package
+            .classes
+            .iter()
+            .find(|class| class.name == name)
+            .unwrap_or_else(|| panic!("class '{name}' lowered"))
+    };
+    assert_eq!(by_name("PayRunType").table_name, None);
+    assert_eq!(
+        by_name("StatusLabel").table_name.as_deref(),
+        Some("pay_run_status_label")
     );
 }
 

@@ -781,6 +781,11 @@ pub(crate) fn lower_class(
 
     let mut class_def = ir::ClassDef::new(&decl.name.text, extends, features);
     class_def.description = decl.doc.clone();
+    // The `table "…"` override is carried verbatim — consumers stop
+    // re-deriving the table name the moment it is declared (issue #177).
+    if let Some(table) = &decl.table {
+        class_def = class_def.with_table_name(table.clone());
+    }
     ClassRecord {
         package: package.to_string(),
         file: path.to_string(),
