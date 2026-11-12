@@ -209,7 +209,7 @@ pub const FORMAT_VERSION: u32 = 1;
 
 pub use actors::{
     ActorDef, ActorKind, ActorModel, ActorsDef, CapabilityDef, DelegationDef, GrantDef,
-    GrantEffect, GrantEntry, NeverBothDef, ACTOR_MODEL_FORMAT_VERSION,
+    GrantEffect, GrantEntry, NeverBothDef, SessionKind, ACTOR_MODEL_FORMAT_VERSION,
 };
 pub use class::{
     ClassDef, DatatypeDef, EnumDef, EnumLiteral, Feature, FeatureConstraints, FeatureKind,
