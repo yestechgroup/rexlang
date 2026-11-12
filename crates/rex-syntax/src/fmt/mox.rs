@@ -323,6 +323,11 @@ impl<'src> Formatter<'src> {
         self.begin_top_decl();
         self.advance();
         self.scan_qname();
+        // The contextual `table` annotation: `table "…"` directly after the
+        // class name (an escaped `^table` is a name, never the annotation).
+        if self.take_if(|token| matches!(token, Token::Ident(text) if *text == "table")) {
+            self.take_if(|token| matches!(token, Token::Str(_)));
+        }
         if self.take_if(|token| matches!(token, Token::Extends)) {
             self.scan_qname();
             while self.take_if(|token| matches!(token, Token::Comma)) {
