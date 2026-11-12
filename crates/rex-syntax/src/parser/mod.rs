@@ -411,7 +411,7 @@
 //!   `cloudflareWorkers`, ...) are deliberately **not** syntax: both
 //!   positions are plain `name`s and the driver validates them against its
 //!   closed tables, so the word lists live in the driver, not here. Policy
-//!   expressions are [`raw_parens`] spans — the driver slices strictly
+//!   expressions are `raw_parens` spans — the driver slices strictly
 //!   inside the parens (the `when`-condition convention) and parses, types,
 //!   and evaluates the text with rex-expr.
 //! * A binding's string is `"<path>"` or `"<path>#<Module>"`, split at its
@@ -481,7 +481,7 @@
 //! * Doc comments (`///` runs) directly above a `usecase` declaration
 //!   become its description.
 //! * A perform step's `when (...)` guard (real lexer keyword, escapable
-//!   with `^`) is a [`raw_parens`] span, written last before `;` — the
+//!   with `^`) is a `raw_parens` span, written last before `;` — the
 //!   driver slices the condition strictly inside the parens (the
 //!   `when`-condition convention) and types it against the subject's
 //!   resolved class. The guard's interior is never parsed here.
@@ -540,7 +540,7 @@
 //!   `delete`, `childUpdate`) is deliberately **not** syntax: both
 //!   segments are plain names and the driver validates the tail against
 //!   its closed tables (the `.deploy` vocabulary discipline). The `when`
-//!   if-part is a [`raw_parens`] span — the driver slices strictly inside
+//!   if-part is a `raw_parens` span — the driver slices strictly inside
 //!   the parens (the `when`-condition convention) and types the text with
 //!   rex-expr.
 //! * The `discretionary` prefix is grammatical before a simple item

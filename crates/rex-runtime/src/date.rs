@@ -9,7 +9,7 @@
 //! (R5/R1 discipline: never wrap, never saturate), and `plus_months` clamps
 //! the day to the target month's length (R8: Jan 31 + 1 month = Feb 28/29).
 //!
-//! Serialization is ISO-8601 `YYYY-MM-DD` ([`Display`]); parsing is strict
+//! Serialization is ISO-8601 `YYYY-MM-DD` ([`Display`](std::fmt::Display)); parsing is strict
 //! (`FromStr`) — this is what generated instance loaders use. There is no
 //! time-of-day, no timezone, and no clock: expressions stay pure (the "as
 //! at date D" queries take dates as values). The only dependency is

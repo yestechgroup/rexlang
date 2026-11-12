@@ -168,8 +168,8 @@ impl<'a> LowerCtx<'a> {
     /// Rune function, RUNE-BODIES stage 2): no implicit `self`; `roots` are
     /// the named scope entries (the function's inputs, alias bindings, the
     /// output slot for post guards) with their lifted rex-expr types. An
-    /// `Option`-typed root lowers as a [`Binding::Lifted`] local; everything
-    /// else is a plain [`Binding::Local`].
+    /// `Option`-typed root lowers as a `Binding::Lifted` local; everything
+    /// else is a plain `Binding::Local`.
     pub fn new_function(model: &'a Model, roots: &[(String, Ty)]) -> Self {
         let mut checker = TypeChecker::new(rex_expr::TypeContext::from_model(model));
         let mut root_scope = Vec::new();

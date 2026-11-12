@@ -1,4 +1,5 @@
-//! Hover rendering: turns a navigation-index [`Definition`] into markdown.
+//! Hover rendering: turns a navigation-index
+//! [`Definition`](rex_driver::navigation::Definition) into markdown.
 
 use rex_driver::navigation::{DefId, FeatureSymbolKind, NavigationIndex, SymbolKind};
 

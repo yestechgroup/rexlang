@@ -7,7 +7,7 @@
 //! invariants.
 //!
 //! The kernel is specified with [Creusot](https://creusot.rs) contracts:
-//! [`Graph::well_formed`] states the well-formedness of every observable
+//! `Graph::well_formed` states the well-formedness of every observable
 //! graph, the mutators carry the `requires(well_formed(*self))` /
 //! `ensures(well_formed(^self))` discipline, and the SMT-backed prover
 //! discharges the obligations (`cargo creusot -p rex-verify`, see
@@ -612,7 +612,7 @@ impl Graph {
     /// 3. the parent relation is cycle-free (checked with bounded walks).
     ///
     /// This is the test-side oracle for the property tests; the formal
-    /// counterpart is [`Graph::well_formed`]. The oracle is `#[trusted]`
+    /// counterpart is `Graph::well_formed`. The oracle is `#[trusted]`
     /// for the prover (an assumption, recorded as such in the
     /// proof-obligation register) because it inspects *arbitrary*,
     /// possibly malformed graphs — the very states the invariant

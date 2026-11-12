@@ -189,7 +189,7 @@ pub use rex_diagnostics::ifml_lints::{
 /// (every `action(...)`/`navigate(...)`/`refresh(...)` reference resolves
 /// to a declaration — domain-independent, always runs) plus, when a
 /// domain model is given, every type-checkable expression. Constructs the
-/// checker cannot type are silently skipped (see the [module docs](self)
+/// checker cannot type are silently skipped (see the module docs
 /// skip list). With `domains: None` only the cross-reference pass runs.
 ///
 /// ```

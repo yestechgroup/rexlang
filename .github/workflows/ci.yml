@@ -60,3 +60,10 @@ jobs:
         run: |
           cargo fmt --all -- --check
           cargo run -q -p rex-cli -- fmt --check examples/*.mox examples/*.actor examples/*.ifml examples/*.evt examples/*.dmn examples/*.ddd examples/*.uc examples/*.deploy examples/*.cmmn tests/conformance/models/*.mox tests/conformance/models/*.actor tests/conformance/ddd/*.ddd tests/conformance/sigil/*.mox tests/conformance/sigil/*.actor tests/conformance/sigil/*.ddd tests/conformance/events/*.mox tests/conformance/events/*.evt tests/conformance/deploy/*.deploy tests/conformance/usecases/*.uc tests/conformance/cmmn/*.cmmn tests/conformance/dmn/*.dmn patterns/ifml/*.ifml tests/conformance/ifml/app.ifml tests/conformance/ifml/cli.ifml tests/conformance/ifml/rexlang/auth.mox tests/conformance/ifml/rexlang/auth.actor
+      # Broken intra-doc links are warnings by default; -D warnings makes
+      # them errors so the gate stays visible (issue #175). cargo doc runs
+      # no doctests, so it needs no TMPDIR dance.
+      - name: Docs
+        run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: "-D warnings"

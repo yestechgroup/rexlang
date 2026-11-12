@@ -4,7 +4,8 @@
 //!
 //! The [restingstate](https://github.com/yestechgroup/restingstate)
 //! toolchain's language-neutral `xstate-ir` `Machine` is the canonical
-//! lowered form: [`lower_design_machines`] maps every [`StateMachine`] onto
+//! lowered form: [`lower_design_machines`] maps every
+//! [`StateMachine`](rex_ir::ddd::StateMachine) onto
 //! it, so machine semantics anchor to a statechart model instead of a
 //! rexlang-private shape (the sigil rev-pinned-dependency precedent). The
 //! mapping is total and lossless for the v1 surface:
@@ -13,7 +14,9 @@
 //! - `initial` — the machine's initial state.
 //! - `context` — one field per machine: the bound feature, typed by the
 //!   enum's qualified name, defaulting to the initial state.
-//! - `states` — [`StateMachine::states`] (canonical order: initial, then
+//! - `states` —
+//!   [`StateMachine::states`](rex_ir::ddd::StateMachine::states) (canonical
+//!   order: initial, then
 //!   terminals, then remaining endpoints in first-appearance order);
 //!   terminals map to `Final` nodes, everything else to `Atomic`.
 //! - transitions attach to their source state in artifact order; the event

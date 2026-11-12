@@ -103,7 +103,7 @@ impl IfmlImports {
     }
 }
 
-/// One diagnostic: a stable code (see the [module docs](self) for the
+/// One diagnostic: a stable code (see the module docs for the
 /// table), a human message, the byte-offset span it points at, and the file
 /// (compilation path key) the span indexes into. Import-level diagnostics
 /// that have no natural span carry `(0, 0)` and the importing file's path.

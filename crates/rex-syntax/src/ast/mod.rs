@@ -22,13 +22,13 @@ pub type Span = SimpleSpan<usize>;
 
 /// A single identifier, e.g. `Book` or an escaped keyword such as `^class`.
 mod cmmn;
-mod ddd;
+pub mod ddd;
 mod deploy;
-mod dmn;
-mod evt;
+pub mod dmn;
+pub mod evt;
 mod mox;
 mod shared;
-mod uc;
+pub mod uc;
 
 pub use cmmn::*;
 pub use ddd::*;

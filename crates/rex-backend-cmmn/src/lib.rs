@@ -23,7 +23,7 @@
 //!   service task lowers to `taskType: "Process"` whose `processRef` is
 //!   the resolved `alias.Service.operation` — the key the engine's task
 //!   executor registry resolves (the engine executes composition tasks
-//!   through a registered [`TaskExecutor`](cmmn) seam at activation).
+//!   through a registered `TaskExecutor` seam at activation).
 //! * A discretionary task is **excluded from its stage's children** (the
 //!   engine instantiates only the containment tree at case start) and
 //!   becomes a `discretionaryItem` plus a `planningTable` attached to the

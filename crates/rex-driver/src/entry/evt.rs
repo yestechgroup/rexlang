@@ -113,7 +113,7 @@ fn compile_evt_with(
 ///
 /// Event payload field types resolve against the **union namespace of the
 /// imported domains** (the same rule multi-file `.mox` compiles follow)
-/// through the shared helper [`resolve_ddd_type`](crate::lower::resolve_ddd_type): the `rex-syntax`
+/// through the shared helper `resolve_ddd_type`: the `rex-syntax`
 /// primitives resolve everywhere; every other reference resolves with the
 /// `.mox` cross-package rules (a bare single-segment name must be unique
 /// across all domain packages — ambiguity, unknown names, and
