@@ -87,8 +87,8 @@ pub struct ClassDecl {
     /// Description from the doc comment directly above the declaration.
     pub doc: Option<String>,
     /// The declared `table "…"` storage-name override, when present. The
-    /// driver carries it verbatim as [`rex_ir::ClassDef::table_name`]; the
-    /// uniqueness check uses it as the class's effective table name.
+    /// driver carries it verbatim as the IR's `ClassDef.tableName` field;
+    /// the uniqueness check uses it as the class's effective table name.
     pub table: Option<String>,
     /// Direct superclasses from the `extends` clause, in source order.
     pub extends: Vec<TypeRef>,
