@@ -193,6 +193,33 @@ snapshot is vendored — a closed-set check over an absent snapshot would
 false-positive. Vocabulary members stay unchecked: no dotted namespace, no
 membership check.
 
+**C1 (`.ddd` service-guard condition scope).** A `.ddd` service
+operation's `when` guard (issue rexlang#180) types under a scope the
+*driver* assembles, not the checker alone; the rule is test-citable so
+`crates/rex-driver/tests/ddd_conditions.rs` can cite it. The scope's
+bindings, in shadowing order (later wins):
+
+1. the implicit-`self` features — the module's unique machine-bearing
+   class, or the class a resolved `transition` binding pins (issue
+   rexlang#176); absent in a multi-machine module without a pin;
+2. in a multi-machine module, each machine's bound field as an
+   enum-typed name — by its authored field name when that name is unique
+   across the module's machines, and always by the enum-derived spelling
+   (lowerCamel of the machine's enum type name: `machine status:
+   PayRunStatus` binds `payRunStatus`);
+3. the machine states as enum-typed names (the machine-bound rule; a
+   state two machines declare never binds);
+4. the service's injected repositories as class-typed roots (`inject
+   TimecardRepository;` binds `TimecardRepository` to the repository
+   design's class), so `TimecardRepository.status` navigates as ordinary
+   feature access.
+
+An unresolvable reference is the driver's `E0353`/`E0354` (the
+`driver.ddd` band), not a checker error; a resolved path that mistypes is
+the ordinary L2/R2 rules with the condition span. The driver lowers the
+resolution into the artifact as `conditionPaths` — see docs/DDD.md
+"Condition scoping" for the row discipline.
+
 **Guard lint.** A string literal compared (`==`/`!=`) against a
 `String`-typed operand inside a guard expression type-checks (it is a
 string equality), but records a **lint**:
