@@ -684,7 +684,22 @@ fn check_condition(
                 Some((inner_start..span.end).into()),
             ));
         }
-        Ok(_) => {}
+        Ok(_) => {
+            // The use-based guard lint (issue #142): a String-typed operand
+            // compared to a string literal warns that the field could be an
+            // enum. Type-driven, never name-based; defers silently when the
+            // type context is absent (no lints are produced then).
+            for lint in checker.guard_string_lints(&ast) {
+                let start = inner_start.saturating_add(lint.span.start).min(span.end);
+                let end = inner_start
+                    .saturating_add(lint.span.end)
+                    .clamp(start, span.end);
+                local.push(Diagnostic::warning(
+                    format!("{context_label}: {}", lint.message),
+                    Some((start..end).into()),
+                ));
+            }
+        }
     }
 }
 /// The features of a class including everything inherited through its

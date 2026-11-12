@@ -9,7 +9,7 @@ use rex_expr::{
 };
 use rex_ir::{
     ClassDef, DatatypeDef, EnumDef, EnumLiteral, Feature, FeatureKind, Model, Multiplicity,
-    Operation, OperationParam, Package, PrimitiveType, TypeRef,
+    Operation, OperationParam, Package as IrPackage, Package, PrimitiveType, TypeRef,
 };
 
 const PKG: &str = "nz.example.library";
@@ -1282,4 +1282,309 @@ fn assert_err_probe(checker: &TypeChecker, source: &str, rule: &str) {
         error.iter().any(|e| e.message.contains(rule)),
         "{source}: {error:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// L3: the enum-literal namespace and closed membership (issue #142)
+// ---------------------------------------------------------------------------
+
+/// The enum type of the library model, spelled out in full.
+fn category_ty() -> Ty {
+    Ty::named(NamedKind::Enum, PKG, "BookCategory")
+}
+
+/// `EnumName.Member` — a dotted name whose receiver is not a scope binding —
+/// resolves through the enum-member registry and types as the enum.
+#[test]
+fn l3_dotted_enum_literal_types_as_the_enum() {
+    assert_ty("BookCategory.Mystery", category_ty());
+    assert_ty("BookCategory.ScienceFiction", category_ty());
+}
+
+/// The point of the namespace: a guard can name an enum member as a typed
+/// value against an enum-typed feature, in both operand orders.
+#[test]
+fn l3_dotted_enum_literal_compares_against_an_enum_typed_feature() {
+    assert_ty("book.category == BookCategory.Mystery", Ty::boolean());
+    assert_ty(
+        "BookCategory.ScienceFiction != book.category",
+        Ty::boolean(),
+    );
+}
+
+/// An undeclared member is a closed-set error (the V13 discipline) with a
+/// did-you-mean hint when exactly one declared member is near.
+#[test]
+fn l3_unknown_member_is_an_error_with_a_did_you_mean() {
+    assert_err(
+        "BookCategory.Mistry",
+        "`Mistry` is not a literal of enum `BookCategory`; did you mean `Mystery`?",
+    );
+    assert_err(
+        "BookCategory.Historical",
+        "`Historical` is not a literal of enum `BookCategory`",
+    );
+}
+
+/// The namespace is contextual on the dot: a bare enum name without a member
+/// is still an unknown name (it is a type, not a value).
+#[test]
+fn l3_bare_enum_name_without_a_member_stays_an_unknown_name() {
+    assert_err("BookCategory", "unknown name `BookCategory`");
+}
+
+/// Scope bindings win: a `let`-bound (or feature) name shadowing an enum
+/// name takes the ordinary feature-access path.
+#[test]
+fn l3_a_scope_binding_shadows_the_namespace() {
+    let checker = TypeChecker::new(TypeContext::from_model(&library_model()))
+        .with_binding("category", Ty::string());
+    // `category` is bound as a string, so `.Mystery` is a feature access on
+    // a string — the namespace never engages.
+    assert_err_probe(&checker, "category.Mystery", "unknown feature `Mystery`");
+}
+
+/// A member chain past the literal fails the ordinary way: the literal types
+/// as the enum, and enums carry no features.
+#[test]
+fn l3_chaining_past_the_literal_is_a_feature_error() {
+    assert_err_probe(
+        &checker(),
+        "BookCategory.Mystery.something",
+        "unknown feature `something` on enum `BookCategory`",
+    );
+}
+
+/// An enum name declared by two packages is ambiguous — the bare-name
+/// resolution never guesses (the package-function precedent).
+#[test]
+fn l3_ambiguous_enum_names_across_packages_error() {
+    let mut model = Model::new();
+    for package in ["alpha", "beta"] {
+        let mut pkg = IrPackage::new(package);
+        pkg.enums.push(EnumDef::new(
+            "Shared",
+            vec![EnumLiteral::new("One", None, 0)],
+        ));
+        pkg.classes.push(ClassDef::new(
+            "Thing",
+            vec![],
+            vec![Feature::new(
+                "state",
+                FeatureKind::Attribute,
+                TypeRef::Enum {
+                    package: package.to_string(),
+                    name: "Shared".to_string(),
+                },
+                Multiplicity::REQUIRED,
+            )],
+        ));
+        model.packages.push(pkg);
+    }
+    let checker = TypeChecker::new(DomainTypes::from_model(&model))
+        .with_binding("thing", Ty::class("alpha", "Thing"));
+    assert_err_probe(
+        &checker,
+        "Shared.One",
+        "ambiguous enum `Shared`: declared in alpha, beta",
+    );
+    // The package-qualified spelling is unambiguous by construction: an
+    // ambiguity error names the packages so the author can pick a scope
+    // binding; here the same bare name over a single-package model resolves.
+    let mut single = Model::new();
+    let mut pkg = IrPackage::new("alpha");
+    pkg.enums.push(EnumDef::new(
+        "Shared",
+        vec![EnumLiteral::new("One", None, 0)],
+    ));
+    single.packages.push(pkg);
+    let solo = TypeChecker::new(DomainTypes::from_model(&single));
+    assert_ty_probe(
+        &solo,
+        "Shared.One",
+        Ty::named(NamedKind::Enum, "alpha", "Shared"),
+    );
+}
+
+/// Ask 2's membership check: a string literal compared against an
+/// enum-typed feature where the literal is NOT a declared member gets the
+/// closed-set error (never the generic R2 mismatch).
+#[test]
+fn l3_non_member_string_literal_against_an_enum_is_a_membership_error() {
+    assert_err(
+        "book.category == \"Historical\"",
+        "`\"Historical\"` is not a literal of enum `BookCategory`",
+    );
+    assert_err(
+        "book.category != \"Historical\"",
+        "`\"Historical\"` is not a literal of enum `BookCategory`",
+    );
+    assert_err(
+        "\"Historical\" == book.category",
+        "`\"Historical\"` is not a literal of enum `BookCategory`",
+    );
+}
+
+/// A declared member still fails the same-type rule (R2) — the anti-
+/// magic-strings stance of docs/DDD.md is deliberate: the typed spelling is
+/// the dotted form `BookCategory.Mystery`, never a bare string.
+#[test]
+fn l3_member_string_literal_against_an_enum_stays_the_r2_error() {
+    assert_err(
+        "book.category == \"Mystery\"",
+        "cannot compare enum `BookCategory` and string",
+    );
+}
+
+/// `Option<enum>` against a string literal defers to the generic R2 rule:
+/// the adaptation is only defined for the plain enum type.
+#[test]
+fn l3_option_enum_against_a_string_literal_defers_to_r2() {
+    let mut model = Model::new();
+    let mut pkg = IrPackage::new(PKG);
+    pkg.enums.push(EnumDef::new(
+        "Stage",
+        vec![EnumLiteral::new("Open", None, 0)],
+    ));
+    pkg.classes.push(ClassDef::new(
+        "Card",
+        vec![],
+        vec![Feature::new(
+            "stage",
+            FeatureKind::Attribute,
+            TypeRef::Enum {
+                package: PKG.to_string(),
+                name: "Stage".to_string(),
+            },
+            Multiplicity::OPTIONAL,
+        )],
+    ));
+    model.packages.push(pkg);
+    let checker = TypeChecker::new(DomainTypes::from_model(&model))
+        .with_binding("card", Ty::class(PKG, "Card"));
+    assert_err_probe(
+        &checker,
+        "card.stage == \"Open\"",
+        "cannot compare Option<enum `Stage`> and string",
+    );
+}
+
+/// When the host never registered members (the kind-only `insert_named`
+/// seam), the membership check defers silently to the generic R2 rule — a
+/// host-contract gap must not invent a closed set.
+#[test]
+fn l3_membership_defers_when_the_registry_is_absent() {
+    // The old incremental seam: the Book class and the enum KIND, but no
+    // member registry entry for it.
+    let book_features = library_model()
+        .packages
+        .iter()
+        .flat_map(|package| package.classes.iter())
+        .find(|class| class.name == "Book")
+        .expect("Book class")
+        .features
+        .clone();
+    let mut kind_only = DomainTypes::default();
+    kind_only.insert_class(PKG, "Book", vec![], book_features, vec![]);
+    kind_only.insert_named(PKG, "BookCategory", NamedKind::Enum);
+    let no_members = TypeChecker::new(kind_only).with_binding("book", book());
+    let parsed = parse("book.category == \"Whatever\"").ast.expect("ast");
+    let errors = no_members
+        .type_of(&parsed)
+        .expect_err("kind-only registry has no closed set");
+    assert!(
+        errors.iter().any(|e| e.message.contains("cannot compare")),
+        "expected the generic R2 mismatch, got {errors:?}"
+    );
+    // And the same expression over the full model gets the membership error.
+    assert_err(
+        "book.category == \"Whatever\"",
+        "is not a literal of enum `BookCategory`",
+    );
+}
+
+/// Ask 3's use-based lint: a guard comparing a string literal against a
+/// String-typed operand records one lint naming the operand, so the driver
+/// can surface it as a warning suggesting the enum declaration.
+#[test]
+fn l3_guard_lint_records_string_field_comparisons() {
+    for source in [
+        "book.title == \"Dune\"",
+        "\"Dune\" == book.title",
+        "book.title != \"Dune\"",
+        "book.citation ?: \"none\" == book.title", // a string-typed derived feature
+    ] {
+        let parsed = parse(source);
+        let ast = parsed.ast.expect("ast");
+        let lints = checker().guard_string_lints(&ast);
+        assert_eq!(lints.len(), 1, "{source:?}: {lints:?}");
+        assert!(
+            lints[0].message.contains("`book.title`"),
+            "{source:?}: expected the operand named, got {lints:?}"
+        );
+        assert!(
+            lints[0].message.contains("declare"),
+            "{source:?}: expected the enum suggestion, got {lints:?}"
+        );
+    }
+}
+
+/// A bare feature name of the implicit-self scope is named too.
+#[test]
+fn l3_guard_lint_names_bare_string_features() {
+    let self_checker =
+        TypeChecker::new(TypeContext::from_model(&library_model())).with_self(PKG, "Book");
+    let parsed = parse("title == \"Dune\"").ast.expect("ast");
+    let lints = self_checker.guard_string_lints(&parsed);
+    assert_eq!(lints.len(), 1, "{lints:?}");
+    assert!(lints[0].message.contains("`title`"), "{lints:?}");
+}
+
+/// Enum-typed comparisons, string concatenation, and non-literal operands
+/// are not guard-lint material.
+#[test]
+fn l3_guard_lint_stays_silent_outside_string_literal_equality() {
+    let silent = [
+        "book.category == BookCategory.Mystery", // enum-typed, dotted literal
+        "book.title == book.citation",           // no string literal operand
+        "book.title != \"\"",                    // sentinel: never a member
+        "book.title + \" x\"",                   // concatenation, not a guard
+        "book.pages == 5",                       // not a string comparison
+    ];
+    for source in silent {
+        let parsed = parse(source);
+        let ast = parsed.ast.expect("ast");
+        let lints = checker().guard_string_lints(&ast);
+        assert!(lints.is_empty(), "{source:?}: {lints:?}");
+    }
+}
+
+/// The lint walks control forms and collection algebra with correct
+/// scoping: `let` bindings, lambda parameters, and branch bodies all
+/// participate.
+#[test]
+fn l3_guard_lint_walks_control_forms_and_lambdas() {
+    let found = [
+        "let t = book.title; t == \"Dune\"",
+        "book.authors.any(w => w.name == \"Wolfe\")",
+        "if book.title == \"Dune\" { true } else { false }",
+    ];
+    for source in found {
+        let parsed = parse(source);
+        let ast = parsed.ast.expect("ast");
+        let lints = checker().guard_string_lints(&ast);
+        assert_eq!(lints.len(), 1, "{source:?}: {lints:?}");
+    }
+}
+
+/// The deferral rule: without a type context (or with unresolvable names)
+/// nothing is recorded — the lint never guesses.
+#[test]
+fn l3_guard_lint_defers_without_a_type_context() {
+    let bare = TypeChecker::new(DomainTypes::default());
+    let parsed = parse("title == \"Dune\"").ast.expect("ast");
+    assert!(bare.guard_string_lints(&parsed).is_empty());
+    // A poisoned operand (unknown feature) stays silent too.
+    let parsed = parse("book.nope == \"Dune\"").ast.expect("ast");
+    assert!(checker().guard_string_lints(&parsed).is_empty());
 }

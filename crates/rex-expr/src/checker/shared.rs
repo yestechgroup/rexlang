@@ -107,6 +107,18 @@ pub fn is_string_operand(ty: Option<&Ty>) -> bool {
     }
 }
 
+/// The L3 closed-set message: `literal` names no declared member of the
+/// enum, with a did-you-mean hint when exactly one declared member is
+/// within edit distance 2. Shared by the enum-literal namespace
+/// (navigation) and the string-literal membership check (equality).
+pub(crate) fn not_a_literal_message(literal: &str, enum_name: &str, members: &[String]) -> String {
+    let mut message = format!("`{literal}` is not a literal of enum `{enum_name}`");
+    if let Some(candidate) = rex_diagnostics::did_you_mean_unique(literal, members.iter()) {
+        message.push_str(&format!("; did you mean `{candidate}`?"));
+    }
+    message
+}
+
 /// The constant integer value of an expression, when it is a pure constant
 /// tree (used for the R1/R4 compile-time halves). Overflowing intermediates
 /// yield `None` — the node where they occurred reports its own error.

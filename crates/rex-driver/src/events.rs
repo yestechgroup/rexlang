@@ -274,6 +274,11 @@ pub(crate) fn compile_evt_file(
             types.merge(rex_expr::DomainTypes::from_model(domains_model));
         }
     }
+    // Dedupes the guard lint across the per-event universes: the same
+    // comparison at the same filter span is one warning, not one per
+    // subscribed event.
+    let mut seen_lints: std::collections::BTreeSet<(usize, String)> =
+        std::collections::BTreeSet::new();
 
     for subscription in &ast.subscriptions {
         // Rule e — subscription names are unique within the file.
@@ -404,7 +409,26 @@ pub(crate) fn compile_evt_file(
                         subscription.name.text, event_name
                     );
                     match checker.type_of(&expr) {
-                        Ok(ty) if ty == rex_expr::Ty::boolean() => {}
+                        Ok(ty) if ty == rex_expr::Ty::boolean() => {
+                            // The use-based guard lint (issue #142): a
+                            // String-typed payload field compared to a
+                            // string literal warns that the field could be
+                            // an enum. Deduped across the per-event
+                            // universes: the same comparison against every
+                            // listed event is one warning.
+                            for lint in checker.guard_string_lints(&expr) {
+                                let message = format!(
+                                    "{} (in the `when` of subscription '{}')",
+                                    lint.message, subscription.name.text
+                                );
+                                if seen_lints.insert((when_span.start, message.clone())) {
+                                    local.push(
+                                        Diagnostic::warning(message, Some(when_span))
+                                            .with_help(where_help.clone()),
+                                    );
+                                }
+                            }
+                        }
                         Ok(ty) => {
                             local.push(
                                 Diagnostic::error(

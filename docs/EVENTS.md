@@ -449,6 +449,14 @@ because it lists only `OrderPlaced` — the same filter on `billing` would
 be rule 13's routing error. `deadLetter orders` points at the declared
 channel.
 
+A filter comparing a string literal against a `String`-typed payload field
+still type-checks — strings support equality — and warns under the
+expression guard lint (rule L3 of `docs/EXPRESSIONS.md`; one warning per
+filter, deduped across the per-event universes), suggesting the field be
+declared as an enum so the compared literals are checked. The empty string
+is excepted: `orderId != ""` here is an emptiness check (a sentinel can
+never be a declared member), so it stays silent.
+
 ---
 
 ## Delivery model & governance (slice 2)

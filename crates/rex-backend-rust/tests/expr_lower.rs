@@ -29,6 +29,15 @@ fn library_model() -> Model {
     package
         .datatypes
         .push(rex_ir::DatatypeDef::new("Date", None).bind("rust", "chrono::NaiveDate"));
+    // The L3 enum-literal namespace's registry input: the enum and one
+    // enum-typed feature to compare against.
+    package.enums.push(rex_ir::EnumDef::new(
+        "BookCategory",
+        vec![
+            rex_ir::EnumLiteral::new("Mystery", None, 0),
+            rex_ir::EnumLiteral::new("ScienceFiction", None, 1),
+        ],
+    ));
     package.classes.push(ClassDef::new(
         "Library",
         vec![],
@@ -98,6 +107,15 @@ fn library_model() -> Model {
                 TypeRef::Datatype {
                     package: PKG.to_string(),
                     name: "Date".to_string(),
+                },
+                Multiplicity::REQUIRED,
+            ),
+            Feature::new(
+                "category",
+                FeatureKind::Attribute,
+                TypeRef::Enum {
+                    package: PKG.to_string(),
+                    name: "BookCategory".to_string(),
                 },
                 Multiplicity::REQUIRED,
             ),
@@ -208,6 +226,24 @@ fn string_literal_is_the_escaped_rust_str_to_string() {
         "\"a \\\"quoted\\\" \\\\ backslash\"",
         "\"a \\\"quoted\\\" \\\\ backslash\".to_string()",
     );
+}
+
+#[test]
+fn l3_enum_member_literal_lowers_to_the_variant_path() {
+    // The dotted namespace member lowers to the same `Enum::Member` shape
+    // the codegen emits for enum defaults; the comparison is the plain
+    // same-type `==` of R2.
+    lower_in(
+        "Book",
+        "category == BookCategory.Mystery",
+        "(self.category == BookCategory::Mystery)",
+    );
+    lower_in(
+        "Book",
+        "BookCategory.ScienceFiction != category",
+        "(BookCategory::ScienceFiction != self.category)",
+    );
+    lower_in("Book", "BookCategory.Mystery", "BookCategory::Mystery");
 }
 
 #[test]

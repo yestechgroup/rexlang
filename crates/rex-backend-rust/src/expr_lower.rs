@@ -663,6 +663,26 @@ impl Lowerer<'_, '_> {
         name: &rex_expr::Spanned<String>,
         optional_safe: bool,
     ) -> Result<String, LowerError> {
+        // Rule L3 (the enum-literal namespace): a receiver name that is not
+        // a scope binding and resolves to a registered enum's declared
+        // member lowers to the variant path — the same `Enum::Member` shape
+        // the codegen emits for enum defaults. The tree is well-typed, so
+        // the checker's namespace resolution (`enum_literal_ty`) must
+        // succeed here exactly when the checker typed this node through it.
+        if let ExprKind::Name(enum_name) = &receiver.kind {
+            if self.lookup(enum_name).is_err()
+                && self
+                    .checker
+                    .enum_literal_ty(enum_name, &name.value)
+                    .is_some()
+            {
+                return Ok(format!(
+                    "{}::{}",
+                    rust_ident(enum_name),
+                    rust_ident(&name.value)
+                ));
+            }
+        }
         let recv_ty = self.type_of(receiver)?;
         let recv_is_option = matches!(recv_ty, Ty::Option(_));
         let target = recv_ty.inner().unwrap_or(&recv_ty).clone();

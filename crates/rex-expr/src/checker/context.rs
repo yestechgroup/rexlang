@@ -35,17 +35,29 @@ pub struct FunctionSignature {
 
 /// The unified domain-object index: the generic binding seam every surface
 /// lowers into. Classes carry their resolvable members (features, operations,
-/// supertypes); every other named type is registered by kind. Built from a
+/// supertypes); every other named type is registered by kind; enums may
+/// additionally register their declared literal names — the closed
+/// vocabulary the enum-literal namespace and the membership check read
+/// (rule L3). Built from a
 /// [`rex_ir::Model`] — which is what `.mox` compiles to and what sigil
 /// imports, schema imports, `.ddd`, and `.evt` all resolve against — or
-/// assembled incrementally with [`DomainTypes::insert_class`] and
-/// [`DomainTypes::insert_named`], so surfaces without a full `Model` can
-/// still contribute bindable domain objects.
+/// assembled incrementally with [`DomainTypes::insert_class`],
+/// [`DomainTypes::insert_named`], and [`DomainTypes::insert_enum`], so
+/// surfaces without a full `Model` can still contribute bindable domain
+/// objects.
+///
+/// The member registry is scoped to enums. Vocabularies are deferred
+/// deliberately: their entries are lockfile-backed facets whose member
+/// semantics differ (entry keys, not nominal literals), and an entry set can
+/// be legitimately empty before a snapshot is vendored — a closed-set check
+/// over an absent snapshot would false-positive. Register one with
+/// [`DomainTypes::insert_named`] as today; its members stay unchecked.
 #[derive(Debug, Clone, Default)]
 pub struct DomainTypes {
     classes: BTreeMap<(String, String), ClassInfo>,
     pub(crate) named: BTreeMap<(String, String), NamedKind>,
     pub(crate) functions: BTreeMap<String, Vec<FunctionSignature>>,
+    members: BTreeMap<(String, String), Vec<String>>,
 }
 
 impl DomainTypes {
@@ -63,7 +75,15 @@ impl DomainTypes {
                 );
             }
             for enum_ in &package.enums {
-                context.insert_named(&package.name, &enum_.name, NamedKind::Enum);
+                context.insert_enum(
+                    &package.name,
+                    &enum_.name,
+                    enum_
+                        .literals
+                        .iter()
+                        .map(|literal| literal.name.clone())
+                        .collect(),
+                );
             }
             for datatype in &package.datatypes {
                 context.insert_named(&package.name, &datatype.name, NamedKind::Datatype);
@@ -111,11 +131,44 @@ impl DomainTypes {
         );
     }
 
-    /// Registers a non-class named type (enum, datatype, interface,
-    /// vocabulary) by kind.
+    /// Registers a non-class named type (datatype, interface, vocabulary,
+    /// or a member-less enum) by kind.
     pub fn insert_named(&mut self, package: &str, name: &str, kind: NamedKind) {
         self.named
             .insert((package.to_string(), name.to_string()), kind);
+    }
+
+    /// Registers one enum with its declared literal names, replacing any
+    /// previous entry (and its kind) for the same (package, name). The
+    /// members are the closed set the enum-literal namespace resolves
+    /// against (rule L3 of `docs/EXPRESSIONS.md`); a host that registers
+    /// only the kind via [`DomainTypes::insert_named`] leaves the set open
+    /// — the namespace and the membership check then defer silently.
+    pub fn insert_enum(&mut self, package: &str, name: &str, members: Vec<String>) {
+        let key = (package.to_string(), name.to_string());
+        self.named.insert(key.clone(), NamedKind::Enum);
+        self.members.insert(key, members);
+    }
+
+    /// The declared literal names of one registered enum, in declaration
+    /// order; `None` when the enum was registered without members.
+    pub fn enum_members(&self, package: &str, name: &str) -> Option<&[String]> {
+        self.members
+            .get(&(package.to_string(), name.to_string()))
+            .map(|members| members.as_slice())
+    }
+
+    /// Every member-registered enum whose name matches `name`, as
+    /// `(package, name)` keys. The bare-name resolution input of the
+    /// enum-literal namespace: exactly one match resolves, more are
+    /// ambiguous (never guessed), none leaves the name to the ordinary
+    /// scope rules.
+    pub fn enums_named(&self, name: &str) -> Vec<(String, String)> {
+        self.members
+            .keys()
+            .filter(|(_, enum_name)| enum_name == name)
+            .cloned()
+            .collect()
     }
 
     /// Registers one free-function signature under its bare name. Further
@@ -136,6 +189,7 @@ impl DomainTypes {
     pub fn merge(&mut self, other: DomainTypes) {
         self.classes.extend(other.classes);
         self.named.extend(other.named);
+        self.members.extend(other.members);
         for (name, signatures) in other.functions {
             self.functions.entry(name).or_default().extend(signatures);
         }

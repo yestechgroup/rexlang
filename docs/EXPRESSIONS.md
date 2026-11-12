@@ -94,7 +94,9 @@ Notes:
   parameter — except in the bare-call form `NAME "(" args ")"`, which is a
   package-function call (see "Function calls" under the type system). A bare
   `NAME` with no parentheses is never a call. Feature access always has an
-  explicit receiver.
+  explicit receiver; the one receiver that is not a variable is the
+  enum-literal namespace (rule L3): `EnumName.Member` where `EnumName` is
+  not a scope binding is a typed member literal.
 
 ### Precedence (loosest to tightest)
 
@@ -154,6 +156,57 @@ same numeric type — or two `date` values (rule R7) — and produce `boolean`.
 ordering on `string`; strings support equality (R2) and `+` concatenation
 (R9). Dates take no arithmetic operators at all: calendar arithmetic is the
 typed method algebra described under R8, never `+`/`-`.
+
+**L3 (enum-literal namespace and closed membership).** Enums carry a closed
+literal set, and expressions can name members as typed values: a dotted
+name `EnumName.Member` whose receiver is **not a scope binding** resolves
+through the enum-member registry (`DomainTypes::insert_enum`, fed from the
+model's `EnumDef` literals), and the member types as the enum — so
+`status == PayRunStatus.Draft` is the typed spelling of an enum comparison,
+in either operand order, `==` or `!=`. Scope wins: a bound name shadowing
+an enum name takes the ordinary feature-access path. A bare enum name
+without `.Member` stays an ordinary name (a type, not a value); a member
+chain past the literal (`EnumName.Member.x`) is an unknown-feature error.
+A bare name declared by several packages is ambiguous — a type error naming
+every declaring package (the package-function precedent). The `.ddd`
+machine-state binding (docs/DDD.md "Condition binding") predates and
+composes with this rule: bound state names are scope bindings, so they keep
+winning over the namespace.
+
+The same closed set backs two membership checks, both compile-time:
+
+- A dotted access naming an undeclared member is a type error
+  (`` `Member` is not a literal of enum `EnumName` ``, with a did-you-mean
+  hint when exactly one declared member is within edit distance 2).
+- A string literal compared (`==`/`!=`) against a **plain** enum-typed
+  operand where the literal names no declared member is the same closed-set
+  error — never the generic R2 mismatch. A declared member still fails R2's
+  same-type rule: the anti-magic-strings stance is deliberate, and the
+  typed spelling is the dotted form, never a bare string (docs/DDD.md).
+  `Option`-/`List`-wrapped enums and enums registered without a member set
+  (the kind-only `insert_named` host seam) defer to the ordinary R2 rule.
+
+Vocabularies are deliberately outside the registry: their entries are
+lockfile-backed facets with different member semantics (entry keys, not
+nominal literals), and an entry set can be legitimately empty before a
+snapshot is vendored — a closed-set check over an absent snapshot would
+false-positive. Vocabulary members stay unchecked: no dotted namespace, no
+membership check.
+
+**Guard lint.** A string literal compared (`==`/`!=`) against a
+`String`-typed operand inside a guard expression type-checks (it is a
+string equality), but records a **lint**:
+`TypeChecker::guard_string_lints` returns it, and every guard-hosting
+surface (`.ddd` conditions, `.actor` `when`, `.evt` filters, `.cmmn`
+criteria, `.uc` step guards) emits it as a WARNING suggesting the field be
+declared as an enum so the compared literals are checked against its
+members — the use-based companion of the name-based bare-`String`
+declaration rule. The empty string is excepted: `field != ""` is a
+sentinel/emptiness check, and an empty string can never be a declared
+member, so empty-literal comparisons stay silent. The lint is name-blind
+and type-driven: it fires only where a guard actually compares, and defers
+silently whenever a type cannot be resolved (no type context, unbound
+names — the `domains: None` contract).
 
 **U1 (if unification).** `if` requires a `boolean` condition. Both branches
 must have the *same* type — compared exactly, with no implicit `int → long`
@@ -558,3 +611,6 @@ over an optional date propagates with `map`:
 `rex-syntax`: it returns the recovered expression (if any) plus every error
 with byte spans. `TypeChecker::type_of` collects **all** type errors in one
 pass (subexpression errors do not cascade into spurious operator errors).
+The guard lint of rule L3 is a separate opt-in pass
+(`TypeChecker::guard_string_lints`), not part of `type_of`: it changes no
+typing and only guard-hosting drivers run it.

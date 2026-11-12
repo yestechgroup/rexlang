@@ -328,7 +328,7 @@ in `crates/rex-driver/src/ddd.rs`; behavior pinned by
 **Condition binding.** Machine states bind as enum-typed *names* — guards
 read `status == AwaitingApproval`, never `status == "AwaitingApproval"`.
 The string literal is a type error under the same-type equality rule (R2 of
-`docs/EXPRESSIONS.md`); the anti-magic-strings stance is deliberate. Edge
+`docs/EXPRESSIONS.md`); the anti-magic-strings stance is deliberate. The enum-literal namespace (rule L3 of `docs/EXPRESSIONS.md`) is the general typed spelling beyond a machine's own bound states: `status == PayRunStatus.Draft` names any declared member of the field's enum as a typed value, and a string literal that names no declared member is the closed-set membership error rather than the generic mismatch. Edge
 guards bind only the machine's own states (a foreign machine's states are
 unbound — cross-entity state references are a type error). A service
 operation is not aggregate-scoped, so its condition requires the module to
