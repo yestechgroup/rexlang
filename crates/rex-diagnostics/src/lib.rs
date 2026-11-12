@@ -35,6 +35,7 @@
 use std::sync::LazyLock;
 
 pub mod dmn;
+pub mod domain;
 pub mod driver;
 pub mod ifml_check;
 pub mod ifml_lints;
@@ -43,6 +44,7 @@ pub mod integrity;
 pub mod suggest;
 
 pub use dmn::*;
+pub use domain::*;
 pub use driver::*;
 pub use ifml_check::*;
 pub use ifml_lints::*;
@@ -120,6 +122,7 @@ const BAND_ENTRIES: &[&[Entry]] = &[
     driver::ENTRIES,
     integrity::ENTRIES,
     dmn::ENTRIES,
+    domain::ENTRIES,
 ];
 
 /// All registered entries, flattened once.
@@ -188,6 +191,13 @@ const BANDS: &[Band] = &[
         owner: "rex-driver .dmn surface and .ddd decision links",
         severity_note: "error",
         next_free: "E0252",
+    },
+    Band {
+        id: "driver.domain",
+        range: "E0300–E0349",
+        owner: "rex-driver .mox domain-surface checks",
+        severity_note: "error",
+        next_free: "E0302",
     },
 ];
 

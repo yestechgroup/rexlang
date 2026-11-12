@@ -12,6 +12,7 @@ Every diagnostic a rexlang surface emits carries a stable string code. The codes
 | `driver.payload` | camelCase names | rex-driver DiagnosticCode | error | n/a |
 | `driver.integrity` | X0001–X0099 | rex-driver integrity pass | error | X0009 |
 | `dmn.check` | E0200–E0299 | rex-driver .dmn surface and .ddd decision links | error | E0252 |
+| `driver.domain` | E0300–E0349 | rex-driver .mox domain-surface checks | error | E0302 |
 
 ## Band `ifml.resolver` (E0001–E0099)
 
@@ -94,3 +95,10 @@ Every diagnostic a rexlang surface emits carries a stable string code. The codes
 | `E0214` | error | Duplicate metadata | `duplicate '<word>' metadata` — the same metadata word (description, owner, …) is declared twice on one element, so the element carries two values for one attribute. | Keep one occurrence of the metadata word and merge the values. |
 | `E0250` | error | Unknown invoked decision service | `unknown decision service '<name>' invoked by operation '<op>' of service '<service>'` — the `.ddd` application service's operation invokes a decision service no provided `.dmn` model declares; the decision-link check joins the design against the decision surface. | Declare the decision service in a `.dmn` model, or fix the spelling. |
 | `E0251` | error | Unknown injected decision service | `unknown decision service '<name>' injected by service '<service>'` — the `.ddd` application service injects a decision service no provided `.dmn` model declares; the decision-link check joins the design against the decision surface. | Declare the decision service in a `.dmn` model, or fix the spelling. |
+
+## Band `driver.domain` (E0300–E0349)
+
+| Code | Class | Title | Meaning | Fix |
+|------|-------|-------|---------|-----|
+| `E0300` | error | Stripped-name collision | `stripped module name '<name>' is shared by <kind> '<a>' and <kind> '<b>'` — two declarations in one package (classes and/or enums) whose names strip to the same module identifier: one trailing `Type` suffix removed, then snake_case (`PayRun` and `PayRunType` both strip to `pay_run`; `TypeWriter` keeps its name). Consumers generate the same module path for both and one overwrites the other. The diagnostic spans the later declaration and names both. Pairs where either class is a containment target (some class declares a `contains` feature targeting it) are exempt — contained value objects share their owner's module downstream by design. | Rename one of the declarations, or give one class a distinct `table "…"` override when the collision is a value-object/table pairing. |
+| `E0301` | error | Table-name collision | `table name '<name>' is shared by class '<a>' and class '<b>'` — two classes in one package map to the same effective table name (a declared `table "…"` override, else the derived default), so both would generate the same pg table and one overwrites the other. The diagnostic spans the later declaration and names both. Pairs where either class is a containment target are exempt. | Give one of the classes a distinct `table "…"` override, or rename it. |
