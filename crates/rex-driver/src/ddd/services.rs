@@ -3,8 +3,11 @@
 
 use std::collections::BTreeSet;
 
+use rex_diagnostics::ddd::{
+    E_TRANSITION_NOT_SAVE, E_TRANSITION_QUALIFIER_REQUIRED, E_UNKNOWN_TRANSITION_TRIGGER,
+};
 use rex_diagnostics::dmn::{E_UNKNOWN_INJECTED_SERVICE, E_UNKNOWN_INVOKED_SERVICE};
-use rex_ir::ddd::{Delegation, Service, ServiceOperation};
+use rex_ir::ddd::{Delegation, Service, ServiceOperation, TransitionRef};
 use rex_syntax::ast as dsl;
 
 use crate::diagnostic::Diagnostic;
@@ -184,20 +187,207 @@ pub(crate) fn rule_17_validate_decision_links(
     }
     local
 }
+/// Issue rexlang#176 — the explicit transition binding of a delegated
+/// service operation. The binding is legal only on a delegation to a
+/// repository `save` **of this module** (rule 8's own errors cover the
+/// rest, and this check stays silent there — no cascade), the machine is
+/// the one bound to the repository's designed class, the trigger must be
+/// one the machine declares (an explicit `via` name or a bare arrow's
+/// derived name; a name both explicit and derived is ambiguous), and a
+/// multi-machine module requires the enum-type qualifier. Returns the
+/// binding as authored (the artifact keeps the names exactly as written)
+/// and, through `pin`, the machine's class the binding resolved to — the
+/// op's own-record condition scope (issue rexlang#180's joint shape).
+#[allow(clippy::too_many_arguments)]
+fn lower_transition<'a>(
+    binding: &dsl::DddTransitionRef,
+    op: &dsl::DddServiceOp,
+    service: &dsl::DddService,
+    module: &dsl::DddModule,
+    delegation: &dsl::DddDelegation,
+    machines: &'a MachineScopes,
+    repository_scopes: &'a [RepositoryScope],
+    local: &mut Vec<Diagnostic>,
+) -> (Option<TransitionRef>, Option<&'a (String, String)>) {
+    let context = format!(
+        "operation '{}' of service '{}'",
+        op.name.text, service.name.text
+    );
+    let target = delegation.target.full_name();
+    // The binding's machine is the one bound to the target repository's
+    // designed class; anything else the delegation gets wrong is rule 8's
+    // finding (unknown target, cross-module repository) — stay silent.
+    let Some(scope) = repository_scopes.iter().find(|scope| scope.name == target) else {
+        return (None, None);
+    };
+    if delegation.operation.text != "save" {
+        local.push(
+            Diagnostic::error(
+                format!(
+                    "{E_TRANSITION_NOT_SAVE} transition on {context}, which delegates to \
+                     repository '{target}.{}'; only a `save` delegation carries a \
+                     transition",
+                    delegation.operation.text
+                ),
+                Some(binding.span),
+            )
+            .with_help("delegate with `name => <Repository>.save` and bind the transition there"),
+        );
+        return (None, None);
+    }
+    let Some(machine) = machines.machine_of_class(&scope.class) else {
+        local.push(
+            Diagnostic::error(
+                format!(
+                    "{E_UNKNOWN_TRANSITION_TRIGGER} unknown transition trigger '{}' on \
+                     {context}: the design of '{}' (repository '{target}') carries no \
+                     machine to bind",
+                    trigger_spelling(binding),
+                    scope.class.1
+                ),
+                Some(binding.span),
+            )
+            .with_help(
+                "a transition binding fires a state-machine transition; give the \
+                 design a `machine` block first",
+            ),
+        );
+        return (None, None);
+    };
+    // Multi-machine modules must qualify the machine by its enum type name.
+    match (&binding.machine, machines.is_multi_machine()) {
+        (None, true) => {
+            local.push(
+                Diagnostic::error(
+                    format!(
+                        "{E_TRANSITION_QUALIFIER_REQUIRED} transition on {context} has no \
+                         machine qualifier; module '{}' carries {} machine-bearing designs",
+                        module.name.text,
+                        machines.machines.len()
+                    ),
+                    Some(binding.span),
+                )
+                .with_help(format!(
+                    "qualify as `<EnumType>.<Trigger>` — the machine bound to \
+                     repository '{target}' is '{}: {}'",
+                    machine.field, machine.enum_type.1
+                )),
+            );
+            return (None, None);
+        }
+        (Some(qualifier), _) if qualifier.text != machine.enum_type.1 => {
+            local.push(
+                Diagnostic::error(
+                    format!(
+                        "{E_UNKNOWN_TRANSITION_TRIGGER} unknown transition trigger '{}' on \
+                         {context}: the machine bound to repository '{target}' is '{}: {}', \
+                         not '{}'",
+                        trigger_spelling(binding),
+                        machine.field,
+                        machine.enum_type.1,
+                        qualifier.text
+                    ),
+                    Some(binding.span),
+                )
+                .with_help(format!(
+                    "qualify as `{}.{}`, or drop the qualifier — the qualifier names \
+                     the machine's enum type",
+                    machine.enum_type.1, binding.trigger.text
+                )),
+            );
+            return (None, None);
+        }
+        _ => {}
+    }
+    // The trigger must be one the machine declares, and unambiguously so.
+    let trigger = &binding.trigger.text;
+    let explicit = machine.explicit_triggers.contains(trigger);
+    let derived = machine.derived_triggers.contains(trigger);
+    if explicit && derived {
+        local.push(
+            Diagnostic::error(
+                format!(
+                    "{E_UNKNOWN_TRANSITION_TRIGGER} transition trigger '{trigger}' on \
+                     {context} is ambiguous: it is both declared via `via` and derived \
+                     from a bare arrow of machine '{}'",
+                    machine.field
+                ),
+                Some(binding.span),
+            )
+            .with_help(
+                "rename the `via` trigger or the bare arrow's target state, then \
+                 bind the spelling you mean",
+            ),
+        );
+        return (None, None);
+    }
+    if !explicit && !derived {
+        let declared = machine.trigger_names();
+        let candidates: BTreeSet<String> = declared.iter().cloned().collect();
+        let suggestion = rex_diagnostics::did_you_mean_adaptive(trigger, &candidates);
+        let help = match &suggestion {
+            Some(suggestion) => format!("did you mean '{suggestion}'?"),
+            None if declared.is_empty() => format!(
+                "the machine '{}' declares no triggers; add `via` triggers or bare \
+                 arrows first",
+                machine.field
+            ),
+            None => format!("the machine declares: {}", declared.join(", ")),
+        };
+        local.push(
+            Diagnostic::error(
+                format!(
+                    "{E_UNKNOWN_TRANSITION_TRIGGER} unknown transition trigger '{trigger}' \
+                     on {context}",
+                ),
+                Some(binding.span),
+            )
+            .with_help(help),
+        );
+        return (None, None);
+    }
+    // Resolved: the binding lowers as authored, and pins the machine's
+    // class as the op's own-record condition scope.
+    (
+        Some(
+            TransitionRef::new(binding.trigger.text.clone()).with_machine(
+                binding
+                    .machine
+                    .as_ref()
+                    .map(|qualifier| qualifier.text.clone()),
+            ),
+        ),
+        Some(&scope.class),
+    )
+}
+
+/// The spelled form of a transition binding for messages: `Submit`, or
+/// `PayRunStatus.Submit` when qualified.
+fn trigger_spelling(binding: &dsl::DddTransitionRef) -> String {
+    match &binding.machine {
+        Some(qualifier) => format!("{}.{}", qualifier.text, binding.trigger.text),
+        None => binding.trigger.text.clone(),
+    }
+}
+
 /// Stage 4 — one module's services: rule 2 on service and operation names,
 /// rule 7 on declared signatures, the `when` conditions of every operation
-/// against the module's machine scopes, and the queues for the deferred
-/// validations (capabilities → rule 10, delegations → rule 8, injects →
-/// rule 9, decision links → rule 17). Returns the lowered services and the
-/// stage's diagnostics.
+/// under the module's condition scope (machine states, machine fields,
+/// injected repositories — issue rexlang#180) with their resolved paths
+/// lowered into the artifact, and the queues for the deferred validations
+/// (capabilities → rule 10, delegations → rule 8, injects → rule 9,
+/// decision links → rule 17). Returns the lowered services and the stage's
+/// diagnostics.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_module_services<'a>(
     module: &'a dsl::DddModule,
     design_source: &str,
     packages: &[DomainPackage],
     base: Option<&str>,
-    machines: &[ResolvedMachine],
+    machines: &MachineScopes,
     service_self: Option<(String, String)>,
+    repository_scopes: &[RepositoryScope],
+    union: Option<&rex_ir::Model>,
     expr_context: Option<&rex_expr::TypeContext>,
     registries: &mut Registries<'a>,
 ) -> (Vec<Service>, Vec<Diagnostic>) {
@@ -224,6 +414,24 @@ pub(crate) fn lower_module_services<'a>(
 
         let mut ops: Vec<String> = Vec::new();
         let mut operations = Vec::new();
+        // The service's injected repositories (issue rexlang#180): the
+        // condition paths' first segments resolve against these, bound as
+        // class-typed roots for the type check.
+        let injections: Vec<(String, (String, String))> = service
+            .dependencies
+            .iter()
+            .filter_map(|dependency| {
+                repository_scopes
+                    .iter()
+                    .find(|scope| scope.name == dependency.text)
+                    .map(|scope| (dependency.text.clone(), scope.class.clone()))
+            })
+            .collect();
+        let dependency_names: Vec<String> = service
+            .dependencies
+            .iter()
+            .map(|dependency| dependency.text.clone())
+            .collect();
         for op in &service.operations {
             // Rule 2 — operation names are unique within one service.
             if ops.contains(&op.name.text) {
@@ -284,6 +492,51 @@ pub(crate) fn lower_module_services<'a>(
                 // Delegated operations copy the target's signature
                 // conceptually; consumers resolve it through
                 // `delegation`, so no return type or parameters lower.
+                // Issue rexlang#176 — the explicit transition binding,
+                // checked against the target repository's designed machine;
+                // a resolved binding pins the machine's class as the op's
+                // own-record condition scope (the multi-machine relaxation's
+                // joint shape with issue rexlang#180).
+                let (transition, pin) = match &op.transition {
+                    Some(binding) => lower_transition(
+                        binding,
+                        op,
+                        service,
+                        module,
+                        delegation,
+                        machines,
+                        repository_scopes,
+                        &mut local,
+                    ),
+                    None => (None, None),
+                };
+                let self_class = pin.or(service_self.as_ref());
+                let condition_text_out = op
+                    .condition
+                    .map(|span| condition_text(design_source, span).to_string());
+                let condition_paths = op
+                    .condition
+                    .map(|condition| {
+                        check_condition(
+                            design_source,
+                            condition,
+                            ConditionCheck {
+                                label: format!(
+                                    "operation '{}' of service '{}'",
+                                    op.name.text, service.name.text
+                                ),
+                                module: &module.name.text,
+                                self_class,
+                                scopes: machines,
+                                injections: &injections,
+                                dependencies: &dependency_names,
+                                union,
+                                context: expr_context,
+                            },
+                            &mut local,
+                        )
+                    })
+                    .unwrap_or_default();
                 operations.push(ServiceOperation {
                     name: op.name.text.clone(),
                     return_type: None,
@@ -297,24 +550,10 @@ pub(crate) fn lower_module_services<'a>(
                     capabilities,
                     emits,
                     invokes,
-                    condition: op
-                        .condition
-                        .map(|span| condition_text(design_source, span).to_string()),
+                    condition: condition_text_out,
+                    condition_paths,
+                    transition,
                 });
-                if let Some(condition) = op.condition {
-                    check_condition(
-                        design_source,
-                        condition,
-                        &format!(
-                            "operation '{}' of service '{}'",
-                            op.name.text, service.name.text
-                        ),
-                        service_self.as_ref(),
-                        machines,
-                        expr_context,
-                        &mut local,
-                    );
-                }
                 registries.delegation_checks.push(DelegationCheck {
                     module: module.name.text.clone(),
                     delegation,
@@ -353,6 +592,52 @@ pub(crate) fn lower_module_services<'a>(
                         }
                     })
                     .collect();
+                let condition_text_out = op
+                    .condition
+                    .map(|span| condition_text(design_source, span).to_string());
+                let condition_paths = op
+                    .condition
+                    .map(|condition| {
+                        check_condition(
+                            design_source,
+                            condition,
+                            ConditionCheck {
+                                label: format!(
+                                    "operation '{}' of service '{}'",
+                                    op.name.text, service.name.text
+                                ),
+                                module: &module.name.text,
+                                self_class: service_self.as_ref(),
+                                scopes: machines,
+                                injections: &injections,
+                                dependencies: &dependency_names,
+                                union,
+                                context: expr_context,
+                            },
+                            &mut local,
+                        )
+                    })
+                    .unwrap_or_default();
+                // Issue rexlang#176 — a transition binding is legal only on
+                // a delegation to a repository `save`; a declared operation
+                // carries none.
+                if let Some(binding) = &op.transition {
+                    local.push(
+                        Diagnostic::error(
+                            format!(
+                                "{E_TRANSITION_NOT_SAVE} transition on operation '{}' of \
+                                 service '{}', which declares its own signature; a \
+                                 transition binds a delegation to a repository `save`",
+                                op.name.text, service.name.text
+                            ),
+                            Some(binding.span),
+                        )
+                        .with_help(
+                            "delegate with `name => <Repository>.save` and bind the \
+                             transition there",
+                        ),
+                    );
+                }
                 operations.push(ServiceOperation {
                     name: op.name.text.clone(),
                     return_type,
@@ -363,24 +648,10 @@ pub(crate) fn lower_module_services<'a>(
                     capabilities,
                     emits,
                     invokes,
-                    condition: op
-                        .condition
-                        .map(|span| condition_text(design_source, span).to_string()),
+                    condition: condition_text_out,
+                    condition_paths,
+                    transition: None,
                 });
-                if let Some(condition) = op.condition {
-                    check_condition(
-                        design_source,
-                        condition,
-                        &format!(
-                            "operation '{}' of service '{}'",
-                            op.name.text, service.name.text
-                        ),
-                        service_self.as_ref(),
-                        machines,
-                        expr_context,
-                        &mut local,
-                    );
-                }
             }
         }
 

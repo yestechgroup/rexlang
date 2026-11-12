@@ -10,7 +10,7 @@ use rex_syntax::ast as dsl;
 use crate::diagnostic::Diagnostic;
 use crate::lower::{self, DomainPackage};
 
-use super::machines::class_operations;
+use super::machines::{class_operations, MachineScopes};
 use super::*;
 
 /// Stage 5 — one module's designs: rule 3 (the target resolves), rule 2
@@ -26,7 +26,7 @@ pub(crate) fn lower_module_designs(
     packages: &[DomainPackage],
     base: Option<&str>,
     union: Option<&rex_ir::Model>,
-    machines: &[ResolvedMachine],
+    machines: &MachineScopes,
     expr_context: Option<&rex_expr::TypeContext>,
     registries: &mut Registries<'_>,
 ) -> (Vec<Design>, Vec<Diagnostic>) {
@@ -110,7 +110,7 @@ pub(crate) fn lower_module_designs(
                 union,
                 packages,
                 base,
-                machines,
+                &machines.machines,
                 expr_context,
                 design_source,
                 &mut local,
@@ -306,7 +306,7 @@ fn lower_design_repository(
     resolved: Option<&(String, String)>,
     packages: &[DomainPackage],
     base: Option<&str>,
-    machines: &[ResolvedMachine],
+    machines: &MachineScopes,
     expr_context: Option<&rex_expr::TypeContext>,
     design_source: &str,
     registries: &mut Registries<'_>,
@@ -346,6 +346,7 @@ fn lower_design_repository(
 
     let operations = lower_repository_ops(
         repository,
+        module,
         packages,
         base,
         &mut local,
@@ -478,12 +479,13 @@ fn check_flags(design: &dsl::DddDesign, local: &mut Vec<Diagnostic>) {
 #[allow(clippy::too_many_arguments)]
 fn lower_repository_ops(
     repository: &dsl::DddRepository,
+    module: &dsl::DddModule,
     packages: &[DomainPackage],
     base: Option<&str>,
     local: &mut Vec<Diagnostic>,
     source: &str,
     self_class: Option<&(String, String)>,
-    machines: &[ResolvedMachine],
+    machines: &MachineScopes,
     context: Option<&rex_expr::TypeContext>,
 ) -> Vec<RepositoryOperation> {
     let mut ops: Vec<String> = Vec::new();
@@ -560,13 +562,19 @@ fn lower_repository_ops(
                 check_condition(
                     source,
                     condition,
-                    &format!(
-                        "operation '{}' of repository '{}'",
-                        op.name.text, repository.name.text
-                    ),
-                    self_class,
-                    machines,
-                    context,
+                    ConditionCheck {
+                        label: format!(
+                            "operation '{}' of repository '{}'",
+                            op.name.text, repository.name.text
+                        ),
+                        module: &module.name.text,
+                        self_class,
+                        scopes: machines,
+                        injections: &[],
+                        dependencies: &[],
+                        union: None,
+                        context,
+                    },
                     local,
                 );
             }

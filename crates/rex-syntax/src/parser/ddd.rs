@@ -193,28 +193,83 @@ pub(crate) fn ddd_delegation<'src>(
     )
 }
 
+/// The `transition <Trigger>` (or `transition <EnumType>.<Trigger>`)
+/// clause of a delegated service operation (issue rexlang#176): the
+/// explicit transition binding. The `transition` keyword is contextual
+/// (the [`ddd::TRANSITION`] identifier, not a lexer token), so an operation
+/// may be named `transition` — the keyword position is unambiguous. The
+/// clause is committed once the keyword matched: a missing trigger is a
+/// syntax error (with recovery), not a failed alternative. The spelling is
+/// one name or two dotted names — `PayRunStatus.Reverse` splits at the dot
+/// into the machine qualifier (the enum type name) and the trigger; a
+/// third segment is a syntax error.
+pub(crate) fn ddd_transition_clause<'src>(
+) -> impl Parser<'src, Tokens<'src>, DddTransitionRef, MoxExtra<'src>> + Clone {
+    ddd_keyword(ddd::TRANSITION)
+        .ignore_then(name().or_not())
+        .then(kw(Token::Dot).ignore_then(name()).or_not())
+        .map_with(|(first, second), e| (first, second, e.span()))
+        .validate(|(first, second, span), _e, emitter| {
+            // `transition Submit`: the trigger only. `transition
+            // PayRunStatus.Reverse`: the qualifier (the machine's enum type
+            // name) precedes the dot, the trigger follows it.
+            match (first, second) {
+                (Some(qualifier), Some(trigger)) => DddTransitionRef {
+                    trigger,
+                    machine: Some(qualifier),
+                    span,
+                },
+                (Some(trigger), None) => DddTransitionRef {
+                    trigger,
+                    machine: None,
+                    span,
+                },
+                (None, _) => {
+                    emitter.emit(Rich::custom(span, "`transition` requires a trigger name"));
+                    DddTransitionRef {
+                        trigger: Name {
+                            text: String::new(),
+                            span,
+                            escaped: false,
+                        },
+                        machine: None,
+                        span,
+                    }
+                }
+            }
+        })
+}
+
 /// One operation of a `service` body: an optional `protected` modifier, then
 /// a declared signature
-/// (`type_ref multiplicity? name "(" params? ")" capability*? invokes? emits? ";"`)
-/// or a delegation (`name "=>" target.operation capability*? invokes? emits? ";"`).
+/// (`type_ref multiplicity? name "(" params? ")" capability*? invokes? emits?
+/// transition? ";"`)
+/// or a delegation (`name "=>" target.operation capability*? invokes? emits?
+/// transition? ";"`).
 /// The two alternatives are distinguished by the `=>` after the leading name;
 /// chumsky backtracks, so a delegated op may be named `save` and a declared
 /// op's type may be any contextual keyword. Both forms carry the clause
-/// sequence `capability? invokes? emits? when?` (the canonical clause order
-/// the formatter emits); repository operations take none of the
-/// `capability`/`invokes`/`emits` clauses — the wire artifact's repository
-/// operations carry neither, so accepting one would silently drop data.
+/// sequence `capability? invokes? emits? transition? when?` (the canonical
+/// clause order the formatter emits; the `transition` binding is issue
+/// rexlang#176's); repository operations take none of the
+/// `capability`/`invokes`/`emits`/`transition` clauses — the wire artifact's
+/// repository operations carry neither, so accepting one would silently drop
+/// data.
 pub(crate) fn ddd_service_op<'src>(
 ) -> impl Parser<'src, Tokens<'src>, DddServiceOp, MoxExtra<'src>> + Clone {
     let declared = ddd_signature()
         .then(ddd_capabilities().or_not())
         .then(ddd_invokes().or_not())
         .then(ddd_emits().or_not())
+        .then(ddd_transition_clause().or_not())
         .then(ddd_guard_clause().or_not())
         .then_ignore(kw(Token::Other(';')))
         .map_with(
             |(
-                ((((type_ref, multiplicity, name, params), capabilities), invokes), emits),
+                (
+                    ((((type_ref, multiplicity, name, params), capabilities), invokes), emits),
+                    transition,
+                ),
                 condition,
             ),
              e| {
@@ -228,6 +283,7 @@ pub(crate) fn ddd_service_op<'src>(
                     capabilities: capabilities.unwrap_or_default(),
                     invokes: invokes.unwrap_or_default(),
                     emits: emits.unwrap_or_default(),
+                    transition,
                     condition,
                     span: e.span(),
                 }
@@ -239,21 +295,26 @@ pub(crate) fn ddd_service_op<'src>(
         .then(ddd_capabilities().or_not())
         .then(ddd_invokes().or_not())
         .then(ddd_emits().or_not())
+        .then(ddd_transition_clause().or_not())
         .then(ddd_guard_clause().or_not())
         .then_ignore(kw(Token::Other(';')))
         .map_with(
-            |(((((name, delegation), capabilities), invokes), emits), condition), e| DddServiceOp {
-                name,
-                return_type: None,
-                multiplicity: None,
-                params: Vec::new(),
-                delegation: Some(delegation),
-                is_protected: false,
-                capabilities: capabilities.unwrap_or_default(),
-                invokes: invokes.unwrap_or_default(),
-                emits: emits.unwrap_or_default(),
-                condition,
-                span: e.span(),
+            |((((((name, delegation), capabilities), invokes), emits), transition), condition),
+             e| {
+                DddServiceOp {
+                    name,
+                    return_type: None,
+                    multiplicity: None,
+                    params: Vec::new(),
+                    delegation: Some(delegation),
+                    is_protected: false,
+                    capabilities: capabilities.unwrap_or_default(),
+                    invokes: invokes.unwrap_or_default(),
+                    emits: emits.unwrap_or_default(),
+                    transition,
+                    condition,
+                    span: e.span(),
+                }
             },
         );
     ddd_keyword(ddd::PROTECTED)

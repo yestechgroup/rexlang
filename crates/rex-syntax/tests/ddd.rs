@@ -1432,6 +1432,204 @@ fn emits_formats_in_canonical_clause_order() {
     );
 }
 
+/// A delegated service operation carrying the `transition` clause (issue
+/// rexlang#176): the explicit transition binding, unqualified or qualified
+/// by the machine's enum type name.
+const TRANSITION: &str = r#"
+import "payrun.mox"
+
+application Payroll {
+    base nz.example.payroll
+    module payroll {
+        service PayRunService {
+            inject PayRunRepository;
+            submit => PayRunRepository.save transition Submit when (status == Draft);
+            reverse => PayRunRepository.save transition PayRunStatus.Reverse;
+            protected post => PayRunRepository.save capability PostPayRun emits PayRunPosted transition Post;
+        }
+    }
+}
+"#;
+
+#[test]
+fn transition_clause_parses() {
+    let result = parse_ddd(TRANSITION);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let service = &expect_module(&file, "payroll").services[0];
+    assert_eq!(service.operations.len(), 3);
+
+    // Unqualified: the trigger only, `machine` none; the guard rides after
+    // the binding in the canonical clause order.
+    let submit = &service.operations[0];
+    let transition = submit.transition.as_ref().expect("the transition binding");
+    assert_eq!(transition.trigger.text, "Submit");
+    assert!(transition.machine.is_none());
+    assert_eq!(span_text(TRANSITION, transition.span), "transition Submit");
+    assert_eq!(
+        span_text(TRANSITION, submit.condition.expect("condition")),
+        "(status == Draft)"
+    );
+
+    // Qualified: the machine qualifier is the enum type name, split at the
+    // dot.
+    let reverse = &service.operations[1];
+    let qualified = reverse.transition.as_ref().expect("the transition binding");
+    assert_eq!(qualified.trigger.text, "Reverse");
+    assert_eq!(
+        qualified.machine.as_ref().expect("the qualifier").text,
+        "PayRunStatus"
+    );
+    assert_eq!(
+        span_text(TRANSITION, qualified.span),
+        "transition PayRunStatus.Reverse"
+    );
+
+    // The binding composes with the other clauses, in the canonical order:
+    // capability, emits, transition.
+    let post = &service.operations[2];
+    assert!(post.is_protected);
+    assert_eq!(post.capabilities[0].text, "PostPayRun");
+    assert_eq!(post.emits[0].text, "PayRunPosted");
+    let bound = post.transition.as_ref().expect("the transition binding");
+    assert_eq!(bound.trigger.text, "Post");
+    assert!(bound.machine.is_none());
+    assert!(post.condition.is_none());
+
+    // An op without the binding carries none (the AST default).
+    let plain = r#"
+application A { module m { service S {
+    void go();
+    finish => T.save;
+} } }
+"#;
+    let result = parse_ddd(plain);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let ops = &expect_module(&file, "m").services[0].operations;
+    assert!(ops[0].transition.is_none());
+    assert!(ops[1].transition.is_none());
+}
+
+#[test]
+fn transition_clause_requires_a_trigger_name() {
+    let result =
+        parse_ddd("application A { module m { service S { finish => T.save transition; } } }");
+    assert!(
+        result.errors.iter().any(|error| error
+            .message
+            .contains("`transition` requires a trigger name")),
+        "expected the transition error, got {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn transition_clause_order_is_pinned() {
+    // The clause order is fixed: `capability? invokes? emits? transition?
+    // when?`. A violation is a syntax error, not a formatting opportunity.
+    for source in [
+        // `transition` before `emits`.
+        "application A { module m { service S { finish => T.save transition Submit emits PayRunPosted; } } }",
+        // `transition` after the guard.
+        "application A { module m { service S { finish => T.save when (total > 0) transition Submit; } } }",
+        // A third dotted segment is not part of the spelling.
+        "application A { module m { service S { finish => T.save transition pkg.PayRunStatus.Reverse; } } }",
+    ] {
+        let result = parse_ddd(source);
+        assert!(
+            !result.errors.is_empty(),
+            "expected a syntax error for {source}"
+        );
+    }
+}
+
+#[test]
+fn transition_formats_in_canonical_clause_order() {
+    // The source is already canonical (emits → transition → when); the
+    // formatter re-emits it byte-identically and is idempotent.
+    let formatted = fmt_ddd(TRANSITION);
+    assert_eq!(
+        formatted,
+        concat!(
+            "import \"payrun.mox\";\n",
+            "\n",
+            "application Payroll {\n",
+            "    base nz.example.payroll\n",
+            "    module payroll {\n",
+            "        service PayRunService {\n",
+            "            inject PayRunRepository;\n",
+            "            submit => PayRunRepository.save transition Submit when (status == Draft);\n",
+            "            reverse => PayRunRepository.save transition PayRunStatus.Reverse;\n",
+            "            protected post => PayRunRepository.save capability PostPayRun emits PayRunPosted transition Post;\n",
+            "        }\n",
+            "    }\n",
+            "}\n",
+        ),
+        "canonical clause order emits → transition → when, got:\n{formatted}"
+    );
+    assert_eq!(
+        fmt_ddd(&formatted),
+        formatted,
+        "formatting must be idempotent"
+    );
+
+    // The formatted output parses cleanly.
+    let once = parse_ddd(&formatted);
+    assert!(
+        once.errors.is_empty(),
+        "formatted output must parse cleanly, got {:?}",
+        once.errors
+    );
+}
+
+#[test]
+fn transition_word_stays_contextual() {
+    // `transition` is special only in the clause position between a service
+    // operation's `emits` clause and its `when` guard; everywhere else it
+    // is an ordinary identifier: service name, op name, class name — and
+    // `^transition` escapes as any contextual word. A machine transition
+    // line may also be named `transition` (the from-state position).
+    let source = concat!(
+        "application transition { module m {\n",
+        "    service transition {\n",
+        "        void transition();\n",
+        "    }\n",
+        "    entity transition\n",
+        "    entity ^transition\n",
+        "    machine transition: Status {\n",
+        "        initial Draft;\n",
+        "        transition -> Posted;\n",
+        "        terminal Posted;\n",
+        "    }\n",
+        "} }\n",
+    );
+    let result = parse_ddd(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let module = expect_module(&file, "m");
+    assert_eq!(module.designs[0].class.text, "transition");
+    assert_eq!(module.designs[1].class.text, "transition");
+    assert_eq!(module.services[0].name.text, "transition");
+    // The machine block attaches to the preceding design (the `^transition`
+    // one), and its transition line may itself be named `transition`.
+    let machine = module.designs[1].machine.as_ref().expect("the machine");
+    assert_eq!(machine.field.text, "transition");
+    assert_eq!(machine.transitions[0].from.text, "transition");
+}
+
 #[test]
 fn emits_word_stays_contextual() {
     // `emits` is special only between a service operation's capability and
