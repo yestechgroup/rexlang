@@ -15,13 +15,20 @@ use super::*;
 /// stage validates the machines themselves). Every machine-bearing design
 /// resolves its class and enum here; ambiguous bindings (two machines
 /// declaring the same state in one module) drop the name and say so once.
+/// Alongside the machines, the scope carries the module-level tables the
+/// condition scoping reads (issue rexlang#180): the ambiguous state names
+/// and one row per machine field (the bound feature with its enum, the
+/// designed class, and whether the field name is unique across the
+/// module's machines).
 pub(crate) fn collect_machine_scopes(
     module: &dsl::DddModule,
     packages: &[DomainPackage],
     base: Option<&str>,
     local: &mut Vec<Diagnostic>,
-) -> Vec<ResolvedMachine> {
+) -> MachineScopes {
     let mut machines: Vec<ResolvedMachine> = Vec::new();
+    let mut fields: Vec<MachineField> = Vec::new();
+    let mut ambiguous_states: Vec<String> = Vec::new();
     for design in &module.designs {
         let Some(machine) = &design.machine else {
             continue;
@@ -48,8 +55,16 @@ pub(crate) fn collect_machine_scopes(
             // binding here stays nameless.
             continue;
         };
+        fields.push(MachineField {
+            field: machine.field.text.clone(),
+            alias: lower_camel(enum_name),
+            enum_type: (enum_package.clone(), enum_name.clone()),
+            // Filled once every machine is collected.
+            unique: true,
+        });
         let resolved = ResolvedMachine {
             class: class.clone(),
+            field: machine.field.text.clone(),
             enum_type: (enum_package.clone(), enum_name.clone()),
             states: machine
                 .initial
@@ -64,6 +79,17 @@ pub(crate) fn collect_machine_scopes(
                         .cloned(),
                 )
                 .collect::<Vec<_>>(),
+            explicit_triggers: machine
+                .transitions
+                .iter()
+                .filter_map(|transition| transition.trigger.as_ref().map(|name| name.text.clone()))
+                .collect(),
+            derived_triggers: machine
+                .transitions
+                .iter()
+                .filter(|transition| transition.trigger.is_none())
+                .map(|transition| lower_camel(&transition.to.text))
+                .collect(),
         };
         let mut seen: Vec<String> = Vec::new();
         let mut ambiguous: Vec<String> = Vec::new();
@@ -81,6 +107,9 @@ pub(crate) fn collect_machine_scopes(
         }
         let ambiguous_refs: Vec<&str> = ambiguous.iter().map(String::as_str).collect();
         for state in &ambiguous {
+            if !ambiguous_states.contains(state) {
+                ambiguous_states.push(state.clone());
+            }
             local.push(Diagnostic::error(
                 format!(
                     "ambiguous state name '{state}' in module '{}': it is declared \
@@ -96,7 +125,41 @@ pub(crate) fn collect_machine_scopes(
             .retain(|state| !ambiguous_refs.contains(&state.as_str()));
         machines.push(filtered);
     }
-    machines
+    // A field name two machines bind never binds bare (issue rexlang#180):
+    // the enum-derived spelling is its qualified form.
+    let mut field_counts: Vec<(String, usize)> = Vec::new();
+    for field in &fields {
+        match field_counts
+            .iter_mut()
+            .find(|(name, _)| *name == field.field)
+        {
+            Some((_, count)) => *count += 1,
+            None => field_counts.push((field.field.clone(), 1)),
+        }
+    }
+    for field in &mut fields {
+        field.unique = field_counts
+            .iter()
+            .find(|(name, _)| *name == field.field)
+            .is_some_and(|(_, count)| *count == 1);
+    }
+    MachineScopes {
+        machines,
+        fields,
+        ambiguous_states,
+    }
+}
+
+/// The lowerCamel of a name (`PayRunStatus` → `payRunStatus`) — the
+/// enum-derived spelling that qualifies a machine field in a multi-machine
+/// module (issue rexlang#180), the same derivation a bare machine arrow's
+/// trigger uses.
+pub(crate) fn lower_camel(name: &str) -> String {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) => first.to_lowercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }
 /// Validates and lowers one `machine` block against the designed class:
 /// the design must be an entity bound to an enum-typed feature, the states
@@ -393,23 +456,38 @@ pub(crate) fn lower_design_machine(
 
     // Edge guards: the designed class scopes them; the machine's own states
     // bind (a foreign machine's states are unbound here — cross-entity state
-    // references are a type error).
+    // references are a type error). The scope table carries only the own
+    // machine, so the shared check binds no foreign state and no machine
+    // fields (the own-record names bind through `self`).
     let own_machine = machines
         .iter()
         .find(|candidate| candidate.class == resolved.cloned().unwrap_or_default());
     let edge_machines: Vec<ResolvedMachine> = own_machine.cloned().into_iter().collect();
+    let edge_scopes = MachineScopes {
+        machines: edge_machines,
+        fields: Vec::new(),
+        ambiguous_states: Vec::new(),
+    };
     for transition in &machine.transitions {
         if let Some(guard) = transition.guard {
             check_condition(
                 source,
                 guard,
-                &format!(
-                    "transition '{} -> {}' of machine '{}'",
-                    transition.from.text, transition.to.text, machine.field.text
-                ),
-                resolved,
-                &edge_machines,
-                context,
+                ConditionCheck {
+                    label: format!(
+                        "transition '{} -> {}' of machine '{}'",
+                        transition.from.text, transition.to.text, machine.field.text
+                    ),
+                    // The module name feeds the path walker's E0354 only;
+                    // edge guards run no walker.
+                    module: "",
+                    self_class: resolved,
+                    scopes: &edge_scopes,
+                    injections: &[],
+                    dependencies: &[],
+                    union: None,
+                    context,
+                },
                 local,
             );
         }
@@ -445,10 +523,88 @@ pub(crate) struct ResolvedMachine {
     /// The designed class, package-qualified (the condition scope of the
     /// module's service operations).
     pub(crate) class: (String, String),
+    /// The machine's bound field name as authored (`status`).
+    pub(crate) field: String,
     /// The enum the states are drawn from.
     pub(crate) enum_type: (String, String),
-    /// Every state the machine declares (initial, terminals, endpoints).
+    /// Every state the machine declares (initial, terminals, endpoints),
+    /// minus the module's ambiguous names (those never bind).
     pub(crate) states: Vec<String>,
+    /// The explicit `via` trigger names (issue rexlang#176: legal binding
+    /// targets of a service operation's `transition` clause).
+    pub(crate) explicit_triggers: Vec<String>,
+    /// The derived trigger names — the lowerCamel of the target state for
+    /// every bare arrow (`Posted` → `posted`). Derived names are legal
+    /// binding targets too; a name that is both explicit and derived is
+    /// ambiguous and binds nothing (the E0350 error at the binding site).
+    pub(crate) derived_triggers: Vec<String>,
+}
+
+impl ResolvedMachine {
+    /// Every trigger the machine declares, explicit and derived, in
+    /// declaration order (duplicates removed) — the vocabulary a
+    /// transition binding resolves against and the did-you-mean pool.
+    pub(crate) fn trigger_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        for name in self
+            .explicit_triggers
+            .iter()
+            .chain(self.derived_triggers.iter())
+        {
+            if !names.contains(name) {
+                names.push(name.clone());
+            }
+        }
+        names
+    }
+}
+
+/// One module's machine scopes: the per-machine resolutions plus the
+/// module-level tables the condition scoping reads (issue rexlang#180).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct MachineScopes {
+    /// The resolved machines, in design order, ambiguous state names
+    /// removed.
+    pub(crate) machines: Vec<ResolvedMachine>,
+    /// One row per machine-bearing design whose class and enum resolved.
+    pub(crate) fields: Vec<MachineField>,
+    /// State names declared by more than one machine of the module —
+    /// unbound everywhere; a condition referencing one is the `E0354`
+    /// error with the `<EnumType>.<State>` qualification as help.
+    pub(crate) ambiguous_states: Vec<String>,
+}
+
+impl MachineScopes {
+    /// `true` when the module carries more than one machine-bearing design —
+    /// the multi-machine scoping regime (no implicit self; machine fields
+    /// bind by uniqueness plus their enum-derived spellings).
+    pub(crate) fn is_multi_machine(&self) -> bool {
+        self.machines.len() > 1
+    }
+
+    /// The machine whose designed class is `class`, if any.
+    pub(crate) fn machine_of_class(&self, class: &(String, String)) -> Option<&ResolvedMachine> {
+        self.machines.iter().find(|machine| &machine.class == class)
+    }
+}
+
+/// One machine-bearing design's bound field, as the condition scoping
+/// addresses it (issue rexlang#180): by the authored field name when it is
+/// unique across the module's machines, and always by the enum-derived
+/// spelling ([`MachineField::alias`], the lowerCamel of the machine's enum
+/// type name).
+#[derive(Debug, Clone)]
+pub(crate) struct MachineField {
+    /// The authored machine field name (`status`).
+    pub(crate) field: String,
+    /// The enum-derived spelling (`PayRunStatus` → `payRunStatus`).
+    pub(crate) alias: String,
+    /// The machine's enum type, package-qualified.
+    pub(crate) enum_type: (String, String),
+    /// Whether [`MachineField::field`] is unique across the module's
+    /// machines; an ambiguous field name never binds bare (the `E0354`
+    /// error at reference sites).
+    pub(crate) unique: bool,
 }
 /// The literal names of the referenced enum, in declaration order, when the
 /// type resolves to an enum of the domain union.

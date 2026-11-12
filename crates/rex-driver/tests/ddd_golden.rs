@@ -29,14 +29,23 @@ const DESIGN_PATH: &str = "tests/conformance/ddd/library.ddd";
 const DOMAIN_PATH: &str = "tests/conformance/ddd/library.mox";
 const ARTIFACT_PATH: &str = "tests/conformance/ddd/library.ddd.json";
 
-#[test]
-fn conformance_design_matches_golden_artifact() {
-    let design_absolute = fixture_path(DESIGN_PATH);
+/// The rexlang#176/#180 fixture: a multi-machine module exercising the
+/// transition bindings and the scoped guards; its golden carries the
+/// `transition` and `conditionPaths` wire fields.
+const TIMESHEET_DESIGN_PATH: &str = "tests/conformance/ddd/timesheet.ddd";
+const TIMESHEET_DOMAIN_PATH: &str = "tests/conformance/ddd/timesheet.mox";
+const TIMESHEET_ARTIFACT_PATH: &str = "tests/conformance/ddd/timesheet.ddd.json";
+
+/// Compiles one `(design, domain)` fixture pair the way the CLI resolves
+/// the import (paths relative to the design file) and returns the lowered
+/// artifact, failing on any diagnostic.
+fn compile_fixture(design_path: &str, domain_path: &str) -> rex_ir::ddd::DddModel {
+    let design_absolute = fixture_path(design_path);
     let source = std::fs::read_to_string(&design_absolute)
-        .unwrap_or_else(|error| panic!("read conformance design {DESIGN_PATH}: {error}"));
-    let domain_absolute = fixture_path(DOMAIN_PATH);
+        .unwrap_or_else(|error| panic!("read conformance design {design_path}: {error}"));
+    let domain_absolute = fixture_path(domain_path);
     let domain = std::fs::read_to_string(&domain_absolute)
-        .unwrap_or_else(|error| panic!("read conformance domain {DOMAIN_PATH}: {error}"));
+        .unwrap_or_else(|error| panic!("read conformance domain {domain_path}: {error}"));
 
     // The driver is filesystem-free: the harness resolves the import the
     // way the CLI does (relative to the design file) and provides the
@@ -57,6 +66,36 @@ fn conformance_design_matches_golden_artifact() {
     );
     let model = compilation.model.expect("design artifact lowered");
     assert_eq!(model.format_version, rex_ir::ddd::DDD_MODEL_FORMAT_VERSION);
+    model
+}
+
+/// Byte-compiles the lowered artifact against the committed golden (or
+/// rewrites it under `REX_UPDATE_FIXTURES=1`).
+fn assert_golden_artifact(model: rex_ir::ddd::DddModel, artifact_path: &str, design_path: &str) {
+    let json = model.to_json_pretty().expect("serialize IR");
+
+    let artifact = fixture_path(artifact_path);
+    if std::env::var("REX_UPDATE_FIXTURES").is_ok() {
+        std::fs::create_dir_all(artifact.parent().unwrap()).unwrap();
+        std::fs::write(&artifact, &json).unwrap();
+        eprintln!("updated {}", artifact.display());
+        return;
+    }
+    let expected = std::fs::read_to_string(&artifact).unwrap_or_else(|_| {
+        panic!(
+            "missing golden artifact {}; regenerate with REX_UPDATE_FIXTURES=1",
+            artifact.display()
+        )
+    });
+    assert_eq!(
+        json, expected,
+        "DDD artifact for {design_path} drifted from the golden file"
+    );
+}
+
+#[test]
+fn conformance_design_matches_golden_artifact() {
+    let model = compile_fixture(DESIGN_PATH, DOMAIN_PATH);
     assert_eq!(
         model
             .application
@@ -73,25 +112,19 @@ fn conformance_design_matches_golden_artifact() {
         ["media", "person"]
     );
 
-    let json = model.to_json_pretty().expect("serialize IR");
+    assert_golden_artifact(model, ARTIFACT_PATH, DESIGN_PATH);
+}
 
-    let artifact = fixture_path(ARTIFACT_PATH);
-    if std::env::var("REX_UPDATE_FIXTURES").is_ok() {
-        std::fs::create_dir_all(artifact.parent().unwrap()).unwrap();
-        std::fs::write(&artifact, &json).unwrap();
-        eprintln!("updated {}", artifact.display());
-        return;
-    }
-    let expected = std::fs::read_to_string(&artifact).unwrap_or_else(|_| {
-        panic!(
-            "missing golden artifact {}; regenerate with REX_UPDATE_FIXTURES=1",
-            artifact.display()
-        )
-    });
-    assert_eq!(
-        json, expected,
-        "DDD artifact for {DESIGN_PATH} drifted from the golden file"
-    );
+#[test]
+fn conformance_timesheet_matches_golden_artifact() {
+    let model = compile_fixture(TIMESHEET_DESIGN_PATH, TIMESHEET_DOMAIN_PATH);
+    // The rexlang#176/#180 wire fields carry the fixture's bindings.
+    let submit = &model.modules[0].services[0].operations[0];
+    let transition = submit.transition.as_ref().expect("the transition binding");
+    assert_eq!(transition.trigger, "Submit");
+    assert_eq!(transition.machine.as_deref(), Some("PayRunStatus"));
+    assert_eq!(submit.condition_paths.len(), 2);
+    assert_golden_artifact(model, TIMESHEET_ARTIFACT_PATH, TIMESHEET_DESIGN_PATH);
 }
 
 #[test]

@@ -25,15 +25,17 @@ use crate::diagnostic::{Diagnostic, DiagnosticCode};
 use crate::lower::{self, DomainPackage, DomainUnit};
 use crate::pipeline;
 
+mod conditions;
 mod designs;
 mod graph;
 mod machines;
 mod searches;
 mod services;
 
+use conditions::{resolve_condition_paths, PathScan};
 use designs::lower_module_designs;
 use graph::{rule_13_aggregate_references, rule_6_aggregate_boundary};
-use machines::{collect_machine_scopes, lower_design_machine, ResolvedMachine};
+use machines::{collect_machine_scopes, lower_design_machine, MachineScopes};
 use searches::{lower_module_searches, rule_11_bind_searches};
 use services::{
     lower_module_services, rule_17_validate_decision_links, rule_8_resolve_delegations,
@@ -228,17 +230,28 @@ pub(crate) fn compile_ddd_file(
         // (the design stage below validates the machines themselves).
         let machines = collect_machine_scopes(module, &packages, base.as_deref(), &mut local);
 
+        // Stage 2.5 — the module's repository scopes (issue rexlang#180):
+        // each repository design's name paired with its designed class, so
+        // the services' qualified condition paths resolve before the designs
+        // lower. Resolution is silent — a design whose class does not
+        // resolve contributes no scope, and the design stage's own rule-3
+        // error is the one diagnostic.
+        let repository_scopes = collect_repository_scopes(module, &packages, base.as_deref());
+
         // Rule 2 — module names are unique application-wide.
         rule_2_module_name_unique(module, &mut registries.module_names, &mut local);
 
         let mut module_out = Module::new(module.name.text.clone());
 
         // Stage 3 — the condition scope of the module's service operations:
-        // a service operation is not aggregate-scoped, so its `when`
-        // condition types against the module's unique machine-bearing
-        // design.
-        check_service_condition_scope(module, &mut local);
-        let service_self = machines.first().map(|machine| machine.class.clone());
+        // a module with no machine-bearing design has no own-record scope
+        // at all, so an op-level `when` is undecidable there. A multi
+        // -machine module admits guards whose every referenced name
+        // resolves — the scoped binding lives in the condition check
+        // (issue rexlang#180).
+        check_service_condition_scope(module, &machines, &mut local);
+        let service_self =
+            (machines.machines.len() == 1).then(|| machines.machines[0].class.clone());
 
         // Stage 4 — the module's services.
         let (services, stage_diags) = lower_module_services(
@@ -248,6 +261,8 @@ pub(crate) fn compile_ddd_file(
             base.as_deref(),
             &machines,
             service_self,
+            &repository_scopes,
+            union.as_ref(),
             expr_context.as_ref(),
             &mut registries,
         );
@@ -499,40 +514,97 @@ fn rule_2_module_name_unique(
     }
 }
 /// Stage 3 — the condition scope of a module's service operations: a
-/// service operation is not aggregate-scoped, so its `when` condition
-/// types against the module's unique machine-bearing design (states bind
-/// from the machine registry; with zero or several machine-bearing designs
-/// the scope is undecidable and reported).
-fn check_service_condition_scope(module: &dsl::DddModule, local: &mut Vec<Diagnostic>) {
-    let machine_designs = module
-        .designs
-        .iter()
-        .filter(|design| design.machine.is_some())
-        .count();
-    if machine_designs != 1 {
-        for service in &module.services {
-            for op in &service.operations {
-                if let Some(condition) = op.condition {
-                    local.push(
-                        Diagnostic::error(
-                            format!(
-                                "operation '{}' of service '{}' carries a `when` condition, \
-                             but module '{}' does not have exactly one machine-bearing \
-                             design to scope it",
-                                op.name.text, service.name.text, module.name.text
-                            ),
-                            Some(condition),
-                        )
-                        .with_help(
-                            "a condition binds the states of the module's machine; give the \
-                         module one `machine` block, or guard the repository operation \
-                         of the machine-bearing design",
+/// module with **no** machine-bearing design has no own-record scope at
+/// all, so an op-level `when` is undecidable there (the message the
+/// machine-bound rule has always reported). A module with one machine
+/// scopes its guards on that design; a multi-machine module admits guards
+/// whose every referenced name resolves — the scoped binding (injected
+/// repositories, unique machine fields, enum-derived spellings) lives in
+/// the condition check, and the unresolved references are the E0353/E0354
+/// errors (issue rexlang#180).
+fn check_service_condition_scope(
+    module: &dsl::DddModule,
+    machines: &MachineScopes,
+    local: &mut Vec<Diagnostic>,
+) {
+    if !machines.machines.is_empty() {
+        return;
+    }
+    for service in &module.services {
+        for op in &service.operations {
+            if let Some(condition) = op.condition {
+                local.push(
+                    Diagnostic::error(
+                        format!(
+                            "operation '{}' of service '{}' carries a `when` condition, \
+                         but module '{}' does not have exactly one machine-bearing \
+                         design to scope it",
+                            op.name.text, service.name.text, module.name.text
                         ),
-                    );
-                }
+                        Some(condition),
+                    )
+                    .with_help(
+                        "a condition binds the states of the module's machine; give the \
+                      module one `machine` block, or guard the repository operation \
+                      of the machine-bearing design",
+                    ),
+                );
             }
         }
     }
+}
+/// Stage 2.5 — the module's repository scopes (issue rexlang#180): every
+/// repository design's name paired with its designed class, collected
+/// before the services lower so their qualified condition paths resolve
+/// against it. Resolution is silent: a design whose class does not resolve
+/// contributes no scope (the design stage's rule-3 error is the one
+/// diagnostic), and duplicate repository names resolve to the first
+/// declaration (the design stage's rule-2 error is the one diagnostic).
+fn collect_repository_scopes(
+    module: &dsl::DddModule,
+    packages: &[DomainPackage],
+    base: Option<&str>,
+) -> Vec<RepositoryScope> {
+    let mut scopes: Vec<RepositoryScope> = Vec::new();
+    for design in &module.designs {
+        let Some(repository) = &design.repository else {
+            continue;
+        };
+        if scopes
+            .iter()
+            .any(|scope| scope.name == repository.name.text)
+        {
+            continue;
+        }
+        // The resolution diagnostics are dropped — the design stage owns
+        // the rule-3 error for an unresolvable class.
+        let mut resolution_diags = Vec::new();
+        let help = format!(
+            "the design of '{}' in module '{}' must target a class \
+             declared in the imported domains",
+            design.class.text, module.name.text
+        );
+        let Some(class) = lower::resolve_ddd_class(
+            &class_type_ref(&design.class),
+            packages,
+            base,
+            &help,
+            &mut resolution_diags,
+        ) else {
+            continue;
+        };
+        scopes.push(RepositoryScope {
+            name: repository.name.text.clone(),
+            class,
+        });
+    }
+    scopes
+}
+/// One repository design's scope (issue rexlang#180): the repository name
+/// as declared → the class the design binds, package-qualified.
+pub(crate) struct RepositoryScope {
+    pub(crate) name: String,
+    pub(crate) class: (String, String),
 }
 /// `true` when every imported domain lowered successfully (vacuously true
 /// for an empty import set).
@@ -618,19 +690,52 @@ fn condition_text(source: &str, span: rex_syntax::Span) -> &str {
         .unwrap_or("")
         .trim()
 }
-/// Type-checks one sliced condition with the machine states of `machines`
-/// bound as enum-typed names (acceptance: guards bind to declared states,
-/// never magic strings) and `self_class` as the implicit-`self` scope.
-/// Parse/type errors are re-based onto the file-absolute condition span.
+/// The scope a `when` condition checks against: the implicit-self class
+/// (the module's unique machine-bearing class, or the class a transition
+/// pin names — `None` in a multi-machine module, where own-record names
+/// must resolve through the machine-field spellings), the module's machine
+/// scopes, the service's injected repositories, and the union the
+/// feature-level checks read.
+pub(crate) struct ConditionCheck<'a> {
+    /// The human context the messages embed ("operation 'x' of service
+    /// 'Y'", "transition 'a -> b' of machine 'c'").
+    pub(crate) label: String,
+    /// The module name (the E0354 messages embed it).
+    pub(crate) module: &'a str,
+    /// The implicit-self class, when one exists.
+    pub(crate) self_class: Option<&'a (String, String)>,
+    /// The module's machine scopes.
+    pub(crate) scopes: &'a MachineScopes,
+    /// The service's injected repositories (dependency name as declared →
+    /// designed class); empty for machine-edge and repository-operation
+    /// conditions, which carry no injections.
+    pub(crate) injections: &'a [(String, (String, String))],
+    /// Every dependency the service declares; empty outside service
+    /// operations (the path walker runs for service operations only).
+    pub(crate) dependencies: &'a [String],
+    /// The fully lowered union; `None` unless every domain lowered (the
+    /// feature-level checks silently defer, and the path walker with them).
+    pub(crate) union: Option<&'a rex_ir::Model>,
+    /// The shared expression context; `None` under the same deferral.
+    pub(crate) context: Option<&'a rex_expr::TypeContext>,
+}
+/// Type-checks one sliced condition and resolves its field paths. The
+/// machine states of the module bind as enum-typed names (acceptance:
+/// guards bind to declared states, never magic strings); in a multi
+/// -machine module the machine fields bind too — uniquely-named fields
+/// bare, every field also under its enum-derived spelling (issue
+/// rexlang#180) — and the service's injected repositories bind as
+/// class-typed roots. Service-operation conditions additionally run the
+/// path walker (`conditionPaths` + the E0353/E0354 checks); the checker
+/// errors on walker-suppressed spans are dropped so one root cause yields
+/// one diagnostic. Returns the resolved paths (empty outside service
+/// operations).
 fn check_condition(
     source: &str,
     span: rex_syntax::Span,
-    context_label: &str,
-    self_class: Option<&(String, String)>,
-    machines: &[ResolvedMachine],
-    context: Option<&rex_expr::TypeContext>,
+    check: ConditionCheck<'_>,
     local: &mut Vec<Diagnostic>,
-) {
+) -> Vec<rex_ir::ddd::ConditionPath> {
     let text = condition_text(source, span);
     let inner_start = span.start + 1;
     let parsed = rex_expr::parse(text);
@@ -640,18 +745,62 @@ fn check_condition(
             .saturating_add(error.span.end)
             .clamp(start, span.end);
         local.push(Diagnostic::error(
-            format!("invalid condition in {context_label}: {}", error.message),
+            format!("invalid condition in {}: {}", check.label, error.message),
             Some((start..end).into()),
         ));
     }
-    let (Some(ast), Some(context), Some(union_self)) = (parsed.ast, context, self_class) else {
+    let Some(ast) = parsed.ast else {
         // A condition still parses when the domain failed to lower (its
-        // diagnostics already block the artifact) or the scope is unknown.
-        return;
+        // diagnostics already block the artifact).
+        return Vec::new();
     };
-    let mut checker =
-        rex_expr::TypeChecker::new(context.clone()).with_self(&union_self.0, &union_self.1);
-    for machine in machines {
+    let mut paths: Vec<rex_ir::ddd::ConditionPath> = Vec::new();
+    let mut suppressed: Vec<rex_expr::ast::Span> = Vec::new();
+    // Path resolution (issue rexlang#180) — service operations only, and
+    // only against a fully lowered union (the deferral contract).
+    if !check.dependencies.is_empty() {
+        if let Some(union) = check.union {
+            let scan = PathScan {
+                label: check.label.clone(),
+                module: check.module,
+                scopes: check.scopes,
+                self_class: check.self_class,
+                injections: check.injections,
+                dependencies: check.dependencies,
+                union,
+            };
+            let outcome = resolve_condition_paths(&ast, &scan);
+            suppressed = outcome.suppressed;
+            local.extend(outcome.diagnostics);
+            paths = outcome.paths;
+        }
+    }
+    let Some(context) = check.context else {
+        // The union failed to lower; its diagnostics already block the
+        // artifact and the typed checks defer.
+        return paths;
+    };
+    let mut checker = rex_expr::TypeChecker::new(context.clone());
+    if let Some(self_class) = check.self_class {
+        checker = checker.with_self(&self_class.0, &self_class.1);
+    }
+    let multi_machine = check.scopes.is_multi_machine();
+    if multi_machine {
+        // No implicit self: the module's machine fields carry the
+        // own-record scope, bare when the name is unique across the
+        // module's machines and always under the enum-derived spelling.
+        for field in &check.scopes.fields {
+            let binding = rex_expr::Ty::from_type_ref(&rex_ir::TypeRef::Enum {
+                package: field.enum_type.0.clone(),
+                name: field.enum_type.1.clone(),
+            });
+            if field.unique {
+                checker = checker.with_binding(field.field.clone(), binding.clone());
+            }
+            checker = checker.with_binding(field.alias.clone(), binding);
+        }
+    }
+    for machine in &check.scopes.machines {
         let binding = rex_expr::Ty::from_type_ref(&rex_ir::TypeRef::Enum {
             package: machine.enum_type.0.clone(),
             name: machine.enum_type.1.clone(),
@@ -660,15 +809,24 @@ fn check_condition(
             checker = checker.with_binding(state.clone(), binding.clone());
         }
     }
+    for (name, (package, class)) in check.injections {
+        checker = checker.with_binding(name.clone(), rex_expr::Ty::class(package, class));
+    }
     match checker.type_of(&ast) {
         Err(errors) => {
             for error in errors {
+                if suppressed.contains(&error.span) {
+                    // The path walker diagnosed this reference (E0353/E0354);
+                    // the checker's unknown-name/unknown-feature error is
+                    // the duplicate, not a second finding.
+                    continue;
+                }
                 let start = inner_start.saturating_add(error.span.start).min(span.end);
                 let end = inner_start
                     .saturating_add(error.span.end)
                     .clamp(start, span.end);
                 local.push(Diagnostic::error(
-                    format!("invalid condition in {context_label}: {}", error.message),
+                    format!("invalid condition in {}: {}", check.label, error.message),
                     Some((start..end).into()),
                 ));
             }
@@ -678,8 +836,9 @@ fn check_condition(
         Ok(ty) if ty != rex_expr::Ty::boolean() => {
             local.push(Diagnostic::error(
                 format!(
-                    "invalid condition in {context_label}: condition must be boolean, \
-                     found {ty}"
+                    "invalid condition in {}: condition must be boolean, \
+                     found {ty}",
+                    check.label
                 ),
                 Some((inner_start..span.end).into()),
             ));
@@ -695,12 +854,13 @@ fn check_condition(
                     .saturating_add(lint.span.end)
                     .clamp(start, span.end);
                 local.push(Diagnostic::warning(
-                    format!("{context_label}: {}", lint.message),
+                    format!("{}: {}", check.label, lint.message),
                     Some((start..end).into()),
                 ));
             }
         }
     }
+    paths
 }
 /// The features of a class including everything inherited through its
 /// `extends` chain (cycle-safe), in own-first order.

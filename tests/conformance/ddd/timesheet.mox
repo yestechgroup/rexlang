@@ -1,0 +1,25 @@
+package nz.example.timesheet
+
+enum PayRunStatus {
+    Draft as "D" = 0
+    Calculating as "C" = 1
+    AwaitingApproval as "A" = 2
+    Posted as "P" = 3
+    Reversed as "V" = 4
+}
+
+enum TimecardStatus {
+    Open as "O" = 0
+    Submitted as "S" = 1
+    Approved as "R" = 2
+}
+
+class PayRun {
+    PayRunStatus status
+    int total
+}
+
+class Timecard {
+    TimecardStatus status
+    int hours
+}

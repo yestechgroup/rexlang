@@ -1,0 +1,42 @@
+import "timesheet.mox";
+
+application Timesheet {
+    base nz.example.timesheet
+    module payroll {
+        /// Submits and approves pay runs; the guard is the
+        /// separation-of-duties rule over the pay run's timecard.
+        service PayRunService {
+            inject PayRunRepository;
+            inject TimecardRepository;
+            submit => PayRunRepository.save transition PayRunStatus.Submit when (payRunStatus == Draft && TimecardRepository.status == Approved);
+            approve => PayRunRepository.save transition PayRunStatus.Approve;
+            reverse => PayRunRepository.save transition PayRunStatus.Reverse;
+        }
+        entity PayRun repository PayRunRepository {
+            findById;
+            findAll;
+            save;
+            delete;
+        }
+        machine status: PayRunStatus {
+            initial Draft;
+            Draft -> Calculating via Calculate;
+            Calculating -> AwaitingApproval via Submit;
+            AwaitingApproval -> Posted via Approve;
+            Draft -> Reversed via Reverse;
+            terminal Posted;
+            terminal Reversed;
+        }
+        entity Timecard repository TimecardRepository {
+            findById;
+            findAll;
+            save;
+        }
+        machine status: TimecardStatus {
+            initial Open;
+            Open -> Submitted via SendTimecard;
+            Submitted -> Approved via ApproveTimecard;
+            terminal Approved;
+        }
+    }
+}

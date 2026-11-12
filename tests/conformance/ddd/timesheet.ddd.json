@@ -1,0 +1,209 @@
+{
+  "formatVersion": 1,
+  "application": {
+    "name": "Timesheet",
+    "base": "nz.example.timesheet"
+  },
+  "modules": [
+    {
+      "name": "payroll",
+      "services": [
+        {
+          "name": "PayRunService",
+          "description": "Submits and approves pay runs; the guard is the\nseparation-of-duties rule over the pay run's timecard.",
+          "operations": [
+            {
+              "name": "submit",
+              "delegation": {
+                "target": "PayRunRepository",
+                "operation": "save"
+              },
+              "condition": "payRunStatus == Draft && TimecardRepository.status == Approved",
+              "conditionPaths": [
+                {
+                  "scope": {
+                    "type": "ownRecord"
+                  },
+                  "field": "status",
+                  "fieldType": {
+                    "type": "enum",
+                    "value": {
+                      "package": "nz.example.timesheet",
+                      "name": "PayRunStatus"
+                    }
+                  }
+                },
+                {
+                  "scope": {
+                    "type": "injected",
+                    "value": {
+                      "repository": "TimecardRepository",
+                      "class": "Timecard"
+                    }
+                  },
+                  "field": "status",
+                  "fieldType": {
+                    "type": "enum",
+                    "value": {
+                      "package": "nz.example.timesheet",
+                      "name": "TimecardStatus"
+                    }
+                  }
+                }
+              ],
+              "transition": {
+                "trigger": "Submit",
+                "machine": "PayRunStatus"
+              }
+            },
+            {
+              "name": "approve",
+              "delegation": {
+                "target": "PayRunRepository",
+                "operation": "save"
+              },
+              "transition": {
+                "trigger": "Approve",
+                "machine": "PayRunStatus"
+              }
+            },
+            {
+              "name": "reverse",
+              "delegation": {
+                "target": "PayRunRepository",
+                "operation": "save"
+              },
+              "transition": {
+                "trigger": "Reverse",
+                "machine": "PayRunStatus"
+              }
+            }
+          ],
+          "dependencies": [
+            "PayRunRepository",
+            "TimecardRepository"
+          ]
+        }
+      ],
+      "designs": [
+        {
+          "class": "PayRun",
+          "stereotype": "entity",
+          "flags": {
+            "auditable": true,
+            "optimisticLocking": true
+          },
+          "repository": {
+            "name": "PayRunRepository",
+            "operations": [
+              {
+                "name": "findById",
+                "builtin": "findById"
+              },
+              {
+                "name": "findAll",
+                "builtin": "findAll"
+              },
+              {
+                "name": "save",
+                "builtin": "save"
+              },
+              {
+                "name": "delete",
+                "builtin": "delete"
+              }
+            ]
+          },
+          "machine": {
+            "field": "status",
+            "enumType": {
+              "type": "enum",
+              "value": {
+                "package": "nz.example.timesheet",
+                "name": "PayRunStatus"
+              }
+            },
+            "initial": "Draft",
+            "terminals": [
+              "Posted",
+              "Reversed"
+            ],
+            "transitions": [
+              {
+                "from": "Draft",
+                "to": "Calculating",
+                "trigger": "Calculate"
+              },
+              {
+                "from": "Calculating",
+                "to": "AwaitingApproval",
+                "trigger": "Submit"
+              },
+              {
+                "from": "AwaitingApproval",
+                "to": "Posted",
+                "trigger": "Approve"
+              },
+              {
+                "from": "Draft",
+                "to": "Reversed",
+                "trigger": "Reverse"
+              }
+            ]
+          }
+        },
+        {
+          "class": "Timecard",
+          "stereotype": "entity",
+          "flags": {
+            "auditable": true,
+            "optimisticLocking": true
+          },
+          "repository": {
+            "name": "TimecardRepository",
+            "operations": [
+              {
+                "name": "findById",
+                "builtin": "findById"
+              },
+              {
+                "name": "findAll",
+                "builtin": "findAll"
+              },
+              {
+                "name": "save",
+                "builtin": "save"
+              }
+            ]
+          },
+          "machine": {
+            "field": "status",
+            "enumType": {
+              "type": "enum",
+              "value": {
+                "package": "nz.example.timesheet",
+                "name": "TimecardStatus"
+              }
+            },
+            "initial": "Open",
+            "terminals": [
+              "Approved"
+            ],
+            "transitions": [
+              {
+                "from": "Open",
+                "to": "Submitted",
+                "trigger": "SendTimecard"
+              },
+              {
+                "from": "Submitted",
+                "to": "Approved",
+                "trigger": "ApproveTimecard"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

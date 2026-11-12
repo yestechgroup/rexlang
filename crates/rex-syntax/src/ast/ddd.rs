@@ -110,11 +110,34 @@ pub struct DddServiceOp {
     /// Event names from the `emits` clause, in source order — the events
     /// the operation produces (loosely coupled to the `.evt` layer).
     pub emits: Vec<Name>,
+    /// The `transition <Trigger>` binding (issue rexlang#176): the
+    /// machine-bound transition a delegated operation fires — legal only
+    /// on a delegation to a repository `save`, which the driver validates.
+    pub transition: Option<DddTransitionRef>,
     /// The `when ( ... )` guard condition: a `raw_parens` span (parens
     /// included, expression inside deliberately unparsed — slicing and
     /// type-checking it is the driver's job).
     pub condition: Option<Span>,
     /// Span of the whole operation, `;` included.
+    pub span: Span,
+}
+
+/// The `transition <Trigger>` (or `transition <EnumType>.<Trigger>`)
+/// binding of a [`DddServiceOp`] (issue rexlang#176): the declared
+/// transition a delegated operation fires on the machine bound to the
+/// delegation target's repository design. The qualifier — when written —
+/// is the machine's **enum type name**, the only machine-qualification the
+/// surface has (machine declarations are field-named).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DddTransitionRef {
+    /// The trigger name as written (`Submit`); an explicit `via` trigger
+    /// or a bare arrow's derived name.
+    pub trigger: Name,
+    /// The machine qualifier's enum type name (`PayRunStatus` in
+    /// `transition PayRunStatus.Reverse`); `None` for the unqualified
+    /// spelling.
+    pub machine: Option<Name>,
+    /// Span of the whole clause, `transition` included.
     pub span: Span,
 }
 
