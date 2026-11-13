@@ -27,10 +27,12 @@
 //! [salsa]: https://crates.io/crates/salsa
 
 pub(crate) mod cmmn;
+pub(crate) mod conditions;
 mod ddd;
 pub(crate) mod deploy;
 pub mod diagnostic;
 pub(crate) mod dmn;
+pub(crate) mod engine_common;
 pub(crate) mod events;
 pub(crate) mod integrity;
 pub(crate) mod lower;

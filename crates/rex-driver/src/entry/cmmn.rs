@@ -5,6 +5,7 @@ use salsa::Database as Db;
 
 use crate::cmmn;
 use crate::compilation::CmmnCompilation;
+use crate::entry::finish_surface;
 use crate::imports::DomainImports;
 use crate::session::{parse_cmmn_query, Database, SourceFile};
 use crate::union::{domain_files, lower_domains};
@@ -46,7 +47,7 @@ fn compile_cmmn_with(
         .unwrap_or_default();
     let domains = lower_domains(db, &path, &domain_imports, &domains, imports);
 
-    let (model, mut diagnostics) = cmmn::compile_cmmn_file(
+    let (model, diagnostics) = cmmn::compile_cmmn_file(
         &path,
         &source,
         parsed.ast.as_ref(),
@@ -56,12 +57,7 @@ fn compile_cmmn_with(
         actors,
         events,
     );
-    diagnostics.extend(domains.sigil_diagnostics);
-    CmmnCompilation {
-        model,
-        domains_model: domains.domains_model,
-        diagnostics,
-    }
+    finish_surface(domains, model, diagnostics, CmmnCompilation::assemble)
 }
 
 /// Compiles a `.cmmn` case file against its imported domain models and

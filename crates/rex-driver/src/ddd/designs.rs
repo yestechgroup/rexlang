@@ -576,7 +576,7 @@ fn lower_repository_ops(
                     .with_protected(op.is_protected)
                     .with_condition(
                         op.condition
-                            .map(|span| condition_text(source, span).to_string()),
+                            .map(|span| crate::conditions::when_interior(source, span).to_string()),
                     ),
             );
             if let Some(condition) = op.condition {

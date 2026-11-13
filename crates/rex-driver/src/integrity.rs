@@ -43,6 +43,7 @@ use rex_ir::ifml::IfmlModel;
 use rex_ir::ActorModel;
 
 use crate::diagnostic::Diagnostic;
+use crate::engine_common;
 
 /// Prefixes a diagnostic message with its stable registry code — `"{code}
 /// {message}"`, the shape the CLI's `.ifml` converter prints and
@@ -177,19 +178,8 @@ fn check_capability_existence(
     if actors.is_empty() {
         return Vec::new();
     }
-    let declared: BTreeSet<String> = actors
-        .iter()
-        .flat_map(|(_, model)| model.blocks.iter())
-        .flat_map(|block| block.capabilities.iter().map(|c| c.name.clone()))
-        .collect();
-    let help = if declared.is_empty() {
-        "the actor model declares no capabilities".to_string()
-    } else {
-        format!(
-            "the actor model declares: {}",
-            declared.iter().cloned().collect::<Vec<_>>().join(", ")
-        )
-    };
+    let declared = engine_common::declared_capabilities(actors.iter().map(|(_, model)| model));
+    let help = engine_common::declared_capabilities_help(&declared);
     let mut diagnostics = Vec::new();
     for (path, design) in designs {
         for module in &design.modules {

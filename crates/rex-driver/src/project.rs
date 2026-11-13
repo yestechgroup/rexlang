@@ -48,8 +48,8 @@
 //! is host policy (the CLI hard-errors, the LSP degrades).
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 
+use crate::engine_common::dir_of;
 use crate::workspace_imports::{collect_schema_imports, collect_sigil_imports};
 use crate::{
     compile_actors_str, compile_ddd_str, compile_evt_str, compile_str, render, Diagnostic,
@@ -560,16 +560,6 @@ fn cannot_read(key: &str, importer: &str) -> String {
 /// extensions pass through ignored (parity with today's walker hosts).
 fn is_imported_surface(import: &str) -> bool {
     import.ends_with(".ifml") || import.ends_with(".mox") || import.ends_with(".actor")
-}
-
-/// The importing file's directory, `"."` for a bare file name — the CLI's
-/// `dir_of` rule.
-fn dir_of(path: &str) -> PathBuf {
-    Path::new(path)
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."))
-        .to_path_buf()
 }
 
 /// The domain gather core behind [`gather_domain_sources`]: resolve each

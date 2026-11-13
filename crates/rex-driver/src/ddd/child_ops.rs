@@ -323,7 +323,7 @@ pub(crate) fn lower_module_child_operations(
             // surface is the service-operation one).
             let condition = op
                 .condition
-                .map(|span| condition_text(design_source, span).to_string());
+                .map(|span| crate::conditions::when_interior(design_source, span).to_string());
             if let Some(span) = op.condition {
                 let no_scopes = MachineScopes {
                     machines: Vec::new(),

@@ -5,6 +5,7 @@ use salsa::Database as Db;
 
 use crate::compilation::DmnCompilation;
 use crate::dmn;
+use crate::entry::finish_surface;
 use crate::imports::DomainImports;
 use crate::session::{parse_dmn_query, Database, SourceFile};
 use crate::union::{domain_files, lower_domains};
@@ -53,13 +54,7 @@ fn compile_dmn_with(
         &domains.domain_units,
         tables,
     );
-    let mut diagnostics = diagnostics;
-    diagnostics.extend(domains.sigil_diagnostics);
-    DmnCompilation {
-        model: artifact,
-        domains_model: domains.domains_model,
-        diagnostics,
-    }
+    finish_surface(domains, artifact, diagnostics, DmnCompilation::assemble)
 }
 /// Compiles a `.dmn` decision-model file to the standalone
 /// [`rex_ir::dmn::DmnModel`]: parse the file, lower every named domain

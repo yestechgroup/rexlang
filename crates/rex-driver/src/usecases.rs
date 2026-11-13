@@ -27,14 +27,14 @@ use rex_ir::{ActorModel, GrantEffect, Model as DomainModel, TypeRef};
 use rex_syntax::ast as dsl;
 use rex_syntax::Span;
 
+use crate::conditions::{
+    check_condition, when_interior, ConditionSpanning, ConditionWording, LintWording,
+    ParseErrorPolicy,
+};
 use crate::diagnostic::Diagnostic;
-use crate::import_matches;
+use crate::engine_common;
 use crate::lower::{self, DomainPackage, DomainUnit};
 use crate::pipeline;
-
-/// The provided-artifact bucket an import hits when it names a `.ddd`
-/// design (the designs entry of the four-bucket hit array).
-const BUCKET_DESIGNS: usize = 1;
 
 /// A use case scenario node: the identity every succession reference
 /// resolves to (rule 8).
@@ -114,55 +114,14 @@ pub(crate) fn compile_usecase_file(
 ) -> (Option<UseCaseModel>, Vec<(String, Diagnostic)>) {
     let imports = ast.map(|file| file.imports.as_slice()).unwrap_or_default();
 
-    // Which provided bucket each import resolves against (exact path or
-    // lexical resolution, the `.deploy` rule): domains, designs, actors,
-    // events.
-    let hits: Vec<[bool; 4]> = imports
-        .iter()
-        .map(|import| {
-            [
-                domains
-                    .iter()
-                    .any(|unit| import_matches(&import.path, path, &unit.path)),
-                designs
-                    .iter()
-                    .any(|(provided, _)| import_matches(&import.path, path, provided)),
-                actors
-                    .iter()
-                    .any(|(provided, _)| import_matches(&import.path, path, provided)),
-                events
-                    .iter()
-                    .any(|(provided, _)| import_matches(&import.path, path, provided)),
-            ]
-        })
-        .collect();
-
-    let mut import_diagnostics = Vec::new();
-    for (import, hit) in imports.iter().zip(&hits) {
-        // Rule 1 — every import must name a provided artifact of any
-        // surface.
-        if !hit.iter().any(|hit| *hit) {
-            import_diagnostics.push(Diagnostic::error(
-                format!("imported file \"{}\" was not provided", import.path),
-                Some(import.span),
-            ));
-            continue;
-        }
-        // Rule 1 — aliases exist for `realizes`, which names designs; every
-        // other surface rejects them.
-        if import.alias.is_some() && !hit[BUCKET_DESIGNS] {
-            import_diagnostics.push(
-                Diagnostic::error(
-                    format!(
-                        "import \"{}\" is not a design; only design imports take an alias",
-                        import.path
-                    ),
-                    Some(import.span),
-                )
-                .with_help("alias the `.ddd` design a `realizes` binding names"),
-            );
-        }
-    }
+    let hits = engine_common::four_bucket_hits(imports, path, domains, designs, actors, events);
+    let import_diagnostics = engine_common::import_hit_diagnostics(
+        imports,
+        &hits,
+        None,
+        Some("alias the `.ddd` design a `realizes` binding names"),
+        |_| None,
+    );
 
     let diags = pipeline::engine_diags(path, parse_diagnostics, import_diagnostics, domains);
 
@@ -193,47 +152,24 @@ pub(crate) fn compile_usecase_file(
     // the `.cmmn` typing pattern with no synthetic classes, since a guard's
     // `self` is the subject's resolved domain class. The checker is
     // constructed per step with that class as `self`.
-    let mut types = rex_expr::DomainTypes::default();
-    for unit in domains {
-        if let Some(model) = &unit.model {
-            types.merge(rex_expr::DomainTypes::from_model(model));
-        }
-    }
+    let types = engine_common::union_types(domains);
 
     // Design imports by alias (rule 12): the first aliased design match per
     // alias wins.
-    let mut designs_by_alias: Vec<(&str, &DddModel)> = Vec::new();
-    for (import, hit) in imports.iter().zip(&hits) {
-        let Some(alias) = &import.alias else {
-            continue;
-        };
-        if !hit[BUCKET_DESIGNS] || designs_by_alias.iter().any(|(seen, _)| seen == alias) {
-            continue;
-        }
-        if let Some((_, design)) = designs
-            .iter()
-            .find(|(provided, _)| import_matches(&import.path, path, provided))
-        {
-            designs_by_alias.push((alias.as_str(), design));
-        }
-    }
+    let designs_by_alias = engine_common::designs_by_alias(imports, &hits, designs, path);
 
     let mut model = UseCaseModel::new();
     let mut use_case_names: Vec<(String, Span)> = Vec::new();
 
     for decl in &ast.use_cases {
         // Rule 9 — usecase names are unique within the file.
-        if use_case_names.iter().any(|(name, _)| *name == decl.name) {
-            local.push(
-                Diagnostic::error(
-                    format!("duplicate use case '{}'", decl.name),
-                    Some(decl.span),
-                )
-                .with_help(format!("'{}' is already declared in this file", decl.name)),
-            );
-        } else {
-            use_case_names.push((decl.name.clone(), decl.span));
-        }
+        engine_common::register_unique_declared(
+            &mut use_case_names,
+            &decl.name,
+            decl.span,
+            "use case",
+            &mut local,
+        );
 
         let mut out = UseCaseDef {
             name: decl.name.clone(),
@@ -258,22 +194,17 @@ pub(crate) fn compile_usecase_file(
         for (participant_ast, is_subject) in declared_subject.chain(declared_actors) {
             // Rule 9 — the shared namespace.
             if !participant_ast.name.is_empty() {
-                if namespace.contains(&participant_ast.name) {
-                    local.push(
-                        Diagnostic::error(
-                            format!(
-                                "duplicate name '{}' in use case '{}'",
-                                participant_ast.name, decl.name
-                            ),
-                            Some(participant_ast.span),
-                        )
-                        .with_help(
-                            "participants, steps, and messages share one namespace per use case",
-                        ),
-                    );
-                } else {
-                    namespace.push(participant_ast.name.clone());
-                }
+                engine_common::register_unique(
+                    &mut namespace,
+                    &participant_ast.name,
+                    participant_ast.span,
+                    format!(
+                        "duplicate name '{}' in use case '{}'",
+                        participant_ast.name, decl.name
+                    ),
+                    Some("participants, steps, and messages share one namespace per use case"),
+                    &mut local,
+                );
             }
 
             // Rule 2 — participant typing. A bare actor is a policy
@@ -293,7 +224,7 @@ pub(crate) fn compile_usecase_file(
                     (local.len() == before).then_some(ty)
                 }
                 None => {
-                    if !is_subject && !actor_known(&participant_ast.name, actors) {
+                    if !is_subject && !engine_common::actor_known(&participant_ast.name, actors) {
                         local.push(
                             Diagnostic::error(
                                 format!(
@@ -320,20 +251,17 @@ pub(crate) fn compile_usecase_file(
             for occurrence in &participant_ast.occurrences {
                 match occurrence {
                     dsl::UcOccurrence::Named(name) => {
-                        if occurrence_names.contains(name) {
-                            local.push(
-                                Diagnostic::error(
-                                    format!(
-                                        "duplicate occurrence '{}' on participant '{}' in use case '{}'",
-                                        name, participant_ast.name, decl.name
-                                    ),
-                                    Some(participant_ast.span),
-                                )
-                                .with_help("an occurrence is declared once per participant"),
-                            );
-                        } else {
-                            occurrence_names.push(name.clone());
-                        }
+                        engine_common::register_unique(
+                            &mut occurrence_names,
+                            name,
+                            participant_ast.span,
+                            format!(
+                                "duplicate occurrence '{}' on participant '{}' in use case '{}'",
+                                name, participant_ast.name, decl.name
+                            ),
+                            Some("an occurrence is declared once per participant"),
+                            &mut local,
+                        );
                         occurrences_out.push(Occurrence::Named(name.clone()));
                     }
                     dsl::UcOccurrence::MessageEnd { message, target } => {
@@ -383,22 +311,14 @@ pub(crate) fn compile_usecase_file(
             let mut steps_out: Vec<Step> = Vec::new();
             for step in &participant_ast.steps {
                 if !step.name.is_empty() {
-                    if namespace.contains(&step.name) {
-                        local.push(
-                            Diagnostic::error(
-                                format!(
-                                    "duplicate name '{}' in use case '{}'",
-                                    step.name, decl.name
-                                ),
-                                Some(step.span),
-                            )
-                            .with_help(
-                                "participants, steps, and messages share one namespace per use case",
-                            ),
-                        );
-                    } else {
-                        namespace.push(step.name.clone());
-                    }
+                    engine_common::register_unique(
+                        &mut namespace,
+                        &step.name,
+                        step.span,
+                        format!("duplicate name '{}' in use case '{}'", step.name, decl.name),
+                        Some("participants, steps, and messages share one namespace per use case"),
+                        &mut local,
+                    );
                 }
                 // Rule 3 — the step's operation names an operation on the
                 // subject's resolved class, walking extends; the optional
@@ -457,22 +377,17 @@ pub(crate) fn compile_usecase_file(
             .collect();
         for message in &decl.messages {
             if !message.name.is_empty() {
-                if namespace.contains(&message.name) {
-                    local.push(
-                        Diagnostic::error(
-                            format!(
-                                "duplicate name '{}' in use case '{}'",
-                                message.name, decl.name
-                            ),
-                            Some(message.span),
-                        )
-                        .with_help(
-                            "participants, steps, and messages share one namespace per use case",
-                        ),
-                    );
-                } else {
-                    namespace.push(message.name.clone());
-                }
+                engine_common::register_unique(
+                    &mut namespace,
+                    &message.name,
+                    message.span,
+                    format!(
+                        "duplicate name '{}' in use case '{}'",
+                        message.name, decl.name
+                    ),
+                    Some("participants, steps, and messages share one namespace per use case"),
+                    &mut local,
+                );
             }
 
             let payload = message.payload.as_ref().and_then(|payload| {
@@ -758,11 +673,7 @@ fn check_step_guard(
     let span = step.when?;
     // The span covers the raw parens; slice strictly inside (the
     // `when`-condition convention).
-    let interior = source
-        .get(span.start + 1..span.end.saturating_sub(1))
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+    let interior = when_interior(source, span).to_string();
     let Some(TypeRef::Class { package, name }) = resolved else {
         return Some(interior);
     };
@@ -770,47 +681,28 @@ fn check_step_guard(
         "in the `when` of step '{}' in use case '{}'",
         step.name, decl.name
     );
-    let parsed = rex_expr::parse(&interior);
-    for error in &parsed.errors {
-        local.push(
-            Diagnostic::error(
-                format!("invalid step guard condition: {}", error.message),
-                Some(span),
-            )
-            .with_help(help.clone()),
-        );
-    }
-    let Some(ast) = parsed.ast else {
-        return Some(interior);
-    };
     let checker = rex_expr::TypeChecker::new(types.clone()).with_self(package, name);
-    match checker.type_of(&ast) {
-        Ok(ty) if ty == rex_expr::Ty::boolean() => {
-            // The use-based guard lint (issue #142): a String-typed operand
-            // compared to a string literal in a step `when` warns that the
-            // field could be an enum.
-            for lint in checker.guard_string_lints(&ast) {
-                local.push(Diagnostic::warning(&lint.message, Some(span)).with_help(help.clone()));
-            }
-            Some(interior)
-        }
-        Ok(ty) => {
-            local.push(
-                Diagnostic::error(
-                    format!("step guard condition must be boolean, found {ty}"),
-                    Some(span),
-                )
-                .with_help(help),
-            );
-            Some(interior)
-        }
-        Err(errors) => {
-            for error in errors {
-                local.push(Diagnostic::error(error.message, Some(span)).with_help(help.clone()));
-            }
-            Some(interior)
-        }
-    }
+    let wording = ConditionWording {
+        parse_errors: ParseErrorPolicy::Emit,
+        parse_prefix: "invalid step guard condition: ".to_string(),
+        type_errors_raw: true,
+        boolean_prefix: "step guard condition ".to_string(),
+        lint: LintWording::Raw,
+        parse_help: Some(help.clone()),
+        typed_help: Some(help),
+    };
+    let outcome = check_condition(
+        &interior,
+        ConditionSpanning::Fixed(span),
+        wording,
+        Some(checker),
+        None,
+        local,
+    );
+    local.extend(outcome.lints);
+    // The guard text lowers whatever the typing did — the artifact is
+    // dropped on any error anyway.
+    Some(interior)
 }
 
 /// Rule 5 — one message end's binding: the inline endpoint xor exactly one
@@ -1308,18 +1200,6 @@ fn resolve_payload(
             None
         }
     }
-}
-
-/// `true` when some provided actor model declares the actor name. Every
-/// member of an `extends` chain is a declared actor itself, so chain
-/// members match by name directly.
-fn actor_known(name: &str, actors: &[(String, ActorModel)]) -> bool {
-    actors.iter().any(|(_, model)| {
-        model
-            .blocks
-            .iter()
-            .any(|block| block.actors.iter().any(|actor| actor.name == name))
-    })
 }
 
 /// `true` when some provided actor model declares the capability name.

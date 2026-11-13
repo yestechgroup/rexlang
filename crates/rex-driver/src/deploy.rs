@@ -32,7 +32,12 @@ use rex_ir::ifml::IfmlModel;
 use rex_syntax::ast as dsl;
 use rex_syntax::Span;
 
+use crate::conditions::{
+    check_condition, ConditionSpanning, ConditionTriage, ConditionWording, LintWording,
+    ParseErrorPolicy,
+};
 use crate::diagnostic::Diagnostic;
+use crate::engine_common;
 use crate::import_matches;
 use crate::pipeline;
 
@@ -184,6 +189,24 @@ fn component_settings(kind: ComponentKind) -> Vec<(&'static str, SettingSpec)> {
 /// produced) plus the diagnostics, each tagged with the deploy file's
 /// path.
 ///
+/// The engine is four stage passes composed in this exact order — the
+/// diagnostic interleave is pinned by `tests/deploy_stages.rs`, and moving
+/// a group means moving its stage, never reordering the calls:
+///
+/// 1. [`stage_imports`] — every import resolves to a provided design or
+///    flow (rule 2);
+/// 2. [`stage_applications`] — per application, components, settings, env,
+///    bindings, and connections (rules 3–6);
+/// 3. [`stage_profiles`] — per profile, target, shape-valid defaults,
+///    mappings, and the verbatim policy expressions (rule 7);
+/// 4. [`stage_deployments`] — per deployment, effective settings
+///    (component baselines ⊕ profile defaults ⊕ overrides), capabilities,
+///    engines, and policy evaluation (rules 8–11).
+///
+/// The file-local diagnostics accumulate in `local` in stage order and are
+/// appended after the parse diagnostics by the shared engine tail; any
+/// error anywhere drops the artifact.
+///
 /// See [`compile_deploy_str`](crate::compile_deploy_str) for the normative
 /// contract.
 pub(crate) fn compile_deploy_file(
@@ -206,59 +229,72 @@ pub(crate) fn compile_deploy_file(
     let mut local: Vec<Diagnostic> = Vec::new();
     let mut model = DeployModel::new();
 
-    // Rule 2 — every import must name a provided `.ddd` design or `.ifml`
-    // flow (exact string or lexical resolution, the `.actor` rule).
-    for import in &ast.imports {
-        let provided_design = designs
-            .iter()
-            .any(|(provided, _)| import_matches(&import.path, path, provided));
-        let provided_flow = flows
-            .iter()
-            .any(|(provided, _)| import_matches(&import.path, path, provided));
-        if !provided_design && !provided_flow {
-            local.push(
-                Diagnostic::error(
-                    format!("imported file \"{}\" was not provided", import.path),
-                    Some(import.span),
-                )
-                .with_help("imports must name a .ddd design or an .ifml flow the host provides"),
-            );
-        } else if !import.path.ends_with(".ddd") && !import.path.ends_with(".ifml") {
-            local.push(
-                Diagnostic::error(
-                    format!(
-                        "unsupported import \"{}\" (expected a .ddd design or an .ifml flow)",
-                        import.path
-                    ),
-                    Some(import.span),
-                )
-                .with_help("a deployment composes .ddd designs and .ifml flows"),
-            );
-        }
-    }
+    stage_imports(path, ast, designs, flows, &mut local);
+    stage_applications(path, ast, designs, flows, &mut model, &mut local);
+    stage_profiles(source, ast, &mut model, &mut local);
+    stage_deployments(ast, &mut model, &mut local);
 
-    // Applications: unique names; per application, unique component names,
-    // validated kinds/capabilities/settings/bindings, and known connection
-    // endpoints.
+    pipeline::engine_finish(path, local, diags, model)
+}
+
+/// Stage 1 — imports (rule 2): every import must name a provided `.ddd`
+/// design or `.ifml` flow (exact string or lexical resolution, the
+/// `.actor` rule); an import that resolves to some other extension is
+/// rejected inside the same per-import pass, so a file mixing missing and
+/// unsupported imports keeps the interleaving.
+fn stage_imports(
+    path: &str,
+    ast: &dsl::DeployFile,
+    designs: &[(String, DddModel)],
+    flows: &[(String, IfmlModel)],
+    local: &mut Vec<Diagnostic>,
+) {
+    let hits = engine_common::two_bucket_hits(&ast.imports, path, designs, flows);
+    let import_diagnostics = engine_common::import_hit_diagnostics(
+        &ast.imports,
+        &hits,
+        Some("imports must name a .ddd design or an .ifml flow the host provides"),
+        None,
+        |import| {
+            if !import.path.ends_with(".ddd") && !import.path.ends_with(".ifml") {
+                Some(
+                    Diagnostic::error(
+                        format!(
+                            "unsupported import \"{}\" (expected a .ddd design or an .ifml flow)",
+                            import.path
+                        ),
+                        Some(import.span),
+                    )
+                    .with_help("a deployment composes .ddd designs and .ifml flows"),
+                )
+            } else {
+                None
+            }
+        },
+    );
+    local.extend(import_diagnostics);
+}
+
+/// Stage 2 — applications: unique names; per application, unique
+/// component names, validated kinds/capabilities/settings/env/bindings,
+/// and known connection endpoints.
+fn stage_applications(
+    path: &str,
+    ast: &dsl::DeployFile,
+    designs: &[(String, DddModel)],
+    flows: &[(String, IfmlModel)],
+    model: &mut DeployModel,
+    local: &mut Vec<Diagnostic>,
+) {
     let mut application_names: Vec<(String, Span)> = Vec::new();
     for application in &ast.applications {
-        if application_names
-            .iter()
-            .any(|(name, _)| *name == application.name.text)
-        {
-            local.push(
-                Diagnostic::error(
-                    format!("duplicate application '{}'", application.name.text),
-                    Some(application.name.span),
-                )
-                .with_help(format!(
-                    "'{}' is already declared in this file",
-                    application.name.text
-                )),
-            );
-        } else {
-            application_names.push((application.name.text.clone(), application.name.span));
-        }
+        engine_common::register_unique_declared(
+            &mut application_names,
+            &application.name.text,
+            application.name.span,
+            "application",
+            local,
+        );
 
         let mut out = DeployApplication::new(application.name.text.clone());
         // Components keyed by name for connection and setting resolution,
@@ -324,29 +360,27 @@ pub(crate) fn compile_deploy_file(
 
             // Rule 5 — baseline settings use single-segment paths from the
             // kind's vocabulary.
-            let mut seen_settings: Vec<&str> = Vec::new();
+            let mut seen_settings: Vec<String> = Vec::new();
             let mut settings: Vec<DeploySetting> = Vec::new();
             for setting in &component.settings {
-                validate_setting_path_len(&setting.path, 1, &mut local);
+                validate_setting_path_len(&setting.path, 1, local);
                 let name = setting.path.segments.last().map(|name| name.text.as_str());
                 if let Some(name) = name {
-                    if seen_settings.contains(&name) {
-                        local.push(
-                            Diagnostic::error(
-                                format!(
-                                    "duplicate setting '{}' on component '{}'",
-                                    name, component.name.text
-                                ),
-                                Some(setting.path.span),
-                            )
-                            .with_help("a setting is declared once per level"),
-                        );
+                    if !engine_common::register_unique(
+                        &mut seen_settings,
+                        name,
+                        setting.path.span,
+                        format!(
+                            "duplicate setting '{}' on component '{}'",
+                            name, component.name.text
+                        ),
+                        Some("a setting is declared once per level"),
+                        local,
+                    ) {
                         continue;
                     }
-                    seen_settings.push(name);
                 }
-                let Some(value) =
-                    check_setting_value(&setting.path, &setting.value, kind, &mut local)
+                let Some(value) = check_setting_value(&setting.path, &setting.value, kind, local)
                 else {
                     continue;
                 };
@@ -361,7 +395,7 @@ pub(crate) fn compile_deploy_file(
             // never joins the effective-settings map and is never
             // policy-addressable, so the only checks here are syntactic —
             // an empty or duplicated name on one component.
-            let mut seen_env: Vec<&str> = Vec::new();
+            let mut seen_env: Vec<String> = Vec::new();
             let mut env_out: Vec<DeployEnv> = Vec::new();
             for entry in &component.env {
                 if entry.name.text.is_empty() {
@@ -371,20 +405,19 @@ pub(crate) fn compile_deploy_file(
                     );
                     continue;
                 }
-                if seen_env.contains(&entry.name.text.as_str()) {
-                    local.push(
-                        Diagnostic::error(
-                            format!(
-                                "duplicate env '{}' on component '{}'",
-                                entry.name.text, component.name.text
-                            ),
-                            Some(entry.name.span),
-                        )
-                        .with_help("an env name is declared once per component"),
-                    );
+                if !engine_common::register_unique(
+                    &mut seen_env,
+                    &entry.name.text,
+                    entry.name.span,
+                    format!(
+                        "duplicate env '{}' on component '{}'",
+                        entry.name.text, component.name.text
+                    ),
+                    Some("an env name is declared once per component"),
+                    local,
+                ) {
                     continue;
                 }
-                seen_env.push(&entry.name.text);
                 env_out.push(DeployEnv::new(entry.name.text.clone(), entry.value.clone()));
             }
 
@@ -452,28 +485,29 @@ pub(crate) fn compile_deploy_file(
 
         model.applications.push(out);
     }
+}
 
+/// Stage 3 — profiles: unique names, a known target, shape-valid defaults,
+/// validated mapping kinds. Defaults are application-independent here —
+/// their vocabulary validation runs per deployment
+/// ([`stage_deployments`], via [`apply_settings`]).
+fn stage_profiles(
+    source: &str,
+    ast: &dsl::DeployFile,
+    model: &mut DeployModel,
+    local: &mut Vec<Diagnostic>,
+) {
     // Profiles: unique names, a known target, shape-valid defaults,
     // validated mapping kinds.
     let mut profile_names: Vec<(String, Span)> = Vec::new();
     for profile in &ast.profiles {
-        if profile_names
-            .iter()
-            .any(|(name, _)| *name == profile.name.text)
-        {
-            local.push(
-                Diagnostic::error(
-                    format!("duplicate profile '{}'", profile.name.text),
-                    Some(profile.name.span),
-                )
-                .with_help(format!(
-                    "'{}' is already declared in this file",
-                    profile.name.text
-                )),
-            );
-        } else {
-            profile_names.push((profile.name.text.clone(), profile.name.span));
-        }
+        engine_common::register_unique_declared(
+            &mut profile_names,
+            &profile.name.text,
+            profile.name.span,
+            "profile",
+            local,
+        );
 
         // Rule 7 — a profile selects an implementation-provided target.
         let target = match profile.target.as_ref() {
@@ -520,22 +554,21 @@ pub(crate) fn compile_deploy_file(
         // against the application the profile is being applied to.
         let mut seen_defaults: Vec<String> = Vec::new();
         for setting in &profile.defaults {
-            validate_setting_path_len(&setting.path, 2, &mut local);
+            validate_setting_path_len(&setting.path, 2, local);
             if let Some(full) = Some(setting.path.full_name()) {
-                if seen_defaults.contains(&full) {
-                    local.push(
-                        Diagnostic::error(
-                            format!(
-                                "duplicate default '{}' in profile '{}'",
-                                full, profile.name.text
-                            ),
-                            Some(setting.path.span),
-                        )
-                        .with_help("a setting is declared once per level"),
-                    );
+                if !engine_common::register_unique(
+                    &mut seen_defaults,
+                    &full,
+                    setting.path.span,
+                    format!(
+                        "duplicate default '{}' in profile '{}'",
+                        full, profile.name.text
+                    ),
+                    Some("a setting is declared once per level"),
+                    local,
+                ) {
                     continue;
                 }
-                seen_defaults.push(full);
             }
             profile_out.defaults.push(DeploySetting {
                 path: setting.path.full_name(),
@@ -591,7 +624,13 @@ pub(crate) fn compile_deploy_file(
 
         model.profiles.push(profile_out);
     }
+}
 
+/// Stage 4 — deployments: unique names, known application and profile,
+/// then the per-deployment rules — effective settings (component
+/// baselines ⊕ profile defaults ⊕ overrides), capabilities, engines, and
+/// policy enforcement.
+fn stage_deployments(ast: &dsl::DeployFile, model: &mut DeployModel, local: &mut Vec<Diagnostic>) {
     // Deployments: unique names, known application and profile, then the
     // per-deployment rules — effective settings, capabilities, engines,
     // and policy enforcement.
@@ -608,23 +647,13 @@ pub(crate) fn compile_deploy_file(
         }
     }
     for deployment in &ast.deployments {
-        if deployment_names
-            .iter()
-            .any(|(name, _)| *name == deployment.name.text)
-        {
-            local.push(
-                Diagnostic::error(
-                    format!("duplicate deployment '{}'", deployment.name.text),
-                    Some(deployment.name.span),
-                )
-                .with_help(format!(
-                    "'{}' is already declared in this file",
-                    deployment.name.text
-                )),
-            );
-        } else {
-            deployment_names.push((deployment.name.text.clone(), deployment.name.span));
-        }
+        engine_common::register_unique_declared(
+            &mut deployment_names,
+            &deployment.name.text,
+            deployment.name.span,
+            "deployment",
+            local,
+        );
 
         let application = match model
             .applications
@@ -708,7 +737,7 @@ pub(crate) fn compile_deploy_file(
                     &ast_profile.defaults,
                     &application,
                     &mut effective,
-                    &mut local,
+                    local,
                     SettingsLevel::Default(&profile.name),
                 );
             }
@@ -716,27 +745,26 @@ pub(crate) fn compile_deploy_file(
         let mut seen_configure: Vec<String> = Vec::new();
         let mut configure_out = Vec::new();
         for setting in &deployment.configure {
-            validate_setting_path_len(&setting.path, 2, &mut local);
+            validate_setting_path_len(&setting.path, 2, local);
             let full = setting.path.full_name();
-            if seen_configure.contains(&full) {
-                local.push(
-                    Diagnostic::error(
-                        format!(
-                            "duplicate override '{}' in deployment '{}'",
-                            full, deployment.name.text
-                        ),
-                        Some(setting.path.span),
-                    )
-                    .with_help("a setting is declared once per level"),
-                );
+            if !engine_common::register_unique(
+                &mut seen_configure,
+                &full,
+                setting.path.span,
+                format!(
+                    "duplicate override '{}' in deployment '{}'",
+                    full, deployment.name.text
+                ),
+                Some("a setting is declared once per level"),
+                local,
+            ) {
                 continue;
             }
-            seen_configure.push(full.clone());
             if let Some(value) = check_setting_against_application(
                 &setting.path,
                 &setting.value,
                 &application,
-                &mut local,
+                local,
                 &SettingsLevel::Override(&deployment.name.text),
             ) {
                 if let Some((component, name)) = split_setting_path(&full) {
@@ -833,7 +861,7 @@ pub(crate) fn compile_deploy_file(
         // settings. `require` conditions must hold; `prohibit` conditions
         // must not.
         for policy in &profile.policies {
-            check_policy(policy, &application, deployment, &effective, &mut local);
+            check_policy(policy, &application, deployment, &effective, local);
         }
 
         let mut deployment_out = DeployDeployment::new(
@@ -844,8 +872,6 @@ pub(crate) fn compile_deploy_file(
         deployment_out.configure = configure_out;
         model.deployments.push(deployment_out);
     }
-
-    pipeline::engine_finish(path, local, diags, model)
 }
 
 /// The two-segment split of a `component.setting` path.
@@ -1061,18 +1087,20 @@ fn apply_settings(
     for setting in settings {
         validate_setting_path_len(&setting.path, 2, local);
         let full = setting.path.full_name();
-        if seen.contains(&full) {
-            local.push(Diagnostic::error(
-                format!(
-                    "duplicate {} '{}' — a setting is declared once per level",
-                    level.label(),
-                    full
-                ),
-                Some(setting.path.span),
-            ));
+        if !engine_common::register_unique(
+            &mut seen,
+            &full,
+            setting.path.span,
+            format!(
+                "duplicate {} '{}' — a setting is declared once per level",
+                level.label(),
+                full
+            ),
+            None,
+            local,
+        ) {
             continue;
         }
-        seen.push(full.clone());
         let Some(value) = check_setting_against_application(
             &setting.path,
             &setting.value,
@@ -1091,6 +1119,95 @@ fn apply_settings(
     }
 }
 
+/// The artifact-side of a rule 6 binding: the noun the diagnostics spell
+/// (`design`/`flow`) and the module list an imported artifact declares
+/// (both the existence check and the "modules of ..." help).
+trait BoundArtifact {
+    /// The binding noun in diagnostics: `design` or `flow`.
+    fn kind_word() -> &'static str;
+
+    /// The module names the artifact declares, in declaration order.
+    fn module_names(&self) -> Vec<&str>;
+}
+
+impl BoundArtifact for DddModel {
+    fn kind_word() -> &'static str {
+        "design"
+    }
+
+    fn module_names(&self) -> Vec<&str> {
+        self.modules
+            .iter()
+            .map(|module| module.name.as_str())
+            .collect()
+    }
+}
+
+impl BoundArtifact for IfmlModel {
+    fn kind_word() -> &'static str {
+        "flow"
+    }
+
+    fn module_names(&self) -> Vec<&str> {
+        self.modules
+            .iter()
+            .map(|module| module.name.as_str())
+            .collect()
+    }
+}
+
+/// Rule 6 — the shared binding core of [`check_design_binding`] and
+/// [`check_flow_binding`]: the reference (as written) must resolve through
+/// [`import_matches`] to one of the provided artifacts, and a `#<Module>`
+/// suffix must name a module there. Only the nouns differ between the
+/// twins; the resolution, module check, and wording shape are shared.
+fn check_binding<B: BoundArtifact>(
+    source: &str,
+    module: Option<&str>,
+    deploy_path: &str,
+    component: &dsl::DeployComponentDecl,
+    artifacts: &[(String, B)],
+) -> Option<Diagnostic> {
+    let resolved = artifacts
+        .iter()
+        .find(|(provided, _)| import_matches(source, deploy_path, provided));
+    let Some((_, artifact)) = resolved else {
+        return Some(
+            Diagnostic::error(
+                format!(
+                    "component '{}' binds unknown {} \"{}\"",
+                    component.name.text,
+                    B::kind_word(),
+                    source
+                ),
+                Some(component.span),
+            )
+            .with_help(format!(
+                "a {} binding's path must match one of this file's imports",
+                B::kind_word()
+            )),
+        );
+    };
+    let module = module?;
+    let modules = artifact.module_names();
+    if !modules.contains(&module) {
+        return Some(
+            Diagnostic::error(
+                format!(
+                    "{} \"{}\" declares no module '{}' (component '{}')",
+                    B::kind_word(),
+                    source,
+                    module,
+                    component.name.text
+                ),
+                Some(component.span),
+            )
+            .with_help(format!("modules of {}: {}", source, modules.join(", "))),
+        );
+    }
+    None
+}
+
 /// Rule 6 — a design binding must reference one of the file's `.ddd`
 /// imports (exact string or lexical resolution) and, when it names a
 /// module, that module must exist in the imported design.
@@ -1100,49 +1217,13 @@ fn check_design_binding(
     component: &dsl::DeployComponentDecl,
     designs: &[(String, DddModel)],
 ) -> Option<Diagnostic> {
-    let resolved = designs
-        .iter()
-        .find(|(provided, _)| import_matches(&binding.source, deploy_path, provided));
-    let Some((_, design)) = resolved else {
-        return Some(
-            Diagnostic::error(
-                format!(
-                    "component '{}' binds unknown design \"{}\"",
-                    component.name.text, binding.source
-                ),
-                Some(component.span),
-            )
-            .with_help("a design binding's path must match one of this file's imports"),
-        );
-    };
-    if let Some(module) = &binding.module {
-        if !design
-            .modules
-            .iter()
-            .any(|candidate| &candidate.name == module)
-        {
-            return Some(
-                Diagnostic::error(
-                    format!(
-                        "design \"{}\" declares no module '{}' (component '{}')",
-                        binding.source, module, component.name.text
-                    ),
-                    Some(component.span),
-                )
-                .with_help(format!(
-                    "modules of {}: {}",
-                    binding.source,
-                    design
-                        .modules
-                        .iter()
-                        .map(|module| module.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )),
-            );
-        }
-    }
-    None
+    check_binding(
+        &binding.source,
+        binding.module.as_deref(),
+        deploy_path,
+        component,
+        designs,
+    )
 }
 
 /// Rule 6 — the flow-binding twin of [`check_design_binding`].
@@ -1152,48 +1233,13 @@ fn check_flow_binding(
     component: &dsl::DeployComponentDecl,
     flows: &[(String, IfmlModel)],
 ) -> Option<Diagnostic> {
-    let resolved = flows
-        .iter()
-        .find(|(provided, _)| import_matches(&binding.source, deploy_path, provided));
-    let Some((_, flow)) = resolved else {
-        return Some(
-            Diagnostic::error(
-                format!(
-                    "component '{}' binds unknown flow \"{}\"",
-                    component.name.text, binding.source
-                ),
-                Some(component.span),
-            )
-            .with_help("a flow binding's path must match one of this file's imports"),
-        );
-    };
-    if let Some(module) = &binding.module {
-        if !flow
-            .modules
-            .iter()
-            .any(|candidate| &candidate.name == module)
-        {
-            return Some(
-                Diagnostic::error(
-                    format!(
-                        "flow \"{}\" declares no module '{}' (component '{}')",
-                        binding.source, module, component.name.text
-                    ),
-                    Some(component.span),
-                )
-                .with_help(format!(
-                    "modules of {}: {}",
-                    binding.source,
-                    flow.modules
-                        .iter()
-                        .map(|module| module.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )),
-            );
-        }
-    }
-    None
+    check_binding(
+        &binding.source,
+        binding.module.as_deref(),
+        deploy_path,
+        component,
+        flows,
+    )
 }
 
 /// Rule 11 — one policy condition, end to end: parse (rex-expr), type-check
@@ -1207,32 +1253,51 @@ fn check_policy(
     effective: &BTreeMap<String, BTreeMap<String, DeployValue>>,
     local: &mut Vec<Diagnostic>,
 ) {
-    let parsed = rex_expr::parse(&policy.expression);
-    for error in &parsed.errors {
-        local.push(
-            Diagnostic::error(
-                format!("invalid policy condition: {}", error.message),
-                Some(deployment.span),
-            )
-            .with_help(format!(
-                "in `{} ({})`",
-                if policy.prohibit {
-                    "prohibit"
-                } else {
-                    "require"
-                },
-                policy.expression
-            )),
-        );
-    }
-    let Some(ast) = parsed.ast else {
-        return;
+    let checker =
+        rex_expr::TypeChecker::new(policy_universe(application)).with_self("", &application.name);
+    let policy_help = format!(
+        "in `{} ({})`",
+        if policy.prohibit {
+            "prohibit"
+        } else {
+            "require"
+        },
+        policy.expression
+    );
+    let wording = ConditionWording {
+        parse_errors: ParseErrorPolicy::Emit,
+        parse_prefix: "invalid policy condition: ".to_string(),
+        type_errors_raw: false,
+        boolean_prefix: "policy condition ".to_string(),
+        lint: LintWording::Skip,
+        parse_help: Some(policy_help.clone()),
+        typed_help: Some(policy_help),
     };
+    let outcome = check_condition(
+        &policy.expression,
+        ConditionSpanning::Fixed(deployment.span),
+        wording,
+        Some(checker),
+        None,
+        local,
+    );
+    // A policy only evaluates when it typed as boolean; every other
+    // triage verdict has been diagnosed above.
+    if outcome.triage != ConditionTriage::Boolean {
+        return;
+    }
+    let ast = outcome
+        .ast
+        .expect("the boolean verdict implies a parsed tree");
+    enforce_policy(policy, deployment, &ast, effective, local);
+}
 
-    // The synthetic settings universe: one class per component (features =
-    // the kind's setting vocabulary), plus the application as a root class
-    // whose features are the components. `api.replicas` is then plain
-    // feature navigation from `self` — no fake `Model` assembled.
+/// The synthetic policy universe of [`check_policy`]: one class per
+/// component (features = the kind's setting vocabulary), plus the
+/// application as a root class whose features are the components.
+/// `api.replicas` is then plain feature navigation from `self` — no fake
+/// `Model` assembled.
+fn policy_universe(application: &DeployApplication) -> rex_expr::DomainTypes {
     let mut types = rex_expr::DomainTypes::default();
     for component in &application.components {
         let features = component_settings(component.kind)
@@ -1269,51 +1334,21 @@ fn check_policy(
         })
         .collect();
     types.insert_class("", &application.name, Vec::new(), root_features, Vec::new());
+    types
+}
 
-    let checker = rex_expr::TypeChecker::new(types).with_self("", &application.name);
-    match checker.type_of(&ast) {
-        Ok(ty) if ty == rex_expr::Ty::boolean() => {}
-        Ok(ty) => {
-            local.push(
-                Diagnostic::error(
-                    format!("policy condition must be boolean, found {ty}"),
-                    Some(deployment.span),
-                )
-                .with_help(format!(
-                    "in `{} ({})`",
-                    if policy.prohibit {
-                        "prohibit"
-                    } else {
-                        "require"
-                    },
-                    policy.expression
-                )),
-            );
-            return;
-        }
-        Err(errors) => {
-            for error in errors {
-                local.push(
-                    Diagnostic::error(
-                        format!("invalid policy condition: {}", error.message),
-                        Some(deployment.span),
-                    )
-                    .with_help(format!(
-                        "in `{} ({})`",
-                        if policy.prohibit {
-                            "prohibit"
-                        } else {
-                            "require"
-                        },
-                        policy.expression
-                    )),
-                );
-            }
-            return;
-        }
-    }
-
-    let value = match evaluate(&ast, effective) {
+/// Rule 11 — the require/prohibit half of [`check_policy`]: the condition
+/// already parsed and typed as boolean, so evaluate it against the
+/// deployment's effective settings and diagnose evaluation failures and
+/// violations.
+fn enforce_policy(
+    policy: &DeployPolicy,
+    deployment: &dsl::DeployDeploymentDecl,
+    ast: &rex_expr::Expr,
+    effective: &BTreeMap<String, BTreeMap<String, DeployValue>>,
+    local: &mut Vec<Diagnostic>,
+) {
+    let value = match evaluate(ast, effective) {
         Ok(value) => value,
         Err(message) => {
             local.push(

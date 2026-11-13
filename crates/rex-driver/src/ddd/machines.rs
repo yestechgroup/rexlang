@@ -513,7 +513,7 @@ pub(crate) fn lower_design_machine(
     for (out, ast) in machine_out.transitions.iter_mut().zip(&machine.transitions) {
         out.guard = ast
             .guard
-            .map(|span| condition_text(source, span).to_string());
+            .map(|span| crate::conditions::when_interior(source, span).to_string());
     }
     Some(machine_out)
 }

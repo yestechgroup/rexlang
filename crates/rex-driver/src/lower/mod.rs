@@ -10,15 +10,16 @@
 //! per-package `DomainUnit`); the function clusters live in their own
 //! files — [`resolve`] (name resolution), [`imports`] (`import schema`),
 //! [`compile`] (the one- and multi-file pipelines and the `.actor`
-//! engine), [`conditions`] (`when` gates), [`classes`]
+//! engine), [`classes`]
 //! (class/feature/constraint lowering and class-graph validation),
 //! [`vocabulary`] (vocabulary lowering plus the lockfile/vocab disk
 //! reads), and [`actors`] (union policy-set lowering and its passes).
+//! The shared `when`-condition pipeline (interior slicing, span rebasing,
+//! parse/type-check/triage) is [`crate::conditions`].
 
 pub(crate) mod actors;
 pub(crate) mod classes;
 pub(crate) mod compile;
-pub(crate) mod conditions;
 pub(crate) mod imports;
 pub(crate) mod names;
 pub(crate) mod resolve;
@@ -380,25 +381,6 @@ pub(crate) struct ObligationRef {
     span: Span,
 }
 
-/// A `when` condition awaiting type checking once the class universe is
-/// known. Lowering only syntax-checks conditions (so parse errors keep their
-/// source order); the type check runs after every class is lowered.
-pub(crate) struct PendingCondition {
-    /// The file whose spans the condition refers to.
-    file: String,
-    /// The trimmed condition text.
-    text: String,
-    /// Host-file offset of the condition text's first byte.
-    base: usize,
-    /// The condition's inner region (strictly between the parens); mapped
-    /// spans are clamped to it.
-    inner_start: usize,
-    inner_end: usize,
-    /// The capability's owning class (package, name); `None` when the
-    /// capability's class failed to resolve (that error is already reported).
-    class: Option<(String, String)>,
-}
-
 /// One imported domain model handed to [`compile_actor_file`] and
 /// [`crate::ddd::compile_ddd_file`]: its lowered model (when error-free),
 /// its AST, and its own diagnostics.
@@ -511,51 +493,5 @@ pub(crate) fn ir_type_of(
                 .map(|segment| segment.text.clone())
                 .unwrap_or_default(),
         },
-    }
-}
-
-/// The verbatim text inside a `when (...)` condition: strictly inside the
-/// parens, ends-trimmed (the same span-to-text convention as target bodies).
-pub(crate) fn when_text(source: &str, span: Span) -> &str {
-    source[span.start + 1..span.end - 1].trim()
-}
-
-/// Syntax-checks a `when` condition with the neutral expression parser
-/// (`rex-expr`, syntax only — bare condition names are resource features
-/// whose typing is a backend concern). Every parse error is re-spanned into
-/// the file: the error's byte offsets are relative to the condition text, so
-/// they are shifted onto the condition's inner region (clamped to it).
-pub(crate) fn check_when_syntax(source: &str, when_span: Span, diags: &mut Vec<Diagnostic>) {
-    let raw = &source[when_span.start + 1..when_span.end - 1];
-    let text = raw.trim();
-    let base = when_span.start + 1 + (raw.len() - raw.trim_start().len());
-    let inner_start = when_span.start + 1;
-    let inner_end = when_span.end - 1;
-    for error in rex_expr::parse(text).errors {
-        let start = (base + error.span.start).clamp(inner_start, inner_end);
-        let end = (base + error.span.end).clamp(start, inner_end);
-        diags.push(Diagnostic::error(
-            format!("invalid `when` condition: {}", error.message),
-            Some((start..end).into()),
-        ));
-    }
-}
-
-/// Slices a `when (...)` span into a deferred type-check entry.
-pub(crate) fn pending_condition(
-    file: &str,
-    source: &str,
-    when_span: Span,
-    class: Option<(String, String)>,
-) -> PendingCondition {
-    let raw = &source[when_span.start + 1..when_span.end - 1];
-    let text = raw.trim();
-    PendingCondition {
-        file: file.to_string(),
-        text: text.to_string(),
-        base: when_span.start + 1 + (raw.len() - raw.trim_start().len()),
-        inner_start: when_span.start + 1,
-        inner_end: when_span.end - 1,
-        class,
     }
 }

@@ -17,7 +17,12 @@ use rex_ir::events::{ChannelDef, CloudEventsAttributes, DeliveryMode, EventDef, 
 use rex_syntax::ast as dsl;
 use rex_syntax::Span;
 
+use crate::conditions::{
+    check_condition, when_interior, ConditionSpanning, ConditionTriage, ConditionWording,
+    LintWording, ParseErrorPolicy,
+};
 use crate::diagnostic::Diagnostic;
+use crate::engine_common;
 use crate::lower::{self, DomainUnit};
 use crate::pipeline;
 
@@ -75,20 +80,13 @@ pub(crate) fn compile_evt_file(
     let mut event_names: Vec<(String, Span)> = Vec::new();
     for event in &ast.events {
         // Rule e — event names are unique within the file.
-        if event_names.iter().any(|(name, _)| *name == event.name.text) {
-            local.push(
-                Diagnostic::error(
-                    format!("duplicate event '{}'", event.name.text),
-                    Some(event.name.span),
-                )
-                .with_help(format!(
-                    "'{}' is already declared in this file",
-                    event.name.text
-                )),
-            );
-        } else {
-            event_names.push((event.name.text.clone(), event.name.span));
-        }
+        engine_common::register_unique_declared(
+            &mut event_names,
+            &event.name.text,
+            event.name.span,
+            "event",
+            &mut local,
+        );
 
         let mut event_out = EventDef::new(event.name.text.clone());
         event_out.version = event.version.clone();
@@ -107,20 +105,17 @@ pub(crate) fn compile_evt_file(
             // Extra rule — payload field names are unique within their
             // event (the wire contract documents the uniqueness as a
             // driver concern).
-            if field_names.contains(&field.name.text) {
-                local.push(
-                    Diagnostic::error(
-                        format!(
-                            "duplicate payload field '{}' in event '{}'",
-                            field.name.text, event.name.text
-                        ),
-                        Some(field.name.span),
-                    )
-                    .with_help("a payload field is declared once per event"),
-                );
-            } else {
-                field_names.push(field.name.text.clone());
-            }
+            engine_common::register_unique(
+                &mut field_names,
+                &field.name.text,
+                field.name.span,
+                format!(
+                    "duplicate payload field '{}' in event '{}'",
+                    field.name.text, event.name.text
+                ),
+                Some("a payload field is declared once per event"),
+                &mut local,
+            );
 
             // Rule b — the field type resolves against the domain namespace
             // (any declared kind) or is a primitive. The parser recovers a
@@ -202,23 +197,13 @@ pub(crate) fn compile_evt_file(
     let mut channel_names: Vec<(String, Span)> = Vec::new();
     for channel in &ast.channels {
         // Rule e — channel names are unique within the file.
-        if channel_names
-            .iter()
-            .any(|(name, _)| *name == channel.name.text)
-        {
-            local.push(
-                Diagnostic::error(
-                    format!("duplicate channel '{}'", channel.name.text),
-                    Some(channel.name.span),
-                )
-                .with_help(format!(
-                    "'{}' is already declared in this file",
-                    channel.name.text
-                )),
-            );
-        } else {
-            channel_names.push((channel.name.text.clone(), channel.name.span));
-        }
+        engine_common::register_unique_declared(
+            &mut channel_names,
+            &channel.name.text,
+            channel.name.span,
+            "channel",
+            &mut local,
+        );
 
         let mut channel_out = ChannelDef::new(channel.name.text.clone());
         // The channel's `of <scope>` clause rides through verbatim — an
@@ -268,12 +253,7 @@ pub(crate) fn compile_evt_file(
     // payload fields — the expression's implicit `self` — so a bare field
     // name refers to the event being filtered. `insert_class` replaces the
     // previous entry, so one universe serves every event.
-    let mut types = rex_expr::DomainTypes::default();
-    for unit in domains {
-        if let Some(domains_model) = &unit.model {
-            types.merge(rex_expr::DomainTypes::from_model(domains_model));
-        }
-    }
+    let mut types = engine_common::union_types(domains);
     // Dedupes the guard lint across the per-event universes: the same
     // comparison at the same filter span is one warning, not one per
     // subscribed event.
@@ -282,23 +262,13 @@ pub(crate) fn compile_evt_file(
 
     for subscription in &ast.subscriptions {
         // Rule e — subscription names are unique within the file.
-        if subscription_names
-            .iter()
-            .any(|(name, _)| *name == subscription.name.text)
-        {
-            local.push(
-                Diagnostic::error(
-                    format!("duplicate subscription '{}'", subscription.name.text),
-                    Some(subscription.name.span),
-                )
-                .with_help(format!(
-                    "'{}' is already declared in this file",
-                    subscription.name.text
-                )),
-            );
-        } else {
-            subscription_names.push((subscription.name.text.clone(), subscription.name.span));
-        }
+        engine_common::register_unique_declared(
+            &mut subscription_names,
+            &subscription.name.text,
+            subscription.name.span,
+            "subscription",
+            &mut local,
+        );
 
         // Rule f — an empty event list or consumer is an error. The empty
         // event list is reachable from clean syntax (`events [ ]`); the
@@ -362,25 +332,30 @@ pub(crate) fn compile_evt_file(
         if let Some(when_span) = subscription.when {
             // The span covers the raw parens; slice strictly inside (the
             // `when`-condition convention).
-            let interior = source
-                .get(when_span.start + 1..when_span.end.saturating_sub(1))
-                .unwrap_or_default()
-                .trim()
-                .to_string();
-            let parsed = rex_expr::parse(&interior);
-            for error in &parsed.errors {
-                local.push(
-                    Diagnostic::error(
-                        format!("invalid when filter: {}", error.message),
-                        Some(when_span),
-                    )
-                    .with_help(format!(
-                        "in the `when` of subscription '{}'",
-                        subscription.name.text
-                    )),
-                );
-            }
-            if let Some(expr) = parsed.ast {
+            let interior = when_interior(source, when_span).to_string();
+            // The parse-error pass: one diagnostic per parse error, help
+            // naming the subscription.
+            let parse_wording = ConditionWording {
+                parse_errors: ParseErrorPolicy::Emit,
+                parse_prefix: "invalid when filter: ".to_string(),
+                type_errors_raw: true,
+                boolean_prefix: String::new(),
+                lint: LintWording::Skip,
+                parse_help: Some(format!(
+                    "in the `when` of subscription '{}'",
+                    subscription.name.text
+                )),
+                typed_help: None,
+            };
+            let outcome = check_condition(
+                &interior,
+                ConditionSpanning::Fixed(when_span),
+                parse_wording,
+                None,
+                None,
+                &mut local,
+            );
+            if outcome.triage != ConditionTriage::Unparsed {
                 for event_name in &subscription_out.events {
                     // Unknown events were diagnosed above; typing skips
                     // them (their payload shape is unknown).
@@ -408,43 +383,34 @@ pub(crate) fn compile_evt_file(
                         "in the `when` of subscription '{}' against event '{}'",
                         subscription.name.text, event_name
                     );
-                    match checker.type_of(&expr) {
-                        Ok(ty) if ty == rex_expr::Ty::boolean() => {
-                            // The use-based guard lint (issue #142): a
-                            // String-typed payload field compared to a
-                            // string literal warns that the field could be
-                            // an enum. Deduped across the per-event
-                            // universes: the same comparison against every
-                            // listed event is one warning.
-                            for lint in checker.guard_string_lints(&expr) {
-                                let message = format!(
-                                    "{} (in the `when` of subscription '{}')",
-                                    lint.message, subscription.name.text
-                                );
-                                if seen_lints.insert((when_span.start, message.clone())) {
-                                    local.push(
-                                        Diagnostic::warning(message, Some(when_span))
-                                            .with_help(where_help.clone()),
-                                    );
-                                }
-                            }
-                        }
-                        Ok(ty) => {
-                            local.push(
-                                Diagnostic::error(
-                                    format!("when filter must be boolean, found {ty}"),
-                                    Some(when_span),
-                                )
-                                .with_help(where_help),
-                            );
-                        }
-                        Err(errors) => {
-                            for error in errors {
-                                local.push(
-                                    Diagnostic::error(error.message, Some(when_span))
-                                        .with_help(where_help.clone()),
-                                );
-                            }
+                    let wording = ConditionWording {
+                        // The parse errors were emitted above; the
+                        // recovered expression still types per event.
+                        parse_errors: ParseErrorPolicy::ReportedElsewhere,
+                        parse_prefix: String::new(),
+                        type_errors_raw: true,
+                        boolean_prefix: "when filter ".to_string(),
+                        lint: LintWording::Suffixed(format!(
+                            " (in the `when` of subscription '{}')",
+                            subscription.name.text
+                        )),
+                        parse_help: None,
+                        typed_help: Some(where_help),
+                    };
+                    let outcome = check_condition(
+                        &interior,
+                        ConditionSpanning::Fixed(when_span),
+                        wording,
+                        Some(checker),
+                        None,
+                        &mut local,
+                    );
+                    // The use-based guard lint (issue #142), deduped
+                    // across the per-event universes: the same comparison
+                    // against every listed event is one warning.
+                    for lint in outcome.lints {
+                        if seen_lints.insert((when_span.start, lint.message.clone())) {
+                            local.push(lint);
                         }
                     }
                 }

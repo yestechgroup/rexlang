@@ -6,6 +6,7 @@ use salsa::Database as Db;
 
 use crate::compilation::DddCompilation;
 use crate::ddd;
+use crate::entry::finish_surface;
 use crate::imports::DomainImports;
 use crate::session::{parse_ddd_query, Database, SourceFile};
 use crate::union::{domain_files, lower_domains};
@@ -59,13 +60,7 @@ fn compile_ddd_with(
         actors,
         decisions,
     );
-    let mut diagnostics = diagnostics;
-    diagnostics.extend(domains.sigil_diagnostics);
-    DddCompilation {
-        model,
-        domains_model: domains.domains_model,
-        diagnostics,
-    }
+    finish_surface(domains, model, diagnostics, DddCompilation::assemble)
 }
 /// Compiles a `.ddd` design file against its imported domain models in one
 /// call.

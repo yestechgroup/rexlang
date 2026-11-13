@@ -23,10 +23,7 @@ pub fn collect_schema_imports(sources: &[(String, String)]) -> anyhow::Result<Sc
         let Some(ast) = &rex_syntax::parse(source).ast else {
             continue;
         };
-        let dir = Path::new(path)
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
+        let dir = crate::engine_common::dir_of(path);
         for decl in &ast.declarations {
             let rex_syntax::ast::Decl::ImportSchema(import) = decl else {
                 continue;
@@ -79,10 +76,7 @@ pub fn collect_sigil_imports(sources: &[(String, String)]) -> anyhow::Result<Sig
         let Some(ast) = &rex_syntax::parse(source).ast else {
             continue;
         };
-        let dir = Path::new(path)
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
+        let dir = crate::engine_common::dir_of(path);
         for decl in &ast.declarations {
             let rex_syntax::ast::Decl::ImportSchema(import) = decl else {
                 continue;
@@ -162,11 +156,8 @@ fn discover_rosetta_files(file: &Path) -> Vec<PathBuf> {
         }
     }
     let mut out = Vec::new();
-    let base = file
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    collect(base, 0, file, &mut out);
+    let base = crate::engine_common::dir_of(file);
+    collect(&base, 0, file, &mut out);
     out
 }
 

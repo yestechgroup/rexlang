@@ -18,7 +18,6 @@
 //! [`crate::deploy`] policy pattern): the case file as a root class, plan
 //! items as classes of boolean transition predicates.
 
-use rex_expr::Ty;
 use rex_ir::cmmn::{
     CaseDef, CaseFileItem, CaseFileTransition, CmmnModel, ControlRules, Criterion, OnPart,
     PlanItem, PlanItemKind, PlanItemTransition, PlanningMode, Role, ServiceDef, StageBody, TaskDef,
@@ -29,14 +28,14 @@ use rex_ir::{ActorModel, Multiplicity, TypeRef};
 use rex_syntax::ast as dsl;
 use rex_syntax::Span;
 
+use crate::conditions::{
+    check_condition, when_interior, ConditionSpanning, ConditionTriage, ConditionWording,
+    LintWording, ParseErrorPolicy,
+};
 use crate::diagnostic::Diagnostic;
-use crate::import_matches;
+use crate::engine_common;
 use crate::lower::{self, DomainUnit};
 use crate::pipeline;
-
-/// The provided-artifact bucket an import hits when it names a `.ddd`
-/// design (the designs entry of the four-bucket hit array).
-const BUCKET_DESIGNS: usize = 1;
 
 /// The plan-item standard events an [`OnPart::Item`] may watch, in
 /// vocabulary order.
@@ -105,55 +104,14 @@ pub(crate) fn compile_cmmn_file(
 ) -> (Option<CmmnModel>, Vec<(String, Diagnostic)>) {
     let imports = ast.map(|file| file.imports.as_slice()).unwrap_or_default();
 
-    // Which provided bucket each import resolves against (exact path or
-    // lexical resolution, the `.deploy` rule): domains, designs, actors,
-    // events.
-    let hits: Vec<[bool; 4]> = imports
-        .iter()
-        .map(|import| {
-            [
-                domains
-                    .iter()
-                    .any(|unit| import_matches(&import.path, path, &unit.path)),
-                designs
-                    .iter()
-                    .any(|(provided, _)| import_matches(&import.path, path, provided)),
-                actors
-                    .iter()
-                    .any(|(provided, _)| import_matches(&import.path, path, provided)),
-                events
-                    .iter()
-                    .any(|(provided, _)| import_matches(&import.path, path, provided)),
-            ]
-        })
-        .collect();
-
-    let mut import_diagnostics = Vec::new();
-    for (import, hit) in imports.iter().zip(&hits) {
-        // Rule 1 — every import must name a provided artifact of any
-        // surface.
-        if !hit.iter().any(|hit| *hit) {
-            import_diagnostics.push(Diagnostic::error(
-                format!("imported file \"{}\" was not provided", import.path),
-                Some(import.span),
-            ));
-            continue;
-        }
-        // Rule 1 — aliases exist for `execute`, which names designs; every
-        // other surface rejects them.
-        if import.alias.is_some() && !hit[BUCKET_DESIGNS] {
-            import_diagnostics.push(
-                Diagnostic::error(
-                    format!(
-                        "import \"{}\" is not a design; only design imports take an alias",
-                        import.path
-                    ),
-                    Some(import.span),
-                )
-                .with_help("alias the `.ddd` design an `execute` binding names"),
-            );
-        }
-    }
+    let hits = engine_common::four_bucket_hits(imports, path, domains, designs, actors, events);
+    let import_diagnostics = engine_common::import_hit_diagnostics(
+        imports,
+        &hits,
+        None,
+        Some("alias the `.ddd` design an `execute` binding names"),
+        |_| None,
+    );
 
     let diags = pipeline::engine_diags(path, parse_diagnostics, import_diagnostics, domains);
 
@@ -171,35 +129,20 @@ pub(crate) fn compile_cmmn_file(
 
     // Design imports by alias (rule 7): the first aliased design match per
     // alias wins.
-    let mut designs_by_alias: Vec<(&str, &DddModel)> = Vec::new();
-    for (import, hit) in imports.iter().zip(&hits) {
-        let Some(alias) = &import.alias else {
-            continue;
-        };
-        if !hit[BUCKET_DESIGNS] || designs_by_alias.iter().any(|(seen, _)| seen == alias) {
-            continue;
-        }
-        if let Some((_, design)) = designs
-            .iter()
-            .find(|(provided, _)| import_matches(&import.path, path, provided))
-        {
-            designs_by_alias.push((alias.as_str(), design));
-        }
-    }
+    let designs_by_alias = engine_common::designs_by_alias(imports, &hits, designs, path);
 
     let mut model = CmmnModel::new();
     let mut case_names: Vec<(String, Span)> = Vec::new();
 
     for decl in &ast.cases {
         // Rule 2 — case names are unique within the file.
-        if case_names.iter().any(|(name, _)| *name == decl.name) {
-            local.push(
-                Diagnostic::error(format!("duplicate case '{}'", decl.name), Some(decl.span))
-                    .with_help(format!("'{}' is already declared in this file", decl.name)),
-            );
-        } else {
-            case_names.push((decl.name.clone(), decl.span));
-        }
+        engine_common::register_unique_declared(
+            &mut case_names,
+            &decl.name,
+            decl.span,
+            "case",
+            &mut local,
+        );
 
         // Rule 3 — roles: unique names, `.actor` bindings resolve.
         let mut roles: Vec<Role> = Vec::new();
@@ -217,7 +160,7 @@ pub(crate) fn compile_cmmn_file(
             };
             if let Some(actor) = &role.actor {
                 lowered.actor = Some(actor.clone());
-                if !actor_known(actor, actors) {
+                if !engine_common::actor_known(actor, actors) {
                     local.push(
                         Diagnostic::error(
                             format!(
@@ -270,12 +213,7 @@ pub(crate) fn compile_cmmn_file(
         // `case_file.financials.size() > 0` and `VerifyBorrower.completed`
         // are plain feature navigation from `self`. No fake `Model` is
         // assembled.
-        let mut types = rex_expr::DomainTypes::default();
-        for unit in domains {
-            if let Some(domains_model) = &unit.model {
-                types.merge(rex_expr::DomainTypes::from_model(domains_model));
-            }
-        }
+        let mut types = engine_common::union_types(domains);
         let case_file_features: Vec<rex_ir::Feature> = case_file
             .iter()
             .map(|item| {
@@ -407,14 +345,14 @@ fn lower_plan_item(
     local: &mut Vec<Diagnostic>,
 ) {
     // Rule 5 — plan-item names join the shared namespace exactly once.
-    if seen.iter().any(|name| name == &item.name) {
-        local.push(Diagnostic::error(
-            format!("duplicate name '{}' in case '{}'", item.name, case),
-            Some(item.span),
-        ));
-    } else {
-        seen.push(item.name.clone());
-    }
+    engine_common::register_unique(
+        seen,
+        &item.name,
+        item.span,
+        format!("duplicate name '{}' in case '{}'", item.name, case),
+        None,
+        local,
+    );
 
     // Rule 8 — discretionary planning is a task/service concept.
     if item.discretionary && matches!(item.kind, dsl::CmmnItemKind::Milestone) {
@@ -735,88 +673,40 @@ fn check_when(
 ) -> Option<String> {
     // The span covers the raw parens; slice strictly inside (the
     // `when`-condition convention).
-    let interior = source
-        .get(span.start + 1..span.end.saturating_sub(1))
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    let parsed = rex_expr::parse(&interior);
-    for error in &parsed.errors {
-        local.push(
-            Diagnostic::error(
-                format!("invalid criterion condition: {}", error.message),
-                Some(span),
-            )
-            .with_help(format!(
-                "in the `when` of plan item '{item}' in case '{case}'"
-            )),
-        );
-    }
-    let ast = parsed.ast?;
+    let interior = when_interior(source, span).to_string();
     let checker = rex_expr::TypeChecker::new(types.clone()).with_self("", case);
     let when_help = format!("in the `when` of plan item '{item}' in case '{case}'");
-    match checker.type_of(&ast) {
-        Ok(ty) if ty == Ty::boolean() => {
-            // The use-based guard lint (issue #142): a String-typed
-            // operand compared to a string literal in a criterion `when`
-            // warns that the field could be an enum.
-            for lint in checker.guard_string_lints(&ast) {
-                local.push(
-                    Diagnostic::warning(&lint.message, Some(span)).with_help(when_help.clone()),
-                );
-            }
-            Some(interior)
-        }
-        Ok(ty) => {
-            local.push(
-                Diagnostic::error(
-                    format!("criterion condition must be boolean, found {ty}"),
-                    Some(span),
-                )
-                .with_help(when_help),
-            );
-            Some(interior)
-        }
-        Err(errors) => {
-            for error in errors {
-                local.push(
-                    Diagnostic::error(error.message, Some(span)).with_help(format!(
-                        "in the `when` of plan item '{item}' in case '{case}'"
-                    )),
-                );
-            }
-            Some(interior)
-        }
+    let wording = ConditionWording {
+        parse_errors: ParseErrorPolicy::Emit,
+        parse_prefix: "invalid criterion condition: ".to_string(),
+        type_errors_raw: true,
+        boolean_prefix: "criterion condition ".to_string(),
+        lint: LintWording::Raw,
+        parse_help: Some(when_help.clone()),
+        typed_help: Some(when_help),
+    };
+    let outcome = check_condition(
+        &interior,
+        ConditionSpanning::Fixed(span),
+        wording,
+        Some(checker),
+        None,
+        local,
+    );
+    local.extend(outcome.lints);
+    match outcome.triage {
+        ConditionTriage::Unparsed => None,
+        _ => Some(interior),
     }
 }
 
 /// Maps an AST multiplicity annotation onto the IR's bounds form. `None`
 /// (no annotation) is `0..1` — the `.mox` feature convention.
 fn ir_multiplicity(multiplicity: Option<&dsl::Multiplicity>) -> Multiplicity {
-    use dsl::{MultBound, MultiplicityKind};
     let Some(multiplicity) = multiplicity else {
         return Multiplicity::OPTIONAL;
     };
-    let (lower, upper) = match &multiplicity.kind {
-        MultiplicityKind::Unbounded => (0u32, rex_ir::Upper::Unbounded),
-        MultiplicityKind::Exact(n) => (*n as u32, rex_ir::Upper::Finite(*n as u32)),
-        MultiplicityKind::Range(lower, upper) => (
-            *lower as u32,
-            match upper {
-                MultBound::Int(n) => rex_ir::Upper::Finite(*n as u32),
-                MultBound::Star => rex_ir::Upper::Unbounded,
-            },
-        ),
-    };
+    let (lower, upper) =
+        engine_common::multiplicity_bounds(&multiplicity.kind, |_, value| value as u32);
     Multiplicity { lower, upper }
-}
-
-/// `true` when some provided actor model declares the actor name.
-fn actor_known(name: &str, actors: &[(String, ActorModel)]) -> bool {
-    actors.iter().any(|(_, model)| {
-        model
-            .blocks
-            .iter()
-            .any(|block| block.actors.iter().any(|actor| actor.name == name))
-    })
 }
