@@ -482,16 +482,19 @@ pub(crate) fn resolve_decision_service<'a>(
     }
 }
 
+/// One same-name candidate for a pinned reference: its model path, the
+/// model, the declared service, and the model's strictly parsed version
+/// (when the metadata parses).
+type ServiceCandidate<'a> = (
+    &'a str,
+    &'a rex_ir::dmn::DmnModel,
+    &'a rex_ir::dmn::DecisionService,
+    Option<(&'a str, (u64, u64, u64))>,
+);
+
 /// The strict versions a service's candidates declare, sorted and
 /// deduplicated, rendered for the E0252 help line (`1.5.0`, `2.0.0`).
-fn available_versions(
-    candidates: &[(
-        &str,
-        &rex_ir::dmn::DmnModel,
-        &rex_ir::dmn::DecisionService,
-        Option<(&str, (u64, u64, u64))>,
-    )],
-) -> Vec<String> {
+fn available_versions(candidates: &[ServiceCandidate<'_>]) -> Vec<String> {
     let mut versions: Vec<String> = candidates
         .iter()
         .filter_map(|(_, _, _, version)| {

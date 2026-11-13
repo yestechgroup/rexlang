@@ -7,7 +7,7 @@
 //! tests pin it.
 
 use rex_driver::{compile_ddd_str, compile_ddd_str_with_decisions, DddCompilation, Severity};
-use rex_ir::dmn::{DecisionService, DmnModel, ModelMetadata, MetadataKind};
+use rex_ir::dmn::{DecisionService, DmnModel, MetadataKind, ModelMetadata};
 
 const DOMAIN: &str = r#"
 package nz.example.library
@@ -475,10 +475,10 @@ fn compatible_and_exact_pins_resolve_clean() {
         .collect();
     assert_eq!(
         messages,
-        vec![format!(
+        vec![
             "E0252 decision service 'LoanAssessment' is not provided at version \"1.5.0\" \
              invoked by operation 'approve' of service 'LoanService'"
-        )],
+        ],
         "the compatible pins track the new highest version; only the stale exact pin fails"
     );
 }
