@@ -226,13 +226,13 @@ The decision's value is the FEEL expression text, stored **verbatim**
 (interior spacing is never normalized, so `rexlang fmt` round-trips it
 byte-identically). The driver syntax-checks the text (rule 12) and stops
 there — no deep typing at compile time (see Deviations). Conditional
-(`if`) expressions are **not** gated: the rev-pinned dsntk parser
-mis-rejects several valid conditional forms, and the gate never
-false-positives on legitimate FEEL. The intended discipline is that an
+(`if`) expressions gate like every other expression: the rev-pinned
+dsntk fork parser accepts the full DMN FEEL conditional grammar (the
+fork fix for dsntk-rs#14). The intended discipline is that an
 expression reads the decision's **own** information requirements — its
 required inputs, or required decisions by name (whose named outputs may be
 read individually) — but name-level checking of expression text is a
-documented deferral, like the conditional gate.
+documented deferral.
 
 ### `logic invoke <model> { <param>: "<FEEL>"; ... }`
 
@@ -442,9 +442,9 @@ brief:
 12. **Expressions** — `logic expression` texts and invoke binding
     expressions are syntactically valid FEEL (E0208); stored verbatim even
     when checking fails, the `.cmmn` `when` precedent. Conditional (`if`)
-    forms are not gated: the rev-pinned dsntk parser mis-rejects several
-    valid conditional forms, and the gate never false-positives on
-    legitimate FEEL.
+    forms gate like every other expression: the rev-pinned dsntk fork
+    parser accepts the full DMN FEEL conditional grammar (the fork fix
+    for dsntk-rs#14).
 13. **Decision tables** — every referenced markdown table is provided
     (E0209), parses in the dsntk shape (E0210), and its clause signature
     matches the decision's declared contract exactly: input columns equal

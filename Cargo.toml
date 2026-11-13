@@ -73,9 +73,9 @@ xstate-ir = { git = "https://github.com/yestechgroup/restingstate.git", rev = "3
 # dsntk-feel-parser. The validation contract lives in `crates/rex-driver/src/dmn.rs`
 # and `docs/DMN.md`; the recognizer's decision-table type is the
 # compatibility boundary (rex-ir stays ours).
-dsntk-recognizer = { git = "https://github.com/yestechgroup/dsntk-rs.git", rev = "0826f7e3138527f485bfd1e0ebd828e21c215d2d" }
-dsntk-feel = { git = "https://github.com/yestechgroup/dsntk-rs.git", rev = "0826f7e3138527f485bfd1e0ebd828e21c215d2d" }
-dsntk-feel-parser = { git = "https://github.com/yestechgroup/dsntk-rs.git", rev = "0826f7e3138527f485bfd1e0ebd828e21c215d2d" }
+dsntk-recognizer = { git = "https://github.com/yestechgroup/dsntk-rs.git", rev = "c452751f7d5dc72c705684f2c2a372217f3ab460" }
+dsntk-feel = { git = "https://github.com/yestechgroup/dsntk-rs.git", rev = "c452751f7d5dc72c705684f2c2a372217f3ab460" }
+dsntk-feel-parser = { git = "https://github.com/yestechgroup/dsntk-rs.git", rev = "c452751f7d5dc72c705684f2c2a372217f3ab460" }
 
 anyhow = "1.0"
 ariadne = "0.5"

@@ -548,19 +548,37 @@ decision_model M {
 }
 
 #[test]
-fn conditional_feel_expressions_are_deferred_not_gated() {
-    // The rev-pinned dsntk parser mis-rejects `if <bare name> then ...`
-    // (a valid FEEL conditional) — the gate must not false-positive on it,
-    // and `diff` must not read as the `if` keyword.
+fn conditional_feel_expressions_gate_clean() {
+    // The rev-pinned dsntk parser accepts the full DMN FEEL conditional
+    // grammar (the fork fix for dsntk-rs#14): bare-name conditions,
+    // composite `and`/`not` conditions, nested conditionals, and string
+    // branches all gate clean — and `diff` does not read as the `if`
+    // keyword.
     let source = r#"
 decision_model M {
-    inputs { eligible: boolean; }
+    inputs { eligible: boolean; active: boolean; }
     decisions {
         decision d {
             output int;
             logic expression "if eligible then 1 else 2"
         }
         decision e {
+            output int;
+            logic expression "if eligible and active then 1 else 2"
+        }
+        decision f {
+            output int;
+            logic expression "if not eligible then 1 else 2"
+        }
+        decision g {
+            output int;
+            logic expression "if eligible then (if active then 1 else 2) else 3"
+        }
+        decision h {
+            output string;
+            logic expression "if eligible then \"x\" else \"y\""
+        }
+        decision i {
             output int;
             logic expression "diff + 1"
         }
@@ -570,9 +588,36 @@ decision_model M {
     let compilation = compile(source, &[], &[]);
     assert!(
         compilation.diagnostics.is_empty(),
-        "conditional FEEL defers: {:?}",
+        "conditional FEEL gates clean: {:?}",
         compilation.diagnostics
     );
+}
+
+#[test]
+fn broken_conditionals_still_error() {
+    // Closing the deferral must not turn the gate off: genuinely broken
+    // conditional forms are real syntax errors (E0208).
+    for expression in [
+        "if eligible then 1",
+        "if then 1 else 2",
+        "if eligible then else 2",
+    ] {
+        let source = format!(
+            r#"
+decision_model M {{
+    inputs {{ eligible: boolean; }}
+    decisions {{
+        decision d {{
+            output int;
+            logic expression "{expression}"
+        }}
+    }}
+}}
+"#
+        );
+        let compilation = compile(&source, &[], &[]);
+        expect_diagnostic(&compilation, "E0208 invalid FEEL expression on decision 'd'");
+    }
 }
 
 #[test]

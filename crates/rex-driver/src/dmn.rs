@@ -18,11 +18,10 @@
 //! in the model, and the referenced markdown file (provided by the host —
 //! the driver stays filesystem-free) is parsed with the rev-pinned dsntk
 //! recognizer and checked against that signature. FEEL expression texts are
-//! syntax-checked with the dsntk FEEL parser — with one documented
-//! deferral: conditional (`if`) forms are not gated, because the rev-pinned
-//! parser mis-rejects several valid conditional forms; deep FEEL typing is
-//! out of scope for the compile (expressions are stored verbatim in the
-//! artifact).
+//! syntax-checked with the dsntk FEEL parser — the fork parser accepts the
+//! full DMN FEEL conditional grammar (the fork fix for dsntk-rs#14), so
+//! nothing is deferred. Deep FEEL typing is out of scope for the compile
+//! (expressions are stored verbatim in the artifact).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -608,28 +607,18 @@ fn check_logic(
 
 fn check_feel(what: &str, owner: &Name, text: &str, span: Span, local: &mut Vec<Diagnostic>) {
     if let Err(error) = dsntk_feel_parser::parse_expression(&FeelScope::default(), text, false) {
-        // The rev-pinned dsntk parser mis-rejects several valid conditional
-        // forms (`if <bare name> then`, `if a and b then`, `not` conditions,
-        // nested ifs) — gating those would false-positive on legitimate
-        // FEEL, so conditional expressions are deferred (rule 12's documented
-        // gap). Non-conditional parse failures are real syntax errors.
-        if !contains_if_keyword(text) {
-            local.push(Diagnostic::error(
-                format!(
-                    "{} invalid FEEL expression on {} '{}': {}",
-                    E_INVALID_FEEL, what, owner.text, error
-                ),
-                Some(span),
-            ));
-        }
+        // Parse failures are real syntax errors: the rev-pinned fork
+        // parser accepts the full DMN FEEL conditional grammar (the fork
+        // fix for dsntk-rs#14 — bare-name conditions, composite
+        // `and`/`not` conditions, nested ifs), so nothing is deferred.
+        local.push(Diagnostic::error(
+            format!(
+                "{} invalid FEEL expression on {} '{}': {}",
+                E_INVALID_FEEL, what, owner.text, error
+            ),
+            Some(span),
+        ));
     }
-}
-
-/// Whether the text uses FEEL's `if` keyword (an alphanumeric token, so
-/// `diff` does not count).
-fn contains_if_keyword(text: &str) -> bool {
-    text.split(|c: char| !c.is_ascii_alphanumeric())
-        .any(|token| token == "if")
 }
 
 fn check_decision_table(

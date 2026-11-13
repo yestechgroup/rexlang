@@ -115,11 +115,9 @@ fn compile_dmn_with(
 ///     nothing unknown, and binds nothing twice (E0213).
 /// 12. **FEEL syntax** — `logic expression` texts and binding expressions
 ///     parse as FEEL with the dsntk parser (`invalid FEEL expression on
-///     <what> '<name>': <error>`, E0208). One documented deferral:
-///     conditional (`if`) expressions are **not** gated — the rev-pinned
-///     dsntk parser mis-rejects several valid conditional forms (`if
-///     <bare name> then`, composite `and`/`not` conditions, nested ifs),
-///     and a syntax gate must not false-positive on legitimate FEEL.
+///     <what> '<name>': <error>`, E0208). The rev-pinned fork parser
+///     accepts the full DMN FEEL conditional grammar (the fork fix for
+///     dsntk-rs#14), so nothing is deferred.
 ///     Deep FEEL typing is out of scope for the compile: expressions are
 ///     stored verbatim; evaluation is a backend concern.
 /// 13. **Decision tables** — every `logic table "<path>"` decision's
