@@ -235,14 +235,16 @@
 //!                      capability_clause? invokes_clause? emits_clause?
 //!                      transition_clause? guard_clause? ";"
 //! inject_decl       := "inject" name ";"
-//!                    | "inject" "decision" qualified_name ";"
+//!                    | "inject" "decision" qualified_name version_pin? ";"
 //! signature         := type_ref multiplicity? name
 //!                      "(" (param ("," param)*)? ")"
 //! body_signature    := (type_ref multiplicity?)? name
 //!                      "(" (param ("," param)*)? ")"
 //! param             := type_ref multiplicity? name
 //! capability_clause := "capability" name ("," name)*
-//! invokes_clause    := "invokes" qualified_name ("," qualified_name)*
+//! invokes_clause    := "invokes" invokes_entry ("," invokes_entry)*
+//! invokes_entry     := qualified_name version_pin?
+//! version_pin       := "version" ("compatible" | string)
 //! emits_clause      := "emits" name ("," name)*
 //! transition_clause := "transition" name ("." name)?
 //! design_decl       := "abstract"? stereotype name design_flag*
@@ -318,6 +320,15 @@
 //!   are field-named, so a machine-name qualifier does not exist as
 //!   authored). A clause order violation is a syntax error, not a
 //!   formatting opportunity.
+//! * A `version_pin` (rexlang#154) is the reference's declared
+//!   compatibility contract, optional per `invokes` entry and on the
+//!   `inject decision` line: `version compatible` or
+//!   `version "X.Y.Z"` (an exact version). The `version` discriminator is
+//!   the existing lexer keyword token (the `.mox` vocabulary keyword — no
+//!   new keyword, escape rules unchanged); `compatible` is a contextual
+//!   word, an ordinary identifier everywhere else (a service may be named
+//!   `compatible`). Resolution against the decision models' `version`
+//!   metadata is a driver concern (rule 17), never a wire concern.
 //! * `design_flag`s and the single-member search lines (`entity`, `ranking`,
 //!   `analyzer`, `pagination`) are idempotent on repeat — the first
 //!   declaration wins; repeated `text`/`filters`/`sort`/`document`/
@@ -607,7 +618,8 @@
 //!                   | decision_name_list | criterion_decl | flag_decl
 //! performer_clause := "performer" ":" name ";"
 //! execute_clause   := "execute" name "." name "." name ";"
-//! invoke_clause    := "invokes" qualified_name ";"
+//! invoke_clause    := "invokes" qualified_name version_pin? ";"
+//! version_pin      := "version" ("compatible" | string)
 //! decision_name_list := ("inputs" | "outputs") "{" name* "}"
 //! criterion_decl   := ("entry" | "exit") "on" on_part ("," on_part)*
 //!                     ("when" raw_parens)? ";"
@@ -639,12 +651,17 @@
 //!   `stage`; the driver rejects it on milestones — discretionary
 //!   planning is a task/service concept.
 //! * A `decision` plan item invokes a `.dmn` decision service: one
-//!   `invokes <qualified-name>;` clause (a duplicate is a parse error,
-//!   the `execute` clause rule; the driver validates placement,
+//!   `invokes <qualified-name> [version <pin>];` clause (a duplicate is a
+//!   parse error, the `execute` clause rule; the driver validates placement,
 //!   resolution, and the missing clause), plus optional `inputs { name* }`
 //!   and `outputs { name* }` bare name lists (the `.dmn` service
 //!   name-list shape; repeated blocks merge — the `.dmn` rule). The
 //!   qualified name lowers as written; resolution is a driver concern.
+//!   The optional `version` pin (rexlang#154) — `version compatible` or
+//!   `version "X.Y.Z"` — rides with the clause: the `version`
+//!   discriminator is the existing lexer keyword token (no new keyword),
+//!   and `compatible` is a contextual word like every other `.cmmn`
+//!   identifier.
 //! * Semicolons follow the `.evt` rule: every statement line (`role`,
 //!   case-file item, `performer`, `execute`, `invokes`, criterion, flag)
 //!   ends in `;`; block declarations (`case`, `stage`, `task`, `service`,
@@ -1108,6 +1125,7 @@ mod grammar_doc_tests {
             ddd::DECISION,
             ddd::EMITS,
             ddd::INVOKES,
+            ddd::COMPATIBLE,
             ddd::TRANSITION,
             ddd::PROTECTED,
             ddd::MACHINE,
@@ -1192,6 +1210,7 @@ mod grammar_doc_tests {
             cmmn::PERFORMER,
             cmmn::EXECUTE,
             cmmn::INVOKES,
+            cmmn::COMPATIBLE,
             cmmn::INPUTS,
             cmmn::OUTPUTS,
             cmmn::REQUIRED,

@@ -6,8 +6,12 @@ use std::collections::BTreeSet;
 use rex_diagnostics::ddd::{
     E_TRANSITION_NOT_SAVE, E_TRANSITION_QUALIFIER_REQUIRED, E_UNKNOWN_TRANSITION_TRIGGER,
 };
-use rex_diagnostics::dmn::{E_UNKNOWN_INJECTED_SERVICE, E_UNKNOWN_INVOKED_SERVICE};
-use rex_ir::ddd::{Delegation, Service, ServiceOperation, TransitionRef};
+use rex_diagnostics::dmn::{
+    E_AMBIGUOUS_SERVICE_VERSION, E_NO_USABLE_SERVICE_VERSION, E_PINNED_VERSION_NOT_AVAILABLE,
+    E_UNKNOWN_INJECTED_SERVICE, E_UNKNOWN_INVOKED_SERVICE,
+};
+use rex_ir::ddd::{DecisionPin, Delegation, Service, ServiceOperation, TransitionRef};
+use rex_ir::dmn::VersionPin;
 use rex_syntax::ast as dsl;
 
 use crate::diagnostic::Diagnostic;
@@ -131,6 +135,14 @@ pub(crate) fn rule_8_resolve_delegations(
 /// `rex_diagnostics::dmn` code prefixed onto the message (the
 /// `driver.integrity` band precedent) and a did-you-mean help line naming
 /// the declared set.
+///
+/// A reference may carry a **version pin** (rexlang#154): `version
+/// compatible` or `version "X.Y.Z"`. Pinned references resolve through
+/// the shared [`resolve_decision_service`] core — the same core the
+/// `.cmmn` decision-task check runs — and the pin's failure modes error
+/// `E0252`/`E0253`/`E0254` (the `rex_diagnostics::dmn` codes) with the
+/// rule-17 shape: spanned on the reference, the verb and context phrasing
+/// of the unknown-service errors.
 pub(crate) fn rule_17_validate_decision_links(
     decision_checks: &[DecisionCheck<'_>],
     decisions: &[(String, rex_ir::dmn::DmnModel)],
@@ -156,37 +168,341 @@ pub(crate) fn rule_17_validate_decision_links(
             .last()
             .map(|segment| segment.text.as_str())
             .unwrap_or_default();
-        if declared.contains(name) {
-            continue;
-        }
-        let suggestion = rex_diagnostics::did_you_mean_adaptive(name, &declared);
-        let help = match &suggestion {
-            Some(suggestion) => format!("did you mean '{suggestion}'?"),
-            None if declared.is_empty() => {
-                "the decision models declare no decision services".to_string()
+        match resolve_decision_service(name, check.pin, decisions) {
+            DecisionResolution::Resolved { .. } => {}
+            DecisionResolution::Unknown => {
+                let suggestion = rex_diagnostics::did_you_mean_adaptive(name, &declared);
+                let help = match &suggestion {
+                    Some(suggestion) => format!("did you mean '{suggestion}'?"),
+                    None if declared.is_empty() => {
+                        "the decision models declare no decision services".to_string()
+                    }
+                    None => format!(
+                        "the decision models declare: {}",
+                        declared.iter().cloned().collect::<Vec<_>>().join(", ")
+                    ),
+                };
+                let (code, verb) = match check.site {
+                    DecisionSite::Invoked => (E_UNKNOWN_INVOKED_SERVICE, "invoked by"),
+                    DecisionSite::Injected => (E_UNKNOWN_INJECTED_SERVICE, "injected by"),
+                };
+                local.push(
+                    Diagnostic::error(
+                        format!(
+                            "{code} unknown decision service '{name}' {verb} {}",
+                            check.context
+                        ),
+                        Some(check.name.span),
+                    )
+                    .with_help(help),
+                );
             }
-            None => format!(
-                "the decision models declare: {}",
-                declared.iter().cloned().collect::<Vec<_>>().join(", ")
-            ),
-        };
-        let (code, verb) = match check.site {
-            DecisionSite::Invoked => (E_UNKNOWN_INVOKED_SERVICE, "invoked by"),
-            DecisionSite::Injected => (E_UNKNOWN_INJECTED_SERVICE, "injected by"),
-        };
-        local.push(
-            Diagnostic::error(
-                format!(
-                    "{code} unknown decision service '{name}' {verb} {}",
-                    check.context
-                ),
-                Some(check.name.span),
-            )
-            .with_help(help),
-        );
+            DecisionResolution::VersionMiss { pin, available } => {
+                let help = available_versions_help(&available);
+                local.push(
+                    Diagnostic::error(
+                        format!(
+                            "{E_PINNED_VERSION_NOT_AVAILABLE} decision service '{name}' is \
+                             not provided at version \"{pin}\" {} {}",
+                            verb(&check.site),
+                            check.context
+                        ),
+                        Some(check.name.span),
+                    )
+                    .with_help(help),
+                );
+            }
+            DecisionResolution::Ambiguous { version, paths } => {
+                let providers = paths
+                    .iter()
+                    .map(|path| format!("'{path}'"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                local.push(
+                    Diagnostic::error(
+                        format!(
+                            "{E_AMBIGUOUS_SERVICE_VERSION} decision service '{name}' at \
+                             version \"{version}\" is ambiguous {} {}: provided by \
+                             {providers}",
+                            verb(&check.site),
+                            check.context
+                        ),
+                        Some(check.name.span),
+                    )
+                    .with_help(
+                        "keep one model per version in the provided bucket, or pin a \
+                         version only one of them declares",
+                    ),
+                );
+            }
+            DecisionResolution::NoUsableVersion => {
+                local.push(
+                    Diagnostic::error(
+                        format!(
+                            "{E_NO_USABLE_SERVICE_VERSION} decision service '{name}' \
+                             declares no usable version {} {}",
+                            verb(&check.site),
+                            check.context
+                        ),
+                        Some(check.name.span),
+                    )
+                    .with_help(
+                        "a `compatible` pin needs a model whose `version` metadata is \
+                         strict \"X.Y.Z\"; the models providing it declare none",
+                    ),
+                );
+            }
+        }
     }
     local
 }
+
+/// The rule-17 verb phrase a decision-link site embeds in its messages:
+/// `invoked by` (an operation's `invokes` entry) or `injected by` (a
+/// service's `inject decision` line).
+fn verb(site: &DecisionSite) -> &'static str {
+    match site {
+        DecisionSite::Invoked => "invoked by",
+        DecisionSite::Injected => "injected by",
+    }
+}
+
+/// Lowers a parsed `version` pin into the wire artifact (rexlang#154):
+/// the surface spelling maps one-to-one onto the shared
+/// [`rex_ir::dmn::VersionPin`].
+pub(crate) fn lower_version_pin(pin: &dsl::DddVersionPin) -> VersionPin {
+    match pin {
+        dsl::DddVersionPin::Compatible => VersionPin::Compatible,
+        dsl::DddVersionPin::Exact(value) => VersionPin::Exact(value.clone()),
+    }
+}
+
+/// The help line naming the strict versions a service's candidates
+/// declare: `the decision models provide it at: 1.5.0, 2.0.0`, or the
+/// none-declared wording when the candidates carry no parseable version.
+pub(crate) fn available_versions_help(available: &[String]) -> String {
+    if available.is_empty() {
+        "the models providing it carry no strict \"X.Y.Z\" version metadata".to_string()
+    } else {
+        format!(
+            "the decision models provide it at: {}",
+            available.join(", ")
+        )
+    }
+}
+
+/// The outcome of resolving one decision-service reference against a
+/// `(path, DmnModel)` bucket (rexlang#154): rule 17 and the `.cmmn`
+/// decision-task check map the variants to their own diagnostics (the
+/// `E0250`-shaped codes on the design side; exact messages on the case
+/// side, which carries no numeric codes).
+pub(crate) enum DecisionResolution<'a> {
+    /// The reference resolved to one model's service.
+    Resolved {
+        /// The model providing the service.
+        model: &'a rex_ir::dmn::DmnModel,
+        /// The resolved service declaration.
+        service: &'a rex_ir::dmn::DecisionService,
+    },
+    /// No provided model declares the service — the unknown-reference
+    /// shape (E0250 on the design side), fired for pinned references too.
+    Unknown,
+    /// The service is declared but no candidate declares the pinned
+    /// version; `available` lists the strict versions the same-name
+    /// candidates do declare (sorted, deduplicated).
+    VersionMiss {
+        /// The pin as written.
+        pin: String,
+        /// The candidates' declared strict versions.
+        available: Vec<String>,
+    },
+    /// The selection is ambiguous: two or more models declare the same
+    /// version — the exact pin's match set, or the `compatible`
+    /// selection's tie at the top version. `paths` lists every declaring
+    /// model's bucket path, in bucket order.
+    Ambiguous {
+        /// The version the candidates share, as the first declaring
+        /// candidate wrote it.
+        version: String,
+        /// The declaring models' bucket paths.
+        paths: Vec<String>,
+    },
+    /// A `compatible` pin whose candidates all carry a `version` metadata
+    /// that is absent or not strict `X.Y.Z` — nothing can be selected.
+    NoUsableVersion,
+}
+
+/// Parses a **strict** `X.Y.Z` version: three non-empty dot-separated
+/// parts of digits only. Anything else — `draft-3`, `1.5`, `1.5.0-beta` —
+/// is no usable version: the `.dmn` surface keeps `version` metadata
+/// permissive (a free string), and strictness applies only when a pin
+/// joins against it.
+pub(crate) fn strict_version(text: &str) -> Option<(u64, u64, u64)> {
+    let parts: Vec<&str> = text.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let numbers: Option<Vec<u64>> = parts
+        .iter()
+        .map(|part| {
+            if part.is_empty() || !part.chars().all(|c| c.is_ascii_digit()) {
+                return None;
+            }
+            part.parse::<u64>().ok()
+        })
+        .collect();
+    numbers.map(|parts| (parts[0], parts[1], parts[2]))
+}
+
+/// The model's declared `version` metadata, when any (the metadata is a
+/// singleton per model — rule 3 — so the first entry wins).
+fn declared_version(model: &rex_ir::dmn::DmnModel) -> Option<&str> {
+    model
+        .metadata
+        .iter()
+        .find(|metadata| metadata.kind == rex_ir::dmn::MetadataKind::Version)
+        .map(|metadata| metadata.value.as_str())
+}
+
+/// The shared decision-service resolver (rexlang#154): resolves an
+/// authored reference (a bare name or a dotted qualified name — both read
+/// by their **last segment**, the rule-17 convention) against the
+/// `(path, DmnModel)` bucket the host provides, honoring the reference's
+/// optional [`dsl::DddVersionPin`]. The `.ddd` rule-17 validation and the
+/// `.cmmn` decision-task check both resolve through this core, so the two
+/// surfaces share one semantics:
+///
+/// - **No pin** — the name exists in the union of the provided models'
+///   services; the first model declaring it wins (the bucket order, the
+///   pre-pin behavior). Unknown names are [`DecisionResolution::Unknown`].
+/// - **Exact** (`version "X.Y.Z"`) — the candidates are the same-name
+///   services; exactly the candidates whose model declares the pinned
+///   version (both parsed strictly as `X.Y.Z` and compared as versions)
+///   survive. Zero matches are [`DecisionResolution::VersionMiss`] (the
+///   help names the versions the bucket does declare); two or more are
+///   [`DecisionResolution::Ambiguous`] (naming every declaring model).
+/// - **Compatible** (`version compatible`) — the candidates with a
+///   parseable version participate; the selection is the **highest semver
+///   in the highest major present** (a deterministic total order). A
+///   candidate whose `version` metadata is absent or not strict `X.Y.Z`
+///   cannot participate: when *no* candidate can,
+///   [`DecisionResolution::NoUsableVersion`]; when two or more tie at the
+///   selected version, [`DecisionResolution::Ambiguous`].
+///
+/// An empty bucket resolves every reference as
+/// [`DecisionResolution::Unknown`] (the callers short-circuit that to the
+/// unvalidated lowering — the plain-compile behavior).
+pub(crate) fn resolve_decision_service<'a>(
+    authored: &str,
+    pin: Option<&dsl::DddVersionPin>,
+    decisions: &'a [(String, rex_ir::dmn::DmnModel)],
+) -> DecisionResolution<'a> {
+    let name = authored.rsplit('.').next().unwrap_or_default();
+    // The same-name candidates, in bucket order: one service per model
+    // (service names are unique per model — the `.dmn` rule 2), each with
+    // its declared version metadata split into the raw display text and
+    // the strict parse.
+    type Candidate<'a> = (
+        &'a str,
+        &'a rex_ir::dmn::DmnModel,
+        &'a rex_ir::dmn::DecisionService,
+        Option<(&'a str, (u64, u64, u64))>,
+    );
+    let candidates: Vec<Candidate<'a>> = decisions
+        .iter()
+        .filter_map(|(path, model)| {
+            model
+                .services
+                .iter()
+                .find(|service| service.name == name)
+                .map(|service| {
+                    let version = declared_version(model)
+                        .and_then(|text| strict_version(text).map(|parsed| (text, parsed)));
+                    (path.as_str(), model, service, version)
+                })
+        })
+        .collect();
+    let Some(&(_, model, service, _)) = candidates.first() else {
+        return DecisionResolution::Unknown;
+    };
+    let Some(pin) = pin else {
+        return DecisionResolution::Resolved { model, service };
+    };
+    match pin {
+        dsl::DddVersionPin::Exact(value) => {
+            // A pin that is not strict `X.Y.Z` names no version any model
+            // can declare — the miss path, with the pin echoed so the
+            // typo is visible.
+            let pinned = strict_version(value);
+            let matched: Vec<&Candidate<'a>> = candidates
+                .iter()
+                .filter(|(_, _, _, version)| version.as_ref().map(|(_, parsed)| *parsed) == pinned)
+                .collect();
+            match matched.as_slice() {
+                [] => DecisionResolution::VersionMiss {
+                    pin: value.clone(),
+                    available: available_versions(&candidates),
+                },
+                [only] => DecisionResolution::Resolved {
+                    model: only.1,
+                    service: only.2,
+                },
+                _ => DecisionResolution::Ambiguous {
+                    version: value.clone(),
+                    paths: matched.iter().map(|only| only.0.to_string()).collect(),
+                },
+            }
+        }
+        dsl::DddVersionPin::Compatible => {
+            // Only candidates carrying a parseable version participate;
+            // the selection is the highest semver in the highest major
+            // present (a deterministic total order).
+            let Some(&(_, _, _, Some((raw, top)))) = candidates
+                .iter()
+                .max_by_key(|(_, _, _, version)| version.map(|(_, parsed)| parsed))
+            else {
+                return DecisionResolution::NoUsableVersion;
+            };
+            let tied: Vec<&Candidate<'a>> = candidates
+                .iter()
+                .filter(|(_, _, _, version)| version.is_some_and(|(_, parsed)| parsed == top))
+                .collect();
+            if tied.len() > 1 {
+                return DecisionResolution::Ambiguous {
+                    version: raw.to_string(),
+                    paths: tied.iter().map(|only| only.0.to_string()).collect(),
+                };
+            }
+            let only = tied[0];
+            DecisionResolution::Resolved {
+                model: only.1,
+                service: only.2,
+            }
+        }
+    }
+}
+
+/// The strict versions a service's candidates declare, sorted and
+/// deduplicated, rendered for the E0252 help line (`1.5.0`, `2.0.0`).
+fn available_versions(
+    candidates: &[(
+        &str,
+        &rex_ir::dmn::DmnModel,
+        &rex_ir::dmn::DecisionService,
+        Option<(&str, (u64, u64, u64))>,
+    )],
+) -> Vec<String> {
+    let mut versions: Vec<String> = candidates
+        .iter()
+        .filter_map(|(_, _, _, version)| {
+            version.map(|(_, (major, minor, patch))| format!("{major}.{minor}.{patch}"))
+        })
+        .collect();
+    versions.sort();
+    versions.dedup();
+    versions
+}
+
 /// Issue rexlang#176 — the explicit transition binding of a delegated
 /// service operation. The binding is legal only on a delegation to a
 /// repository `save` **of this module** (rule 8's own errors cover the
@@ -462,11 +778,23 @@ pub(crate) fn lower_module_services<'a>(
             // resolve in the union integrity pass).
             let emits: Vec<String> = op.emits.iter().map(|name| name.text.clone()).collect();
             // The invoked decision services lower as their last segment
-            // (the resolution universe's spelling — rule 17).
+            // (the resolution universe's spelling — rule 17); the pinned
+            // entries also lower their `version` pins (rexlang#154), each
+            // named by the same last-segment spelling.
             let invokes: Vec<String> = op
                 .invokes
                 .iter()
-                .map(|name| name.segments.last().unwrap().text.clone())
+                .map(|entry| entry.name.segments.last().unwrap().text.clone())
+                .collect();
+            let decision_pins: Vec<DecisionPin> = op
+                .invokes
+                .iter()
+                .filter_map(|entry| {
+                    entry.pin.as_ref().map(|pin| DecisionPin {
+                        name: entry.name.segments.last().unwrap().text.clone(),
+                        pin: lower_version_pin(pin),
+                    })
+                })
                 .collect();
             for capability in &op.capabilities {
                 registries.capability_checks.push(CapabilityCheck {
@@ -484,7 +812,8 @@ pub(crate) fn lower_module_services<'a>(
                         "operation '{}' of service '{}'",
                         op.name.text, service.name.text
                     ),
-                    name,
+                    name: &name.name,
+                    pin: name.pin.as_ref(),
                 });
             }
 
@@ -551,6 +880,7 @@ pub(crate) fn lower_module_services<'a>(
                     capabilities,
                     emits,
                     invokes,
+                    decision_pins,
                     condition: condition_text_out,
                     condition_paths,
                     transition,
@@ -653,6 +983,7 @@ pub(crate) fn lower_module_services<'a>(
                     capabilities,
                     emits,
                     invokes,
+                    decision_pins,
                     condition: condition_text_out,
                     condition_paths,
                     transition: None,
@@ -666,11 +997,12 @@ pub(crate) fn lower_module_services<'a>(
         for dependency in &service.dependencies {
             registries.inject_checks.push(InjectCheck { dependency });
         }
-        for name in &service.decision_dependencies {
+        for dependency in &service.decision_dependencies {
             registries.decision_checks.push(DecisionCheck {
                 site: DecisionSite::Injected,
                 context: format!("service '{}'", service.name.text),
-                name,
+                name: &dependency.name,
+                pin: dependency.pin.as_ref(),
             });
         }
 
@@ -693,11 +1025,22 @@ pub(crate) fn lower_module_services<'a>(
                 .map(|name| name.text.clone())
                 .collect(),
             // The injected decision services lower as their last segment
-            // (the resolution universe's spelling — rule 17).
+            // (the resolution universe's spelling — rule 17); the pinned
+            // lines also lower their `version` pins (rexlang#154).
             decision_dependencies: service
                 .decision_dependencies
                 .iter()
-                .map(|name| name.segments.last().unwrap().text.clone())
+                .map(|entry| entry.name.segments.last().unwrap().text.clone())
+                .collect(),
+            decision_dependency_pins: service
+                .decision_dependencies
+                .iter()
+                .filter_map(|entry| {
+                    entry.pin.as_ref().map(|pin| DecisionPin {
+                        name: entry.name.segments.last().unwrap().text.clone(),
+                        pin: lower_version_pin(pin),
+                    })
+                })
                 .collect(),
         });
     }

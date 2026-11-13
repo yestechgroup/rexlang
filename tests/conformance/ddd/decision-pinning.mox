@@ -1,0 +1,7 @@
+// The pinning domain: the smallest class the pinned design's signatures
+// resolve against.
+package nz.example.pinning
+
+class LoanApplication {
+    int amount
+}

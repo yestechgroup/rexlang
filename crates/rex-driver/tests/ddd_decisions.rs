@@ -7,7 +7,7 @@
 //! tests pin it.
 
 use rex_driver::{compile_ddd_str, compile_ddd_str_with_decisions, DddCompilation, Severity};
-use rex_ir::dmn::{DecisionService, DmnModel};
+use rex_ir::dmn::{DecisionService, DmnModel, ModelMetadata, MetadataKind};
 
 const DOMAIN: &str = r#"
 package nz.example.library
@@ -53,6 +53,19 @@ fn decision_model(services: &[&str]) -> DmnModel {
             encapsulates: Vec::new(),
         });
     }
+    model
+}
+
+/// A decision model whose declared `version` metadata is `version`, with
+/// one decision service named `name` (rexlang#154's resolution universe:
+/// the model's version metadata is the compatibility contract a pin
+/// joins against).
+fn versioned_model(name: &str, version: &str) -> DmnModel {
+    let mut model = decision_model(&[name]);
+    model.metadata.push(ModelMetadata {
+        kind: MetadataKind::Version,
+        value: version.to_string(),
+    });
     model
 }
 
@@ -341,4 +354,294 @@ application Library {
     );
     assert_clean(&compilation);
     assert!(compilation.model.is_some());
+}
+
+// --- version pins (rexlang#154) ------------------------------------------------
+
+/// A design pinning both ways: `compatible` on the inject line and the
+/// first invokes entry, an exact pin on the second entry, and one
+/// pin-less entry (today's shape).
+const PINNED: &str = r#"
+import "library.mox";
+import "lending-1.dmn";
+import "lending-2.dmn";
+
+application Library {
+    base nz.example.library
+
+    module lending {
+        service LoanService {
+            inject decision LoanAssessment version compatible;
+            boolean approve(Book book)
+                invokes LoanAssessment version compatible, LoanAssessment version "1.5.0", RiskScore;
+        }
+    }
+}
+"#;
+
+/// The lending pair the pins resolve against: the same service contract
+/// at 1.5.0 and 2.0.0 (the major bump), plus the unpinned service.
+fn lending_bucket() -> Vec<(String, DmnModel)> {
+    let mut lending_1 = versioned_model("LoanAssessment", "1.5.0");
+    lending_1.services.push(DecisionService {
+        name: "RiskScore".to_string(),
+        description: None,
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+        encapsulates: Vec::new(),
+    });
+    vec![
+        ("lending-1.dmn".to_string(), lending_1),
+        (
+            "lending-2.dmn".to_string(),
+            versioned_model("LoanAssessment", "2.0.0"),
+        ),
+    ]
+}
+
+/// Adds the unpinned `RiskScore` service to a model, so the pin-less
+/// entry of the pinned design resolves beside the pinned ones.
+fn with_risk_score(mut model: DmnModel) -> DmnModel {
+    model.services.push(DecisionService {
+        name: "RiskScore".to_string(),
+        description: None,
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+        encapsulates: Vec::new(),
+    });
+    model
+}
+
+/// Pins lower into the artifact as authored: the name lists stay ordered,
+/// and the pinned entries carry their `DecisionPin` entries.
+#[test]
+fn pinned_references_lower_their_pins_and_resolve() {
+    let compilation = compile_with_decisions(PINNED, &lending_bucket());
+    assert_clean(&compilation);
+    let model = compilation.model.expect("artifact");
+    let service = &model.modules[0].services[0];
+    assert_eq!(
+        service.decision_dependency_pins,
+        vec![rex_ir::ddd::DecisionPin {
+            name: "LoanAssessment".to_string(),
+            pin: rex_ir::dmn::VersionPin::Compatible,
+        }],
+        "the inject line lowers its pin"
+    );
+    let op = &service.operations[0];
+    assert_eq!(
+        op.invokes,
+        vec!["LoanAssessment", "LoanAssessment", "RiskScore"]
+    );
+    assert_eq!(op.decision_pins.len(), 2);
+    assert_eq!(op.decision_pins[0].pin, rex_ir::dmn::VersionPin::Compatible);
+    assert_eq!(
+        op.decision_pins[1],
+        rex_ir::ddd::DecisionPin {
+            name: "LoanAssessment".to_string(),
+            pin: rex_ir::dmn::VersionPin::Exact("1.5.0".to_string()),
+        }
+    );
+}
+
+/// `version compatible` resolves to the highest version in the highest
+/// major present — here 2.0.0, the only major — and the exact pin
+/// resolves to the model that declares it. Both compile clean; an
+/// unresolvable pin is the only way a clean compile distinguishes.
+#[test]
+fn compatible_and_exact_pins_resolve_clean() {
+    let compilation = compile_with_decisions(PINNED, &lending_bucket());
+    assert_clean(&compilation);
+
+    // The same pins against a bucket where the exact version no longer
+    // exists — only the exact pin fails (E0252), while the compatible
+    // pins track the highest version in the highest major present (3.0.0
+    // over 2.9.0).
+    let decisions = vec![
+        (
+            "lending-1.dmn".to_string(),
+            with_risk_score(versioned_model("LoanAssessment", "2.9.0")),
+        ),
+        (
+            "lending-2.dmn".to_string(),
+            versioned_model("LoanAssessment", "3.0.0"),
+        ),
+    ];
+    let compilation = compile_with_decisions(PINNED, &decisions);
+    let messages: Vec<String> = compilation
+        .diagnostics
+        .iter()
+        .map(|(_, diagnostic)| diagnostic.message.clone())
+        .collect();
+    assert_eq!(
+        messages,
+        vec![format!(
+            "E0252 decision service 'LoanAssessment' is not provided at version \"1.5.0\" \
+             invoked by operation 'approve' of service 'LoanService'"
+        )],
+        "the compatible pins track the new highest version; only the stale exact pin fails"
+    );
+}
+
+/// An exact pin naming a version no model declares errors E0252, with the
+/// versions the bucket does declare on the help line.
+#[test]
+fn an_exact_pin_to_an_undeclared_version_errors_e0252() {
+    let source = PINNED.replace("version \"1.5.0\"", "version \"1.9.0\"");
+    let compilation = compile_with_decisions(&source, &lending_bucket());
+    let (path, diagnostic) = single(&compilation);
+    assert_eq!(path, "design.ddd");
+    assert_eq!(diagnostic.severity, Severity::Error);
+    assert_eq!(
+        diagnostic.message,
+        "E0252 decision service 'LoanAssessment' is not provided at version \"1.9.0\" \
+         invoked by operation 'approve' of service 'LoanService'"
+    );
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("the decision models provide it at: 1.5.0, 2.0.0")
+    );
+    let needle = "LoanAssessment";
+    let (start, _) = source
+        .match_indices(needle)
+        .nth(2)
+        .expect("the exact-pinned invokes reference");
+    assert_eq!(diagnostic.span, Some((start..start + needle.len()).into()));
+    assert!(compilation.model.is_none());
+}
+
+/// An exact pin that is not strict `X.Y.Z` names no version any model can
+/// declare — the E0252 miss shape with the pin echoed.
+#[test]
+fn a_malformed_exact_pin_is_the_miss_shape() {
+    let source = PINNED.replace("version \"1.5.0\"", "version \"draft-3\"");
+    let compilation = compile_with_decisions(&source, &lending_bucket());
+    let (_, diagnostic) = single(&compilation);
+    assert_eq!(
+        diagnostic.message,
+        "E0252 decision service 'LoanAssessment' is not provided at version \"draft-3\" \
+         invoked by operation 'approve' of service 'LoanService'"
+    );
+}
+
+/// Two models declaring the same version make the selection ambiguous —
+/// E0253 names every declaring model, for the exact pin and for the
+/// `compatible` tie alike.
+#[test]
+fn two_models_declaring_the_same_version_error_e0253() {
+    let mut lending_1 = versioned_model("LoanAssessment", "1.5.0");
+    lending_1.services.push(DecisionService {
+        name: "RiskScore".to_string(),
+        description: None,
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+        encapsulates: Vec::new(),
+    });
+    let decisions = vec![
+        ("lending-1.dmn".to_string(), lending_1),
+        (
+            "lending-2.dmn".to_string(),
+            versioned_model("LoanAssessment", "1.5.0"),
+        ),
+    ];
+    // The compatible pins tie at the shared top version; the exact pin
+    // matches both models declaring it.
+    let compilation = compile_with_decisions(PINNED, &decisions);
+    let messages: Vec<String> = compilation
+        .diagnostics
+        .iter()
+        .map(|(_, diagnostic)| diagnostic.message.clone())
+        .collect();
+    assert_eq!(
+        messages,
+        vec![
+            "E0253 decision service 'LoanAssessment' at version \"1.5.0\" is ambiguous \
+             invoked by operation 'approve' of service 'LoanService': provided by \
+             'lending-1.dmn', 'lending-2.dmn'",
+            "E0253 decision service 'LoanAssessment' at version \"1.5.0\" is ambiguous \
+             invoked by operation 'approve' of service 'LoanService': provided by \
+             'lending-1.dmn', 'lending-2.dmn'",
+            "E0253 decision service 'LoanAssessment' at version \"1.5.0\" is ambiguous \
+             injected by service 'LoanService': provided by 'lending-1.dmn', 'lending-2.dmn'",
+        ]
+    );
+    assert!(compilation.model.is_none());
+}
+
+/// `version compatible` against candidates none of which declares a
+/// strict `X.Y.Z` version errors E0254. The `.dmn` side stays permissive:
+/// a `version draft-3` model compiles alone but cannot satisfy a pin.
+#[test]
+fn a_compatible_pin_against_no_usable_version_errors_e0254() {
+    let decisions = vec![
+        (
+            "lending-1.dmn".to_string(),
+            with_risk_score(versioned_model("LoanAssessment", "draft-3")),
+        ),
+        (
+            "lending-2.dmn".to_string(),
+            versioned_model("LoanAssessment", "2024-01-01"),
+        ),
+    ];
+    let compilation = compile_with_decisions(PINNED, &decisions);
+    let messages: Vec<&str> = compilation
+        .diagnostics
+        .iter()
+        .map(|(_, diagnostic)| diagnostic.message.as_str())
+        .collect();
+    assert_eq!(
+        messages,
+        vec![
+            "E0254 decision service 'LoanAssessment' declares no usable version \
+             invoked by operation 'approve' of service 'LoanService'",
+            "E0252 decision service 'LoanAssessment' is not provided at version \
+             \"1.5.0\" invoked by operation 'approve' of service 'LoanService'",
+            "E0254 decision service 'LoanAssessment' declares no usable version \
+             injected by service 'LoanService'",
+        ]
+    );
+    assert_eq!(
+        compilation.diagnostics[0].1.help.as_deref(),
+        Some(
+            "a `compatible` pin needs a model whose `version` metadata is strict \
+             \"X.Y.Z\"; the models providing it declare none"
+        )
+    );
+    assert!(compilation.model.is_none());
+}
+
+/// A candidate with a usable version participates normally beside
+/// unusable ones — the parseable model resolves the compatible pin.
+#[test]
+fn usable_versions_participate_beside_unusable_ones() {
+    let decisions = vec![
+        (
+            "lending-1.dmn".to_string(),
+            with_risk_score(versioned_model("LoanAssessment", "draft-3")),
+        ),
+        (
+            "lending-2.dmn".to_string(),
+            versioned_model("LoanAssessment", "1.5.0"),
+        ),
+    ];
+    let compilation = compile_with_decisions(PINNED, &decisions);
+    assert_clean(&compilation);
+}
+
+/// A pinned reference to a name no model declares is still the E0250
+/// unknown-service shape — the name resolves first, the pin second.
+#[test]
+fn a_pinned_unknown_name_is_still_e0250() {
+    let source = PINNED.replace("RiskScore;", "RiskScor version compatible;");
+    let compilation = compile_with_decisions(&source, &lending_bucket());
+    let (_, diagnostic) = single(&compilation);
+    assert_eq!(
+        diagnostic.message,
+        "E0250 unknown decision service 'RiskScor' invoked by operation \
+         'approve' of service 'LoanService'"
+    );
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("did you mean 'RiskScore'?")
+    );
 }

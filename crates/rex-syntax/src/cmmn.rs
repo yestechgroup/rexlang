@@ -37,8 +37,15 @@ pub(crate) const EXIT: &str = "exit";
 pub(crate) const PERFORMER: &str = "performer";
 /// The `execute <alias>.<Service>.<operation>;` clause of a service body.
 pub(crate) const EXECUTE: &str = "execute";
-/// The `invokes <qualified-name>;` clause of a decision body.
+/// The `invokes <qualified-name> [version <pin>];` clause of a decision
+/// body.
 pub(crate) const INVOKES: &str = "invokes";
+/// The `compatible` word of a decision reference's `version` pin
+/// (rexlang#154): `version compatible` resolves to the highest version in
+/// the highest major present among the candidates. A contextual word like
+/// the rest — special only right after a reference's `version`
+/// discriminator, an ordinary identifier everywhere else.
+pub(crate) const COMPATIBLE: &str = "compatible";
 /// The `inputs { <name>* }` list of a decision body (the `.dmn` service
 /// name-list shape).
 pub(crate) const INPUTS: &str = "inputs";

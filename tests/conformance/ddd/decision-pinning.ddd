@@ -1,0 +1,16 @@
+// The decision-link version pins (rexlang#154): a `compatible` pin on
+// the inject line and the first invokes entry, an exact pin on the
+// second. The driver test pools the versioned lending pair
+// (tests/conformance/dmn/lending-1.dmn at 1.5.0, lending-2.dmn at
+// 2.0.0) — `compatible` resolves to 2.0.0, the exact pin to lending-1.
+import "decision-pinning.mox";
+
+application Pinning {
+    base nz.example.pinning
+    module lending {
+        service LoanService {
+            inject decision LoanAssessment version compatible;
+            boolean approve() invokes LoanAssessment version compatible, LoanAssessment version "1.5.0";
+        }
+    }
+}

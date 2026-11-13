@@ -80,6 +80,14 @@ pub(crate) const DECISION: &str = "decision";
 /// repository operations carry none, so accepting one would silently drop
 /// data).
 pub(crate) const INVOKES: &str = "invokes";
+/// The `compatible` word of a decision reference's `version` pin
+/// (rexlang#154): `invokes RiskScore version compatible` and the exact
+/// `version "1.4.2"` shape. A contextual word like the rest — special
+/// only right after a reference's `version` discriminator, an ordinary
+/// identifier everywhere else (`^compatible` escapes; a service may be
+/// named `compatible`). `version` itself is the existing lexer keyword
+/// token (the `.mox` vocabulary keyword), not a new one.
+pub(crate) const COMPATIBLE: &str = "compatible";
 /// The `emits <Event> (, <Event>)*` clause of a service operation: the
 /// events the operation produces (loosely coupled to the `.evt` layer —
 /// existence/coverage resolve in the union integrity pass, never at the
