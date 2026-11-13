@@ -423,6 +423,59 @@ entity + value-object pairing (`PayRun` containing `PayRunType`)
 compiles. Rename one of the declarations to resolve an E0300; give one
 class a distinct `table "…"` to resolve an E0301.
 
+### Register classes
+
+A `register` declaration declares a **register class** — an org/role noun
+space the generated app can list, join, and reference (issue rexlang#181):
+
+```mox
+package nz.example.org
+
+/// A role in the organisation.
+register Role {
+    /// The role's display name.
+    String display_name
+    String[0..1] badge = "none"
+    String code { pattern "[A-Z]{2,8}" minLength 2 }
+}
+
+/// A person holding zero or more organisational roles.
+class Person {
+    id String email
+    refers Role[] roles
+}
+```
+
+The `register_decl` production is normative in the parser module docs under
+[*`.mox` model sources*](https://docs.rs/rex-syntax/latest/rex_syntax/parser/index.html).
+A register body holds the `attribute` production only — attributes with
+their modifiers, multiplicities, defaults, and constraint blocks, exactly
+like a class body. Relationship features are **not part of the v1 register
+grammar**: `contains`, `refers`, `container`, `op`, and `derived` in a
+register body are parse errors, as are `extends` and the `table "…"`
+annotation. (Other classes may still `refers`/`contains` a register class;
+the flat noun space means a register class itself declares no relations.)
+
+A register declaration lowers onto the standard Core IR as a **plain
+`ClassDef`** — its attributes as attribute features with the same stable-ID
+contract — plus the additive `kind` marker (`rex-ir` wire-contract rule 16):
+`"kind": "register"` on the serialized class. The marker is the *only*
+difference: ordinary classes carry no `kind` field at all, so models without
+register declarations compile to byte-identical artifacts, and every
+backend treats register classes as ordinary classes.
+
+Register classes join every existing class-level rule unchanged: the
+package namespace (a register class is a class for `refers`/`extends`
+targets and for the union namespace), the duplicate-declaration check, the
+stripped-name and effective-table uniqueness rules (E0300/E0301), and
+feature-id assignment.
+
+`register` is a **contextual word**, not a keyword: it is special only at
+the top-level item position (no other `.mox` item starts with a bare
+identifier). A class, feature, enum, or datatype may still be named
+`register`, and the word stays a plain name inside every body. Escaped
+`^register` is always an ordinary identifier.
+
 ### Primitives and the `date` type
 
 Attribute, parameter, and facet positions admit the built-in primitives
