@@ -1,0 +1,243 @@
+{
+  "formatVersion": 1,
+  "rexVersion": "0.1.0",
+  "packages": [
+    {
+      "name": "nz.example.org",
+      "annotations": [],
+      "enums": [],
+      "datatypes": [],
+      "interfaces": [],
+      "classes": [
+        {
+          "name": "CostCenter",
+          "description": "A cost centre effort is booked against.",
+          "extends": [],
+          "features": [
+            {
+              "id": 0,
+              "name": "code",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": true,
+              "isReadOnly": false
+            },
+            {
+              "id": 1,
+              "name": "display_name",
+              "description": "The cost centre's display name.",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            }
+          ]
+        },
+        {
+          "name": "Role",
+          "description": "A role in the organisation: a register-class noun the generated app\nlists, joins, and references.",
+          "extends": [],
+          "features": [
+            {
+              "id": 0,
+              "name": "display_name",
+              "description": "The role's display name.",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            },
+            {
+              "id": 1,
+              "name": "badge",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 0,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "default": {
+                "type": "string",
+                "value": "none"
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            },
+            {
+              "id": 2,
+              "name": "code",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false,
+              "constraints": {
+                "pattern": "[A-Z]{2,8}",
+                "minLength": 2
+              }
+            }
+          ],
+          "kind": "register"
+        },
+        {
+          "name": "Team",
+          "description": "A team booking effort against organisational roles.",
+          "extends": [],
+          "features": [
+            {
+              "id": 0,
+              "name": "display_name",
+              "description": "The team's display name.",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            },
+            {
+              "id": 1,
+              "name": "headcount",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "int"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false,
+              "constraints": {
+                "minimum": 0
+              }
+            }
+          ],
+          "kind": "register"
+        },
+        {
+          "name": "Person",
+          "description": "A person holding zero or more organisational roles.",
+          "extends": [],
+          "features": [
+            {
+              "id": 0,
+              "name": "email",
+              "kind": "attribute",
+              "type": {
+                "type": "primitive",
+                "value": "string"
+              },
+              "multiplicity": {
+                "lower": 1,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": true,
+              "isReadOnly": false
+            },
+            {
+              "id": 1,
+              "name": "roles",
+              "kind": "crossReference",
+              "type": {
+                "type": "class",
+                "value": {
+                  "package": "nz.example.org",
+                  "name": "Role"
+                }
+              },
+              "multiplicity": {
+                "lower": 0,
+                "upper": "unbounded"
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            },
+            {
+              "id": 2,
+              "name": "team",
+              "kind": "crossReference",
+              "type": {
+                "type": "class",
+                "value": {
+                  "package": "nz.example.org",
+                  "name": "Team"
+                }
+              },
+              "multiplicity": {
+                "lower": 0,
+                "upper": {
+                  "finite": 1
+                }
+              },
+              "isDerived": false,
+              "isId": false,
+              "isReadOnly": false
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
