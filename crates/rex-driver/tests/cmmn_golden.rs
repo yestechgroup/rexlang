@@ -999,3 +999,241 @@ fn a_duplicate_invokes_clause_is_a_parse_error() {
     );
     expect_diagnostic(&compilation, "duplicate `invokes` clause");
 }
+
+// --- decision-task version pins (rexlang#154) --------------------------------
+
+use rex_ir::dmn::{DmnModel, ModelMetadata, MetadataKind};
+
+/// Compiles a case source against a caller-provided decision bucket: the
+/// underwriting domain (the decision-fixture pair) plus the `(path,
+/// model)` pairs the host would gather. The case must import a path the
+/// bucket carries under the same spelling.
+fn compile_with_bucket(source: &str, bucket: Vec<(String, DmnModel)>) -> CmmnCompilation {
+    let dir = fixture_path("tests/conformance/cmmn");
+    let domain_path = dir.join("decision.mox");
+    let domain_source = std::fs::read_to_string(&domain_path).expect("read decision.mox");
+    let domain = [(domain_path.display().to_string(), domain_source)];
+    compile_cmmn_str(
+        dir.join("pinned-case.cmmn").to_str().expect("utf-8 path"),
+        source,
+        &domain,
+        &DomainImports::default(),
+        &[],
+        &[],
+        &[],
+        &bucket,
+    )
+}
+
+/// A decision model with a declared `version` metadata and one service
+/// exposing a single-output `Verdict` decision — the guard-navigable
+/// universe entry the pin tests observe.
+fn versioned_model(service: &str, version: &str) -> DmnModel {
+    let mut model = DmnModel::new();
+    model.metadata.push(ModelMetadata {
+        kind: MetadataKind::Version,
+        value: version.to_string(),
+    });
+    model.decisions.push(rex_ir::dmn::Decision {
+        name: "Verdict".to_string(),
+        description: None,
+        outputs: vec![rex_ir::dmn::Output {
+            name: "verdict".to_string(),
+            type_ref: rex_ir::TypeRef::Primitive(rex_ir::PrimitiveType::Boolean),
+        }],
+        logic: None,
+        emits: Vec::new(),
+    });
+    model.services.push(rex_ir::dmn::DecisionService {
+        name: service.to_string(),
+        description: None,
+        inputs: Vec::new(),
+        outputs: vec!["Verdict".to_string()],
+        encapsulates: Vec::new(),
+    });
+    model
+}
+
+const PIN_CASE: &str = "import \"decision.mox\"\nimport \"lending.dmn\"\ncase Underwriting {\n    case_file {\n        Application[1..1] application;\n    }\n    decision assess {\n        invokes lending.LoanAssessmentService version compatible;\n        entry on application.create;\n    }\n}\n";
+
+/// A pinned clause lowers its pin into the binding as authored.
+#[test]
+fn a_pinned_decision_task_lowers_its_pin() {
+    let compilation = compile_with_bucket(
+        PIN_CASE,
+        vec![(
+            "lending.dmn".to_string(),
+            versioned_model("LoanAssessmentService", "2.0.0"),
+        )],
+    );
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "expected clean compile: {:?}",
+        compilation
+            .diagnostics
+            .iter()
+            .map(|(_, diagnostic)| &diagnostic.message)
+            .collect::<Vec<_>>()
+    );
+    let binding = compilation.model.expect("artifact").cases[0].plan_items[0]
+        .decision_task
+        .clone()
+        .expect("binding");
+    assert_eq!(binding.invokes, "lending.LoanAssessmentService");
+    assert_eq!(
+        binding.pin,
+        Some(rex_ir::dmn::VersionPin::Compatible),
+        "the pin rides into the artifact"
+    );
+}
+
+/// The exact-message mirrors of the three pin failure modes, with the
+/// rule-17 help shape. The CMMN side carries no numeric codes.
+#[test]
+fn pinned_decision_task_failures_mirror_the_pin_codes() {
+    // Exact pin to a version no model declares (the E0252 shape).
+    let miss = PIN_CASE.replace("version compatible", "version \"1.4.9\"");
+    let bucket = vec![
+        (
+            "lending.dmn".to_string(),
+            versioned_model("LoanAssessmentService", "1.5.0"),
+        ),
+        (
+            "lending-2.dmn".to_string(),
+            versioned_model("LoanAssessmentService", "2.0.0"),
+        ),
+    ];
+    let compilation = compile_with_bucket(&miss, bucket.clone());
+    let (_, diagnostic) = &compilation.diagnostics[0];
+    assert_eq!(
+        diagnostic.message,
+        "decision service 'LoanAssessmentService' is not provided at version \"1.4.9\" \
+         on decision task 'assess' in case 'Underwriting'"
+    );
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("the decision models provide it at: 1.5.0, 2.0.0")
+    );
+    assert!(compilation.model.is_none());
+
+    // Two models declaring the same version (the E0253 shape).
+    let tie_bucket = vec![
+        (
+            "lending.dmn".to_string(),
+            versioned_model("LoanAssessmentService", "2.0.0"),
+        ),
+        (
+            "lending-2.dmn".to_string(),
+            versioned_model("LoanAssessmentService", "2.0.0"),
+        ),
+    ];
+    let compilation = compile_with_bucket(PIN_CASE, tie_bucket);
+    let (_, diagnostic) = &compilation.diagnostics[0];
+    assert_eq!(
+        diagnostic.message,
+        "decision service 'LoanAssessmentService' at version \"2.0.0\" is ambiguous \
+         on decision task 'assess' in case 'Underwriting': provided by 'lending.dmn', \
+         'lending-2.dmn'"
+    );
+    assert!(compilation.model.is_none());
+
+    // `compatible` against candidates with no strict version (the E0254
+    // shape): a `version draft-3` model compiles alone but pins nothing.
+    let draft = {
+        let mut model = DmnModel::new();
+        model.metadata.push(ModelMetadata {
+            kind: MetadataKind::Version,
+            value: "draft-3".to_string(),
+        });
+        model.services.push(rex_ir::dmn::DecisionService {
+            name: "LoanAssessmentService".to_string(),
+            description: None,
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            encapsulates: Vec::new(),
+        });
+        model
+    };
+    let compilation = compile_with_bucket(
+        PIN_CASE,
+        vec![("lending.dmn".to_string(), draft)],
+    );
+    let (_, diagnostic) = &compilation.diagnostics[0];
+    assert_eq!(
+        diagnostic.message,
+        "decision service 'LoanAssessmentService' declares no usable version on \
+         decision task 'assess' in case 'Underwriting' (pinned version compatible)"
+    );
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some(
+            "a `compatible` pin needs a model whose `version` metadata is strict \
+             \"X.Y.Z\"; the models providing it declare none"
+        )
+    );
+    assert!(compilation.model.is_none());
+
+    // An exact pin that is not strict `X.Y.Z` names nothing any model can
+    // declare — the miss shape with the pin echoed.
+    let malformed = PIN_CASE.replace("version compatible", "version \"draft-3\"");
+    let compilation = compile_with_bucket(
+        &malformed,
+        vec![(
+            "lending.dmn".to_string(),
+            versioned_model("LoanAssessmentService", "2.0.0"),
+        )],
+    );
+    let (_, diagnostic) = &compilation.diagnostics[0];
+    assert_eq!(
+        diagnostic.message,
+        "decision service 'LoanAssessmentService' is not provided at version \"draft-3\" \
+         on decision task 'assess' in case 'Underwriting'"
+    );
+}
+
+/// A task pinned to a version that does not resolve contributes nothing
+/// to the synthetic universe: a guard referencing the decision's output
+/// is an unknown name beside the pin miss — while the same guard against
+/// the matching version resolves clean.
+#[test]
+fn an_unresolved_pin_contributes_nothing_to_the_universe() {
+    let guarded = "import \"decision.mox\"\nimport \"lending.dmn\"\ncase Underwriting {\n    case_file {\n        Application[1..1] application;\n    }\n    decision assess {\n        invokes lending.LoanAssessmentService version \"1.5.0\";\n        entry on application.create when (Verdict);\n    }\n}\n";
+    let bucket = |version: &str| {
+        vec![(
+            "lending.dmn".to_string(),
+            versioned_model("LoanAssessmentService", version),
+        )]
+    };
+    let compilation = compile_with_bucket(guarded, bucket("1.5.0"));
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "the matching pin resolves and the guard types: {:?}",
+        compilation
+            .diagnostics
+            .iter()
+            .map(|(_, diagnostic)| &diagnostic.message)
+            .collect::<Vec<_>>()
+    );
+
+    // The bucket's only model declares 2.0.0 — the exact pin misses, and
+    // the guard's `Verdict` has no universe entry to resolve to.
+    let compilation = compile_with_bucket(guarded, bucket("2.0.0"));
+    let messages: Vec<String> = compilation
+        .diagnostics
+        .iter()
+        .map(|(_, diagnostic)| diagnostic.message.clone())
+        .collect();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("is not provided at version \"1.5.0\"")),
+        "the pin miss fires: {messages:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("unknown name `Verdict`")),
+        "the unresolved task contributed no universe entry: {messages:?}"
+    );
+    assert!(compilation.model.is_none());
+}

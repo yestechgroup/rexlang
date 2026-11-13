@@ -366,21 +366,64 @@ fn last_segment(authored: &str) -> &str {
     authored.rsplit('.').next().unwrap_or_default()
 }
 
-/// Resolves an authored `invokes` name by its **last segment** against the
-/// provided decision models' services (the names pool union-wide, the
-/// rule-17 shape): the first model declaring the service wins. `None`
-/// leaves the clause unvalidated.
-fn resolve_decision_service<'a>(
-    authored: &str,
-    decisions: &'a [(String, DmnModel)],
-) -> Option<(&'a DmnModel, &'a rex_ir::dmn::DecisionService)> {
-    let name = last_segment(authored);
-    for (_, model) in decisions {
-        if let Some(service) = model.services.iter().find(|service| service.name == name) {
-            return Some((model, service));
+/// The decision-task diagnostics for a pinned reference (rexlang#154),
+/// exact-message mirrors of the `.ddd` decision-link codes (the CMMN side
+/// carries no numeric codes — its convention): the E0252/E0253/E0254
+/// failure shapes with the rule-17 help line, phrased on the task and
+/// case the reference was declared in. A resolved or unknown reference
+/// carries no pin diagnostic here (the unknown-name shape is the
+/// caller's, unchanged).
+fn decision_pin_diagnostics(
+    clause: &dsl::CmmnInvoke,
+    item_name: &str,
+    case: &str,
+    name: &str,
+    resolution: &crate::ddd::DecisionResolution<'_>,
+) -> Vec<Diagnostic> {
+    let where_on = format!("on decision task '{item_name}' in case '{case}'");
+    let pinned = match &clause.pin {
+        Some(dsl::DddVersionPin::Exact(value)) => format!("version \"{value}\""),
+        Some(dsl::DddVersionPin::Compatible) => "version compatible".to_string(),
+        None => return Vec::new(),
+    };
+    match resolution {
+        crate::ddd::DecisionResolution::VersionMiss { available, .. } => vec![Diagnostic::error(
+            format!("decision service '{name}' is not provided at {pinned} {where_on}"),
+            Some(clause.span),
+        )
+        .with_help(crate::ddd::available_versions_help(available))],
+        crate::ddd::DecisionResolution::Ambiguous { version, paths } => {
+            let providers = paths
+                .iter()
+                .map(|path| format!("'{path}'"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            vec![Diagnostic::error(
+                format!(
+                    "decision service '{name}' at version \"{version}\" is ambiguous \
+                     {where_on}: provided by {providers}"
+                ),
+                Some(clause.span),
+            )
+            .with_help(
+                "keep one model per version in the provided bucket, or pin a version \
+                 only one of them declares",
+            )]
         }
+        crate::ddd::DecisionResolution::NoUsableVersion => vec![Diagnostic::error(
+            format!(
+                "decision service '{name}' declares no usable version {where_on} \
+                 (pinned {pinned})"
+            ),
+            Some(clause.span),
+        )
+        .with_help(
+            "a `compatible` pin needs a model whose `version` metadata is strict \
+             \"X.Y.Z\"; the models providing it declare none",
+        )],
+        crate::ddd::DecisionResolution::Resolved { .. }
+        | crate::ddd::DecisionResolution::Unknown => Vec::new(),
     }
-    None
 }
 
 /// Gathers the output features of every resolved `decision` plan item in
@@ -408,8 +451,16 @@ fn decision_output_features(
         let Some(invokes) = &item.invokes else {
             continue;
         };
-        let Some((model, service)) = resolve_decision_service(&invokes.service, decisions) else {
-            continue;
+        // Resolution honors the clause's `version` pin (rexlang#154) — a
+        // task pinned to a version that does not resolve contributes
+        // nothing, exactly like an unresolved name.
+        let (model, service) = match crate::ddd::resolve_decision_service(
+            &invokes.service,
+            invokes.pin.as_ref(),
+            decisions,
+        ) {
+            crate::ddd::DecisionResolution::Resolved { model, service, .. } => (model, service),
+            _ => continue,
         };
         for output in &service.outputs {
             let Some(decision) = model
@@ -629,17 +680,32 @@ fn lower_plan_item(
         let authored = item.invokes.as_ref().map(|clause| clause.service.clone());
         if let Some(clause) = &item.invokes {
             let name = last_segment(&clause.service);
-            if !decisions.is_empty() && !decision_pool.contains(name) {
-                local.push(
-                    Diagnostic::error(
-                        format!(
-                            "unknown decision service '{}' on decision task '{}' in case '{}'",
-                            name, item.name, case
-                        ),
-                        Some(clause.span),
-                    )
-                    .with_help(decision_services_help(name, decision_pool)),
-                );
+            if !decisions.is_empty() {
+                // The shared resolver (rexlang#154): the pin rides with
+                // the reference, and a pinned failure mode gets the
+                // exact-message mirror of the `.ddd` pin codes. The
+                // unknown-name shape stays the plain one.
+                let resolution =
+                    crate::ddd::resolve_decision_service(&clause.service, clause.pin.as_ref(), decisions);
+                match &resolution {
+                    crate::ddd::DecisionResolution::Unknown => {
+                        if !decision_pool.contains(name) {
+                            local.push(
+                                Diagnostic::error(
+                                    format!(
+                                        "unknown decision service '{}' on decision task '{}' in case '{}'",
+                                        name, item.name, case
+                                    ),
+                                    Some(clause.span),
+                                )
+                                .with_help(decision_services_help(name, decision_pool)),
+                            );
+                        }
+                    }
+                    other => local.extend(decision_pin_diagnostics(
+                        clause, &item.name, case, name, other,
+                    )),
+                }
             }
         } else {
             local.push(Diagnostic::error(
@@ -652,6 +718,11 @@ fn lower_plan_item(
         }
         lowered_decision = Some(DecisionTaskBinding {
             invokes: authored.unwrap_or_default(),
+            pin: item
+                .invokes
+                .as_ref()
+                .and_then(|clause| clause.pin.as_ref())
+                .map(crate::ddd::lower_version_pin),
             inputs: item.inputs.iter().map(|name| name.text.clone()).collect(),
             outputs: item.outputs.iter().map(|name| name.text.clone()).collect(),
         });

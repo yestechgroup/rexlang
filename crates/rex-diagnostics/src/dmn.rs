@@ -9,8 +9,11 @@
 //! with logic in FEEL expressions and external markdown decision tables
 //! the host provides. `E0200`–`E0215` are the `.dmn` surface's codes;
 //! `E0250`–`E0251` are the `.ddd` decision-link codes, joined against
-//! the decision surface at compile time. Claim a new code by adding a
-//! documented constant plus an `Entry` to `ENTRIES`.
+//! the decision surface at compile time, and `E0252`–`E0254` are the
+//! decision-link **version pin** codes (rexlang#154 — the same join,
+//! resolved through a reference's `version compatible` / exact pin).
+//! Claim a new code by adding a documented constant plus an `Entry` to
+//! `ENTRIES`.
 
 use crate::{Entry, Severity};
 
@@ -65,6 +68,19 @@ pub const E_UNKNOWN_EMITTED_EVENT: &str = "E0215";
 pub const E_UNKNOWN_INVOKED_SERVICE: &str = "E0250";
 /// `unknown decision service '<name>' injected by service '<service>'`.
 pub const E_UNKNOWN_INJECTED_SERVICE: &str = "E0251";
+/// `decision service '<name>' is not provided at version "<pin>"
+/// invoked by <context>` — no provided model declares the service at the
+/// pinned version (rexlang#154).
+pub const E_PINNED_VERSION_NOT_AVAILABLE: &str = "E0252";
+/// `decision service '<name>' at version "<version>" is ambiguous
+/// invoked by <context>: provided by '<path>', '<path>'` — two or more
+/// provided models declare the same version (the exact pin's match set,
+/// or the `compatible` selection's tie; rexlang#154).
+pub const E_AMBIGUOUS_SERVICE_VERSION: &str = "E0253";
+/// `decision service '<name>' declares no usable version invoked by
+/// <context>` — the `compatible` pin has no candidate whose `version`
+/// metadata is strict `X.Y.Z` (rexlang#154).
+pub const E_NO_USABLE_SERVICE_VERSION: &str = "E0254";
 
 pub(crate) const ENTRIES: &[Entry] = &[
     Entry {
@@ -210,5 +226,29 @@ pub(crate) const ENTRIES: &[Entry] = &[
         title: "Unknown injected decision service",
         meaning: "`unknown decision service '<name>' injected by service '<service>'` — the `.ddd` application service injects a decision service no provided `.dmn` model declares; the decision-link check joins the design against the decision surface.",
         fix: "Declare the decision service in a `.dmn` model, or fix the spelling.",
+    },
+    Entry {
+        code: E_PINNED_VERSION_NOT_AVAILABLE,
+        band: DMN_BAND,
+        severity: Severity::Error,
+        title: "Pinned service version not available",
+        meaning: "`decision service '<name>' is not provided at version \"<pin>\" invoked by <context>` — the reference carries an exact `version \"X.Y.Z\"` pin (rexlang#154) and no provided model declares the service at that version. The help line names the versions the bucket's same-name candidates declare (empty when none of them carries a strict `X.Y.Z` `version` metadata). The same failure shape fires on a `.cmmn` decision task with an exact pin — the CMMN side carries no numeric codes.",
+        fix: "Pin a version a provided model declares (the help names them), import the model that declares it, or drop the pin.",
+    },
+    Entry {
+        code: E_AMBIGUOUS_SERVICE_VERSION,
+        band: DMN_BAND,
+        severity: Severity::Error,
+        title: "Ambiguous service version",
+        meaning: "`decision service '<name>' at version \"<version>\" is ambiguous invoked by <context>: provided by '<path>', '<path>'` — two or more provided models declare the service at the same version (rexlang#154): for an exact pin, two candidates matching the pinned version; for `version compatible`, two candidates tying at the selected highest version. The message names every declaring model's path.",
+        fix: "Keep one model per version in the provided bucket, or pin a version only one of them declares.",
+    },
+    Entry {
+        code: E_NO_USABLE_SERVICE_VERSION,
+        band: DMN_BAND,
+        severity: Severity::Error,
+        title: "No usable service version",
+        meaning: "`decision service '<name>' declares no usable version invoked by <context>` — the reference carries a `version compatible` pin (rexlang#154) but none of the models providing the service declares a parseable `version` metadata (strict `X.Y.Z`, three numeric dot-separated parts); the models compile alone but cannot satisfy a compatibility selection.",
+        fix: "Give a providing model a strict \"X.Y.Z\" `version` metadata line, or pin an exact version.",
     },
 ];
