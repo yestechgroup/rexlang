@@ -72,7 +72,11 @@
 //! loosely reference decision-service names (the [`crate::dmn::DmnModel`]
 //! dimension); none are validated at the wire layer — the `.ddd`
 //! decisions entry point joins the design against the provided decision
-//! models at compile time.
+//! models at compile time. A reference may carry a **version pin**
+//! (rexlang#154, [`crate::dmn::VersionPin`]): pinned references lower
+//! into [`ServiceOperation::decision_pins`] /
+//! [`Service::decision_dependency_pins`], each a [`DecisionPin`] pairing
+//! the name with its compatibility contract.
 //!
 //! A [`RepositoryOperation`] carries **exactly one** of a built-in op
 //! ([`RepositoryOperation::builtin`] — the consumer knows its signature) or
@@ -245,6 +249,14 @@ pub struct Service {
     /// joins them against the provided decision models.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub decision_dependencies: Vec<String>,
+    /// The **version pins** of [`Self::decision_dependencies`] entries
+    /// that carry one (rexlang#154): each names the service (the same
+    /// last-segment spelling `decision_dependencies` lowers) and the
+    /// [`crate::dmn::VersionPin`] the `inject decision` line wrote.
+    /// Pin-less lines lower no entry — the additive-field discipline
+    /// keeps every pin-less artifact byte-identical.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decision_dependency_pins: Vec<DecisionPin>,
 }
 
 impl Service {
@@ -256,8 +268,23 @@ impl Service {
             operations: Vec::new(),
             dependencies: Vec::new(),
             decision_dependencies: Vec::new(),
+            decision_dependency_pins: Vec::new(),
         }
     }
+}
+
+/// One **version pin** a decision-link reference carries (rexlang#154):
+/// the invoked service's name (the same last-segment spelling the
+/// `invokes`/`decision_dependencies` lists lower) paired with the
+/// [`crate::dmn::VersionPin`] the reference wrote. Only pinned
+/// references serialize — the pin-less name lists carry them already.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecisionPin {
+    /// The pinned service's name, as the resolution universe spells it.
+    pub name: String,
+    /// The declared compatibility contract.
+    pub pin: crate::dmn::VersionPin,
 }
 
 /// An operation of a [`Service`].
@@ -301,6 +328,14 @@ pub struct ServiceOperation {
     /// joins them against the provided decision models.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub invokes: Vec<String>,
+    /// The **version pins** of [`Self::invokes`] entries that carry one
+    /// (rexlang#154): each names the invoked service (the same
+    /// last-segment spelling `invokes` lowers) and the
+    /// [`crate::dmn::VersionPin`] the entry wrote. Pin-less entries lower
+    /// no entry — the additive-field discipline keeps every pin-less
+    /// artifact byte-identical.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decision_pins: Vec<DecisionPin>,
     /// The `when (...)` guard condition's source text, verbatim between the
     /// parentheses (the `when`-condition rule); typing is a driver concern.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -358,6 +393,7 @@ impl ServiceOperation {
             capabilities: Vec::new(),
             emits: Vec::new(),
             invokes: Vec::new(),
+            decision_pins: Vec::new(),
             condition: None,
             condition_paths: Vec::new(),
             transition: None,
@@ -1266,6 +1302,10 @@ mod tests {
                             capabilities: vec!["BorrowBooks".to_string()],
                             emits: vec!["LoanStateChanged".to_string()],
                             invokes: vec!["RiskScore".to_string()],
+                            decision_pins: vec![DecisionPin {
+                                name: "RiskScore".to_string(),
+                                pin: crate::dmn::VersionPin::Compatible,
+                            }],
                             condition: None,
                             condition_paths: Vec::new(),
                             transition: None,
@@ -1286,6 +1326,7 @@ mod tests {
                             capabilities: Vec::new(),
                             emits: Vec::new(),
                             invokes: Vec::new(),
+                            decision_pins: Vec::new(),
                             condition: None,
                             condition_paths: Vec::new(),
                             transition: None,
@@ -1299,6 +1340,10 @@ mod tests {
                         "NotificationService".to_string(),
                     ],
                     decision_dependencies: vec!["RiskScore".to_string()],
+                    decision_dependency_pins: vec![DecisionPin {
+                        name: "RiskScore".to_string(),
+                        pin: crate::dmn::VersionPin::Exact("1.4.2".to_string()),
+                    }],
                 }],
                 designs: vec![
                     Design {
@@ -1759,15 +1804,50 @@ mod tests {
         let parsed: ServiceOperation = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed, op);
 
+        // The version pins (rexlang#154) serialize additively after the
+        // name lists: camelCase keys, only pinned references appear, and
+        // the shared `dmn::VersionPin` adjacent tagging holds.
         let mut service = Service::new("LoanService");
         service.decision_dependencies = vec!["RiskScore".to_string()];
         let json = serde_json::to_string(&service).expect("serialize");
         assert_eq!(
             json, r#"{"name":"LoanService","decisionDependencies":["RiskScore"]}"#,
-            "camelCase key: {json}"
+            "a pin-less inject lowers no pin entry: {json}"
         );
         let parsed: Service = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed, service);
+
+        service.decision_dependency_pins = vec![DecisionPin {
+            name: "RiskScore".to_string(),
+            pin: crate::dmn::VersionPin::Compatible,
+        }];
+        let json = serde_json::to_string(&service).expect("serialize");
+        assert_eq!(
+            json,
+            r#"{"name":"LoanService","decisionDependencies":["RiskScore"],"decisionDependencyPins":[{"name":"RiskScore","pin":{"type":"compatible"}}]}"#,
+            "the compatible pin serializes as the bare tag: {json}"
+        );
+        let parsed: Service = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, service);
+        assert_eq!(
+            serde_json::to_string(&parsed).expect("re-serialize"),
+            json,
+            "re-serialization is byte-identical"
+        );
+
+        op.decision_pins = vec![DecisionPin {
+            name: "RiskScore".to_string(),
+            pin: crate::dmn::VersionPin::Exact("1.4.2".to_string()),
+        }];
+        let json = serde_json::to_string(&op).expect("serialize");
+        assert!(
+            json.contains(
+                r#""decisionPins":[{"name":"RiskScore","pin":{"type":"exact","value":"1.4.2"}}]"#
+            ),
+            "the exact pin carries its value under the adjacent tag: {json}"
+        );
+        let parsed: ServiceOperation = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, op);
 
         // The chainable setters.
         let op = ServiceOperation::new("submit")
@@ -1775,6 +1855,7 @@ mod tests {
             .with_invokes(vec!["CreditCheck".to_string()]);
         assert_eq!(op.emits, vec!["PayRunSubmitted".to_string()]);
         assert_eq!(op.invokes, vec!["CreditCheck".to_string()]);
+        assert!(op.decision_pins.is_empty());
     }
 
     #[test]

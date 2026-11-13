@@ -37,7 +37,11 @@
 //! - **Shared IR types.** An input's or output's domain type reuses the
 //!   domain IR's [`crate::TypeRef`] (adjacent tagging:
 //!   `{"type": "class", "value": {"package": ..., "name": ...}}`) —
-//!   there is no parallel wire-level type shape.
+//!   there is no parallel wire-level type shape. [`VersionPin`] is the
+//!   shared version-pin shape of the same kind: the sibling `ddd` and
+//!   `cmmn` artifacts reuse it (the [`crate::ddd::DecisionPin`] payload
+//!   and the [`crate::cmmn::DecisionTaskBinding::pin`] field) instead of
+//!   declaring a parallel enum.
 //! - **Equality policy.** Like every artifact root, [`DmnModel`] derives
 //!   [`Eq`] (wire contract rule 14); this artifact carries no
 //!   floating-point values.
@@ -224,6 +228,45 @@ pub enum MetadataKind {
     Effective,
     /// A jurisdiction the decision model governs or is governed by.
     Jurisdiction,
+}
+
+/// The compatibility contract a caller pins against when it invokes a
+/// [`DecisionService`] (rexlang#154): `version compatible` or an exact
+/// `version "X.Y.Z"`, written on the invoking side (a `.ddd` `invokes`
+/// entry, an `inject decision` line, or a `.cmmn` decision task) and
+/// resolved by the driver against the models' `version` metadata.
+///
+/// The surface-level contract is an authoring convention, not a compiled
+/// one: **same major version = compatible** — the service contract (its
+/// inputs/outputs) is the stability boundary, and a breaking change MUST
+/// bump the major. A model whose `version` metadata is absent or not a
+/// strict `X.Y.Z` (three numeric dot-separated parts) satisfies no pin.
+///
+/// Adjacently tagged like [`MetadataKind`]: the unit variant serializes
+/// as `{"type": "compatible"}` and the exact pin as
+/// `{"type": "exact", "value": "1.4.2"}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "camelCase")]
+pub enum VersionPin {
+    /// `version compatible` — resolve to the highest `X.Y.Z` version in
+    /// the highest major version present among the candidates (a
+    /// deterministic total order); the selection is ambiguous when two
+    /// candidates tie at it.
+    Compatible,
+    /// `version "X.Y.Z"` — resolve to exactly this version. The payload
+    /// is the pinned version string, serialized flat under the adjacent
+    /// `"value"` key (`{"type": "exact", "value": "1.4.2"}`).
+    Exact(String),
+}
+
+impl VersionPin {
+    /// The exact pin's version, when this is [`VersionPin::Exact`].
+    pub fn exact_value(&self) -> Option<&str> {
+        match self {
+            VersionPin::Compatible => None,
+            VersionPin::Exact(value) => Some(value),
+        }
+    }
 }
 
 /// A declared input: a typed piece of information decisions read but

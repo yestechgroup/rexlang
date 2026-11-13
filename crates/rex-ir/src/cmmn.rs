@@ -78,8 +78,11 @@
 //!   [`DecisionTaskBinding::invokes`] names a `.dmn` decision service
 //!   **as written** (resolution by the last segment, the rule-17
 //!   convention — a driver concern), and its `inputs`/`outputs` name
-//!   case-file items of the same case. Every other plan item omits the
-//!   field (the empty = minimal rule).
+//!   case-file items of the same case. The binding may carry a **version
+//!   pin** (rexlang#154): [`DecisionTaskBinding::pin`] reuses the shared
+//!   [`crate::dmn::VersionPin`] shape, resolved by the driver against the
+//!   models' `version` metadata. Every other plan item omits the field
+//!   (the empty = minimal rule).
 //!
 //! [rexlang]: https://github.com/anton-makes/rexlang
 
@@ -288,6 +291,12 @@ pub struct DecisionTaskBinding {
     /// the wire keeps the authored spelling — the key a decision-task
     /// executor registry resolves).
     pub invokes: String,
+    /// The **version pin** the clause wrote (rexlang#154), when any — the
+    /// shared [`crate::dmn::VersionPin`] shape. Resolution against the
+    /// models' `version` metadata is a driver concern; the wire carries
+    /// the pin as declared. Omitted for the pin-less clause.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin: Option<crate::dmn::VersionPin>,
     /// The case-file items feeding the decision, in declaration order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<String>,

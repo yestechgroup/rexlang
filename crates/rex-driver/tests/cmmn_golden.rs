@@ -778,6 +778,7 @@ fn the_decision_binding_lowers_as_authored() {
         assess.decision_task,
         Some(DecisionTaskBinding {
             invokes: "Underwriting.LoanAssessmentService".to_string(),
+            pin: None,
             inputs: vec!["application".to_string()],
             outputs: vec!["assessment".to_string()],
         })
