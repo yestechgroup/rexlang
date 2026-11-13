@@ -1,4 +1,6 @@
-// KiwiSaver contribution decisions over the nz.payroll domain.
+// KiwiSaver contribution decisions over the nz.payroll domain; the
+// pay-run outcome events the decisions publish live in kiwisaver.evt.
+import "kiwisaver.evt";
 import "kiwisaver.mox";
 
 decision_model KiwiSaver {
@@ -55,6 +57,10 @@ decision_model KiwiSaver {
                 compliance_status: ComplianceStatus;
             }
             logic table "./tables/contributions.md"
+            emits {
+                ContributionRecorded when "compliance_status = \"compliant\"";
+                VoluntaryContribution;
+            }
         }
         /// The ESCT owed on the employer's contribution, at the member's
         /// ESCT rate.

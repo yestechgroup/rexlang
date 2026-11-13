@@ -207,7 +207,16 @@
         "value": {
           "source": "./tables/contributions.md"
         }
-      }
+      },
+      "emits": [
+        {
+          "event": "ContributionRecorded",
+          "when": "compliance_status = \"compliant\""
+        },
+        {
+          "event": "VoluntaryContribution"
+        }
+      ]
     },
     {
       "name": "esct_calculation",

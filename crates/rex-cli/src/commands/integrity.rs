@@ -279,6 +279,7 @@ fn check_contribution(files: &[PathBuf]) -> anyhow::Result<Vec<Contribution>> {
             &pair.pair.domains,
             &pair.pair.imports(),
             &pair.tables,
+            &pair.events,
         );
         if compilation.model.is_none() {
             report_dmn_diagnostics(&pair.pair, &compilation);

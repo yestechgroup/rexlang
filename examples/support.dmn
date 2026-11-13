@@ -1,7 +1,9 @@
 // Support-desk refund decisions over the support.mox domain: this model is
 // the decision layer the desk consults — eligibility under the consumer
 // guarantees, the approval ladder, and the composed assessment the stored
-// RefundDecision record carries (rexlang#78).
+// RefundDecision record carries (rexlang#78). The assessment's outcome
+// event is declared in support.evt.
+import "support.evt";
 import "support.mox";
 
 decision_model RefundDecisions {
@@ -54,6 +56,9 @@ decision_model RefundDecisions {
                 eligible: "RefundEligibility";
                 approval_required: "requires_approval";
                 amount: "maximum_amount";
+            }
+            emits {
+                RefundApproved when "eligible";
             }
         }
     }

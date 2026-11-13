@@ -344,10 +344,12 @@ fn compile_fence(fence: &Fence, workspace: &Path) -> String {
         }
         "dmn" => {
             // The DMN doc snippets are self-contained (no imports): empty
-            // domains/imports/tables — the compile is the full validation
-            // over primitives only.
+            // domains/imports/tables/events — the compile is the full
+            // validation over primitives only (an empty events bucket is
+            // the blessed loosely-coupled behavior: `emits` entries lower
+            // as authored, unchecked).
             let compilation =
-                rex_driver::compile_dmn_str(&virtual_path, &fence.source, &[], &empty, &[]);
+                rex_driver::compile_dmn_str(&virtual_path, &fence.source, &[], &empty, &[], &[]);
             problems(tagged_errors_of(&compilation.diagnostics))
         }
         "deploy" => {

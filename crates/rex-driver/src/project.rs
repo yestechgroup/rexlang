@@ -489,6 +489,46 @@ fn gather_actor_model(
         .map(|mut models| models.pop().expect("one policy, one model"))
 }
 
+/// The raw import strings one `.dmn` source declares (empty when the file
+/// does not parse — the compile reports that). Hosts split the list by
+/// extension: `.mox` paths join the domain gather, `.evt` paths
+/// [`gather_dmn_events`].
+pub fn dmn_import_paths(source: &str) -> Vec<String> {
+    rex_syntax::parse_dmn(source)
+        .ast
+        .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
+        .unwrap_or_default()
+}
+
+/// Gathers the `.evt` contracts one `.dmn` decision-model file imports:
+/// each `import "<x>.evt"` resolves relative to `path_key`'s directory
+/// (exactly how `.mox` imports resolve), is fetched, and is compiled
+/// through the ordinary event pipeline — the contract's own `.mox` imports
+/// resolve relative to its resolved key, exactly like `rexlang check` on
+/// the contract itself. The bucket is keyed by the import string **as
+/// written** (the table-path rule): the driver's import check matches
+/// `events` entries exactly as written. A missing or non-compiling
+/// contract is a clean error naming it; duplicates gather once.
+pub fn gather_dmn_events(
+    path_key: &str,
+    source: &str,
+    fetch: &mut dyn FnMut(&str) -> Option<String>,
+) -> Result<Vec<(String, rex_ir::events::EventModel)>, String> {
+    let dir = dir_of(path_key);
+    let mut events: Vec<(String, rex_ir::events::EventModel)> = Vec::new();
+    for import in dmn_import_paths(source) {
+        if !import.ends_with(".evt") || events.iter().any(|(key, _)| *key == import) {
+            continue;
+        }
+        let resolved = dir.join(&import);
+        let key = resolved.display().to_string();
+        let text = fetch(&key).ok_or_else(|| cannot_read(&key, path_key))?;
+        let model = gather_event_model(&key, &text, fetch)?;
+        events.push((import, model));
+    }
+    Ok(events)
+}
+
 /// Gathers and compiles one imported `.evt` contract: its own `.mox`
 /// imports resolve relative to its resolved key. Compilation failure
 /// reads ``imported contract {key} does not compile`` plus the

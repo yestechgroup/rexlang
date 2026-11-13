@@ -29,6 +29,7 @@ fn fixture_path(relative: &str) -> PathBuf {
 
 const MODEL_PATH: &str = "tests/conformance/dmn/kiwisaver.dmn";
 const DOMAIN_PATH: &str = "kiwisaver.mox";
+const EVENT_PATH: &str = "kiwisaver.evt";
 const MODEL_ARTIFACT_PATH: &str = "tests/conformance/dmn/kiwisaver.dmn.json";
 const MINIMAL_PATH: &str = "tests/conformance/dmn/minimal.dmn";
 const MINIMAL_ARTIFACT_PATH: &str = "tests/conformance/dmn/minimal.dmn.json";
@@ -37,10 +38,46 @@ const TABLE_PATHS: [&str; 2] = [
     "tests/conformance/dmn/tables/contributions.md",
 ];
 
-/// Compiles the kiwisaver fixture the way the CLI does: the domain and the
-/// tables resolve relative to the model file, the domain text is provided
-/// under its resolved absolute path, and the tables under the paths the
-/// `logic table` clauses write.
+/// Compiles the fixture's `.evt` contract the way the CLI does: the
+/// contract's own `kiwisaver.mox` import resolves relative to it, and the
+/// compiled `EventModel` joins the events bucket under the import string
+/// the model writes.
+fn compile_event(
+    model_dir: &Path,
+    domain_absolute: &Path,
+    domain: &str,
+) -> (String, rex_ir::events::EventModel) {
+    let event_absolute = model_dir.join(EVENT_PATH);
+    let source = std::fs::read_to_string(&event_absolute)
+        .unwrap_or_else(|error| panic!("read conformance contract {EVENT_PATH}: {error}"));
+    let compilation = rex_driver::compile_evt_str(
+        event_absolute.to_str().expect("utf-8 contract path"),
+        &source,
+        &[(
+            domain_absolute
+                .to_str()
+                .expect("utf-8 domain path")
+                .to_string(),
+            domain.to_string(),
+        )],
+        &rex_driver::DomainImports::default(),
+    );
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "conformance contract must compile clean: {:?}",
+        compilation.diagnostics
+    );
+    let model = compilation
+        .model
+        .unwrap_or_else(|| panic!("{EVENT_PATH} must lower to an event artifact"));
+    (EVENT_PATH.to_string(), model)
+}
+
+/// Compiles the kiwisaver fixture the way the CLI does: the domain, the
+/// event contract, and the tables resolve relative to the model file, the
+/// domain text is provided under its resolved absolute path, the contract
+/// under the import string the model writes, and the tables under the
+/// paths the `logic table` clauses write.
 fn compile_conformance() -> DmnCompilation {
     let model_absolute = fixture_path(MODEL_PATH);
     let source = std::fs::read_to_string(&model_absolute)
@@ -50,6 +87,8 @@ fn compile_conformance() -> DmnCompilation {
     let domain_absolute = model_dir.join(DOMAIN_PATH);
     let domain = std::fs::read_to_string(&domain_absolute)
         .unwrap_or_else(|error| panic!("read conformance domain {DOMAIN_PATH}: {error}"));
+
+    let events = vec![compile_event(model_dir, &domain_absolute, &domain)];
 
     let mut tables: Vec<(String, String)> = Vec::new();
     for relative in TABLE_PATHS {
@@ -75,6 +114,7 @@ fn compile_conformance() -> DmnCompilation {
         )],
         &rex_driver::DomainImports::default(),
         &tables,
+        &events,
     )
 }
 
@@ -98,6 +138,29 @@ fn conformance_decision_model_matches_golden_artifact() {
     assert_eq!(model.knowledge_sources.len(), 2);
     assert_eq!(model.services.len(), 1);
     assert_eq!(model.views.len(), 1);
+    // The DMN → EVT edge (rule 14): the fixture's emitting decision
+    // carries its outcome events, gated and bare.
+    let contributing = model
+        .decisions
+        .iter()
+        .find(|decision| decision.name == "calculate_contributions")
+        .expect("the emitting decision");
+    assert_eq!(contributing.emits.len(), 2);
+    assert_eq!(contributing.emits[0].event, "ContributionRecorded");
+    assert_eq!(
+        contributing.emits[0].when.as_deref(),
+        Some("compliance_status = \"compliant\"")
+    );
+    assert_eq!(contributing.emits[1].event, "VoluntaryContribution");
+    assert_eq!(contributing.emits[1].when, None);
+    assert!(
+        model
+            .decisions
+            .iter()
+            .all(|decision| decision.name == "calculate_contributions"
+                || decision.emits.is_empty()),
+        "only the emitting decision carries emits"
+    );
 
     let json = model.to_json_pretty().expect("serialize IR");
     let artifact = fixture_path(MODEL_ARTIFACT_PATH);
@@ -129,6 +192,7 @@ fn minimal_decision_model_matches_golden_artifact() {
         &source,
         &[],
         &rex_driver::DomainImports::default(),
+        &[],
         &[],
     );
     assert!(
@@ -188,6 +252,17 @@ fn conformance_models_are_fmt_stable() {
 // --- negative cases ----------------------------------------------------------
 
 fn compile(source: &str, domains: &[(&str, &str)], tables: &[(&str, &str)]) -> DmnCompilation {
+    compile_with_events(source, domains, tables, &[])
+}
+
+/// [`compile`] with rule 14's events bucket: each `(authored import
+/// string, compiled contract)` pair the `emits` resolution joins against.
+fn compile_with_events(
+    source: &str,
+    domains: &[(&str, &str)],
+    tables: &[(&str, &str)],
+    events: &[(String, rex_ir::events::EventModel)],
+) -> DmnCompilation {
     let domains = domains
         .iter()
         .map(|(path, text)| (path.to_string(), text.to_string()))
@@ -202,6 +277,7 @@ fn compile(source: &str, domains: &[(&str, &str)], tables: &[(&str, &str)]) -> D
         &domains,
         &rex_driver::DomainImports::default(),
         &tables,
+        events,
     )
 }
 
@@ -737,4 +813,220 @@ decision_model M {}
 "#;
     let compilation = compile(source, &[], &[]);
     expect_diagnostic(&compilation, "imported file \"nope.mox\" was not provided");
+}
+
+// --- rule 14: the DMN → EVT emits edge ----------------------------------------
+
+/// A minimal `.evt` contract source, compiled the way a host provides it.
+const EVENT_DOMAIN: &str = r#"
+package nz.example
+
+enum ComplianceStatus {
+    Compliant as "compliant" = 0
+    NonCompliant as "non_compliant" = 1
+}
+
+class Employee {
+    String id
+}
+"#;
+
+fn event_contract(source: &str) -> (String, rex_ir::events::EventModel) {
+    let compilation = rex_driver::compile_evt_str(
+        "events.evt",
+        source,
+        &[("events.mox".to_string(), EVENT_DOMAIN.to_string())],
+        &rex_driver::DomainImports::default(),
+    );
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "test contract must compile clean: {:?}",
+        compilation.diagnostics
+    );
+    (
+        "events.evt".to_string(),
+        compilation
+            .model
+            .expect("clean compile yields the contract artifact"),
+    )
+}
+
+/// One emitting decision over a provided contract: the positive rule-14
+/// shape every negative test below varies.
+fn emitting_source() -> String {
+    r#"
+import "events.evt";
+
+decision_model M {
+    decisions {
+        decision d {
+            output boolean;
+            emits {
+                PayRunRecorded;
+            }
+        }
+    }
+}
+"#
+    .to_string()
+}
+
+#[test]
+fn emits_resolve_against_the_provided_contracts() {
+    let events = vec![event_contract(
+        r#"
+import "events.mox"
+
+event PayRunRecorded version "1.0.0" {
+    employeeId: String;
+}
+"#,
+    )];
+    let compilation = compile_with_events(&emitting_source(), &[], &[], &events);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "the declared event resolves: {:?}",
+        compilation.diagnostics
+    );
+    let model = compilation.model.as_ref().expect("clean compile");
+    assert_eq!(model.decisions[0].emits.len(), 1);
+    assert_eq!(model.decisions[0].emits[0].event, "PayRunRecorded");
+    assert_eq!(model.decisions[0].emits[0].when, None);
+}
+
+#[test]
+fn an_unknown_emitted_event_errors_with_did_you_mean() {
+    let events = vec![event_contract(
+        r#"
+import "events.mox"
+
+event PayRunRecorded version "1.0.0" {
+    employeeId: String;
+}
+"#,
+    )];
+    let source = r#"
+import "events.evt";
+
+decision_model M {
+    decisions {
+        decision d {
+            output boolean;
+            emits {
+                PayRunRecrded;
+            }
+        }
+    }
+}
+"#;
+    let compilation = compile_with_events(source, &[], &[], &events);
+    let diagnostic = expect_diagnostic(
+        &compilation,
+        "E0215 unknown event 'PayRunRecrded' emitted by decision 'd'",
+    );
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("did you mean 'PayRunRecorded'?"),
+        "the did-you-mean help names the declared event"
+    );
+}
+
+#[test]
+fn an_unknown_emitted_event_lists_the_declared_set() {
+    let events = vec![event_contract(
+        r#"
+import "events.mox"
+
+event PayRunRecorded version "1.0.0" {
+    employeeId: String;
+}
+
+event PayRunReversed version "1.0.0" {
+    employeeId: String;
+}
+"#,
+    )];
+    let source = emitting_source().replace("PayRunRecorded", "PayRunFiled");
+    let compilation = compile_with_events(&source, &[], &[], &events);
+    let diagnostic = expect_diagnostic(
+        &compilation,
+        "E0215 unknown event 'PayRunFiled' emitted by decision 'd'",
+    );
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("the event contracts declare: PayRunRecorded, PayRunReversed"),
+    );
+}
+
+#[test]
+fn an_evt_import_no_bucket_provides_is_rule_1() {
+    // No events bucket: the `.evt` import resolves against neither bucket.
+    let compilation = compile(&emitting_source(), &[], &[]);
+    expect_diagnostic(
+        &compilation,
+        "imported file \"events.evt\" was not provided",
+    );
+}
+
+#[test]
+fn an_empty_bucket_lowers_emits_as_authored() {
+    // The blessed loosely-coupled behavior: no contracts provided, no
+    // `.evt` imports — the entries lower unchecked, and there is nothing
+    // to error about.
+    let source = r#"
+decision_model M {
+    decisions {
+        decision d {
+            output boolean;
+            emits {
+                WhateverWeLike when "flag";
+                AlsoFine;
+            }
+        }
+    }
+}
+"#;
+    let compilation = compile_with_events(source, &[], &[], &[]);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "an empty bucket is the plain behavior: {:?}",
+        compilation.diagnostics
+    );
+    let model = compilation.model.as_ref().expect("clean compile");
+    assert_eq!(model.decisions[0].emits.len(), 2);
+    assert_eq!(model.decisions[0].emits[0].event, "WhateverWeLike");
+    assert_eq!(model.decisions[0].emits[0].when.as_deref(), Some("flag"));
+    assert_eq!(model.decisions[0].emits[1].event, "AlsoFine");
+}
+
+#[test]
+fn a_malformed_when_feel_text_errors() {
+    let events = vec![event_contract(
+        r#"
+import "events.mox"
+
+event PayRunRecorded version "1.0.0" {
+    employeeId: String;
+}
+"#,
+    )];
+    let source = r#"
+import "events.evt";
+
+decision_model M {
+    decisions {
+        decision d {
+            output boolean;
+            emits {
+                PayRunRecorded when "(eligible";
+            }
+        }
+    }
+}
+"#;
+    let compilation = compile_with_events(source, &[], &[], &events);
+    expect_diagnostic(
+        &compilation,
+        "E0208 invalid FEEL expression on decision 'd': <ParserError> syntax error: (eligible",
+    );
 }

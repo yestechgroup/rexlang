@@ -1,0 +1,17 @@
+// The pay-run outcome events the KiwiSaver decision model publishes: the
+// decisions name these contracts (kiwisaver.dmn), the payroll consumers
+// subscribe to them. Payload types resolve against the nz.payroll domain.
+import "kiwisaver.mox"
+
+/// One pay run's recorded contribution picture.
+event ContributionRecorded version "1.0.0" {
+    employeeNumber: String;
+    employerCecAmount: int;
+    esctAmount: int;
+    compliance: ComplianceStatus;
+}
+
+/// A voluntary member's opt-in contribution record.
+event VoluntaryContribution version "1.0.0" {
+    employeeNumber: String;
+}
