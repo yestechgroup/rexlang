@@ -295,6 +295,47 @@ fn when_condition_bytes_are_preserved_verbatim() {
 }
 
 #[test]
+fn session_kind_modifiers_format_canonically() {
+    // The modifier rides the entry's line between effect and capability.
+    let messy = "actors S { grant G { permit  human C forbid agent D permit E } }";
+    let canonical = concat!(
+        "actors S {\n",
+        "    grant G {\n",
+        "        permit human C\n",
+        "        forbid agent D\n",
+        "        permit E\n",
+        "    }\n",
+        "}\n",
+    );
+    assert_eq!(fmt(messy), canonical);
+    assert_eq!(fmt(canonical), canonical, "not a fixpoint");
+
+    // The ambiguity rule, formatter side: `human` before a keyword is a
+    // capability name, not a modifier.
+    let human_named = "actors S { grant G { permit human when (a > 0) } }";
+    let human_named_canonical =
+        "actors S {\n    grant G {\n        permit human when (a > 0)\n    }\n}\n";
+    assert_eq!(fmt(human_named), human_named_canonical);
+    assert_eq!(fmt(human_named_canonical), human_named_canonical);
+
+    // The same modifier handling inside a delegation body (and the escaped
+    // `^agent` capability never reads as a modifier).
+    assert_eq!(
+        fmt("actors S { delegation D { from A to B permit human C permit ^agent } }"),
+        concat!(
+            "actors S {\n",
+            "    delegation D {\n",
+            "        from A\n",
+            "        to B\n",
+            "        permit human C\n",
+            "        permit ^agent\n",
+            "    }\n",
+            "}\n",
+        )
+    );
+}
+
+#[test]
 fn cedar_entry_formats_like_target_bodies() {
     let formatted = fmt("actors S { grant G { cedar { if x { y } } } }");
     assert_eq!(
@@ -544,6 +585,13 @@ fn idempotent_on_conformance_currency() {
 #[test]
 fn idempotent_on_conformance_actors() {
     assert_idempotent(include_str!("../../../tests/conformance/models/actors.mox"));
+}
+
+#[test]
+fn idempotent_on_conformance_register() {
+    assert_idempotent(include_str!(
+        "../../../tests/conformance/models/register.mox"
+    ));
 }
 
 #[test]
@@ -798,6 +846,9 @@ fn stable_on_conformance_models() {
         "../../../tests/conformance/models/currency.mox"
     ));
     assert_still_parses(include_str!("../../../tests/conformance/models/actors.mox"));
+    assert_still_parses(include_str!(
+        "../../../tests/conformance/models/register.mox"
+    ));
 }
 
 #[test]
@@ -843,6 +894,11 @@ const GOLDENS: &[(&str, &str, Formatter)] = &[
     (
         "tests/conformance/models/actors.mox",
         "tests/conformance/fmt/actors.fmt.mox",
+        format,
+    ),
+    (
+        "tests/conformance/models/register.mox",
+        "tests/conformance/fmt/register.fmt.mox",
         format,
     ),
     (
@@ -1086,4 +1142,101 @@ fn import_sigil_normalizes_spacing() {
         fmt(source),
         "package demo\n\nimport sigil \"a.rosetta\"\nimport sigil \"b.rosetta\"\n"
     );
+}
+
+// --- `register` declarations (issue rexlang#181, part A) ---------------------
+
+#[test]
+fn register_decl_formats_like_a_class() {
+    // The canonical layout mirrors a class: the declaration header always
+    // expands, one attribute per line, `}` at the parent indent.
+    let formatted = fmt("register Role{String display_name\nCostCenter cost_center}");
+    assert_eq!(
+        formatted,
+        "register Role {\n    String display_name\n    CostCenter cost_center\n}\n"
+    );
+    assert_eq!(fmt(&formatted), formatted, "not a fixpoint");
+}
+
+#[test]
+fn idempotent_on_gnarly_register_declarations() {
+    assert_idempotent(concat!(
+        "package   a.b\n",
+        "\n",
+        "/// A role in the organisation.\n",
+        "register Role {\n",
+        "    /// The role's display name.\n",
+        "    String display_name\n",
+        "    String[0..1] badge = \"none\"\n",
+        "    String code { pattern \"[A-Z]{2,8}\" minLength 2 }\n",
+        "}\n",
+        "\n",
+        "register  Empty{}\n",
+        "\n",
+        "register Lead extends Nothing { int x }\n"
+    ));
+}
+
+#[test]
+fn import_hoisting_keeps_register_declarations_in_place() {
+    // A register declaration after an import must not ride the import
+    // section: imports hoist directly after the package, every other
+    // declaration keeps its relative order.
+    let source = concat!(
+        "package p\n",
+        "\n",
+        "class A { int x }\n",
+        "\n",
+        "import schema \"x.json\" as X\n",
+        "\n",
+        "register R { int y }\n"
+    );
+    let formatted = fmt(source);
+    assert_eq!(
+        formatted,
+        concat!(
+            "package p\n",
+            "\n",
+            "import schema \"x.json\" as X\n",
+            "\n",
+            "class A {\n",
+            "    int x\n",
+            "}\n",
+            "\n",
+            "register R {\n",
+            "    int y\n",
+            "}\n"
+        ),
+        "the register declaration must keep its place behind `class A`:\n{formatted}"
+    );
+    assert_eq!(fmt(&formatted), formatted, "not a fixpoint");
+}
+
+#[test]
+fn class_named_register_keeps_import_hoisting_working() {
+    // `class register { ... }` — the class's *name* is the contextual word.
+    // The declaration must stay one item for the import section split, so a
+    // following import still hoists to the canonical position.
+    let source = concat!(
+        "package p\n",
+        "\n",
+        "class register { int x }\n",
+        "\n",
+        "import schema \"x.json\" as X\n"
+    );
+    let formatted = fmt(source);
+    assert_eq!(
+        formatted,
+        concat!(
+            "package p\n",
+            "\n",
+            "import schema \"x.json\" as X\n",
+            "\n",
+            "class register {\n",
+            "    int x\n",
+            "}\n"
+        ),
+        "the import must hoist above the class:\n{formatted}"
+    );
+    assert_eq!(fmt(&formatted), formatted, "not a fixpoint");
 }

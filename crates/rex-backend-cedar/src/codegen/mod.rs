@@ -50,6 +50,9 @@ mod policy;
 mod reach;
 mod schema;
 
+#[cfg(test)]
+mod tests;
+
 use policy::policy_set;
 use schema::schema_json;
 

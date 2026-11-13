@@ -110,6 +110,22 @@ impl<'src> Formatter<'src> {
         match self.peek_tok() {
             Some(Token::Permit | Token::Forbid) => {
                 self.advance();
+                // Session-kind modifier (rexlang#181 part B), the parser's
+                // ambiguity rule: `agent` (the keyword) or `human`
+                // (contextual) is the modifier only when a capability-name
+                // token follows — otherwise `human` is itself the
+                // capability name.
+                let modifier = match self.peek_tok() {
+                    Some(Token::Agent) => true,
+                    Some(Token::Ident("human")) => matches!(
+                        self.peek_tok_nth(1),
+                        Some(Token::Ident(_) | Token::IdentEscaped(_))
+                    ),
+                    _ => false,
+                };
+                if modifier {
+                    self.advance();
+                }
                 self.take_name();
                 if self.take_if(|token| matches!(token, Token::When)) {
                     self.scan_raw_parens();

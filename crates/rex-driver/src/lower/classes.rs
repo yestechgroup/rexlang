@@ -472,6 +472,35 @@ pub(crate) fn lower_interface(decl: &mox::InterfaceDecl) -> ir::InterfaceDef {
     interface
 }
 
+/// Lowers a `register` declaration (issue rexlang#181) through the exact
+/// class pipeline: the grammar admits attributes only, so the declaration
+/// lowers like a class with no `extends` and no table override, joining
+/// every class-level rule (namespace, duplicate checks, stripped-name and
+/// table uniqueness, feature ids) unchanged. The one difference is the
+/// additive wire marker: the lowered `ClassDef` carries
+/// `kind: ClassKind::Register` (rex-ir wire-contract rule 16).
+pub(crate) fn lower_register(
+    decl: &mox::RegisterDecl,
+    source: &str,
+    path: &str,
+    package: &str,
+    scope: &Scope<'_>,
+    prep: &PrepMaps<'_>,
+    diags: &mut Vec<Diagnostic>,
+) -> ClassRecord {
+    let class_decl = mox::ClassDecl {
+        name: decl.name.clone(),
+        doc: decl.doc.clone(),
+        table: None,
+        extends: Vec::new(),
+        features: decl.attributes.clone(),
+        span: decl.span,
+    };
+    let mut record = lower_class(&class_decl, source, path, package, scope, prep, diags);
+    record.def.kind = ir::ClassKind::Register;
+    record
+}
+
 pub(crate) fn lower_class(
     decl: &mox::ClassDecl,
     source: &str,

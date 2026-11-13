@@ -278,6 +278,61 @@ fn agent_and_delegation_in_actor_file_parse() {
     );
 }
 
+/// Session-kind grant modifiers work in the standalone `.actor` home too
+/// (one shared `actors_block` grammar, rexlang#181 part B).
+#[test]
+fn session_kind_modifiers_in_actor_file_parse() {
+    let source = concat!(
+        "import \"support.mox\"\n",
+        "actors Payroll {\n",
+        "    actor Finance\n",
+        "    agent Helper extends Finance\n",
+        "    capability SubmitPayRun on Ticket\n",
+        "    capability IngestHours on Ticket\n",
+        "    grant Finance {\n",
+        "        permit human SubmitPayRun when (payRunStatus == Draft)\n",
+        "    }\n",
+        "    grant Helper {\n",
+        "        forbid agent IngestHours\n",
+        "    }\n",
+        "    delegation Ingest {\n",
+        "        from Finance\n",
+        "        to Helper\n",
+        "        permit agent IngestHours\n",
+        "    }\n",
+        "}\n",
+    );
+    let result = parse_actors(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let payroll = expect_block(&file, "Payroll");
+    let effect = |grant_index: usize, entry_index: usize| match &payroll.grants[grant_index].entries
+        [entry_index]
+    {
+        GrantEntryDecl::Effect(effect) => effect,
+        other => panic!("expected an effect entry, found {other:?}"),
+    };
+    assert_eq!(
+        effect(0, 0).session_kind,
+        Some(SessionKindModifier::Human),
+        "`permit human SubmitPayRun` is a human-session permit"
+    );
+    assert_eq!(
+        effect(1, 0).session_kind,
+        Some(SessionKindModifier::Agent),
+        "`forbid agent IngestHours` is an agent-session forbid"
+    );
+    assert_eq!(
+        payroll.delegations[0].entries[0].session_kind,
+        Some(SessionKindModifier::Agent),
+        "delegation entries carry the modifier too"
+    );
+}
+
 #[test]
 fn adversarial_inputs_do_not_panic() {
     let nasty = [

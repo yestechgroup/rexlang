@@ -62,9 +62,9 @@
 //! ```text
 //! model            := item*
 //! item             := package_decl | annotation_decl | import_schema_decl
-//!                   | import_sigil_decl | class_decl | interface_decl
-//!                   | enum_decl | datatype_decl | vocabulary_decl
-//!                   | actors_block
+//!                   | import_sigil_decl | class_decl | register_decl
+//!                   | interface_decl | enum_decl | datatype_decl
+//!                   | vocabulary_decl | actors_block
 //! package_decl     := "package" qualified_name
 //! annotation_decl  := "annotation" string ("as" name)?
 //! import_schema_decl := "import" "schema" string ("as" name)?
@@ -72,6 +72,7 @@
 //! class_decl       := "class" name table_annotation?
 //!                     ("extends" type_ref ("," type_ref)*)?
 //!                     "{" feature* "}"
+//! register_decl    := "register" name "{" attribute* "}"
 //! table_annotation := "table" string
 //! feature          := modifier* ( containment | reference | container
 //!                               | op_decl | derived_decl | attribute )
@@ -127,6 +128,21 @@
 //!   The annotation is recognized only directly after the class name and at
 //!   most once; it is a class declaration's grammar only (`enum` has no
 //!   table).
+//! * `register` (issue rexlang#181) is the same contextual discipline: the
+//!   ordinary identifier `register` is special only at the top-level item
+//!   position (no other `.mox` item starts with a bare identifier, so there
+//!   is no ambiguity); a class, feature, enum, or datatype may still be
+//!   named `register`, and the word stays a plain name inside every body.
+//!   A register body reuses the `attribute` production verbatim — no
+//!   `extends`, no `table` annotation, and no relationship features, which
+//!   are simply not accepted here (parse errors, no recovery shapeshifting).
+//!   The one narrowing: an attribute's type may not be a *bare keyword*
+//!   segment. A bare keyword can never name a declared type (declarations
+//!   name themselves with identifiers), so accepting one would silently
+//!   read class-only grammar as attributes (`extends Base` typed `extends`);
+//!   keyword-led qualified references keep parsing (`actors.Thing`, where
+//!   the package's last segment is a keyword). The driver lowers the
+//!   declaration onto a `ClassDef` carrying the register-class marker.
 //! * In a `datatype_block`, `format`, `create`, and `convert` each appear at
 //!   most once, and a binding target literally named `format` is an error —
 //!   the unescaped key declares the format (only writable escaped,
@@ -148,8 +164,9 @@
 //! obligation_decl := "obligation" name
 //! grant_decl      := "grant" name "{" grant_entry* "}"
 //! grant_entry     := effect_entry | cedar_entry
-//! effect_entry    := ("permit" | "forbid") name ("when" raw_parens)?
-//!                    obligation*
+//! effect_entry    := ("permit" | "forbid") session_kind? name
+//!                    ("when" raw_parens)? obligation*
+//! session_kind    := "human" | "agent"
 //! obligation      := "obligation" name
 //! cedar_entry     := "cedar" raw_body
 //! delegation_decl := "delegation" name "{" "from" name "to" name
@@ -160,6 +177,17 @@
 //!
 //! * The body items may be interleaved in any order; the AST folds them into
 //!   per-kind lists.
+//! * `session_kind` is the optional session-kind modifier of an effect
+//!   entry (rexlang#181 part B). `agent` is the real lexer keyword — a
+//!   capability named `agent` needs the `^agent` escape, so an unescaped
+//!   `agent` there is always the modifier. `human` is *contextual*: it is
+//!   the modifier iff the next token is a valid capability-name token
+//!   (`name`), so `permit human X` restricts to human sessions while
+//!   `permit human when (...)` permits a capability literally named
+//!   `human` with a guard (and `permit human obligation done` attaches an
+//!   obligation to the capability `human`). Unknown kind words
+//!   (`permit robot X`) are parse errors: only `human` and `agent` are
+//!   accepted, and the trailing name has no rule to bind it.
 //! * The delegation shape above is the only *valid* one; the parser accepts
 //!   any item order and reports misplaced/duplicate `from`/`to`/`purpose`
 //!   lines and `cedar` entries (not allowed inside a delegation) as errors.
@@ -955,16 +983,20 @@ mod grammar_doc_tests {
 
     /// Contextual words the grammar quotes that are *not* lexer keywords and
     /// not covered by a table below: feature modifiers, the import sigils,
-    /// the delegation `to`, the datatype block words, `unique`, the `.evt`
+    /// the top-level `register` declaration word (rexlang#181 part A), the
+    /// delegation `to`, the session-kind modifier `human` (rexlang#181
+    /// part B), the datatype block words, `unique`, the `.evt`
     /// subscription/channel words plus the slice-2 clause words, and the
     /// parser-only `ranking` values (`crate::ddd` documents them as
     /// parser-only).
-    const CONTEXTUAL_WORDS: [&str; 32] = [
+    const CONTEXTUAL_WORDS: [&str; 34] = [
         "id",
         "readonly",
         "schema",
         "sigil",
         "to",
+        "register",
+        "human",
         "create",
         "convert",
         "format",

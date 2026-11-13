@@ -1924,3 +1924,54 @@ fn an_undesigned_class_stays_silent() {
         compilation.diagnostics
     );
 }
+
+// --- session-kind grant modifiers (rexlang#181 part B) ---------------------------
+
+#[test]
+fn session_kind_modifiers_lower_in_actor_files() {
+    let source = concat!(
+        "import \"domain.mox\"\n",
+        "\n",
+        "actors Payroll {\n",
+        "    actor Finance\n",
+        "    agent Helper extends Finance\n",
+        "\n",
+        "    capability SubmitPayRun on Ticket\n",
+        "    capability IngestHours on Ticket\n",
+        "\n",
+        "    grant Finance {\n",
+        "        permit human SubmitPayRun\n",
+        "    }\n",
+        "\n",
+        "    grant Helper {\n",
+        "        permit agent IngestHours\n",
+        "    }\n",
+        "\n",
+        "    delegation Ingest {\n",
+        "        from Finance\n",
+        "        to Helper\n",
+        "        permit agent IngestHours\n",
+        "    }\n",
+        "}\n",
+    );
+    let compilation = compile(source, &[("domain.mox", DOMAIN)]);
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        compilation.diagnostics
+    );
+    let model = compilation.model.expect("actor model lowered");
+    let block = model
+        .blocks
+        .iter()
+        .find(|block| block.name == "Payroll")
+        .expect("Payroll block lowered");
+    assert_eq!(
+        block.grants[0].entries[0].session_kind,
+        rex_ir::SessionKind::Human
+    );
+    assert_eq!(
+        block.delegations[0].entries[0].session_kind,
+        rex_ir::SessionKind::Agent
+    );
+}

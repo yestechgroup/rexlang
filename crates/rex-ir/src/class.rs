@@ -245,6 +245,31 @@ impl InterfaceDef {
     }
 }
 
+/// Whether a [`ClassDef`] is an ordinary entity class or a register class
+/// (issue rexlang#181): a `register` declaration lowers onto the standard
+/// model as a plain class carrying the register marker, so downstream
+/// consumers can tell the register noun space apart.
+///
+/// Serializes as a bare camelCase tag string: `"entity"`, `"register"`.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ClassKind {
+    /// `entity` — an ordinary class (the default; the field is omitted on
+    /// serialize).
+    #[default]
+    Entity,
+    /// `register` — a register class (`register <name> { ... }`).
+    Register,
+}
+
+impl ClassKind {
+    /// `true` for the default entity kind: the field is omitted on
+    /// serialize, keeping artifacts for register-less models byte-identical.
+    pub fn is_entity(&self) -> bool {
+        matches!(self, Self::Entity)
+    }
+}
+
 /// A class definition with its supertypes and features.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -273,6 +298,13 @@ pub struct ClassDef {
     /// not be re-derived. Additive; omitted when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub table_name: Option<String>,
+    /// Whether this class is an ordinary entity class or a register class
+    /// (issue rexlang#181). Register classes are plain classes in every
+    /// other respect; the marker lets consumers tell the register noun
+    /// space apart. Additive (wire-contract rule 16); omitted for entity
+    /// classes, so register-less models stay byte-identical.
+    #[serde(default, skip_serializing_if = "ClassKind::is_entity")]
+    pub kind: ClassKind,
 }
 
 impl ClassDef {
@@ -285,6 +317,7 @@ impl ClassDef {
             features,
             operations: Vec::new(),
             table_name: None,
+            kind: ClassKind::Entity,
         };
         class.assign_feature_ids();
         class
@@ -293,6 +326,14 @@ impl ClassDef {
     /// Chainable setter declaring the class's storage table (`table "…"`).
     pub fn with_table_name(mut self, table_name: impl Into<String>) -> Self {
         self.table_name = Some(table_name.into());
+        self
+    }
+
+    /// Chainable setter for the class's kind (issue rexlang#181): `register`
+    /// marks a register class; [`ClassKind::Entity`] is the default and
+    /// never serializes.
+    pub fn with_kind(mut self, kind: ClassKind) -> Self {
+        self.kind = kind;
         self
     }
 

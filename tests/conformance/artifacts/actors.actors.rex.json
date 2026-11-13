@@ -45,6 +45,7 @@
             {
               "effect": "permit",
               "capability": "EscalateTicket",
+              "sessionKind": "human",
               "when": "amount > 0"
             }
           ]
@@ -58,7 +59,8 @@
           "entries": [
             {
               "effect": "permit",
-              "capability": "EscalateTicket"
+              "capability": "EscalateTicket",
+              "sessionKind": "agent"
             }
           ]
         },

@@ -14,6 +14,11 @@ impl<'src> Formatter<'src> {
                     Token::Package => self.scan_package(),
                     Token::Annotation => self.scan_annotation(),
                     Token::Class => self.scan_class(),
+                    // The contextual `register` declaration (issue #181):
+                    // the ordinary identifier `register` at the top-level
+                    // item position. An escaped `^register` is a name and
+                    // keeps falling through to junk.
+                    Token::Ident("register") => self.scan_register(),
                     Token::Interface => self.scan_interface(),
                     Token::Enum => self.scan_enum(),
                     Token::Type => self.scan_datatype(),
@@ -222,6 +227,30 @@ impl<'src> Formatter<'src> {
             )
         }
 
+        /// Whether the contextual `register` identifier at brace-depth 0
+        /// begins a `register <name> {` declaration (issue #181): the next
+        /// two tokens (comments skipped) must be a name and a `{`. A
+        /// declaration *named* `register` (`class register {`,
+        /// `enum register {`) never matches — its name is directly followed
+        /// by the body brace — so those declarations stay single items and a
+        /// following import still hoists.
+        fn starts_register(nodes: &[Node<'_>], index: usize) -> bool {
+            let mut next = nodes[index + 1..]
+                .iter()
+                .filter_map(|node| match node {
+                    Node::Token(token, _) => Some(token),
+                    Node::Comment { .. } => None,
+                })
+                .take(2);
+            matches!(
+                (next.next(), next.next()),
+                (
+                    Some(Token::Ident(_) | Token::IdentEscaped(_)),
+                    Some(Token::LBrace),
+                )
+            )
+        }
+
         /// Whether the item starting at `start` is an `import schema "…"` or
         /// `import sigil "…"` declaration: the import keyword, the
         /// contextual `schema`/`sigil` identifier, then a string literal
@@ -248,7 +277,12 @@ impl<'src> Formatter<'src> {
                 Node::Token(token, _) => Some(token),
                 Node::Comment { .. } => None,
             };
-            if items.is_empty() || (depth == 0 && token.is_some_and(starts_item)) {
+            let boundary = match token {
+                Some(token) if starts_item(token) => true,
+                Some(Token::Ident("register")) => depth == 0 && starts_register(&self.nodes, index),
+                _ => false,
+            };
+            if items.is_empty() || (depth == 0 && boundary) {
                 items.push((index, index));
             }
             let last = items.len() - 1;
@@ -334,6 +368,18 @@ impl<'src> Formatter<'src> {
                 self.scan_qname();
             }
         }
+        self.scan_body(BodyKind::Class);
+    }
+
+    /// Consumes and emits one `register <name> { ... }` declaration
+    /// (issue #181). The canonical layout mirrors a class declaration
+    /// exactly (attribute bodies, `BodyKind::Class`); the grammar's one
+    /// narrowing — no `extends`, no `table` annotation — needs no scanner
+    /// work: extra tokens simply fall to the body's junk line.
+    pub(crate) fn scan_register(&mut self) {
+        self.begin_top_decl();
+        self.advance();
+        self.scan_qname();
         self.scan_body(BodyKind::Class);
     }
 

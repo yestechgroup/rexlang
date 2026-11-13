@@ -5,7 +5,8 @@
 
 use rex_ir::{
     ActorDef, ActorKind, ActorModel, ActorsDef, CapabilityDef, DelegationDef, GrantDef,
-    GrantEffect, GrantEntry, IrError, NeverBothDef, TypeRef, ACTOR_MODEL_FORMAT_VERSION,
+    GrantEffect, GrantEntry, IrError, NeverBothDef, SessionKind, TypeRef,
+    ACTOR_MODEL_FORMAT_VERSION,
 };
 
 const PKG: &str = "nz.example.actors";
@@ -517,6 +518,124 @@ fn legacy_artifact_without_purposes_deserializes() {
     let reserialized = artifact.to_json().expect("serialize");
     assert!(!reserialized.contains("purposes"));
     assert!(!reserialized.contains(r#""purpose""#));
+    let reparsed = ActorModel::from_json(&reserialized).expect("deserialize");
+    assert_eq!(artifact, reparsed);
+}
+
+// --- session kinds (rexlang#181 part B) ------------------------------------------
+
+/// Session kinds are additive (wire contract rule 9): a grant entry without
+/// a modifier serializes exactly as before — no `sessionKind` key at all —
+/// and the three kinds serialize as bare lowercase tags, `any` being the
+/// default that never serializes.
+#[test]
+fn session_kind_is_additive_and_serializes_as_bare_tag() {
+    assert_eq!(
+        GrantEntry::new(GrantEffect::Permit, "ReadTicket").session_kind,
+        SessionKind::Any
+    );
+
+    let plain = serde_json::to_string(&GrantEntry::permit("ReadTicket")).expect("serialize");
+    assert_eq!(plain, r#"{"effect":"permit","capability":"ReadTicket"}"#);
+
+    let human = serde_json::to_string(
+        &GrantEntry::permit("SubmitPayRun").with_session_kind(SessionKind::Human),
+    )
+    .expect("serialize");
+    assert_eq!(
+        human,
+        r#"{"effect":"permit","capability":"SubmitPayRun","sessionKind":"human"}"#
+    );
+
+    let agent = serde_json::to_string(
+        &GrantEntry::forbid("IngestHours").with_session_kind(SessionKind::Agent),
+    )
+    .expect("serialize");
+    assert_eq!(
+        agent,
+        r#"{"effect":"forbid","capability":"IngestHours","sessionKind":"agent"}"#
+    );
+
+    let any = serde_json::to_string(
+        &GrantEntry::permit("ReadTicket").with_session_kind(SessionKind::Any),
+    )
+    .expect("serialize");
+    assert_eq!(
+        any, r#"{"effect":"permit","capability":"ReadTicket"}"#,
+        "`any` is the default and never serializes"
+    );
+}
+
+/// The session kind sits between `capability` and `when` on the wire and
+/// survives a full-artifact JSON round trip, delegation entries included.
+#[test]
+fn session_kind_wire_format_is_pinned_by_json() {
+    let artifact = ActorModel::new().block(
+        ActorsDef::new("Support")
+            .actor(ActorDef::new("Finance"))
+            .actor(ActorDef::new("Agent").kind(ActorKind::Agent))
+            .capability(CapabilityDef::new("SubmitPayRun", class_ref("Ticket")))
+            .capability(CapabilityDef::new("ReadTicket", class_ref("Ticket")))
+            .grant(
+                GrantDef::new("Finance").entry(
+                    GrantEntry::permit("SubmitPayRun")
+                        .with_session_kind(SessionKind::Human)
+                        .when("payRunStatus == \"Draft\""),
+                ),
+            )
+            .delegation(
+                DelegationDef::new("Ingest", "Finance", "Agent")
+                    .entry(GrantEntry::forbid("ReadTicket").with_session_kind(SessionKind::Agent)),
+            ),
+    );
+
+    let expected = r#"{"formatVersion":1,"blocks":[{"name":"Support","actors":[{"name":"Finance"},{"name":"Agent","kind":"agent"}],"capabilities":[{"name":"SubmitPayRun","class":{"type":"class","value":{"package":"nz.example.actors","name":"Ticket"}}},{"name":"ReadTicket","class":{"type":"class","value":{"package":"nz.example.actors","name":"Ticket"}}}],"grants":[{"actor":"Finance","entries":[{"effect":"permit","capability":"SubmitPayRun","sessionKind":"human","when":"payRunStatus == \"Draft\""}]}],"delegations":[{"name":"Ingest","from":"Finance","to":"Agent","entries":[{"effect":"forbid","capability":"ReadTicket","sessionKind":"agent"}]}]}]}"#;
+
+    assert_eq!(artifact.to_json().expect("serialize"), expected);
+    let parsed = ActorModel::from_json(expected).expect("deserialize");
+    assert_eq!(artifact, parsed);
+    assert_eq!(
+        parsed.blocks[0].grants[0].entries[0].session_kind,
+        SessionKind::Human
+    );
+    assert_eq!(
+        parsed.blocks[0].delegations[0].entries[0].session_kind,
+        SessionKind::Agent
+    );
+}
+
+/// Artifacts written before session kinds existed — no `sessionKind` —
+/// deserialize unchanged, every entry defaulting to [`SessionKind::Any`],
+/// and re-serializing drops the absent key again (byte-identical).
+#[test]
+fn legacy_artifact_without_session_kinds_deserializes() {
+    let json = r#"{
+      "formatVersion": 1,
+      "blocks": [
+        {
+          "name": "Support",
+          "actors": [{ "name": "Customer" }],
+          "capabilities": [
+            {
+              "name": "ReadTicket",
+              "class": { "type": "class", "value": { "package": "nz.example.actors", "name": "Ticket" } }
+            }
+          ],
+          "grants": [
+            {
+              "actor": "Customer",
+              "entries": [{ "effect": "permit", "capability": "ReadTicket", "when": "!internal" }]
+            }
+          ]
+        }
+      ]
+    }"#;
+    let artifact = ActorModel::from_json(json).expect("deserialize legacy artifact");
+    let entry = &artifact.blocks[0].grants[0].entries[0];
+    assert_eq!(entry.session_kind, SessionKind::Any);
+
+    let reserialized = artifact.to_json().expect("serialize");
+    assert!(!reserialized.contains("sessionKind"));
     let reparsed = ActorModel::from_json(&reserialized).expect("deserialize");
     assert_eq!(artifact, reparsed);
 }

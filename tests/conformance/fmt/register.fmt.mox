@@ -1,0 +1,31 @@
+package nz.example.org
+
+/// A cost centre effort is booked against.
+class CostCenter {
+    id String code
+    /// The cost centre's display name.
+    String display_name
+}
+
+/// A role in the organisation: a register-class noun the generated app
+/// lists, joins, and references.
+register Role {
+    /// The role's display name.
+    String display_name
+    String[0..1] badge = "none"
+    String code { pattern "[A-Z]{2,8}" minLength 2 }
+}
+
+/// A team booking effort against organisational roles.
+register Team {
+    /// The team's display name.
+    String display_name
+    int headcount { minimum 0 }
+}
+
+/// A person holding zero or more organisational roles.
+class Person {
+    id String email
+    refers Role[] roles
+    refers Team[0..1] team
+}

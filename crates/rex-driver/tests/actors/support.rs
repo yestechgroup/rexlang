@@ -5,7 +5,7 @@
 
 pub(crate) use rex_driver::navigation::{FeatureSymbolKind, Lookup, NavigationIndex, SymbolKind};
 pub(crate) use rex_driver::{compile_str, Compilation, Diagnostic, Severity};
-pub(crate) use rex_ir::{ActorKind, GrantEffect, TypeRef};
+pub(crate) use rex_ir::{ActorKind, GrantEffect, SessionKind, TypeRef};
 
 pub(crate) const FIXTURE: &str = include_str!("../../../../tests/conformance/models/actors.mox");
 
