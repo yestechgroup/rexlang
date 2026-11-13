@@ -59,6 +59,9 @@ pub(crate) const EXPRESSION: &str = "expression";
 /// The `logic invoke <model> { ... }` kind (a business knowledge model
 /// invocation with its argument bindings).
 pub(crate) const INVOKE: &str = "invoke";
+/// The `emits { ... }` block of a decision body: the declared events the
+/// decision's outcome publishes (the DMN → EVT edge).
+pub(crate) const EMITS: &str = "emits";
 /// The `requirements { ... }` block of a decision model body.
 pub(crate) const REQUIREMENTS: &str = "requirements";
 /// The `information { <line>* }` requirement group.

@@ -680,9 +680,12 @@
 //! decisions_block     := "decisions" "{" decision_decl* "}"
 //! decision_decl       := "decision" name "{" decision_item* "}"
 //! decision_item       := output_decl | outputs_block | logic_clause
+//!                        | emits_block
 //! output_decl         := "output" type_ref ";"?
 //! outputs_block       := "outputs" "{" output_entry* "}"
 //! output_entry        := name ":" type_ref ";"?
+//! emits_block         := "emits" "{" emits_entry* "}"
+//! emits_entry         := name ("when" string)? ";"?
 //! logic_clause        := "logic" logic_kind
 //! logic_kind          := "table" string | "expression" string
 //!                       | "invoke" name invoke_body
@@ -738,7 +741,12 @@
 //!   contract). A decision's bare `output <type>` line is the anonymous
 //!   single-output form — an output with an empty name — while the
 //!   `outputs` block declares named outputs; both fold into one list in
-//!   source order.
+//!   source order. A decision's optional `emits` block is the DMN → EVT
+//!   edge (rexlang#152): its entries name the declared `.evt` events the
+//!   decision's outcome publishes, each optionally gated by a
+//!   `when "<FEEL>"` string (`when` is the real lexer condition keyword;
+//!   `^when` stays a name). The formatter emits the canonical decision
+//!   body order `outputs` → `logic` → `emits`.
 //! * Imports must precede the `decision_model` declaration and there is
 //!   exactly one model per file (violations are reported errors; the
 //!   misplaced import is dropped and the first model wins), mirroring the
