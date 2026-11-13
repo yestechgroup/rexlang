@@ -40,6 +40,9 @@ pub enum Decl {
     Vocabulary(VocabularyDecl),
     /// An `actors { ... }` declaration.
     Actors(ActorsDecl),
+    /// A `register <name> { ... }` declaration: a register class (issue
+    /// rexlang#181), lowered as a class carrying its attributes.
+    Register(RegisterDecl),
     /// An `import schema "<path>" (as <name>)?` or `import sigil "<path>"`
     /// declaration: a JSON Schema type or a Rune DSL (`.rosetta`) namespace
     /// set imported into the package's namespace.
@@ -57,6 +60,7 @@ impl Decl {
             Decl::Annotation(decl) => decl.span,
             Decl::Vocabulary(decl) => decl.span,
             Decl::Actors(decl) => decl.span,
+            Decl::Register(decl) => decl.span,
             Decl::ImportSchema(decl) => decl.span,
         }
     }
@@ -74,6 +78,7 @@ impl Decl {
             Decl::Annotation(decl) => decl.name.as_ref(),
             Decl::Vocabulary(decl) => Some(&decl.name),
             Decl::Actors(decl) => Some(&decl.name),
+            Decl::Register(decl) => Some(&decl.name),
             Decl::ImportSchema(decl) => decl.alias.as_ref(),
         }
     }
@@ -94,6 +99,23 @@ pub struct ClassDecl {
     pub extends: Vec<TypeRef>,
     /// Features (attributes, containments, references, ops, ...) in source order.
     pub features: Vec<FeatureDecl>,
+    /// Span of the whole declaration.
+    pub span: Span,
+}
+
+/// A `register` declaration (issue rexlang#181): a register class — an
+/// org/role noun space for generated apps. v1 is a flat noun space: the
+/// body holds the `attribute` production only (relationship features,
+/// `extends`, and the `table` annotation are parse errors here).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RegisterDecl {
+    /// The register class name.
+    pub name: Name,
+    /// Description from the doc comment directly above the declaration.
+    pub doc: Option<String>,
+    /// The declared attributes, in source order. Every entry is a
+    /// [`FeatureDecl::Attribute`] — the grammar admits nothing else.
+    pub attributes: Vec<FeatureDecl>,
     /// Span of the whole declaration.
     pub span: Span,
 }

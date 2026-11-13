@@ -18,7 +18,19 @@ pub(crate) fn kw<'src>(
 
 pub(crate) fn attribute<'src>(
 ) -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<'src>> + Clone {
-    tref()
+    attribute_with(tref())
+}
+
+/// The `attribute` production over a caller-chosen type parser. The class
+/// body uses the shared [`tref`]; the register body narrows it (see
+/// [`register_type_ref`]) — the shape is otherwise identical.
+pub(crate) fn attribute_with<'src, P>(
+    type_parser: P,
+) -> impl Parser<'src, Tokens<'src>, FeatureDecl, MoxExtra<'src>> + Clone
+where
+    P: Parser<'src, Tokens<'src>, TypeRef, MoxExtra<'src>> + Clone,
+{
+    type_parser
         .then(multiplicity().or_not())
         .then(name())
         .then(kw(Token::Eq).ignore_then(default_value()).or_not())
@@ -37,6 +49,41 @@ pub(crate) fn attribute<'src>(
                 }
             },
         )
+}
+
+/// A register body attribute's type: the shared `type_ref`, except that a
+/// *single-segment keyword* reference is not accepted. A bare keyword can
+/// never name a declared type — every `.mox` declaration names itself with
+/// an identifier — so accepting one would only ever mis-parse class-only
+/// grammar (`extends Base` silently reading as an attribute typed
+/// `extends`, issue rexlang#181). Keyword-led *qualified* references keep
+/// parsing: a package's last segment may be a keyword
+/// (`package rex.conformance.actors`), so `actors.Thing` stays a valid
+/// attribute type inside a register body.
+pub(crate) fn register_type_ref<'src>(
+) -> impl Parser<'src, Tokens<'src>, TypeRef, MoxExtra<'src>> + Clone {
+    let ident_led = name().then(
+        kw(Token::Dot)
+            .ignore_then(qname_segment())
+            .repeated()
+            .collect::<Vec<_>>(),
+    );
+    let keyword_led = qname_segment().then(
+        kw(Token::Dot)
+            .ignore_then(qname_segment())
+            .repeated()
+            .at_least(1)
+            .collect::<Vec<_>>(),
+    );
+    ident_led
+        .or(keyword_led)
+        .map_with(|(first, rest), e| TypeRef {
+            name: QualifiedName {
+                segments: once(first).chain(rest).collect(),
+                span: e.span(),
+            },
+            span: e.span(),
+        })
 }
 
 pub(crate) fn containment<'src>(
@@ -221,6 +268,34 @@ pub(crate) fn class_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExt
                 table,
                 extends: extends.unwrap_or_default(),
                 features: features.into_iter().flatten().collect(),
+                span: e.span(),
+            })
+        })
+}
+
+/// The contextual `register` declaration (issue rexlang#181): the ordinary
+/// identifier `register` at the top-level item position, followed by a name
+/// and a body of the existing `attribute` production. Everywhere else —
+/// class bodies, feature, enum, and class names — `register` stays an
+/// ordinary identifier (the `table`-annotation contextual precedent). The
+/// grammar admits no `extends`, no `table` annotation, and no relationship
+/// features in the body: they simply do not parse here.
+pub(crate) fn register_decl<'src>() -> impl Parser<'src, Tokens<'src>, Decl, MoxExtra<'src>> + Clone
+{
+    select! { Token::Ident(text) if text == "register" => () }
+        .ignore_then(name())
+        .then_ignore(kw(Token::LBrace))
+        .then(
+            attribute_with(register_type_ref())
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .then_ignore(kw(Token::RBrace))
+        .map_with(|(name, attributes), e| {
+            Decl::Register(RegisterDecl {
+                name,
+                doc: None,
+                attributes,
                 span: e.span(),
             })
         })
@@ -531,6 +606,7 @@ pub(crate) fn model<'src>() -> impl Parser<'src, Tokens<'src>, Model, MoxExtra<'
         package_decl().map(Item::Package),
         annotation_decl().map(Item::Decl),
         class_decl().map(Item::Decl),
+        register_decl().map(Item::Decl),
         interface_decl().map(Item::Decl),
         enum_decl().map(Item::Decl),
         datatype_decl().map(Item::Decl),
