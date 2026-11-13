@@ -103,17 +103,18 @@ fn load(name: &str) -> Example {
                         source: model.clone(),
                         domains: Vec::new(),
                         tables: Vec::new(),
+                        events: Vec::new(),
                     };
-                    let imports = rex_syntax::parse_dmn(&model)
+                    let imports: Vec<String> = rex_syntax::parse_dmn(&model)
                         .ast
                         .map(|ast| {
                             ast.imports
-                                .into_iter()
-                                .map(|import| import.path)
+                                .iter()
+                                .map(|import| import.path.clone())
                                 .collect::<Vec<String>>()
                         })
                         .unwrap_or_default();
-                    for domain_import in imports {
+                    for domain_import in imports.clone() {
                         let domain_resolved = dir_of(&resolved).join(&domain_import);
                         let domain_key = domain_resolved.display().to_string();
                         if decision
@@ -158,6 +159,32 @@ fn load(name: &str) -> Example {
                         }
                         if let Ok(content) = fs::read_to_string(dir_of(&resolved).join(&table)) {
                             decision.tables.push((table, content));
+                        }
+                    }
+                    // The model's `.evt` imports compile into the events
+                    // bucket (the emits dimension), keyed by the import
+                    // string as written.
+                    for import in imports {
+                        if !import.ends_with(".evt")
+                            || decision.events.iter().any(|(existing, _)| *existing == import)
+                        {
+                            continue;
+                        }
+                        let event_resolved = dir_of(&resolved).join(&import);
+                        let event_compilation = rex_driver::compile_evt_str(
+                            event_resolved.to_str().expect("utf-8 event path"),
+                            &fs::read_to_string(&event_resolved).unwrap_or_else(|error| {
+                                panic!(
+                                    "read imported file {} (imported by {}): {error}",
+                                    event_resolved.display(),
+                                    resolved.display()
+                                )
+                            }),
+                            &decision.domains,
+                            &rex_driver::DomainImports::default(),
+                        );
+                        if let Some(model) = event_compilation.model {
+                            decision.events.push((import, model));
                         }
                     }
                     example.decision_imports.push(decision);

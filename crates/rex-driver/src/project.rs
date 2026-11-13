@@ -90,6 +90,11 @@ pub struct DecisionImport {
     /// as written. A table that cannot be read is simply absent: the
     /// driver's unprovided-table diagnostic names it.
     pub tables: Vec<(String, String)>,
+    /// The model's imported `.evt` contracts, compiled and keyed by the
+    /// import string **as written** (the emits dimension). A contract
+    /// that cannot be read or compiled is simply absent: the DMN rule-1
+    /// diagnostic names it.
+    pub events: Vec<(String, rex_ir::events::EventModel)>,
 }
 
 /// The import closure of one `.ifml` entry file, gathered: everything a
@@ -210,6 +215,7 @@ pub fn gather_ifml_project(
                     source: text.clone(),
                     domains: Vec::new(),
                     tables: Vec::new(),
+                    events: Vec::new(),
                 };
                 // The model's `.mox` imports gather under its resolved key
                 // (the types its inputs and outputs resolve against); a
@@ -249,6 +255,37 @@ pub fn gather_ifml_project(
                             .collect::<Vec<String>>()
                     })
                     .unwrap_or_default();
+                // The model's `.evt` imports compile into the events
+                // bucket (the emits dimension); an unreadable or
+                // non-compiling contract is absent — the DMN rule-1
+                // diagnostic names the authored import string.
+                let imports = rex_syntax::parse_dmn(&text)
+                    .ast
+                    .map(|ast| {
+                        ast.imports
+                            .iter()
+                            .map(|import| import.path.clone())
+                            .collect::<Vec<String>>()
+                    })
+                    .unwrap_or_default();
+                for import in imports {
+                    if !import.ends_with(".evt")
+                        || decision.events.iter().any(|(existing, _)| *existing == import)
+                    {
+                        continue;
+                    }
+                    if let Some((event_key, event_text)) = fetch(&key, &import) {
+                        let compilation = compile_evt_str(
+                            &event_key,
+                            &event_text,
+                            &decision.domains,
+                            &DomainImports::default(),
+                        );
+                        if let Some(model) = compilation.model {
+                            decision.events.push((import, model));
+                        }
+                    }
+                }
                 for table in tables {
                     if decision
                         .tables
@@ -327,6 +364,7 @@ pub fn compile_decision_imports(
                 sigil: sigil.imports,
             },
             &decision.tables,
+            &decision.events,
         );
         let Some(model) = compilation.model else {
             return Err(does_not_compile(

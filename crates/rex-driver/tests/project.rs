@@ -164,6 +164,7 @@ fn compile_decision_imports_compiles_models_against_their_domains_and_tables() {
         source: WIDGET_DMN.to_string(),
         domains: vec![("lib/widgets.mox".to_string(), WIDGET_MOX.to_string())],
         tables: vec![("./tables/verdict.md".to_string(), VERDICT_TABLE.to_string())],
+        events: Vec::new(),
     }];
     let models = compile_decision_imports(&decisions).expect("model compiles against its inputs");
     assert_eq!(models.len(), 1);
@@ -181,6 +182,7 @@ fn compile_decision_imports_reports_a_non_compiling_model() {
         // import key.
         domains: Vec::new(),
         tables: vec![("./tables/verdict.md".to_string(), VERDICT_TABLE.to_string())],
+        events: Vec::new(),
     }];
     let error = compile_decision_imports(&decisions).unwrap_err();
     assert!(

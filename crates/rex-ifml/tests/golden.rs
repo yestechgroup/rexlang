@@ -53,6 +53,7 @@ fn fixture_decisions() -> Vec<rex_ir::dmn::DmnModel> {
         source,
         domains: vec![(dir.join("auth.mox").display().to_string(), domain)],
         tables: Vec::new(),
+        events: Vec::new(),
     }])
     .expect("fixture decision model compiles")
 }

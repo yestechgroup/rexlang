@@ -1237,6 +1237,7 @@ fn fixture_view_decisions() -> DmnModel {
             },
         ],
         logic: None,
+        emits: Vec::new(),
     });
     model.services.push(rex_ir::dmn::DecisionService {
         name: "AssessCustomer".to_string(),

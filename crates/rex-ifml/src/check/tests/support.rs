@@ -152,6 +152,7 @@ pub(crate) fn shop_decision() -> DmnModel {
             },
         ],
         logic: None,
+        emits: Vec::new(),
     });
     model.services.push(rex_ir::dmn::DecisionService {
         name: "AssessRefund".to_string(),
