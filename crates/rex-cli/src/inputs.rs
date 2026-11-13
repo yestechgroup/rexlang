@@ -580,8 +580,9 @@ pub(crate) fn read_evt_pair(file: &Path, project: Option<&mut Project>) -> anyho
 
 /// A `.dmn` decision-model file and its compiled inputs, ready for
 /// [`rex_driver::compile_dmn_str`]: the raw imported domains (in
-/// [`DomainPair`]) plus the decision-table contents its `logic table`
-/// clauses name.
+/// [`DomainPair`]), the decision-table contents its `logic table` clauses
+/// name, and the compiled `.evt` contracts its `import "<path>.evt"`
+/// lines name.
 pub(crate) struct DmnPair {
     /// The decision-model file plus its raw imported domains.
     pub(crate) pair: DomainPair,
@@ -589,28 +590,47 @@ pub(crate) struct DmnPair {
     /// path **as written** — the driver matches table paths exactly as
     /// written.
     pub(crate) tables: Vec<(String, String)>,
+    /// Each imported `.evt` contract, compiled, keyed by the import string
+    /// **as written** — the driver matches events entries exactly as
+    /// written (rule 14's bucket).
+    pub(crate) events: Vec<(String, rex_ir::events::EventModel)>,
 }
 
-/// Reads a `.dmn` file plus every domain it imports; each `logic table
-/// "<path>"` clause's markdown file is resolved relative to the `.dmn`
-/// file's directory and read from disk. A table file that cannot be read
-/// is simply not provided — the driver reports
-/// `decision table "<path>" was not provided` with the written path.
+/// Reads a `.dmn` file plus every import it declares: `.mox` paths gather
+/// into the domain pair exactly as before, and each `import "<x>.evt"`
+/// line resolves relative to the `.dmn` file's directory, compiles through
+/// the ordinary event pipeline, and joins the events bucket under its
+/// written path. Each `logic table "<path>"` clause's markdown file is
+/// resolved relative to the `.dmn` file's directory and read from disk. A
+/// table file that cannot be read is simply not provided — the driver
+/// reports `decision table "<path>" was not provided` with the written
+/// path. A missing or non-compiling `.evt` import is a clean error naming
+/// it.
 pub(crate) fn read_dmn_pair(file: &Path, project: Option<&mut Project>) -> anyhow::Result<DmnPair> {
     let source = std::fs::read_to_string(file)
         .map_err(|error| anyhow::anyhow!("cannot read {}: {error}", file.display()))?;
     let tables = table_sources(file, &source);
+    let mut project = project;
+    let events = {
+        let mut fetch = project_fetch(project.as_deref_mut());
+        rex_driver::project::gather_dmn_events(&file.display().to_string(), &source, &mut fetch)
+            .map_err(|message| anyhow::anyhow!(message))?
+    };
     let pair = read_domain_pair(
         file,
         |source| {
-            rex_syntax::parse_dmn(source)
-                .ast
-                .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
-                .unwrap_or_default()
+            rex_driver::project::dmn_import_paths(source)
+                .into_iter()
+                .filter(|path| !path.ends_with(".evt"))
+                .collect()
         },
         project,
     )?;
-    Ok(DmnPair { pair, tables })
+    Ok(DmnPair {
+        pair,
+        tables,
+        events,
+    })
 }
 
 /// The decision-table contents a `.dmn` source names: every `logic table

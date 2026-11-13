@@ -34,12 +34,30 @@ fn support_model() -> DmnModel {
     let path = root.join("examples/support.dmn");
     let path = path.to_str().expect("utf-8 example path");
     let domains = vec![("support.mox".to_string(), example_file("support.mox"))];
+    // The example's `.evt` import resolves next to the file and compiles
+    // into the events bucket (the CLI rule; the emits block joins it).
+    let events_path = root.join("examples/support.evt");
+    let events_compilation = rex_driver::compile_evt_str(
+        events_path.to_str().expect("utf-8 example path"),
+        &example_file("support.evt"),
+        &domains,
+        &rex_driver::DomainImports::default(),
+    );
+    assert!(
+        events_compilation.diagnostics.is_empty(),
+        "support.evt must compile clean"
+    );
+    let events = vec![(
+        "support.evt".to_string(),
+        events_compilation.model.expect("support.evt must lower to an event artifact"),
+    )];
     let compilation = rex_driver::compile_dmn_str(
         path,
         &example_file("support.dmn"),
         &domains,
         &rex_driver::DomainImports::default(),
         &support_tables(),
+        &events,
     );
     assert!(
         compilation.diagnostics.is_empty(),

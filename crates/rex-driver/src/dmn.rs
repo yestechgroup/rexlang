@@ -21,7 +21,11 @@
 //! syntax-checked with the dsntk FEEL parser — the fork parser accepts the
 //! full DMN FEEL conditional grammar (the fork fix for dsntk-rs#14), so
 //! nothing is deferred. Deep FEEL typing is out of scope for the compile
-//! (expressions are stored verbatim in the artifact).
+//! (expressions are stored verbatim in the artifact). A decision's `emits`
+//! entries name declared `.evt` events: they resolve union-wide against
+//! the event declarations of every provided `EventModel` (rule 14, the
+//! rule-17 pooling shape), and an empty events bucket is the blessed
+//! loosely-coupled behavior — the entries lower as authored, unchecked.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -29,12 +33,12 @@ use dsntk_feel::FeelScope;
 use rex_diagnostics::dmn::{
     E_BINDING_MISMATCH, E_DECISION_CYCLE, E_DUPLICATE_METADATA, E_DUPLICATE_NAME, E_INVALID_FEEL,
     E_TABLE_ERROR, E_TABLE_INPUT_MISMATCH, E_TABLE_NOT_PROVIDED, E_TABLE_OUTPUT_MISMATCH,
-    E_UNKNOWN_INFORMATION_REQUIREMENT, E_UNKNOWN_KNOWLEDGE_MODEL, E_UNKNOWN_KNOWLEDGE_SOURCE,
-    E_UNKNOWN_SERVICE_ENDPOINT, E_UNKNOWN_TYPE, E_UNKNOWN_VIEW_ELEMENT,
+    E_UNKNOWN_EMITTED_EVENT, E_UNKNOWN_INFORMATION_REQUIREMENT, E_UNKNOWN_KNOWLEDGE_MODEL,
+    E_UNKNOWN_KNOWLEDGE_SOURCE, E_UNKNOWN_SERVICE_ENDPOINT, E_UNKNOWN_TYPE, E_UNKNOWN_VIEW_ELEMENT,
 };
 use rex_ir::dmn::{
-    Binding, Bkm, Decision, DecisionLogic, DecisionService, DecisionView, DmnModel, InputData,
-    KnowledgeSource, MetadataKind, ModelMetadata, Output, Parameter, Requirement,
+    Binding, Bkm, Decision, DecisionEmits, DecisionLogic, DecisionService, DecisionView, DmnModel,
+    InputData, KnowledgeSource, MetadataKind, ModelMetadata, Output, Parameter, Requirement,
 };
 use rex_syntax::ast as dsl;
 use rex_syntax::{Name, Span};
@@ -44,10 +48,11 @@ use crate::lower::{self, DomainUnit};
 use crate::pipeline;
 
 /// Lowers and validates one parsed `.dmn` file against its imported domain
-/// models and the external decision-table contents its `logic table` paths
-/// name. Returns the decision-model artifact (or `None` when any
-/// error-severity diagnostic was produced anywhere) plus the diagnostics
-/// from every file, each tagged with its path.
+/// models, the external decision-table contents its `logic table` paths
+/// name, and the `.evt` contracts its `import "<path>.evt"` lines name.
+/// Returns the decision-model artifact (or `None` when any error-severity
+/// diagnostic was produced anywhere) plus the diagnostics from every file,
+/// each tagged with its path.
 ///
 /// See [`compile_dmn_str`](crate::compile_dmn_str) for the normative
 /// contract.
@@ -57,14 +62,19 @@ pub(crate) fn compile_dmn_file(
     parse_diagnostics: &[Diagnostic],
     domains: &[DomainUnit],
     tables: &[(String, String)],
+    events: &[(String, rex_ir::events::EventModel)],
 ) -> (Option<DmnModel>, Vec<(String, Diagnostic)>) {
-    // Import resolution: each import must name one of the provided domains
-    // exactly as written (the `.evt` rule — the host keys contents under the
-    // authored import strings).
+    // Import resolution (rule 1): each import names one of the provided
+    // domains exactly as written (the `.evt` rule — the host keys domain
+    // contents under the authored import strings), else one of the provided
+    // event contracts exactly as written (the table-path rule), else the
+    // unprovided-import error.
     let imports = ast.map(|file| file.imports.as_slice()).unwrap_or_default();
     let mut import_diagnostics = Vec::new();
     for import in imports {
-        if !domains.iter().any(|unit| unit.path == import.path) {
+        let resolved = domains.iter().any(|unit| unit.path == import.path)
+            || events.iter().any(|(path, _)| *path == import.path);
+        if !resolved {
             import_diagnostics.push(Diagnostic::error(
                 format!("imported file \"{}\" was not provided", import.path),
                 Some(import.span),
@@ -78,7 +88,9 @@ pub(crate) fn compile_dmn_file(
     let mut local: Vec<Diagnostic> = Vec::new();
     let mut model = DmnModel::new();
     if let Some(model_decl) = ast.and_then(|file| file.model.as_ref()) {
-        lower_model(model_decl, &packages, tables, &mut model, &mut local);
+        lower_model(
+            model_decl, &packages, tables, events, &mut model, &mut local,
+        );
     }
     pipeline::engine_finish(path, local, diags, model)
 }
@@ -89,6 +101,7 @@ fn lower_model(
     model_decl: &dsl::DmnDecisionModel,
     packages: &[lower::DomainPackage],
     tables: &[(String, String)],
+    events: &[(String, rex_ir::events::EventModel)],
     model: &mut DmnModel,
     local: &mut Vec<Diagnostic>,
 ) {
@@ -219,7 +232,10 @@ fn lower_model(
         });
     }
 
-    // Decisions lower with resolved output types (Rule 4).
+    // Decisions lower with resolved output types (Rule 4) and their
+    // `emits` entries as authored (rule 14 validates the names against the
+    // provided contracts below; resolution errors drop the whole artifact,
+    // so the names ride along verbatim).
     for decision in &model_decl.decisions {
         let mut outputs = Vec::new();
         for output in &decision.outputs {
@@ -236,11 +252,20 @@ fn lower_model(
             });
         }
         let logic = decision.logic.as_ref().map(lower_logic);
+        let emits = decision
+            .emits
+            .iter()
+            .map(|emit| DecisionEmits {
+                event: emit.event.text.clone(),
+                when: emit.when.clone(),
+            })
+            .collect();
         model.decisions.push(Decision {
             name: decision.name.text.clone(),
             description: decision.description.clone(),
             outputs,
             logic,
+            emits,
         });
     }
 
@@ -426,9 +451,17 @@ fn lower_model(
     }
 
     // Rule 11 — invoke bindings cover the invoked model's parameters, and
-    // Rule 12 — expression and binding texts are syntactically valid FEEL.
-    // Both run for decisions and knowledge models (a BKM may invoke a BKM).
+    // Rule 12 — expression, binding, and `emits`-`when` texts are
+    // syntactically valid FEEL. Both run for decisions and knowledge
+    // models (a BKM may invoke a BKM); the `emits` gate is
+    // bucket-independent (a `when` string is a syntax property of the
+    // authored text).
     for decision in &model_decl.decisions {
+        for emit in &decision.emits {
+            if let Some(when) = &emit.when {
+                check_feel("decision", &decision.name, when, emit.span, local);
+            }
+        }
         if let Some(logic) = &decision.logic {
             check_logic(logic, "decision", &decision.name, &model_decl.models, local);
         }
@@ -448,6 +481,49 @@ fn lower_model(
     for decision in &model_decl.decisions {
         if let Some(dsl::DmnLogic::Table { source, span }) = &decision.logic {
             check_decision_table(decision, source, *span, model_decl, tables, local);
+        }
+    }
+
+    // Rule 14 — every emitted event name resolves union-wide against the
+    // declared events of every provided `.evt` contract (bare names, the
+    // rule-10 pooling discipline: a host passes all of the application's
+    // compiled contracts). An empty bucket is the blessed loosely-coupled
+    // behavior — the entries lower as authored, unchecked — while a
+    // *non-empty* bucket whose contracts declare nothing still validates
+    // (everything is unknown).
+    if !events.is_empty() {
+        let declared: BTreeSet<String> = events
+            .iter()
+            .flat_map(|(_, model)| model.events.iter().map(|event| event.name.clone()))
+            .collect();
+        for decision in &model_decl.decisions {
+            for emit in &decision.emits {
+                if declared.contains(&emit.event.text) {
+                    continue;
+                }
+                let suggestion =
+                    rex_diagnostics::did_you_mean_adaptive(&emit.event.text, &declared);
+                let help = match &suggestion {
+                    Some(suggestion) => format!("did you mean '{suggestion}'?"),
+                    None if declared.is_empty() => {
+                        "the event contracts declare no events".to_string()
+                    }
+                    None => format!(
+                        "the event contracts declare: {}",
+                        declared.iter().cloned().collect::<Vec<_>>().join(", ")
+                    ),
+                };
+                local.push(
+                    Diagnostic::error(
+                        format!(
+                            "{} unknown event '{}' emitted by decision '{}'",
+                            E_UNKNOWN_EMITTED_EVENT, emit.event.text, decision.name.text
+                        ),
+                        Some(emit.event.span),
+                    )
+                    .with_help(help),
+                );
+            }
         }
     }
 

@@ -122,6 +122,7 @@ fn gather_sibling_decisions(
                     &pair.pair.domains,
                     &pair.pair.imports(),
                     &pair.tables,
+                    &pair.events,
                 );
                 if let Some(model) = compilation.model {
                     project.store(&key, &Artifact::Decision(model.clone()));
@@ -392,6 +393,7 @@ pub(crate) fn compile_surface(
             &pair.pair.domains,
             &pair.pair.imports(),
             &pair.tables,
+            &pair.events,
         );
         report_dmn_diagnostics(&pair.pair, &compilation);
         let Some(decision_model) = compilation.model else {

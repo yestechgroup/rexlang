@@ -302,6 +302,16 @@ fn dmn_examples_match_golden_artifacts_and_round_trip() {
         } else {
             Vec::new()
         };
+        // The example's `.evt` imports compile through the ordinary event
+        // pipeline and join rule 14's bucket under the import strings the
+        // model writes (the CLI rule); `support.evt` rides next to it.
+        let mut events: Vec<(String, rex_ir::events::EventModel)> = Vec::new();
+        for import in rex_driver::project::dmn_import_paths(&source) {
+            if !import.ends_with(".evt") || events.iter().any(|(key, _)| *key == import) {
+                continue;
+            }
+            events.push((import, compile_evt(name)));
+        }
         // The external markdown decision tables resolve relative to the
         // example file and are keyed by the paths the `logic table`
         // clauses write.
@@ -318,6 +328,7 @@ fn dmn_examples_match_golden_artifacts_and_round_trip() {
             &domains,
             &rex_driver::DomainImports::default(),
             &tables,
+            &events,
         );
         assert_clean(&format!("{name}.dmn"), &compilation.diagnostics);
         let model = compilation

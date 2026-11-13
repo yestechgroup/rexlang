@@ -63,6 +63,15 @@
 //! - [`DecisionService`] is DMN's DecisionService: a named capability
 //!   exposing a set of top-level decisions (`outputs`) over declared
 //!   `inputs`, with everything else it drags in `encapsulated`.
+//! - A [`Decision`]'s `emits` entries are the decision's **outcome
+//!   events** (the DMN → EVT edge, rexlang#152): each
+//!   [`DecisionEmits`] names a declared `.evt` event the decision's
+//!   outcome publishes, with an optional FEEL `when` condition —
+//!   consumers name events, never their payloads. The artifact carries
+//!   the names as written; resolving them against the provided
+//!   [`crate::events::EventModel`] set is a driver concern (the driver
+//!   validates them when the host provides the contracts, and lowers
+//!   them as authored otherwise — the loosely-coupled fallback).
 //! - [`DecisionView`] is a named projection over the graph (`show`) with an
 //!   optional layout `direction`; it carries no semantics beyond
 //!   presentation.
@@ -302,6 +311,29 @@ pub struct Decision {
     /// aggregation stub the driver validates structurally).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logic: Option<DecisionLogic>,
+    /// The events the decision's outcome publishes (the DMN → EVT edge,
+    /// rexlang#152), in declaration order — each a bare event name
+    /// resolved against the provided `.evt` contracts, with an optional
+    /// FEEL `when` condition. Empty when the decision declares no
+    /// `emits` block.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub emits: Vec<DecisionEmits>,
+}
+
+/// One entry of a [`Decision::emits`] block: a declared `.evt` event the
+/// decision's outcome publishes, with its optional FEEL `when` condition.
+/// Consumers name events, never their payloads — no payload wiring rides
+/// on the wire.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecisionEmits {
+    /// The emitted event's name, as written — a bare name consumers
+    /// resolve against the `.evt` contracts the host provides.
+    pub event: String,
+    /// The `when "<FEEL>"` condition gating the emission, carried
+    /// verbatim; omitted when the entry carries no `when` clause.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<String>,
 }
 
 /// One typed output of a [`Decision`].
