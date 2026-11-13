@@ -150,10 +150,7 @@ pub(crate) fn ddd_invokes<'src>(
                     "`invokes` requires at least one decision service name",
                 ));
             }
-            first
-                .into_iter()
-                .chain(rest)
-                .collect::<Vec<_>>()
+            first.into_iter().chain(rest).collect::<Vec<_>>()
         })
 }
 

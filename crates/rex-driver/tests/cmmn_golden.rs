@@ -1002,7 +1002,7 @@ fn a_duplicate_invokes_clause_is_a_parse_error() {
 
 // --- decision-task version pins (rexlang#154) --------------------------------
 
-use rex_ir::dmn::{DmnModel, ModelMetadata, MetadataKind};
+use rex_ir::dmn::{DmnModel, MetadataKind, ModelMetadata};
 
 /// Compiles a case source against a caller-provided decision bucket: the
 /// underwriting domain (the decision-fixture pair) plus the `(path,
@@ -1154,10 +1154,7 @@ fn pinned_decision_task_failures_mirror_the_pin_codes() {
         });
         model
     };
-    let compilation = compile_with_bucket(
-        PIN_CASE,
-        vec![("lending.dmn".to_string(), draft)],
-    );
+    let compilation = compile_with_bucket(PIN_CASE, vec![("lending.dmn".to_string(), draft)]);
     let (_, diagnostic) = &compilation.diagnostics[0];
     assert_eq!(
         diagnostic.message,

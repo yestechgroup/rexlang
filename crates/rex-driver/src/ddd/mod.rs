@@ -54,7 +54,7 @@ use services::{
 // so the two surfaces share one version-pin semantics. The module stays
 // private; these items are the crate-wide seam.
 pub(crate) use services::{
-    available_versions_help, lower_version_pin, DecisionResolution, resolve_decision_service,
+    available_versions_help, lower_version_pin, resolve_decision_service, DecisionResolution,
 };
 
 // The capability-noun classification the actor join reads (rexlang#144):

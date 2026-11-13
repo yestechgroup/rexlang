@@ -210,6 +210,13 @@ criteria and flags; decision tasks take no `performer` (the
 only-a-human-task-carries-performer rule extends, as do the stray-clause
 diagnostics for `inputs`/`outputs` on a non-decision item).
 
+- **Version pins.** The `invokes` clause may carry `version compatible`
+  or `version "X.Y.Z"` — the same pin grammar and resolution rules the
+  `.ddd` decision references use (rexlang#154; see the `.dmn` surface's
+  Versioning section): an exact pin resolves to the same-name service at
+  that version, `compatible` to the highest declared version in the
+  highest major present, and an unsatisfiable pin names the service, the
+  pin, and the versions available.
 - **Resolution.** The qualified name resolves **by its last segment** (the
   rule-17 convention: `Underwriting.LoanAssessmentService` and the bare
   `LoanAssessmentService` are the same service) union-wide against the

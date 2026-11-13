@@ -348,6 +348,37 @@ naming and invocation boundary only — no logic, no requirements of its own.
 
 ---
 
+## Versioning
+
+The model's `version` metadata line is the compatibility contract: a
+decision model at `version X.Y.Z` (strict semver — three numeric
+dot-separated parts) states its service contracts' generation, and the
+authoring rule is **same major = compatible**: a breaking change to a
+service's inputs or outputs MUST bump the major. The compiler does not
+diff signatures across versions — the contract is the inputs/outputs
+the service declares, and the convention is enforced at authoring time.
+
+Consumers pin what they invoke: a `.ddd` `invokes` entry, an
+`inject decision` line, or a `.cmmn` decision task's `invokes` clause
+may carry `version compatible` (the current generation: the highest
+semver in the highest major present in the decision bucket) or
+`version "X.Y.Z"` (exactly that generation). Resolution rules:
+
+- **No pin** — the reference resolves by name alone (the rule-17
+  behavior, unchanged).
+- **`version "X.Y.Z"`** — the same-name service whose model declares
+  that exact version resolves; zero matches is E0252 (naming the
+  versions available in the bucket), two or more candidates declaring
+  it is E0253 (ambiguous, naming the models).
+- **`version compatible`** — the highest declared version in the
+  highest major present resolves; models whose version is absent or not
+  strict `X.Y.Z` cannot satisfy a pin (E0254 when none can).
+
+The conformance fixtures carry the regulated lending pair:
+`lending-1.dmn` (`version "1.5.0"`) and `lending-2.dmn`
+(`version "2.0.0"` — the major bump), the two versioning consumers the
+resolution rules resolve against.
+
 ## Views
 
 ```

@@ -378,6 +378,20 @@ consumers resolve against the domain model.
     path when a non-empty decisions bucket is supplied, else
     `imported decision model "<path>" was not provided`; `.dmn` imports
     are not domains and never lower as `.mox` sources — a plain compile
+    (rexlang#154).
+18. **Version pins** — an `invokes` entry or an `inject decision` line
+    may declare `version compatible` or `version "X.Y.Z"` (an exact
+    semver). The pin narrows rule 17's resolution against the models'
+    declared `version` metadata: an exact pin resolves to the same-name
+    service at that version (zero matches is **E0252**, naming the
+    versions available; two or more candidates declaring the same
+    version is **E0253**, ambiguous); `compatible` resolves to the
+    highest declared version in the highest major present (a model
+    whose version is absent or not strict `X.Y.Z` cannot satisfy a pin —
+    **E0254** when none can). Unpinned references keep the rule-17
+    behavior; the compatibility contract itself is the decision model's
+    (same major = compatible — see the `.dmn` surface's Versioning
+    section).
     ignores them outright.
 18. **Child operations** (`extend`) — the target class must resolve to a
     domain class with an **entity design in the same module** that is an

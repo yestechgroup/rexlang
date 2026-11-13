@@ -2007,7 +2007,10 @@ application A {
     assert_eq!(invokes.len(), 3);
     assert_eq!(invokes[0].pin, Some(DddVersionPin::Compatible));
     assert_eq!(invokes[1].pin, Some(DddVersionPin::Exact("1.4.2".into())));
-    assert_eq!(invokes[2].pin, None, "the pin-less entry keeps today's shape");
+    assert_eq!(
+        invokes[2].pin, None,
+        "the pin-less entry keeps today's shape"
+    );
 }
 
 #[test]

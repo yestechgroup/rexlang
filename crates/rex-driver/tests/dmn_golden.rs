@@ -33,6 +33,10 @@ const EVENT_PATH: &str = "kiwisaver.evt";
 const MODEL_ARTIFACT_PATH: &str = "tests/conformance/dmn/kiwisaver.dmn.json";
 const MINIMAL_PATH: &str = "tests/conformance/dmn/minimal.dmn";
 const MINIMAL_ARTIFACT_PATH: &str = "tests/conformance/dmn/minimal.dmn.json";
+const LENDING_1_PATH: &str = "tests/conformance/dmn/lending-1.dmn";
+const LENDING_2_PATH: &str = "tests/conformance/dmn/lending-2.dmn";
+const LENDING_1_ARTIFACT_PATH: &str = "tests/conformance/dmn/lending-1.dmn.json";
+const LENDING_2_ARTIFACT_PATH: &str = "tests/conformance/dmn/lending-2.dmn.json";
 const TABLE_PATHS: [&str; 2] = [
     "tests/conformance/dmn/tables/eligibility.md",
     "tests/conformance/dmn/tables/contributions.md",
@@ -236,9 +240,72 @@ fn golden_artifacts_round_trip_through_from_json() {
     assert_eq!(&round, model);
 }
 
+/// The versioned lending pair (rexlang#154): the same `LoanAssessment`
+/// service contract at 1.5.0 and 2.0.0. Each model compiles alone (the
+/// `.dmn` side stays permissive — `version` metadata is a free string
+/// until a pin joins against it), lowers its metadata into the artifact,
+/// and byte-matches its golden.
+#[test]
+fn the_versioned_lending_pair_matches_golden_artifacts() {
+    for (model_path, artifact_path, version) in [
+        (LENDING_1_PATH, LENDING_1_ARTIFACT_PATH, "1.5.0"),
+        (LENDING_2_PATH, LENDING_2_ARTIFACT_PATH, "2.0.0"),
+    ] {
+        let model_absolute = fixture_path(model_path);
+        let source = std::fs::read_to_string(&model_absolute).expect("read the lending fixture");
+        let compilation = compile_dmn_str(
+            model_absolute.to_str().expect("utf-8 path"),
+            &source,
+            &[],
+            &rex_driver::DomainImports::default(),
+            &[],
+            &[],
+        );
+        assert!(
+            compilation.diagnostics.is_empty(),
+            "the lending fixture must compile clean: {:?}",
+            compilation.diagnostics
+        );
+        let model = compilation
+            .model
+            .as_ref()
+            .expect("clean compile yields the artifact");
+        // The declared `version` metadata rides the artifact.
+        assert_eq!(
+            model
+                .metadata
+                .iter()
+                .find(|metadata| metadata.kind == rex_ir::dmn::MetadataKind::Version)
+                .map(|metadata| metadata.value.as_str()),
+            Some(version),
+            "{model_path} carries its version metadata"
+        );
+        assert_eq!(model.services.len(), 1);
+        assert_eq!(model.services[0].name, "LoanAssessment");
+
+        let json = model.to_json_pretty().expect("serialize IR");
+        let artifact = fixture_path(artifact_path);
+        if std::env::var("REX_UPDATE_FIXTURES").is_ok() {
+            std::fs::write(&artifact, &json).unwrap();
+            eprintln!("updated {}", artifact.display());
+            continue;
+        }
+        let expected = std::fs::read_to_string(&artifact).unwrap_or_else(|_| {
+            panic!(
+                "missing golden artifact {}; regenerate with REX_UPDATE_FIXTURES=1",
+                artifact.display()
+            )
+        });
+        assert_eq!(
+            json, expected,
+            "decision model artifact for {model_path} drifted from the golden file"
+        );
+    }
+}
+
 #[test]
 fn conformance_models_are_fmt_stable() {
-    for relative in [MODEL_PATH, MINIMAL_PATH] {
+    for relative in [MODEL_PATH, MINIMAL_PATH, LENDING_1_PATH, LENDING_2_PATH] {
         let source =
             std::fs::read_to_string(fixture_path(relative)).expect("read conformance model");
         let once = rex_syntax::format_dmn(&source)

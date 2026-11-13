@@ -10,7 +10,7 @@ use rex_diagnostics::dmn::{
     E_AMBIGUOUS_SERVICE_VERSION, E_NO_USABLE_SERVICE_VERSION, E_PINNED_VERSION_NOT_AVAILABLE,
     E_UNKNOWN_INJECTED_SERVICE, E_UNKNOWN_INVOKED_SERVICE,
 };
-use rex_ir::ddd::{Delegation, DecisionPin, Service, ServiceOperation, TransitionRef};
+use rex_ir::ddd::{DecisionPin, Delegation, Service, ServiceOperation, TransitionRef};
 use rex_ir::dmn::VersionPin;
 use rex_syntax::ast as dsl;
 
@@ -284,7 +284,10 @@ pub(crate) fn available_versions_help(available: &[String]) -> String {
     if available.is_empty() {
         "the models providing it carry no strict \"X.Y.Z\" version metadata".to_string()
     } else {
-        format!("the decision models provide it at: {}", available.join(", "))
+        format!(
+            "the decision models provide it at: {}",
+            available.join(", ")
+        )
     }
 }
 
@@ -408,13 +411,15 @@ pub(crate) fn resolve_decision_service<'a>(
     let candidates: Vec<Candidate<'a>> = decisions
         .iter()
         .filter_map(|(path, model)| {
-            model.services.iter().find(|service| service.name == name).map(
-                |service| {
+            model
+                .services
+                .iter()
+                .find(|service| service.name == name)
+                .map(|service| {
                     let version = declared_version(model)
                         .and_then(|text| strict_version(text).map(|parsed| (text, parsed)));
                     (path.as_str(), model, service, version)
-                },
-            )
+                })
         })
         .collect();
     let Some(&(_, model, service, _)) = candidates.first() else {
@@ -479,7 +484,14 @@ pub(crate) fn resolve_decision_service<'a>(
 
 /// The strict versions a service's candidates declare, sorted and
 /// deduplicated, rendered for the E0252 help line (`1.5.0`, `2.0.0`).
-fn available_versions(candidates: &[(&str, &rex_ir::dmn::DmnModel, &rex_ir::dmn::DecisionService, Option<(&str, (u64, u64, u64))>)]) -> Vec<String> {
+fn available_versions(
+    candidates: &[(
+        &str,
+        &rex_ir::dmn::DmnModel,
+        &rex_ir::dmn::DecisionService,
+        Option<(&str, (u64, u64, u64))>,
+    )],
+) -> Vec<String> {
     let mut versions: Vec<String> = candidates
         .iter()
         .filter_map(|(_, _, _, version)| {

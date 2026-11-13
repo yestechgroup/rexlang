@@ -318,8 +318,7 @@ impl<'src> Formatter<'src> {
             return;
         }
         self.take_if(|token| {
-            matches!(token, Token::Str(_))
-                || matches!(token, Token::Ident(ddd::COMPATIBLE))
+            matches!(token, Token::Str(_)) || matches!(token, Token::Ident(ddd::COMPATIBLE))
         });
     }
 

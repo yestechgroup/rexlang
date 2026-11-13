@@ -1,0 +1,42 @@
+// The regulated lending assessment at version 2.0.0: the same
+// LoanAssessment service contract with a breaking change — the new
+// debt_to_income input — so the major bumps (rexlang#154: same major =
+// compatible; a breaking change MUST bump the major). A `compatible`
+// pin over the lending-1/lending-2 pair resolves here.
+decision_model Lending {
+    namespace nz.example.lending;
+    id "LEND-001";
+    version "2.0.0";
+    inputs {
+        amount: int;
+        term_months: int;
+        debt_to_income: int;
+    }
+    decisions {
+        /// Whether the application clears the automated floor, now with
+        /// the debt burden in the picture.
+        decision verdict {
+            output boolean;
+            logic expression "amount > 0 and debt_to_income < 40"
+        }
+    }
+    requirements {
+        information {
+            verdict requires amount;
+            verdict requires term_months;
+            verdict requires debt_to_income;
+        }
+    }
+    services {
+        /// The case-facing contract: assess one application.
+        service LoanAssessment {
+            inputs {
+                amount
+                term_months
+                debt_to_income
+            }
+            outputs { verdict }
+            encapsulates { verdict }
+        }
+    }
+}

@@ -49,7 +49,9 @@ fn support_model() -> DmnModel {
     );
     let events = vec![(
         "support.evt".to_string(),
-        events_compilation.model.expect("support.evt must lower to an event artifact"),
+        events_compilation
+            .model
+            .expect("support.evt must lower to an event artifact"),
     )];
     let compilation = rex_driver::compile_dmn_str(
         path,

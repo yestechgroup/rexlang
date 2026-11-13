@@ -685,8 +685,11 @@ fn lower_plan_item(
                 // the reference, and a pinned failure mode gets the
                 // exact-message mirror of the `.ddd` pin codes. The
                 // unknown-name shape stays the plain one.
-                let resolution =
-                    crate::ddd::resolve_decision_service(&clause.service, clause.pin.as_ref(), decisions);
+                let resolution = crate::ddd::resolve_decision_service(
+                    &clause.service,
+                    clause.pin.as_ref(),
+                    decisions,
+                );
                 match &resolution {
                     crate::ddd::DecisionResolution::Unknown => {
                         if !decision_pool.contains(name) {

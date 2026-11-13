@@ -1,0 +1,94 @@
+{
+  "formatVersion": 1,
+  "name": "Lending",
+  "namespace": "nz.example.lending",
+  "metadata": [
+    {
+      "kind": {
+        "type": "id"
+      },
+      "value": "LEND-001"
+    },
+    {
+      "kind": {
+        "type": "version"
+      },
+      "value": "2.0.0"
+    }
+  ],
+  "inputs": [
+    {
+      "name": "amount",
+      "typeRef": {
+        "type": "primitive",
+        "value": "int"
+      }
+    },
+    {
+      "name": "term_months",
+      "typeRef": {
+        "type": "primitive",
+        "value": "int"
+      }
+    },
+    {
+      "name": "debt_to_income",
+      "typeRef": {
+        "type": "primitive",
+        "value": "int"
+      }
+    }
+  ],
+  "decisions": [
+    {
+      "name": "verdict",
+      "description": "Whether the application clears the automated floor, now with\nthe debt burden in the picture.",
+      "outputs": [
+        {
+          "name": "",
+          "typeRef": {
+            "type": "primitive",
+            "value": "boolean"
+          }
+        }
+      ],
+      "logic": {
+        "type": "expression",
+        "value": {
+          "text": "amount > 0 and debt_to_income < 40"
+        }
+      }
+    }
+  ],
+  "informationRequirements": [
+    {
+      "requiring": "verdict",
+      "required": "amount"
+    },
+    {
+      "requiring": "verdict",
+      "required": "term_months"
+    },
+    {
+      "requiring": "verdict",
+      "required": "debt_to_income"
+    }
+  ],
+  "services": [
+    {
+      "name": "LoanAssessment",
+      "description": "The case-facing contract: assess one application.",
+      "inputs": [
+        "amount",
+        "term_months",
+        "debt_to_income"
+      ],
+      "outputs": [
+        "verdict"
+      ],
+      "encapsulates": [
+        "verdict"
+      ]
+    }
+  ]
+}
