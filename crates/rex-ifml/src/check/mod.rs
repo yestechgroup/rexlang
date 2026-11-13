@@ -261,9 +261,9 @@ pub fn check_ifml_with_actors(
 /// (bare-name union-wide, after the domain classes; the instantiation
 /// reachability rule of the interaction pass). An empty slice provides no
 /// decision dimension and skips the pass entirely — every diagnostic
-/// stays byte-identical to [`check_ifml_with_actors`]. See the [decision
-/// data section](self#decision-data) of the module docs for the
-/// resolution order and the check-only contract.
+/// stays byte-identical to [`check_ifml_with_actors`]. The resolution
+/// order and the check-only contract are documented in the module's
+/// "Decision data" section.
 pub fn check_ifml_with_decisions(
     compilation: &IfmlCompilation,
     domains: Option<&Model>,
