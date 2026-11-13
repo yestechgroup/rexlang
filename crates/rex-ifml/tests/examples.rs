@@ -166,7 +166,10 @@ fn load(name: &str) -> Example {
                     // string as written.
                     for import in imports {
                         if !import.ends_with(".evt")
-                            || decision.events.iter().any(|(existing, _)| *existing == import)
+                            || decision
+                                .events
+                                .iter()
+                                .any(|(existing, _)| *existing == import)
                         {
                             continue;
                         }

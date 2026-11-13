@@ -270,7 +270,10 @@ pub fn gather_ifml_project(
                     .unwrap_or_default();
                 for import in imports {
                     if !import.ends_with(".evt")
-                        || decision.events.iter().any(|(existing, _)| *existing == import)
+                        || decision
+                            .events
+                            .iter()
+                            .any(|(existing, _)| *existing == import)
                     {
                         continue;
                     }

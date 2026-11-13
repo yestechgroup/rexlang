@@ -86,8 +86,8 @@ use dsntk_model::{
 };
 use dsntk_model_evaluator::trace::TableTrace;
 use dsntk_model_evaluator::ModelEvaluator;
-use rex_ir::dmn::{DecisionLogic, DecisionService as IrDecisionService, DmnModel, MetadataKind};
 use rex_backend_common::canonical_key_order;
+use rex_ir::dmn::{DecisionLogic, DecisionService as IrDecisionService, DmnModel, MetadataKind};
 use rex_ir::{PrimitiveType, TypeRef};
 use serde::Serialize;
 
