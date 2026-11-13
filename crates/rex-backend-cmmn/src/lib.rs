@@ -23,7 +23,15 @@
 //!   service task lowers to `taskType: "Process"` whose `processRef` is
 //!   the resolved `alias.Service.operation` — the key the engine's task
 //!   executor registry resolves (the engine executes composition tasks
-//!   through a registered `TaskExecutor` seam at activation).
+//!   through a registered `TaskExecutor` seam at activation). A decision
+//!   task (a plan item carrying a
+//!   [`DecisionTaskBinding`](rex_ir::cmmn::DecisionTaskBinding)) lowers
+//!   exactly like a service task: `taskType: "Process"` whose `processRef`
+//!   is the **authored** `invokes` qualified name — the key a
+//!   decision-task executor registry resolves. The binding's
+//!   `inputs`/`outputs` case-file names have no slot in the engine's
+//!   `CaseDefinition` shape: the input/output mapping is a runtime
+//!   executor-registry concern, never an engine field.
 //! * A discretionary task is **excluded from its stage's children** (the
 //!   engine instantiates only the containment tree at case start) and
 //!   becomes a `discretionaryItem` plus a `planningTable` attached to the
@@ -575,12 +583,30 @@ impl<'a> CaseDefinitionEmitter<'a> {
         let kind = match &item.kind {
             PlanItemKind::Task(task) => {
                 let discretionary = item.planning == PlanningMode::Manual;
-                EngineKind::Task(EngineTask {
-                    task_type: "User",
-                    required_role: task.performer.clone(),
-                    planning_mode: if discretionary { "Automatic" } else { "None" },
-                    composition: None,
-                })
+                // A decision task lowers exactly like a service task: a
+                // `Process` composition keyed by the authored `invokes`
+                // qualified name (the decision-task executor registry's
+                // `processRef`). The binding's `inputs`/`outputs` have no
+                // engine slot — the input/output mapping is a runtime
+                // executor-registry concern.
+                match &item.decision_task {
+                    Some(binding) => EngineKind::Task(EngineTask {
+                        task_type: "Process",
+                        required_role: None,
+                        planning_mode: if discretionary { "Automatic" } else { "None" },
+                        composition: Some(EngineComposition::Process(EngineProcess {
+                            process_ref: binding.invokes.clone(),
+                            is_blocking: true,
+                            mappings: Vec::new(),
+                        })),
+                    }),
+                    None => EngineKind::Task(EngineTask {
+                        task_type: "User",
+                        required_role: task.performer.clone(),
+                        planning_mode: if discretionary { "Automatic" } else { "None" },
+                        composition: None,
+                    }),
+                }
             }
             PlanItemKind::Service(service) => EngineKind::Task(EngineTask {
                 task_type: "Process",

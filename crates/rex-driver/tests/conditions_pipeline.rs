@@ -320,6 +320,7 @@ fn compile_case(source: &str) -> rex_driver::CmmnCompilation {
         &[],
         &[],
         &[],
+        &[],
     )
 }
 

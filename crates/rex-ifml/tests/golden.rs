@@ -10,9 +10,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use rex_driver::project::{compile_decision_imports, DecisionImport};
 use rex_ifml::{
-    compile_ifml_str, manifest_ifml, parse_ifml, IfmlImports, IfmlManifest, IfmlModel,
-    IFML_MODEL_FORMAT_VERSION,
+    check_ifml, check_ifml_with_decisions, compile_ifml_str, manifest_ifml, parse_ifml,
+    IfmlImports, IfmlManifest, IfmlModel, IFML_MODEL_FORMAT_VERSION,
 };
 
 fn workspace_root() -> &'static Path {
@@ -35,6 +36,27 @@ const CLI_MODEL_PATH: &str = "tests/conformance/ifml/cli.ifml";
 const CLI_ARTIFACT_PATH: &str = "tests/conformance/ifml/cli.ifml.json";
 const MANIFEST_PATH: &str = "tests/conformance/ifml/app.manifest.json";
 const CLI_MANIFEST_PATH: &str = "tests/conformance/ifml/cli.manifest.json";
+
+/// Compiles the app fixture's imported decision model — the decisions
+/// slice the manifest gate checks against. The fixture `.dmn` (and the
+/// `.mox` domain its types resolve against) live next to `app.ifml` under
+/// `rexlang/`, the same directory discipline as the auth pair; the keys
+/// are the resolved disk paths the driver's lexical import resolution
+/// matches.
+fn fixture_decisions() -> Vec<rex_ir::dmn::DmnModel> {
+    let dir = workspace_root().join("tests/conformance/ifml/rexlang");
+    let source =
+        std::fs::read_to_string(dir.join("decisions.dmn")).expect("fixture decision model exists");
+    let domain = std::fs::read_to_string(dir.join("auth.mox")).expect("fixture auth domain exists");
+    compile_decision_imports(&[DecisionImport {
+        key: dir.join("decisions.dmn").display().to_string(),
+        source,
+        domains: vec![(dir.join("auth.mox").display().to_string(), domain)],
+        tables: Vec::new(),
+        events: Vec::new(),
+    }])
+    .expect("fixture decision model compiles")
+}
 
 #[test]
 fn conformance_model_matches_golden_artifact() {
@@ -108,7 +130,12 @@ fn golden_artifact_round_trips_through_from_json() {
 
 /// Compiles `model_relative` (no imports — the conformance fixtures
 /// declare everything locally or import only non-`.ifml` surfaces) and
-/// byte-compares its control/route manifest against the golden file.
+/// byte-compares its control/route manifest against the golden file. The
+/// app fixture checks through [`check_ifml_with_decisions`]: its
+/// `rexlang/decisions.dmn` import is load-bearing (the decision dimension
+/// of `data:` resolution), gathered from disk next to the fixture exactly
+/// the way the CLI gathers it; the CLI fixture carries no decision model,
+/// so its gate is the plain check.
 fn manifest_matches(model_relative: &str, artifact_relative: &str) {
     let absolute = fixture_path(model_relative);
     let source = std::fs::read_to_string(&absolute)
@@ -116,7 +143,11 @@ fn manifest_matches(model_relative: &str, artifact_relative: &str) {
 
     let compilation = compile_ifml_str(model_relative, &source, &IfmlImports::default())
         .unwrap_or_else(|diagnostics| panic!("{model_relative} must compile: {diagnostics:?}"));
-    let diags = rex_ifml::check_ifml(&compilation, None);
+    let diags = if model_relative == MODEL_PATH {
+        check_ifml_with_decisions(&compilation, None, &[], &fixture_decisions())
+    } else {
+        check_ifml(&compilation, None)
+    };
     assert!(
         diags.is_empty(),
         "{model_relative} must pass the checker: {diags:?}"

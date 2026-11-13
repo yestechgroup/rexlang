@@ -49,6 +49,14 @@ use services::{
     rule_9_resolve_injects,
 };
 
+// The shared decision-service resolver (rexlang#154) and its outcome: the
+// `.cmmn` decision-task check resolves through the same core rule 17 runs,
+// so the two surfaces share one version-pin semantics. The module stays
+// private; these items are the crate-wide seam.
+pub(crate) use services::{
+    available_versions_help, lower_version_pin, resolve_decision_service, DecisionResolution,
+};
+
 // The capability-noun classification the actor join reads (rexlang#144):
 // the module stays private (its rule functions are ddd-internal), but the
 // table is shared crate-wide.
@@ -121,11 +129,14 @@ enum DecisionSite {
 /// One decision-service reference awaiting the provided `.dmn` models.
 /// `context` names where the reference was declared ("operation 'x' of
 /// service 'Y'" for an invocation, "service 'Y'" for an injection) — the
-/// phrase the E0250/E0251 message embeds.
+/// phrase the E0250/E0251 message embeds — and `pin` is the reference's
+/// optional `version` pin (rexlang#154), the compatibility contract rule
+/// 17 resolves through the shared `resolve_decision_service` core.
 struct DecisionCheck<'a> {
     site: DecisionSite,
     context: String,
     name: &'a dsl::QualifiedName,
+    pin: Option<&'a dsl::DddVersionPin>,
 }
 /// The application-wide registries, accumulated in declaration order while
 /// the modules lower. First declaration wins: a duplicate errors, and the

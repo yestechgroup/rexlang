@@ -175,6 +175,7 @@ fn cmmn_alias_on_non_design_names_execute() {
         &[],
         &[],
         &[],
+        &[],
     );
     let diagnostic = one_diagnostic(
         &compilation.diagnostics,
@@ -277,6 +278,7 @@ fn cmmn_execute_resolves_against_first_aliased_import() {
         &designs,
         &[],
         &[],
+        &[],
     );
     assert!(
         compilation.diagnostics.is_empty(),
@@ -299,6 +301,7 @@ fn cmmn_execute_still_reports_operation_missing_from_first() {
         &domain(),
         &DomainImports::default(),
         &designs,
+        &[],
         &[],
         &[],
     );
@@ -325,6 +328,7 @@ fn cmmn_unknown_role_actor_help_lists_provided_models() {
         &[],
         &[(actor_path, actor_model)],
         &[],
+        &[],
     );
     let diagnostic = one_diagnostic(&compilation.diagnostics, "unknown actor 'Ghost'");
     assert_eq!(
@@ -346,6 +350,7 @@ fn cmmn_unknown_role_actor_with_no_models_says_so() {
         source,
         &domain(),
         &DomainImports::default(),
+        &[],
         &[],
         &[],
         &[],
@@ -550,6 +555,7 @@ fn cmmn_case_file_multiplicity_maps_bounds() {
         &[],
         &[],
         &[],
+        &[],
     );
     assert!(
         compilation.diagnostics.is_empty(),
@@ -601,6 +607,7 @@ fn duplicate_case_diagnostic() {
         source,
         &domain(),
         &DomainImports::default(),
+        &[],
         &[],
         &[],
         &[],

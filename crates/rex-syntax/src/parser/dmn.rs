@@ -201,8 +201,9 @@ fn braced_items<'src, T>(
 }
 
 /// A `<keyword> { items }` block whose brace is committed: a missing `{` is
-/// a reported error and only the introducing word is consumed.
-fn keyword_block<'src, T>(
+/// a reported error and only the introducing word is consumed. Shared with
+/// the `.cmmn` decision name lists (the same committed-brace shape).
+pub(crate) fn keyword_block<'src, T>(
     keyword: &'static str,
     item: impl Parser<'src, Tokens<'src>, Option<T>, MoxExtra<'src>> + Clone,
 ) -> impl Parser<'src, Tokens<'src>, Vec<T>, MoxExtra<'src>> + Clone {
@@ -267,6 +268,7 @@ enum DmnDecisionItem {
     Output(DmnOutput),
     Outputs(Vec<DmnOutput>),
     Logic(DmnLogic),
+    Emits(Vec<DmnEmits>),
 }
 
 /// One foldable item of a knowledge block.
@@ -655,11 +657,44 @@ pub(crate) fn dmn_bkm_decl<'src>() -> impl Parser<'src, Tokens<'src>, DmnBkm, Mo
         })
 }
 
+/// One `name ("when" "<FEEL>")? ";"` entry of a decision's `emits` block.
+/// Committed once the name matched: a `when` clause without its string is
+/// a reported error and the entry recovers without a condition.
+pub(crate) fn dmn_emits_entry<'src>(
+) -> impl Parser<'src, Tokens<'src>, DmnEmits, MoxExtra<'src>> + Clone {
+    let guard = kw(Token::When)
+        .ignore_then(string_lit().or_not())
+        .map_with(|when, e| (when, e.span()))
+        .validate(|(when, span), _e, emitter| {
+            if when.is_none() {
+                emitter.emit(Rich::custom(span, "expected a string after `when`"));
+            }
+            when.unwrap_or_default()
+        });
+    name()
+        .then(guard.map(Some).or_not())
+        .then(kw(Token::Other(';')).or_not())
+        .map_with(|((event, when), _semi), e| (event, when, e.span()))
+        .validate(|(event, when, span), _e, _emitter| DmnEmits {
+            event,
+            when: when.unwrap_or_default(),
+            span,
+        })
+}
+
+/// The `emits { ... }` block of a decision body: the declared events the
+/// decision's outcome publishes.
+fn dmn_emits_block<'src>() -> impl Parser<'src, Tokens<'src>, Vec<DmnEmits>, MoxExtra<'src>> + Clone
+{
+    keyword_block(dmn::EMITS, dmn_emits_entry().map(Some))
+}
+
 /// A `decision <name> { ... }` declaration of a decisions block. The
-/// `output`/`outputs` members and the optional `logic` clause may be
-/// interleaved in any order; a repeated `logic` clause is a reported error
-/// (the first wins). Unlike a model (BKM), a decision may declare only its
-/// contract — a missing `logic` is not an error.
+/// `output`/`outputs` members, the optional `logic` clause, and the
+/// optional `emits` block may be interleaved in any order; a repeated
+/// `logic` clause is a reported error (the first wins). Unlike a model
+/// (BKM), a decision may declare only its contract — a missing `logic` is
+/// not an error.
 pub(crate) fn dmn_decision_decl<'src>(
 ) -> impl Parser<'src, Tokens<'src>, DmnDecision, MoxExtra<'src>> + Clone {
     let item = choice((
@@ -677,6 +712,7 @@ pub(crate) fn dmn_decision_decl<'src>(
             )
         }),
         dmn_logic_clause().map(DmnDecisionItem::Logic),
+        dmn_emits_block().map(DmnDecisionItem::Emits),
     ))
     .map(Some)
     .or(junk_dmn_member("expected a decision member").to(None));
@@ -701,6 +737,7 @@ pub(crate) fn dmn_decision_decl<'src>(
             }
             let mut outputs = Vec::new();
             let mut logic = None;
+            let mut emits = Vec::new();
             for entry in items.into_iter().flatten() {
                 match entry {
                     DmnDecisionItem::Output(out) => outputs.push(out),
@@ -715,6 +752,7 @@ pub(crate) fn dmn_decision_decl<'src>(
                             ));
                         }
                     }
+                    DmnDecisionItem::Emits(entries) => emits.extend(entries),
                 }
             }
             DmnDecision {
@@ -722,6 +760,7 @@ pub(crate) fn dmn_decision_decl<'src>(
                 description: None,
                 outputs,
                 logic,
+                emits,
                 span,
             }
         })

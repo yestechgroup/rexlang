@@ -63,6 +63,7 @@
               "children": [
                 "ReviewTicket",
                 "AssessRefund",
+                "AssessAuthority",
                 "ApproveRefund",
                 "Escalate",
                 "RefundSettled",
@@ -119,6 +120,40 @@
           ],
           "control": {
             "required": true
+          }
+        },
+        {
+          "name": "AssessAuthority",
+          "description": "The desk's decision layer: the sibling decision model\n(support.dmn) assesses the ticket once the service has run, and\nits assessment lands in the `decision` case-file item the case\ncoordinates around.",
+          "kind": {
+            "type": "task",
+            "value": {}
+          },
+          "entry": [
+            {
+              "onParts": [
+                {
+                  "type": "item",
+                  "value": {
+                    "item": "AssessRefund",
+                    "event": "complete"
+                  }
+                }
+              ],
+              "when": "decision == null"
+            }
+          ],
+          "control": {
+            "required": true
+          },
+          "decisionTask": {
+            "invokes": "RefundDecisions.AssessRefund",
+            "inputs": [
+              "ticket"
+            ],
+            "outputs": [
+              "decision"
+            ]
           }
         },
         {

@@ -1,0 +1,34 @@
+// The regulated lending assessment at version 1.5.0: the service
+// contract the design and case surfaces pin against (rexlang#154). The
+// same contract lives at 2.0.0 in lending-2.dmn — the major bump — so a
+// `compatible` pin tracks forward and an exact pin holds this model.
+decision_model Lending {
+    namespace nz.example.lending;
+    id "LEND-001";
+    version "1.5.0";
+    inputs {
+        amount: int;
+        term_months: int;
+    }
+    decisions {
+        /// Whether the application clears the automated floor.
+        decision verdict {
+            output boolean;
+            logic expression "amount > 0 and term_months <= 84"
+        }
+    }
+    requirements {
+        information {
+            verdict requires amount;
+            verdict requires term_months;
+        }
+    }
+    services {
+        /// The case-facing contract: assess one application.
+        service LoanAssessment {
+            inputs { amount term_months }
+            outputs { verdict }
+            encapsulates { verdict }
+        }
+    }
+}

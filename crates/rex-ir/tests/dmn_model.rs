@@ -6,8 +6,8 @@
 //! [`Model`](rex_ir::Model).
 
 use rex_ir::dmn::{
-    Binding, Bkm, Decision, DecisionLogic, DecisionService, DecisionView, DmnModel, InputData,
-    KnowledgeSource, MetadataKind, ModelMetadata, Output, Parameter, Requirement,
+    Binding, Bkm, Decision, DecisionEmits, DecisionLogic, DecisionService, DecisionView, DmnModel,
+    InputData, KnowledgeSource, MetadataKind, ModelMetadata, Output, Parameter, Requirement,
     DMN_MODEL_FORMAT_VERSION,
 };
 use rex_ir::{IrError, TypeRef};
@@ -105,12 +105,17 @@ fn lending_model() -> DmnModel {
                 logic: Some(DecisionLogic::Expression {
                     text: "if affordability and riskOk then \"approve\" else \"decline\"".into(),
                 }),
+                emits: vec![DecisionEmits {
+                    event: "ApprovalGranted".into(),
+                    when: Some("outcome = \"approve\"".into()),
+                }],
             },
             Decision {
                 name: "riskOk".into(),
                 description: None,
                 outputs: Vec::new(),
                 logic: None,
+                emits: Vec::new(),
             },
             Decision {
                 name: "externalCheck".into(),
@@ -132,6 +137,7 @@ fn lending_model() -> DmnModel {
                         },
                     ],
                 }),
+                emits: Vec::new(),
             },
         ],
         information_requirements: vec![Requirement {
@@ -216,6 +222,17 @@ fn decision_model_round_trips_through_json() {
             ],
         })
     );
+    // The DMN → EVT edge: the emitting decision carries its outcome
+    // events with the `when` condition verbatim; the others carry none.
+    assert_eq!(
+        decisions[0].emits,
+        vec![DecisionEmits {
+            event: "ApprovalGranted".into(),
+            when: Some("outcome = \"approve\"".into()),
+        }]
+    );
+    assert!(decisions[1].emits.is_empty());
+    assert!(decisions[2].emits.is_empty());
 
     assert_eq!(parsed.information_requirements.len(), 1);
     assert_eq!(parsed.knowledge_requirements.len(), 1);
@@ -251,6 +268,12 @@ fn decision_model_wire_shape_is_pinned() {
     // logic-less decision none of the optional keys.
     assert!(compact.contains(r#"{"name":"riskBand","typeRef":{"type":"enum","value":{"package":"nz.example.lending","name":"RiskBand"}}}"#));
     assert!(compact.contains(r#"{"name":"riskOk"}"#));
+    // The DMN → EVT edge: an emits entry serializes as the event name
+    // with its `when` condition; a decision without emits carries no
+    // `emits` key at all (the additive-field rule).
+    assert!(
+        compact.contains(r#""emits":[{"event":"ApprovalGranted","when":"outcome = \"approve\""}]"#)
+    );
 
     let pretty = model.to_json_pretty().expect("serialize");
     for key in [

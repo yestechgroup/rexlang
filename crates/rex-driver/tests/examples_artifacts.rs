@@ -302,6 +302,16 @@ fn dmn_examples_match_golden_artifacts_and_round_trip() {
         } else {
             Vec::new()
         };
+        // The example's `.evt` imports compile through the ordinary event
+        // pipeline and join rule 14's bucket under the import strings the
+        // model writes (the CLI rule); `support.evt` rides next to it.
+        let mut events: Vec<(String, rex_ir::events::EventModel)> = Vec::new();
+        for import in rex_driver::project::dmn_import_paths(&source) {
+            if !import.ends_with(".evt") || events.iter().any(|(key, _)| *key == import) {
+                continue;
+            }
+            events.push((import, compile_evt(name)));
+        }
         // The external markdown decision tables resolve relative to the
         // example file and are keyed by the paths the `logic table`
         // clauses write.
@@ -318,6 +328,7 @@ fn dmn_examples_match_golden_artifacts_and_round_trip() {
             &domains,
             &rex_driver::DomainImports::default(),
             &tables,
+            &events,
         );
         assert_clean(&format!("{name}.dmn"), &compilation.diagnostics);
         let model = compilation
@@ -397,6 +408,51 @@ fn compile_cmmn(name: &str) -> rex_ir::cmmn::CmmnModel {
         dir.join("support.evt").display().to_string(),
         compile_evt("support"),
     )];
+    // The sibling `.dmn` decision model, compiled the way the CLI compiles
+    // it (its own domain import plus the decision tables its `logic table`
+    // clauses name) — the decisions bucket a `decision` task's `invokes`
+    // clause resolves against.
+    let decisions = if source.contains("import \"support.dmn\"") {
+        let (dmn_path, dmn_source) = example("support", "dmn");
+        let dmn_domains = vec![domain_of("support")];
+        // The external markdown decision table resolves relative to the
+        // example file and is keyed by the path the `logic table` clause
+        // writes.
+        let tables = [(
+            "./tables/refund-authority.md".to_string(),
+            read(&dir.join("tables/refund-authority.md")),
+        )];
+        // The example's `.evt` import resolves next to the file and joins
+        // the events bucket (the emits rule joins it the same way).
+        let events = [(
+            "support.evt".to_string(),
+            rex_driver::compile_evt_str(
+                dir.join("support.evt").to_str().expect("utf-8 event path"),
+                &read(&dir.join("support.evt")),
+                &dmn_domains,
+                &rex_driver::DomainImports::default(),
+            )
+            .model
+            .expect("support.evt must lower to an event artifact"),
+        )];
+        let compilation = rex_driver::compile_dmn_str(
+            dmn_path.to_str().expect("utf-8 example path"),
+            &dmn_source,
+            &dmn_domains,
+            &rex_driver::DomainImports::default(),
+            &tables,
+            &events,
+        );
+        assert_clean("support.dmn", &compilation.diagnostics);
+        vec![(
+            dmn_path.display().to_string(),
+            compilation
+                .model
+                .unwrap_or_else(|| panic!("support.dmn must lower to a decision artifact")),
+        )]
+    } else {
+        Vec::new()
+    };
     let compilation = rex_driver::compile_cmmn_str(
         path.to_str().expect("utf-8 example path"),
         &source,
@@ -405,6 +461,7 @@ fn compile_cmmn(name: &str) -> rex_ir::cmmn::CmmnModel {
         &designs,
         &actors,
         &events,
+        &decisions,
     );
     assert_clean(&format!("{name}.cmmn"), &compilation.diagnostics);
     compilation

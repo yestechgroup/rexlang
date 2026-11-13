@@ -1,0 +1,30 @@
+{
+  "namespace": "nz.example.support.decisions",
+  "model_name": "RefundDecisions",
+  "service": "AssessRefund",
+  "inputs": {
+    "helper": {
+      "active": true,
+      "name": "Anton",
+      "userId": "u-7"
+    },
+    "requested_cents": 3000,
+    "ticket": {
+      "internal": false,
+      "needsRefund": true,
+      "state": "Refunded",
+      "ticketNo": "T-1042",
+      "title": "Broken keyboard"
+    }
+  },
+  "outputs": "approved at the desk",
+  "rule_matches": [
+    {
+      "table_id": "RefundAuthority",
+      "matched_rules": [
+        0
+      ]
+    }
+  ],
+  "evaluated_at": "2026-11-13T09:00:00Z"
+}

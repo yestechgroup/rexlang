@@ -54,9 +54,10 @@ docs):
 - Names are plain strings at this layer: `publishes` entries and
   `events` lists reference events *by name*; resolving them is a
   driver/consumer concern, never a wire concern. The production side is
-  the `.ddd` service operation's `emits` clause (`docs/DDD.md`): the union
-  integrity pass checks that emitted events are declared here and that
-  declared events are emitted somewhere.
+  the `.ddd` service operation's `emits` clause (`docs/DDD.md`) and the
+  `.dmn` decision's `emits` block (`docs/DMN.md`): the union integrity
+  pass checks that emitted events are declared here and that declared
+  events are emitted somewhere.
 - The slice-2 delivery model rides under the same discipline: an event's
   `owner`/`classification`/`retention` strings, `pii` array, and
   `cloudEvents` object (`{"type": ..., "source": ..., "subject": ...}` —

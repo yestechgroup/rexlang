@@ -4,6 +4,7 @@
 use crate::cmmn;
 use crate::lexer::{lex_with_comments, Token};
 
+use super::dmn::{dmn_bare_name, keyword_block};
 use super::docs::{collect_docs, doc_run_above, line_of, line_starts};
 use super::*;
 pub(crate) fn cmmn_keyword<'src>(
@@ -331,6 +332,77 @@ pub(crate) fn execute_clause<'src>(
         })
 }
 
+/// An `invokes <qualified-name> [version <pin>];` clause of a decision
+/// body. Committed once `invokes` matched: a missing `;` is a reported
+/// error. The qualified name lowers **as written** (joined segments); the
+/// optional `version` pin (rexlang#154) lowers with it — the same shape
+/// the `.ddd` decision references take.
+pub(crate) fn invoke_clause<'src>(
+) -> impl Parser<'src, Tokens<'src>, CmmnInvoke, MoxExtra<'src>> + Clone {
+    let pin = kw(Token::Version)
+        .ignore_then(
+            choice((
+                cmmn_keyword(cmmn::COMPATIBLE).to(DddVersionPin::Compatible),
+                string_lit().map(DddVersionPin::Exact),
+            ))
+            .or_not(),
+        )
+        .map_with(|pin, e| (pin, e.span()))
+        .validate(|(pin, span), _e, emitter| {
+            pin.unwrap_or_else(|| {
+                emitter.emit(Rich::custom(
+                    span,
+                    "`version` requires `compatible` or an \"X.Y.Z\" version string",
+                ));
+                DddVersionPin::Compatible
+            })
+        });
+    cmmn_keyword(cmmn::INVOKES)
+        .ignore_then(qname())
+        .then(pin.or_not())
+        .then(kw(Token::Other(';')).or_not())
+        .map_with(|((name, pin), semi), e| (name, pin, semi, e.span()))
+        .validate(|(name, pin, semi, span), _e, emitter| {
+            if semi.is_none() {
+                emitter.emit(Rich::custom(span, "expected `;` after the invokes clause"));
+            }
+            let segments: Vec<&str> = name
+                .segments
+                .iter()
+                .map(|segment| segment.text.as_str())
+                .collect();
+            CmmnInvoke {
+                service: segments.join("."),
+                pin,
+                span,
+            }
+        })
+}
+
+/// The words that end a decision body's bare name lists: the words that
+/// can begin the next plan-item body member (the `.dmn` service-list
+/// rule).
+const DECISION_NAME_LIST_STOPS: &[&str] = &[
+    cmmn::PERFORMER,
+    cmmn::EXECUTE,
+    cmmn::INVOKES,
+    cmmn::INPUTS,
+    cmmn::OUTPUTS,
+    cmmn::ENTRY,
+    cmmn::EXIT,
+    cmmn::REQUIRED,
+    cmmn::REPEATS,
+    cmmn::AUTO,
+];
+
+/// An `inputs { <name>* }` / `outputs { <name>* }` bare name list of a
+/// decision body: the `.dmn` service name-list shape, reused verbatim.
+pub(crate) fn decision_name_list<'src>(
+    keyword: &'static str,
+) -> impl Parser<'src, Tokens<'src>, Vec<Name>, MoxExtra<'src>> + Clone {
+    keyword_block(keyword, dmn_bare_name(DECISION_NAME_LIST_STOPS).map(Some))
+}
+
 /// A control flag: `required;`, `repeats;`, or `auto;`.
 pub(crate) fn flag_decl<'src>(
 ) -> impl Parser<'src, Tokens<'src>, (Span, &'static str), MoxExtra<'src>> + Clone {
@@ -350,12 +422,15 @@ pub(crate) fn flag_decl<'src>(
 }
 
 /// One member of a plan item body: a `performer` clause, an `execute`
-/// clause, a criterion, a control flag, or — inside a stage — a nested
-/// plan item.
+/// clause, an `invokes` clause, an `inputs`/`outputs` name list, a
+/// criterion, a control flag, or — inside a stage — a nested plan item.
 #[derive(Clone)]
 pub(crate) enum CmmnBodyMember {
     Performer((String, Span)),
     Execute(CmmnExecute),
+    Invoke(CmmnInvoke),
+    Inputs(Vec<Name>),
+    Outputs(Vec<Name>),
     Criterion {
         is_exit: bool,
         criterion: CmmnCriterion,
@@ -369,6 +444,9 @@ pub(crate) enum CmmnBodyMember {
 pub(crate) struct CmmnBody {
     performer: Option<(String, Span)>,
     execute: Option<CmmnExecute>,
+    invokes: Option<CmmnInvoke>,
+    inputs: Vec<Name>,
+    outputs: Vec<Name>,
     entry: Vec<CmmnCriterion>,
     exit: Vec<CmmnCriterion>,
     required: bool,
@@ -396,6 +474,16 @@ impl CmmnBody {
                         .push((execute.span, "duplicate `execute` clause".to_string()));
                 }
             }
+            CmmnBodyMember::Invoke(invoke) => {
+                if self.invokes.is_none() {
+                    self.invokes = Some(invoke);
+                } else {
+                    self.problems
+                        .push((invoke.span, "duplicate `invokes` clause".to_string()));
+                }
+            }
+            CmmnBodyMember::Inputs(names) => self.inputs.extend(names),
+            CmmnBodyMember::Outputs(names) => self.outputs.extend(names),
             CmmnBodyMember::Criterion { is_exit, criterion } => {
                 if is_exit {
                     self.exit.push(criterion);
@@ -424,6 +512,9 @@ pub(crate) fn plan_item_body<'src>(
     let plain = choice((
         performer_clause().map(CmmnBodyMember::Performer),
         execute_clause().map(CmmnBodyMember::Execute),
+        invoke_clause().map(CmmnBodyMember::Invoke),
+        decision_name_list(cmmn::INPUTS).map(CmmnBodyMember::Inputs),
+        decision_name_list(cmmn::OUTPUTS).map(CmmnBodyMember::Outputs),
         criterion_decl()
             .map(|(is_exit, criterion)| CmmnBodyMember::Criterion { is_exit, criterion }),
         flag_decl().map(|(span, word)| CmmnBodyMember::Flag(span, word)),
@@ -479,6 +570,8 @@ pub(crate) fn plan_item_decl<'src>(
                         CmmnItemKind::Task
                     } else if word == cmmn::SERVICE {
                         CmmnItemKind::Service
+                    } else if word == cmmn::DECISION {
+                        CmmnItemKind::Decision
                     } else {
                         CmmnItemKind::Milestone
                     };
@@ -489,6 +582,9 @@ pub(crate) fn plan_item_decl<'src>(
                         kind,
                         performer: body.performer,
                         execute: body.execute,
+                        invokes: body.invokes,
+                        inputs: body.inputs,
+                        outputs: body.outputs,
                         entry: body.entry,
                         exit: body.exit,
                         required: body.required,
@@ -502,6 +598,7 @@ pub(crate) fn plan_item_decl<'src>(
             .ignore_then(choice((
                 simple(cmmn::TASK),
                 simple(cmmn::SERVICE),
+                simple(cmmn::DECISION),
                 simple(cmmn::MILESTONE),
             )))
             .validate(|mut item, _e, _emitter| {
@@ -528,6 +625,9 @@ pub(crate) fn plan_item_decl<'src>(
                     kind: CmmnItemKind::Stage { items },
                     performer: body.performer,
                     execute: body.execute,
+                    invokes: body.invokes,
+                    inputs: body.inputs,
+                    outputs: body.outputs,
                     entry: body.entry,
                     exit: body.exit,
                     required: body.required,
@@ -540,6 +640,7 @@ pub(crate) fn plan_item_decl<'src>(
             discretionary,
             simple(cmmn::TASK),
             simple(cmmn::SERVICE),
+            simple(cmmn::DECISION),
             simple(cmmn::MILESTONE),
             stage,
         ))

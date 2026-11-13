@@ -44,6 +44,8 @@ fn exported_checker_codes_match_the_registry() {
         rex_ifml::ifml_check::E_UNKNOWN_CAPABILITY,
         rex_ifml::ifml_check::E_UNKNOWN_ROLE,
         rex_ifml::ifml_check::E_UNKNOWN_ACTION_TARGET,
+        rex_ifml::ifml_check::E_EMPTY_DECISION_SERVICE,
+        rex_ifml::ifml_check::E_AMBIGUOUS_DECISION_SERVICE,
     ]);
     assert_eq!(exported, band_codes(ifml_check::CHECK_BAND));
 }

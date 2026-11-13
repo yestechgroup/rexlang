@@ -1,0 +1,19 @@
+{
+  "formatVersion": 1,
+  "name": "LogiclessService",
+  "namespace": "urn:rexlang:LogiclessService",
+  "decisions": [
+    {
+      "name": "draft_decision",
+      "outputs": [
+        { "name": "", "typeRef": { "type": "primitive", "value": "boolean" } }
+      ]
+    }
+  ],
+  "services": [
+    {
+      "name": "DraftService",
+      "outputs": [ "draft_decision" ]
+    }
+  ]
+}

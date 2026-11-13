@@ -1,0 +1,29 @@
+// Conformance decision model: the decision service the canonical `.ifml`
+// fixture binds (`data: AssessCustomer`), over the auth pair's domain —
+// the decision dimension's fixture sibling of `auth.{mox,actor}`
+// (rexlang#152). Logic-less decisions are valid (DRG first, logic
+// attached), so the fixture pins the contract shape alone.
+import "auth.mox";
+
+decision_model ViewDecisions {
+    namespace rexlang.ifml.decisions;
+    inputs {
+        customer: Customer;
+    }
+    decisions {
+        /// The tier verdict the dashboard binds.
+        decision CustomerTier {
+            outputs {
+                tier: string;
+                discount_cents: int;
+            }
+        }
+    }
+    services {
+        /// The dashboard-facing contract.
+        service AssessCustomer {
+            inputs { customer }
+            outputs { CustomerTier }
+        }
+    }
+}

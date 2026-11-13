@@ -235,14 +235,16 @@
 //!                      capability_clause? invokes_clause? emits_clause?
 //!                      transition_clause? guard_clause? ";"
 //! inject_decl       := "inject" name ";"
-//!                    | "inject" "decision" qualified_name ";"
+//!                    | "inject" "decision" qualified_name version_pin? ";"
 //! signature         := type_ref multiplicity? name
 //!                      "(" (param ("," param)*)? ")"
 //! body_signature    := (type_ref multiplicity?)? name
 //!                      "(" (param ("," param)*)? ")"
 //! param             := type_ref multiplicity? name
 //! capability_clause := "capability" name ("," name)*
-//! invokes_clause    := "invokes" qualified_name ("," qualified_name)*
+//! invokes_clause    := "invokes" invokes_entry ("," invokes_entry)*
+//! invokes_entry     := qualified_name version_pin?
+//! version_pin       := "version" ("compatible" | string)
 //! emits_clause      := "emits" name ("," name)*
 //! transition_clause := "transition" name ("." name)?
 //! design_decl       := "abstract"? stereotype name design_flag*
@@ -318,6 +320,15 @@
 //!   are field-named, so a machine-name qualifier does not exist as
 //!   authored). A clause order violation is a syntax error, not a
 //!   formatting opportunity.
+//! * A `version_pin` (rexlang#154) is the reference's declared
+//!   compatibility contract, optional per `invokes` entry and on the
+//!   `inject decision` line: `version compatible` or
+//!   `version "X.Y.Z"` (an exact version). The `version` discriminator is
+//!   the existing lexer keyword token (the `.mox` vocabulary keyword — no
+//!   new keyword, escape rules unchanged); `compatible` is a contextual
+//!   word, an ordinary identifier everywhere else (a service may be named
+//!   `compatible`). Resolution against the decision models' `version`
+//!   metadata is a driver concern (rule 17), never a wire concern.
 //! * `design_flag`s and the single-member search lines (`entity`, `ranking`,
 //!   `analyzer`, `pagination`) are idempotent on repeat — the first
 //!   declaration wins; repeated `text`/`filters`/`sort`/`document`/
@@ -599,14 +610,17 @@
 //! file_item        := type_ref multiplicity? name ";"
 //! plan_item_decl   := "discretionary" simple_item_decl
 //!                   | simple_item_decl | stage_decl
-//! simple_item_decl := ("task" | "service" | "milestone") name plan_body?
+//! simple_item_decl := ("task" | "service" | "decision" | "milestone") name plan_body?
 //! stage_decl       := "stage" name stage_body?
 //! plan_body        := "{" plan_member* "}"
 //! stage_body       := "{" (plan_member | plan_item_decl)* "}"
-//! plan_member      := performer_clause | execute_clause
-//!                   | criterion_decl | flag_decl
+//! plan_member      := performer_clause | execute_clause | invoke_clause
+//!                   | decision_name_list | criterion_decl | flag_decl
 //! performer_clause := "performer" ":" name ";"
 //! execute_clause   := "execute" name "." name "." name ";"
+//! invoke_clause    := "invokes" qualified_name version_pin? ";"
+//! version_pin      := "version" ("compatible" | string)
+//! decision_name_list := ("inputs" | "outputs") "{" name* "}"
 //! criterion_decl   := ("entry" | "exit") "on" on_part ("," on_part)*
 //!                     ("when" raw_parens)? ";"
 //! on_part          := name ("." name)?
@@ -633,14 +647,27 @@
 //!   the parens (the `when`-condition convention) and types the text with
 //!   rex-expr.
 //! * The `discretionary` prefix is grammatical before a simple item
-//!   (`task`, `service`, or `milestone`) but not before a `stage`; the
-//!   driver rejects it on milestones — discretionary planning is a
-//!   task/service concept.
+//!   (`task`, `service`, `decision`, or `milestone`) but not before a
+//!   `stage`; the driver rejects it on milestones — discretionary
+//!   planning is a task/service concept.
+//! * A `decision` plan item invokes a `.dmn` decision service: one
+//!   `invokes <qualified-name> [version <pin>];` clause (a duplicate is a
+//!   parse error, the `execute` clause rule; the driver validates placement,
+//!   resolution, and the missing clause), plus optional `inputs { name* }`
+//!   and `outputs { name* }` bare name lists (the `.dmn` service
+//!   name-list shape; repeated blocks merge — the `.dmn` rule). The
+//!   qualified name lowers as written; resolution is a driver concern.
+//!   The optional `version` pin (rexlang#154) — `version compatible` or
+//!   `version "X.Y.Z"` — rides with the clause: the `version`
+//!   discriminator is the existing lexer keyword token (no new keyword),
+//!   and `compatible` is a contextual word like every other `.cmmn`
+//!   identifier.
 //! * Semicolons follow the `.evt` rule: every statement line (`role`,
-//!   case-file item, `performer`, `execute`, criterion, flag) ends in `;`;
-//!   block declarations (`case`, `stage`, `task`, `service`, `milestone`,
-//!   `roles`, `case_file`) end without one. The formatter emits the
-//!   canonical `;` whether or not the source had one.
+//!   case-file item, `performer`, `execute`, `invokes`, criterion, flag)
+//!   ends in `;`; block declarations (`case`, `stage`, `task`, `service`,
+//!   `decision`, `milestone`, `roles`, `case_file`, the `inputs`/`outputs`
+//!   name lists) end without one. The formatter emits the canonical `;`
+//!   whether or not the source had one.
 //! * Imports must precede the first `case` declaration; a later `import`
 //!   is an error (recovered, and the misplaced import is dropped),
 //!   mirroring the `.actor`/`.evt`/`.uc` rule. Duplicate imports are a
@@ -680,9 +707,12 @@
 //! decisions_block     := "decisions" "{" decision_decl* "}"
 //! decision_decl       := "decision" name "{" decision_item* "}"
 //! decision_item       := output_decl | outputs_block | logic_clause
+//!                        | emits_block
 //! output_decl         := "output" type_ref ";"?
 //! outputs_block       := "outputs" "{" output_entry* "}"
 //! output_entry        := name ":" type_ref ";"?
+//! emits_block         := "emits" "{" emits_entry* "}"
+//! emits_entry         := name ("when" string)? ";"?
 //! logic_clause        := "logic" logic_kind
 //! logic_kind          := "table" string | "expression" string
 //!                       | "invoke" name invoke_body
@@ -738,7 +768,12 @@
 //!   contract). A decision's bare `output <type>` line is the anonymous
 //!   single-output form — an output with an empty name — while the
 //!   `outputs` block declares named outputs; both fold into one list in
-//!   source order.
+//!   source order. A decision's optional `emits` block is the DMN → EVT
+//!   edge (rexlang#152): its entries name the declared `.evt` events the
+//!   decision's outcome publishes, each optionally gated by a
+//!   `when "<FEEL>"` string (`when` is the real lexer condition keyword;
+//!   `^when` stays a name). The formatter emits the canonical decision
+//!   body order `outputs` → `logic` → `emits`.
 //! * Imports must precede the `decision_model` declaration and there is
 //!   exactly one model per file (violations are reported errors; the
 //!   misplaced import is dropped and the first model wins), mirroring the
@@ -1090,6 +1125,7 @@ mod grammar_doc_tests {
             ddd::DECISION,
             ddd::EMITS,
             ddd::INVOKES,
+            ddd::COMPATIBLE,
             ddd::TRANSITION,
             ddd::PROTECTED,
             ddd::MACHINE,
@@ -1173,6 +1209,10 @@ mod grammar_doc_tests {
             cmmn::EXIT,
             cmmn::PERFORMER,
             cmmn::EXECUTE,
+            cmmn::INVOKES,
+            cmmn::COMPATIBLE,
+            cmmn::INPUTS,
+            cmmn::OUTPUTS,
             cmmn::REQUIRED,
             cmmn::REPEATS,
             cmmn::AUTO,
@@ -1180,6 +1220,7 @@ mod grammar_doc_tests {
             cmmn::STAGE,
             cmmn::TASK,
             cmmn::SERVICE,
+            cmmn::DECISION,
             cmmn::MILESTONE,
         ] {
             words.push(word);

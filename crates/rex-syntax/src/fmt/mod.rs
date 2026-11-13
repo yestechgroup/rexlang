@@ -423,6 +423,9 @@ enum BodyKind {
     /// the anonymous `output` line, the named `outputs` block, and the
     /// `logic` clause of a `.dmn` decision body.
     DmnDecision,
+    /// `name ("when" "<FEEL>")? ";"` entries of a `.dmn` decision's
+    /// `emits` block.
+    DmnEmits,
     /// requirement groups of a `.dmn` requirements block.
     DmnRequirements,
     /// `<name> <connective> <name>;` lines of a `.dmn` requirement group.
@@ -1135,6 +1138,7 @@ impl<'src> Formatter<'src> {
                 BodyKind::DmnBkm => self.scan_dmn_bkm_item(),
                 BodyKind::DmnDecisions => self.scan_dmn_decisions_item(),
                 BodyKind::DmnDecision => self.scan_dmn_decision_item(),
+                BodyKind::DmnEmits => self.scan_dmn_emits_item(),
                 BodyKind::DmnRequirements => self.scan_dmn_requirements_item(),
                 BodyKind::DmnRequirementLines => self.scan_dmn_requirement_line(),
                 BodyKind::DmnServices => self.scan_dmn_services_item(),

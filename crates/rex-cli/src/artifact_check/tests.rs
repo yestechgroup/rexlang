@@ -148,6 +148,7 @@ fn classification_table_over_all_artifact_kinds() {
                     logic: Some(rex_ir::dmn::DecisionLogic::Expression {
                         text: "1".to_string(),
                     }),
+                    emits: Vec::new(),
                 });
                 model
             })
@@ -167,6 +168,7 @@ fn classification_table_over_all_artifact_kinds() {
                     description: None,
                     outputs: Vec::new(),
                     logic: None,
+                    emits: Vec::new(),
                 });
                 model.views.push(rex_ir::dmn::DecisionView {
                     name: "overview".to_string(),

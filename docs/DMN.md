@@ -60,17 +60,21 @@ decision_model Approval {
   top-level declaration; the file name is the artifact's identity.
 - **Imports come first**, one per line, with the canonical `;`. An import
   after the `decision_model` is a reported, recovered syntax error, the
-  `.evt` rule. `.dmn` files import **`.mox` domains only** — never `.ddd`,
-  `.evt`, or other `.dmn` files (the architectural rule, see
-  [Cross-surface integration](#cross-surface-integration)).
+  `.evt` rule. `.dmn` files import **`.mox` domains and `.evt` event
+  contracts** — never `.ddd` or other `.dmn` files (the architectural
+  rule, see [Cross-surface integration](#cross-surface-integration)).
 - **Resolution**: each import names a provided `.mox` domain, matched by
-  exact path or lexical resolution relative to the `.dmn` file's directory
-  (the `.deploy` rule). An import no provided entry names is the error
+  exact path or lexical resolution relative to the `.dmn` file's
+  directory (the `.deploy` rule), or a provided `.evt` contract, matched
+  by exact path — the import string **as written**, the table-path rule.
+  An import no provided entry names is the error
   ``imported file "<path>" was not provided``. With no imports, the model
   compiles against the empty domain union — every type must then be a
   primitive (`minimal.dmn` pins that shape).
 - Imported domains lower through the ordinary domain pipeline against the
   union namespace; input, output, and parameter types resolve there.
+  Imported contracts join the compile's **events bucket** — the declared
+  events the decisions' `emits` entries resolve against (rule 14 below).
 
 ---
 
@@ -92,6 +96,8 @@ Language-level rules:
   `requirements` (information, knowledge, authority groups in that order),
   then `services`, then `views`. Members may be written in any source
   order; the AST groups them per kind and the formatter canonicalizes.
+  A decision body reads `output`/`outputs`, then `logic`, then `emits`
+  — the same any-source-order, canonical-emission discipline.
 - **Statement lines end in `;`** — metadata entries, typed entries
   (`name: Type;`), requirement lines, `description` and `direction`
   clauses, and invoke bindings. **`logic` clauses carry no `;`**: a table
@@ -190,7 +196,8 @@ decision calculate_contributions {
 }
 ```
 
-A decision declares an **output contract** and (optionally) logic:
+A decision declares an **output contract** and (optionally) logic and
+outcome events:
 
 - **`output <Type>;`** — the single-output form. The output has no name of
   its own; consumers read the decision's value under the decision's name,
@@ -198,6 +205,8 @@ A decision declares an **output contract** and (optionally) logic:
 - **`outputs { name: Type; ... }`** — the multi-output form. Names are
   FEEL names: an external decision table's output columns must match them
   character-for-character, and an `invoke` binding may name them (below).
+- **`emits { <entry>; ... }`** — the outcome events the decision
+  publishes (the [DMN → EVT edge](#dmn--evt-the-emits-block), below).
 - **No output at all is a parse error** — a decision that produces nothing
   is not a decision; **no `logic` is deliberate**: a logic-less decision
   declares a node whose implementation is deferred, the architecture-first
@@ -226,13 +235,13 @@ The decision's value is the FEEL expression text, stored **verbatim**
 (interior spacing is never normalized, so `rexlang fmt` round-trips it
 byte-identically). The driver syntax-checks the text (rule 12) and stops
 there — no deep typing at compile time (see Deviations). Conditional
-(`if`) expressions are **not** gated: the rev-pinned dsntk parser
-mis-rejects several valid conditional forms, and the gate never
-false-positives on legitimate FEEL. The intended discipline is that an
+(`if`) expressions gate like every other expression: the rev-pinned
+dsntk fork parser accepts the full DMN FEEL conditional grammar (the
+fork fix for dsntk-rs#14). The intended discipline is that an
 expression reads the decision's **own** information requirements — its
 required inputs, or required decisions by name (whose named outputs may be
 read individually) — but name-level checking of expression text is a
-documented deferral, like the conditional gate.
+documented deferral.
 
 ### `logic invoke <model> { <param>: "<FEEL>"; ... }`
 
@@ -252,6 +261,42 @@ decision esct_calculation {
     }
 }
 ```
+
+---
+
+## DMN → EVT: the `emits` block
+
+A decision may map its outcome to **declared events** — the `.evt`
+contracts (`docs/EVENTS.md`). Consumers name events, never their
+payloads:
+
+```
+decision calculate_contributions {
+    outputs { ... }
+    logic table "./tables/contributions.md"
+    emits {
+        ContributionRecorded when "compliance_status = \"compliant\"";
+        VoluntaryContribution;
+    }
+}
+```
+
+An entry is `EventName;` or `EventName when "<FEEL>";` — the `when`
+condition is optional, its FEEL text a quoted string, and every entry
+carries the canonical `;`. Names are **bare** (single-segment) and
+resolve **union-wide** against the declared events of every `.evt`
+contract the file imports (rule 14): the model names what its outcome
+publishes, the contract owns the payload — no field wiring crosses the
+edge, exactly the `.ddd` service-operation `emits` shape.
+
+The FEEL gate applies to a `when` text like any `logic expression` (rule
+12, the same conditional deferral). The **loosely-coupled fallback**: a
+`.dmn` whose host provides no event contracts — an empty events bucket
+and no `.evt` imports — lowers its `emits` entries **as authored,
+unchecked**; the names become the record a consumer fills in by providing
+the contracts. A `.dmn` that declares an `import "<path>.evt"` line is
+held to it: the import must resolve (rule 1) and the names must resolve
+against the provided contracts (rule 14).
 
 ---
 
@@ -303,6 +348,37 @@ naming and invocation boundary only — no logic, no requirements of its own.
 
 ---
 
+## Versioning
+
+The model's `version` metadata line is the compatibility contract: a
+decision model at `version X.Y.Z` (strict semver — three numeric
+dot-separated parts) states its service contracts' generation, and the
+authoring rule is **same major = compatible**: a breaking change to a
+service's inputs or outputs MUST bump the major. The compiler does not
+diff signatures across versions — the contract is the inputs/outputs
+the service declares, and the convention is enforced at authoring time.
+
+Consumers pin what they invoke: a `.ddd` `invokes` entry, an
+`inject decision` line, or a `.cmmn` decision task's `invokes` clause
+may carry `version compatible` (the current generation: the highest
+semver in the highest major present in the decision bucket) or
+`version "X.Y.Z"` (exactly that generation). Resolution rules:
+
+- **No pin** — the reference resolves by name alone (the rule-17
+  behavior, unchanged).
+- **`version "X.Y.Z"`** — the same-name service whose model declares
+  that exact version resolves; zero matches is E0252 (naming the
+  versions available in the bucket), two or more candidates declaring
+  it is E0253 (ambiguous, naming the models).
+- **`version compatible`** — the highest declared version in the
+  highest major present resolves; models whose version is absent or not
+  strict `X.Y.Z` cannot satisfy a pin (E0254 when none can).
+
+The conformance fixtures carry the regulated lending pair:
+`lending-1.dmn` (`version "1.5.0"`) and `lending-2.dmn`
+(`version "2.0.0"` — the major bump), the two versioning consumers the
+resolution rules resolve against.
+
 ## Views
 
 ```
@@ -337,8 +413,9 @@ docs):
   (`{"type": "<variant>", "value": ...}`), no parallel wire-level type
   shape — the `EventModel` precedent.
 - Names and reference strings are kept **as authored**: requirement lines,
-  invoke bindings, service/view lists, table paths, and source labels are
-  plain strings; resolving them is a driver concern, never a wire concern.
+  invoke bindings, `emits` entries, service/view lists, table paths, and
+  source labels are plain strings; resolving them is a driver concern,
+  never a wire concern.
 - A logic-less decision serializes with no `logic` key at all, and every
   collection field is `#[serde(default)]` and omitted when empty — a
   model reduced to metadata serializes as exactly `{"formatVersion":1}`,
@@ -407,11 +484,12 @@ files: `rexlang fmt` formats the `.dmn`, never the markdown.
 Any error-severity diagnostic anywhere (the `.dmn` file, an imported
 domain, a referenced table) drops the artifact; warnings do not. The
 authoritative, numbered contract is the *Validation rules* section of
-`compile_dmn_str` (`crates/rex-driver/src/lib.rs`); the same thirteen in
+`compile_dmn_str` (`crates/rex-driver/src/lib.rs`); the same fourteen in
 brief:
 
-1. **Imports** — every import names a provided `.mox` domain, matched by
-   exact path or relative resolution; missing names are the error
+1. **Imports** — every import names a provided `.mox` domain (matched by
+   exact path or relative resolution) or a provided `.evt` contract
+   (matched by exact path); missing names are the error
    ``imported file "<path>" was not provided``.
 2. **Uniqueness** — element names are unique across all sections (inputs,
    knowledge sources, knowledge models, decisions, services, views): one
@@ -439,26 +517,33 @@ brief:
     E0202), covers all of its parameters, and binds no unknown names
     (E0213): a binding name resolves to a declared input, a required
     decision, or a named output of a required decision.
-12. **Expressions** — `logic expression` texts and invoke binding
-    expressions are syntactically valid FEEL (E0208); stored verbatim even
-    when checking fails, the `.cmmn` `when` precedent. Conditional (`if`)
-    forms are not gated: the rev-pinned dsntk parser mis-rejects several
-    valid conditional forms, and the gate never false-positives on
-    legitimate FEEL.
+12. **Expressions** — `logic expression` texts, invoke binding
+    expressions, and `emits` `when` texts are syntactically valid FEEL
+    (E0208); stored verbatim even when checking fails, the `.cmmn` `when`
+    precedent. Conditional (`if`) forms gate like every other expression:
+    the rev-pinned dsntk fork parser accepts the full DMN FEEL conditional
+    grammar (the fork fix for dsntk-rs#14).
 13. **Decision tables** — every referenced markdown table is provided
     (E0209), parses in the dsntk shape (E0210), and its clause signature
     matches the decision's declared contract exactly: input columns equal
     the decision's information-required inputs (E0211), output columns
     equal its declared outputs (E0212), names character-for-character.
+14. **Emitted events** — every `emits` entry of every decision names a
+    declared event of the provided `.evt` contracts, pooled union-wide
+    across all of them (E0215, with a did-you-mean help line naming the
+    declared events). An **empty** events bucket with no `.evt` imports is
+    the blessed loosely-coupled behavior: the entries lower as authored,
+    unchecked.
 
 ### Diagnostic codes
 
 Every `.dmn` diagnostic carries a stable code in the **`dmn.check` band**:
-`E0200`-`E0214` are the surface codes (typing through table signature,
-rule by rule as above), and `E0250`/`E0251` are the **`.ddd` decision-link
-codes** fired on the design side of the integration below. Run
-`rexlang explain E0205` for one entry, `rexlang explain --list` for the
-ledger; the registry lives in [docs/DIAGNOSTICS.md](DIAGNOSTICS.md).
+`E0200`-`E0215` are the surface codes (typing through table signature and
+emitted events, rule by rule as above), and `E0250`/`E0251` are the
+**`.ddd` decision-link codes** fired on the design side of the
+integration below. Run `rexlang explain E0205` for one entry,
+`rexlang explain --list` for the ledger; the registry lives in
+[docs/DIAGNOSTICS.md](DIAGNOSTICS.md).
 
 ---
 
@@ -466,11 +551,24 @@ ledger; the registry lives in [docs/DIAGNOSTICS.md](DIAGNOSTICS.md).
 
 ### `.mox` — the type universe
 
-DMN depends on **`.mox` domains only**: inputs, outputs, and parameters
-resolve against the union namespace of the imported domains (rule 4),
-lowered through the ordinary domain pipeline. This is the architectural
-rule of the surface: a decision model consumes domain types, never a
-design, policy, or event artifact.
+DMN depends on **`.mox` domains and `.evt` event contracts** (never a
+design or policy artifact): inputs, outputs, and parameters resolve
+against the union namespace of the imported domains (rule 4), lowered
+through the ordinary domain pipeline. This is the architectural rule of
+the surface: a decision model consumes domain types and declared events,
+never a design or policy artifact.
+
+### `.evt` — the `emits` edge
+
+The arrow points from decisions to contracts. A decision's `emits` block
+names the declared events its outcome publishes (the [DMN → EVT
+section](#dmn--evt-the-emits-block) above); the `.evt` contracts own the
+payloads. The compile joins the two when the host provides the compiled
+contracts (rule 14, E0215) and stays loosely coupled otherwise — an empty
+events bucket lowers the names as authored. The edge is deliberately
+one-way at the contract level too: an `.evt` file never references a
+`.dmn` model, so decisions can start emitting without touching the
+contracts, and contracts can evolve without touching the decisions.
 
 ### `.ddd` — the decision link
 
@@ -502,9 +600,11 @@ cargo run -p rex-cli -- ir tests/conformance/dmn/minimal.dmn -o minimal.dmn.json
 ```
 
 - Import paths and table paths resolve **relative to the `.dmn` file's
-  directory**; the CLI reads each imported `.mox` from disk and the
-  referenced markdown tables with them. A missing import file or table is
-  a clean error naming the resolved path.
+  directory**; the CLI reads each imported `.mox` from disk, compiles each
+  imported `.evt` through the ordinary event pipeline (the contract's own
+  imports resolve next to it), and the referenced markdown tables with
+  them. A missing import file or table is a clean error naming the
+  resolved path.
 - Diagnostics come from every file involved (the `.dmn` file, its imported
   domains, its tables) and render grouped per file, the way `.evt` compiles
   render them.
@@ -545,8 +645,12 @@ model demands it:
    architecture; execution is a backend/consumer concern (the table
    engine, the FEEL evaluator, are downstream choices — dsntk
    compatibility is the table format's north star, not a dependency).
-7. **`emits` and event mapping are deferred** — no `.evt` integration yet;
-   a decision model does not publish or subscribe.
+7. **`emits` names events, never payloads** — a decision maps its outcome
+   to declared `.evt` events by bare name (the DMN → EVT edge); no
+   payload wiring, no event-versioning or delivery contract crosses the
+   edge, and a host that provides no contracts gets the loosely-coupled
+   record (the names lower as authored, unchecked). The `.ddd` operation
+   `emits` clause carries the same discipline.
 
 ---
 
@@ -556,18 +660,22 @@ model demands it:
 (the NZ-payroll domain), `kiwisaver.dmn` (the flagship model — all five
 metadata entries, nine inputs mixing primitives and domain types, two
 sources, one invoked BKM, three decisions covering all three logic kinds,
-all three requirement groups, a decision service, and a view; it is the
-formatter's layout reference), the two referenced tables
-`tables/eligibility.md` and `tables/contributions.md` (the latter
-exercising the four-output signature and the annotation column that is
-not an output), and `minimal.dmn` (the architecture-first minimum: no
-imports, one input, one logic-less decision).
+an `emits` block on the table decision, all three requirement groups, a
+decision service, and a view; it is the formatter's layout reference),
+`kiwisaver.evt` (the contract declaring the emitted `ContributionRecorded`
+and `VoluntaryContribution` events over the same domain), the two
+referenced tables `tables/eligibility.md` and `tables/contributions.md`
+(the latter exercising the four-output signature and the annotation
+column that is not an output), and `minimal.dmn` (the architecture-first
+minimum: no imports, one input, one logic-less decision).
 
 The `examples/` side ships `support.dmn` (the support-desk refund
 decisions over `support.mox`: a domain-typed `Ticket`/`User` input pair,
 an expression decision, a table decision with its
 `examples/tables/refund-authority.md`, an invoked BKM composing the two,
-and the `AssessRefund` service the design links to) and `lending.dmn`
+the `AssessRefund` service the design links to, and an `emits` block on
+`RefundAssessment` naming the `RefundApproved` event declared in
+`examples/support.evt`) and `lending.dmn`
 (the architecture-first lending model with no imports: five decisions,
 two BKMs, three sources, two views, and `examples/tables/lvr.md`).
 

@@ -165,7 +165,7 @@ const BANDS: &[Band] = &[
         range: "E0100–E0149",
         owner: "rex-ifml typed checker",
         severity_note: "error",
-        next_free: "E0110",
+        next_free: "E0112",
     },
     Band {
         id: "ifml.lints",
@@ -193,7 +193,7 @@ const BANDS: &[Band] = &[
         range: "E0200–E0299",
         owner: "rex-driver .dmn surface and .ddd decision links",
         severity_note: "error",
-        next_free: "E0252",
+        next_free: "E0255",
     },
     Band {
         id: "driver.domain",

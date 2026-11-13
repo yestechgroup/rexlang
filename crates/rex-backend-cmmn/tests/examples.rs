@@ -7,7 +7,9 @@
 //! Regenerate the golden with
 //! `REX_UPDATE_FIXTURES=1 cargo test -p rex-backend-cmmn --test examples`.
 
-use rex_driver::{compile_actors_str, compile_cmmn_str, compile_ddd_str, compile_evt_str};
+use rex_driver::{
+    compile_actors_str, compile_cmmn_str, compile_ddd_str, compile_dmn_str, compile_evt_str,
+};
 
 #[test]
 fn support_cmmn_lowers_to_the_engine_definition() {
@@ -53,6 +55,51 @@ fn support_cmmn_lowers_to_the_engine_definition() {
         );
     }
 
+    // The sibling `.dmn` decision model, compiled the same way — the
+    // decision dimension a `decision` task's `invokes` clause resolves
+    // against.
+    let decisions_source = read("support.dmn");
+    let decisions_path = dir.join("support.dmn").display().to_string();
+    // The example's `.evt` import resolves next to the file and joins
+    // the events bucket (the emits rule joins it the same way).
+    let events_path = dir.join("support.evt").display().to_string();
+    let events = compile_evt_str(
+        &events_path,
+        &read("support.evt"),
+        &domain,
+        &rex_driver::DomainImports::default(),
+    );
+    assert!(
+        events.diagnostics.is_empty(),
+        "support.evt must compile clean"
+    );
+    // The DMN rule-1 import check matches the bucket keys exactly as
+    // written — the authored import string, not the resolved path.
+    let event_bucket = vec![(
+        "support.evt".to_string(),
+        events.model.clone().expect("event artifact"),
+    )];
+    let decisions = compile_dmn_str(
+        &decisions_path,
+        &decisions_source,
+        &domain,
+        &rex_driver::DomainImports::default(),
+        &[(
+            "./tables/refund-authority.md".to_string(),
+            read("tables/refund-authority.md"),
+        )],
+        &event_bucket,
+    );
+    assert!(
+        decisions.diagnostics.is_empty(),
+        "support.dmn must compile clean: {:?}",
+        decisions
+            .diagnostics
+            .iter()
+            .map(|(_, d)| &d.message)
+            .collect::<Vec<_>>()
+    );
+
     let case_path = dir.join("support.cmmn").display().to_string();
     let compilation = compile_cmmn_str(
         &case_path,
@@ -62,6 +109,7 @@ fn support_cmmn_lowers_to_the_engine_definition() {
         &[(design_path, design.model.expect("design artifact"))],
         &[(actors_path, actors.model.expect("actor artifact"))],
         &[(events_path, events.model.expect("event artifact"))],
+        &[(decisions_path, decisions.model.expect("decision artifact"))],
     );
     assert!(
         compilation.diagnostics.is_empty(),

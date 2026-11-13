@@ -89,6 +89,35 @@ pub(crate) fn ddd_emits<'src>() -> impl Parser<'src, Tokens<'src>, Vec<Name>, Mo
         })
 }
 
+/// The `version <pin>` clause of a decision-service reference (rexlang#154):
+/// `version compatible` or `version "<X.Y.Z>"`. The `version` discriminator
+/// is the existing lexer keyword token (the `.mox` vocabulary keyword — no
+/// new keyword, escape rules unchanged); `compatible` is the contextual
+/// word (an ordinary identifier everywhere else). The clause is committed
+/// once `version` matched: a missing pin value is a reported error (with
+/// recovery), never a silent drop.
+pub(crate) fn ddd_version_pin<'src>(
+) -> impl Parser<'src, Tokens<'src>, DddVersionPin, MoxExtra<'src>> + Clone {
+    kw(Token::Version)
+        .ignore_then(
+            choice((
+                ddd_keyword(ddd::COMPATIBLE).to(DddVersionPin::Compatible),
+                string_lit().map(DddVersionPin::Exact),
+            ))
+            .or_not(),
+        )
+        .map_with(|pin, e| (pin, e.span()))
+        .validate(|(pin, span), _e, emitter| {
+            pin.unwrap_or_else(|| {
+                emitter.emit(Rich::custom(
+                    span,
+                    "`version` requires `compatible` or an \"X.Y.Z\" version string",
+                ));
+                DddVersionPin::Compatible
+            })
+        })
+}
+
 /// The `invokes <DecisionService> (, <DecisionService>)*` clause of a
 /// service operation: the decision services the operation invokes. The
 /// `invokes` keyword is contextual (the [`ddd::INVOKES`] identifier, not a
@@ -97,14 +126,19 @@ pub(crate) fn ddd_emits<'src>() -> impl Parser<'src, Tokens<'src>, Vec<Name>, Mo
 /// matched: a missing name list is a syntax error (with recovery), not a
 /// failed alternative. Names are loosely coupled: the `.ddd` compile
 /// resolves them against the provided `.dmn` artifacts only (the decisions
-/// entry point), never at the wire layer.
+/// entry point), never at the wire layer. Each entry may carry a `version`
+/// pin (rexlang#154) — optional, per entry; entries without one keep the
+/// pin-less shape.
 pub(crate) fn ddd_invokes<'src>(
-) -> impl Parser<'src, Tokens<'src>, Vec<QualifiedName>, MoxExtra<'src>> + Clone {
+) -> impl Parser<'src, Tokens<'src>, Vec<DddDecisionRef>, MoxExtra<'src>> + Clone {
+    let entry = qname()
+        .then(ddd_version_pin().or_not())
+        .map(|(name, pin)| DddDecisionRef { name, pin });
     ddd_keyword(ddd::INVOKES)
-        .ignore_then(qname().or_not())
+        .ignore_then(entry.clone().or_not())
         .then(
             kw(Token::Comma)
-                .ignore_then(qname())
+                .ignore_then(entry)
                 .repeated()
                 .collect::<Vec<_>>(),
         )
@@ -929,18 +963,23 @@ pub(crate) fn ddd_service_op<'src>(
         })
 }
 
-/// An `inject <name>;` or `inject decision <qualified-name>;` line of a
-/// `service` body. After the `inject` keyword the parser attempts the
-/// contextual `decision` discriminator ([`ddd::DECISION`]): present, the
-/// rest of the line is a qualified decision-service name (the `.dmn`
-/// dimension); absent, the plain dependency-name form. Chumsky backtracks,
-/// so `inject decision;` — a plain dependency literally named `decision` —
+/// An `inject <name>;` or `inject decision <qualified-name> [version
+/// <pin>];` line of a `service` body. After the `inject` keyword the parser
+/// attempts the contextual `decision` discriminator ([`ddd::DECISION`]):
+/// present, the rest of the line is a qualified decision-service name (the
+/// `.dmn` dimension) with its optional `version` pin (rexlang#154);
+/// absent, the plain dependency-name form. Chumsky backtracks, so
+/// `inject decision;` — a plain dependency literally named `decision` —
 /// still parses as the plain form (the decision form requires a name
 /// behind the discriminator).
 pub(crate) fn ddd_inject_decl<'src>(
 ) -> impl Parser<'src, Tokens<'src>, DddServiceMember, MoxExtra<'src>> + Clone {
     let decision = ddd_keyword(ddd::DECISION)
-        .ignore_then(qname())
+        .ignore_then(
+            qname()
+                .then(ddd_version_pin().or_not())
+                .map(|(name, pin)| DddDecisionRef { name, pin }),
+        )
         .map(DddServiceMember::InjectDecision);
     let plain = name().map(DddServiceMember::Inject);
     ddd_keyword(ddd::INJECT)
@@ -953,7 +992,7 @@ pub(crate) fn ddd_inject_decl<'src>(
 pub(crate) enum DddServiceMember {
     Operation(Box<DddServiceOp>),
     Inject(Name),
-    InjectDecision(QualifiedName),
+    InjectDecision(DddDecisionRef),
 }
 
 /// Consumes a run of tokens that cannot start or continue a service member,

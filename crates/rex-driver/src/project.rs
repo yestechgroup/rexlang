@@ -52,8 +52,8 @@ use std::collections::BTreeMap;
 use crate::engine_common::dir_of;
 use crate::workspace_imports::{collect_schema_imports, collect_sigil_imports};
 use crate::{
-    compile_actors_str, compile_ddd_str, compile_evt_str, compile_str, render, Diagnostic,
-    DomainImports,
+    compile_actors_str, compile_ddd_str, compile_dmn_str, compile_evt_str, compile_str, render,
+    Diagnostic, DomainImports,
 };
 
 /// One imported `.actor` policy as gathered from a project: the source
@@ -68,6 +68,33 @@ pub struct ActorImport {
     /// The policy's own `.mox` imports as `(resolved key, text)` — the
     /// classes its capabilities are granted on. Dedup by key.
     pub domains: Vec<(String, String)>,
+}
+
+/// One imported `.dmn` decision model as gathered from a project: the
+/// source text plus the `.mox` domains its field types resolve against
+/// and the decision-table contents its `logic table` clauses name, ready
+/// for [`compile_decision_imports`] — the [`ActorImport`] shape for the
+/// decision dimension.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecisionImport {
+    /// Host-resolved key the model was gathered under (dedup identity).
+    pub key: String,
+    /// The model source text.
+    pub source: String,
+    /// The model's own `.mox` imports as `(resolved key, text)` — the
+    /// types its inputs, outputs, and parameters resolve against. Dedup
+    /// by key.
+    pub domains: Vec<(String, String)>,
+    /// Each `logic table "<path>"` clause's markdown content, keyed by
+    /// the path **as written** — the driver matches table paths exactly
+    /// as written. A table that cannot be read is simply absent: the
+    /// driver's unprovided-table diagnostic names it.
+    pub tables: Vec<(String, String)>,
+    /// The model's imported `.evt` contracts, compiled and keyed by the
+    /// import string **as written** (the emits dimension). A contract
+    /// that cannot be read or compiled is simply absent: the DMN rule-1
+    /// diagnostic names it.
+    pub events: Vec<(String, rex_ir::events::EventModel)>,
 }
 
 /// The import closure of one `.ifml` entry file, gathered: everything a
@@ -87,6 +114,9 @@ pub struct IfmlProject {
     pub domains: Vec<(String, String)>,
     /// Imported `.actor` policies with their own gathered domains.
     pub actors: Vec<ActorImport>,
+    /// Imported `.dmn` decision models with their own gathered domains
+    /// and decision-table contents.
+    pub decisions: Vec<DecisionImport>,
     /// Declared `.ifml`/`.mox`/`.actor` imports the fetch provided
     /// nothing for, as `(importer identity, import-as-written)`. Other
     /// extensions are silently ignored (parity with today's
@@ -102,7 +132,11 @@ pub struct IfmlProject {
 /// [`IfmlProject::domains`] (deduplicated by resolved key); `.actor`
 /// imports become [`ActorImport`]s whose own `.mox` imports are fetched
 /// under the policy's resolved key (the host obligation the walker's
-/// contract states). Imports the fetch declines land in
+/// contract states); `.dmn` imports become [`DecisionImport`]s whose own
+/// `.mox` imports and decision-table contents are fetched under the
+/// model's resolved key (tables skip silently when unreadable — the
+/// driver's unprovided-table diagnostic names them). Imports the fetch
+/// declines land in
 /// [`IfmlProject::unresolved`]; unknown extensions pass through ignored.
 ///
 /// The host fetch must map every resolved key it hands out — nested
@@ -165,6 +199,111 @@ pub fn gather_ifml_project(
                 project.actors.push(actor);
             }
             None
+        } else if import.ends_with(".dmn") {
+            if !project.decisions.iter().any(|decision| decision.key == key) {
+                let imports = rex_syntax::parse_dmn(&text)
+                    .ast
+                    .map(|ast| {
+                        ast.imports
+                            .into_iter()
+                            .map(|import| import.path)
+                            .collect::<Vec<String>>()
+                    })
+                    .unwrap_or_default();
+                let mut decision = DecisionImport {
+                    key: key.clone(),
+                    source: text.clone(),
+                    domains: Vec::new(),
+                    tables: Vec::new(),
+                    events: Vec::new(),
+                };
+                // The model's `.mox` imports gather under its resolved key
+                // (the types its inputs and outputs resolve against); a
+                // missing one is unresolved, exactly like an actor's.
+                for path in imports {
+                    match fetch(&key, &path) {
+                        Some((domain_key, domain_text)) => {
+                            if !decision
+                                .domains
+                                .iter()
+                                .any(|(existing, _)| *existing == domain_key)
+                            {
+                                decision.domains.push((domain_key, domain_text));
+                            }
+                        }
+                        None => project.unresolved.push((key.clone(), path)),
+                    }
+                }
+                // The decision-table contents gather under the model's
+                // resolved key too; an unreadable one is simply not
+                // provided — the driver's unprovided-table diagnostic
+                // names the written path (the `read_dmn_pair` discipline,
+                // not the hard read-error the surface imports carry).
+                let tables = rex_syntax::parse_dmn(&text)
+                    .ast
+                    .and_then(|ast| ast.model)
+                    .map(|model| {
+                        model
+                            .decisions
+                            .iter()
+                            .filter_map(|decision| match &decision.logic {
+                                Some(rex_syntax::DmnLogic::Table { source, .. }) => {
+                                    Some(source.clone())
+                                }
+                                _ => None,
+                            })
+                            .collect::<Vec<String>>()
+                    })
+                    .unwrap_or_default();
+                // The model's `.evt` imports compile into the events
+                // bucket (the emits dimension); an unreadable or
+                // non-compiling contract is absent — the DMN rule-1
+                // diagnostic names the authored import string.
+                let imports = rex_syntax::parse_dmn(&text)
+                    .ast
+                    .map(|ast| {
+                        ast.imports
+                            .iter()
+                            .map(|import| import.path.clone())
+                            .collect::<Vec<String>>()
+                    })
+                    .unwrap_or_default();
+                for import in imports {
+                    if !import.ends_with(".evt")
+                        || decision
+                            .events
+                            .iter()
+                            .any(|(existing, _)| *existing == import)
+                    {
+                        continue;
+                    }
+                    if let Some((event_key, event_text)) = fetch(&key, &import) {
+                        let compilation = compile_evt_str(
+                            &event_key,
+                            &event_text,
+                            &decision.domains,
+                            &DomainImports::default(),
+                        );
+                        if let Some(model) = compilation.model {
+                            decision.events.push((import, model));
+                        }
+                    }
+                }
+                for table in tables {
+                    if decision
+                        .tables
+                        .iter()
+                        .any(|(existing, _)| *existing == table)
+                    {
+                        continue;
+                    }
+                    if let Some((_, content)) = fetch(&key, &table) {
+                        decision.tables.push((table, content));
+                    }
+                }
+                project.decisions.push(decision);
+            }
+            None
         } else {
             None
         }
@@ -197,6 +336,43 @@ pub fn compile_actor_imports(actors: &[ActorImport]) -> Result<Vec<rex_ir::Actor
             return Err(does_not_compile(
                 "imported actor model",
                 &actor.key,
+                &compilation.diagnostics,
+            ));
+        };
+        models.push(model);
+    }
+    Ok(models)
+}
+
+/// Compiles every gathered `.dmn` decision model in order against its own
+/// gathered domains and decision tables — the [`compile_actor_imports`]
+/// discipline for the decision dimension. The first model that fails to
+/// compile wins:
+/// ``imported decision model {key} does not compile`` plus, when error
+/// diagnostics exist, one ``  {path}: {message}`` line each.
+pub fn compile_decision_imports(
+    decisions: &[DecisionImport],
+) -> Result<Vec<rex_ir::dmn::DmnModel>, String> {
+    let mut models = Vec::new();
+    for decision in decisions {
+        let schemas =
+            collect_schema_imports(&decision.domains).map_err(|error| error.to_string())?;
+        let sigil = collect_sigil_imports(&decision.domains).map_err(|error| error.to_string())?;
+        let compilation = compile_dmn_str(
+            &decision.key,
+            &decision.source,
+            &decision.domains,
+            &DomainImports {
+                schemas,
+                sigil: sigil.imports,
+            },
+            &decision.tables,
+            &decision.events,
+        );
+        let Some(model) = compilation.model else {
+            return Err(does_not_compile(
+                "imported decision model",
+                &decision.key,
                 &compilation.diagnostics,
             ));
         };
@@ -338,9 +514,134 @@ pub fn gather_usecase_imports(
     Ok(buckets)
 }
 
-/// The pre-compiled design and flow artifacts a `.deploy` file's imports
-/// resolve to, keyed by resolved path — [`crate::compile_deploy_str`]'s
-/// input slices.
+/// The buckets a `.cmmn` case file's imports resolve to: the `.uc` buckets
+/// plus the pre-compiled `.dmn` decision models a `decision` task's
+/// `invokes` clause resolves against — keyed by resolved path, the same
+/// discovery (extension bucketing) and compilation discipline as the
+/// `.evt` bucket.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CmmnBuckets {
+    /// Each imported `.mox` domain as `(resolved key, source)`.
+    pub domains: Vec<(String, String)>,
+    /// Each imported `.ddd` design, compiled.
+    pub designs: Vec<(String, rex_ir::ddd::DddModel)>,
+    /// Each imported `.actor` policy, compiled.
+    pub actors: Vec<(String, rex_ir::ActorModel)>,
+    /// Each imported `.evt` contract, compiled.
+    pub events: Vec<(String, rex_ir::events::EventModel)>,
+    /// Each imported `.dmn` decision model, compiled.
+    pub decisions: Vec<(String, rex_ir::dmn::DmnModel)>,
+}
+
+/// Gathers a `.cmmn` file's imports into [`CmmnBuckets`] — the four
+/// use-case buckets through [`gather_usecase_imports`] (identical
+/// discovery, dedup, and error text), plus a decision pass over the same
+/// imports compiling each `.dmn` into the bucket (its own `.mox` imports
+/// and decision tables resolve relative to its resolved key). Unknown
+/// extensions pass through so the driver reports them.
+pub fn gather_case_imports(
+    path_key: &str,
+    source: &str,
+    import_paths: &dyn Fn(&str) -> Vec<String>,
+    fetch: &mut dyn FnMut(&str) -> Option<String>,
+) -> Result<CmmnBuckets, String> {
+    let uc = gather_usecase_imports(path_key, source, import_paths, fetch)?;
+    let mut buckets = CmmnBuckets {
+        domains: uc.domains,
+        designs: uc.designs,
+        actors: uc.actors,
+        events: uc.events,
+        decisions: Vec::new(),
+    };
+    let dir = dir_of(path_key);
+    for import in import_paths(source) {
+        let resolved = dir.join(&import);
+        let key = resolved.display().to_string();
+        if resolved
+            .extension()
+            .and_then(|extension| extension.to_str())
+            != Some("dmn")
+        {
+            continue;
+        }
+        if buckets
+            .decisions
+            .iter()
+            .any(|(existing, _)| *existing == key)
+        {
+            continue;
+        }
+        let text = fetch(&key).ok_or_else(|| cannot_read(&key, path_key))?;
+        let model = gather_decision_model(&key, &text, fetch)?;
+        buckets.decisions.push((key, model));
+    }
+    Ok(buckets)
+}
+
+/// Gathers and compiles one imported `.dmn` decision model: its own `.mox`
+/// imports resolve relative to its resolved key, its `.evt` imports
+/// gather through [`gather_dmn_events`], and each `logic table "<path>"`
+/// clause's markdown content is fetched the same way and keyed by the
+/// path **as written** (the driver matches table paths exactly as
+/// written). Compilation failure reads ``imported decision model {key}
+/// does not compile`` plus the error-diagnostic lines.
+fn gather_decision_model(
+    key: &str,
+    text: &str,
+    fetch: &mut dyn FnMut(&str) -> Option<String>,
+) -> Result<rex_ir::dmn::DmnModel, String> {
+    let domains = gather_domains_relative(
+        key,
+        text,
+        |source| {
+            rex_syntax::parse_dmn(source)
+                .ast
+                .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
+                .unwrap_or_default()
+        },
+        fetch,
+        true,
+    )?;
+    let schemas = collect_schema_imports(&domains).map_err(|error| error.to_string())?;
+    let sigil = collect_sigil_imports(&domains).map_err(|error| error.to_string())?;
+    let dir = dir_of(key);
+    let mut tables: Vec<(String, String)> = Vec::new();
+    if let Some(ast) = rex_syntax::parse_dmn(text).ast.and_then(|ast| ast.model) {
+        for decision in &ast.decisions {
+            let source = match &decision.logic {
+                Some(rex_syntax::DmnLogic::Table { source, .. }) => source,
+                _ => continue,
+            };
+            if tables.iter().any(|(name, _)| name == source) {
+                continue;
+            }
+            let resolved = dir.join(source).display().to_string();
+            if let Some(content) = fetch(&resolved) {
+                tables.push((source.clone(), content));
+            }
+        }
+    }
+    let events = gather_dmn_events(key, text, fetch)?;
+    let compilation = compile_dmn_str(
+        key,
+        text,
+        &domains,
+        &DomainImports {
+            schemas,
+            sigil: sigil.imports,
+        },
+        &tables,
+        &events,
+    );
+    let Some(model) = compilation.model else {
+        return Err(does_not_compile(
+            "imported decision model",
+            key,
+            &compilation.diagnostics,
+        ));
+    };
+    Ok(model)
+}
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DeployPairs {
     /// Each imported `.ddd` design, compiled.
@@ -357,8 +658,9 @@ pub struct DeployPairs {
 /// entry identity is a resolved disk-path key), so the bridge keeps an
 /// identity → resolved-key map per flow: each import resolves relative to
 /// the resolved key its importer was actually fetched under, never the
-/// process CWD. The flow's `.actor`/`.mox` imports ride through the same
-/// bridge but the deploy lowering consumes none, so they are dropped.
+/// process CWD. The flow's `.actor`/`.mox`/`.dmn` imports ride through
+/// the same bridge (a `.dmn` model's decision tables with it) but the
+/// deploy lowering consumes none, so they are dropped.
 pub fn gather_deploy_imports(
     path_key: &str,
     source: &str,
@@ -489,6 +791,46 @@ fn gather_actor_model(
         .map(|mut models| models.pop().expect("one policy, one model"))
 }
 
+/// The raw import strings one `.dmn` source declares (empty when the file
+/// does not parse — the compile reports that). Hosts split the list by
+/// extension: `.mox` paths join the domain gather, `.evt` paths
+/// [`gather_dmn_events`].
+pub fn dmn_import_paths(source: &str) -> Vec<String> {
+    rex_syntax::parse_dmn(source)
+        .ast
+        .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
+        .unwrap_or_default()
+}
+
+/// Gathers the `.evt` contracts one `.dmn` decision-model file imports:
+/// each `import "<x>.evt"` resolves relative to `path_key`'s directory
+/// (exactly how `.mox` imports resolve), is fetched, and is compiled
+/// through the ordinary event pipeline — the contract's own `.mox` imports
+/// resolve relative to its resolved key, exactly like `rexlang check` on
+/// the contract itself. The bucket is keyed by the import string **as
+/// written** (the table-path rule): the driver's import check matches
+/// `events` entries exactly as written. A missing or non-compiling
+/// contract is a clean error naming it; duplicates gather once.
+pub fn gather_dmn_events(
+    path_key: &str,
+    source: &str,
+    fetch: &mut dyn FnMut(&str) -> Option<String>,
+) -> Result<Vec<(String, rex_ir::events::EventModel)>, String> {
+    let dir = dir_of(path_key);
+    let mut events: Vec<(String, rex_ir::events::EventModel)> = Vec::new();
+    for import in dmn_import_paths(source) {
+        if !import.ends_with(".evt") || events.iter().any(|(key, _)| *key == import) {
+            continue;
+        }
+        let resolved = dir.join(&import);
+        let key = resolved.display().to_string();
+        let text = fetch(&key).ok_or_else(|| cannot_read(&key, path_key))?;
+        let model = gather_event_model(&key, &text, fetch)?;
+        events.push((import, model));
+    }
+    Ok(events)
+}
+
 /// Gathers and compiles one imported `.evt` contract: its own `.mox`
 /// imports resolve relative to its resolved key. Compilation failure
 /// reads ``imported contract {key} does not compile`` plus the
@@ -559,7 +901,10 @@ fn cannot_read(key: &str, importer: &str) -> String {
 /// `true` for the extensions [`IfmlProject::unresolved`] tracks; other
 /// extensions pass through ignored (parity with today's walker hosts).
 fn is_imported_surface(import: &str) -> bool {
-    import.ends_with(".ifml") || import.ends_with(".mox") || import.ends_with(".actor")
+    import.ends_with(".ifml")
+        || import.ends_with(".mox")
+        || import.ends_with(".actor")
+        || import.ends_with(".dmn")
 }
 
 /// The domain gather core behind [`gather_domain_sources`]: resolve each

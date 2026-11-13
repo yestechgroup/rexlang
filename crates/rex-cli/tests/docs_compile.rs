@@ -105,6 +105,10 @@ struct Gathered {
     actors: Vec<(String, String)>,
     /// `.evt` contract sources, keyed by resolved path.
     events: Vec<(String, String)>,
+    /// `.dmn` decision-model sources, keyed by resolved path. Gathered
+    /// and recursed into (a model's own `.mox` imports come along) and
+    /// joined by the gathered `.evt` contracts — the emits dimension.
+    decisions: Vec<(String, String)>,
     /// `.ifml` sources, keyed by resolved path.
     flows: Vec<(String, String)>,
     /// `import sigil` rosetta sources, keyed by the path as written.
@@ -214,6 +218,7 @@ fn gather(base: &Path, source: &str, surface: &str) -> anyhow::Result<Gathered> 
                 "ddd" => gathered.designs.push((key.clone(), content.clone())),
                 "actor" => gathered.actors.push((key.clone(), content.clone())),
                 "evt" => gathered.events.push((key.clone(), content.clone())),
+                "dmn" => gathered.decisions.push((key.clone(), content.clone())),
                 "ifml" => gathered.flows.push((key.clone(), content.clone())),
                 other => anyhow::bail!("unsupported import extension .{other}: {key}"),
             }
@@ -344,10 +349,12 @@ fn compile_fence(fence: &Fence, workspace: &Path) -> String {
         }
         "dmn" => {
             // The DMN doc snippets are self-contained (no imports): empty
-            // domains/imports/tables — the compile is the full validation
-            // over primitives only.
+            // domains/imports/tables/events — the compile is the full
+            // validation over primitives only (an empty events bucket is
+            // the blessed loosely-coupled behavior: `emits` entries lower
+            // as authored, unchecked).
             let compilation =
-                rex_driver::compile_dmn_str(&virtual_path, &fence.source, &[], &empty, &[]);
+                rex_driver::compile_dmn_str(&virtual_path, &fence.source, &[], &empty, &[], &[]);
             problems(tagged_errors_of(&compilation.diagnostics))
         }
         "deploy" => {
@@ -439,6 +446,26 @@ fn compile_fence(fence: &Fence, workspace: &Path) -> String {
                     (path.clone(), compiled.model.expect("event artifact"))
                 })
                 .collect();
+            // The decision models a fence's `decision` tasks resolve
+            // against, compiled with empty tables — the doc-fence decision
+            // models are logic-free (`logic table` contents are a disk
+            // concern the fences don't carry; a table-bearing import
+            // fails with the driver's named unprovided-table diagnostic).
+            let decisions: Vec<(String, rex_ir::dmn::DmnModel)> = gathered
+                .decisions
+                .iter()
+                .map(|(path, source)| {
+                    let compiled = rex_driver::compile_dmn_str(
+                        path,
+                        source,
+                        &gathered.domains,
+                        &empty,
+                        &[],
+                        &events,
+                    );
+                    (path.clone(), compiled.model.expect("decision artifact"))
+                })
+                .collect();
             let compilation = rex_driver::compile_cmmn_str(
                 &virtual_path,
                 &fence.source,
@@ -447,6 +474,7 @@ fn compile_fence(fence: &Fence, workspace: &Path) -> String {
                 &designs,
                 &actors,
                 &events,
+                &decisions,
             );
             problems(tagged_errors_of(&compilation.diagnostics))
         }

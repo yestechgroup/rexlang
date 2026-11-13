@@ -62,6 +62,17 @@ decision_model  LoanApproval {
             }
             logic table "./tables/fees.md"
         }
+        /// The events a priced decision publishes.
+        decision Notifier {
+            emits {
+                FeeQuoted
+                LetterSent when "waiver"
+            }
+            logic invoke RateLookup {
+                tier : "request"
+            }
+            output string
+        }
         decision Plain { output boolean }
     }
 

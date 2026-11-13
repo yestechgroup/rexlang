@@ -92,8 +92,10 @@ case CommercialLoan {
   namespace per case, so criterion references stay unambiguous.
 - **Plan items** — `task` (human work; optional `performer: <role>`),
   `service` (an `execute <alias>.<Service>.<operation>;` binding, the
-  use-case `realizes` rule), `milestone` (a goal; entry criteria only),
-  and `stage` (grouping; the only kind that nests plan items).
+  use-case `realizes` rule), `decision` (an `invokes <qualified-name>;`
+  binding into a sibling `.dmn` decision model, [below](#decision-tasks)),
+  `milestone` (a goal; entry criteria only), and `stage` (grouping; the
+  only kind that nests plan items).
 - **Criteria** — `entry on <part>, <part> when (...);` and `exit on ...;`.
   An on-part is `item.word` — a plan item standard event (`create`,
   `enable`, `start`, `complete`, `terminate`, `fail`, `occur`) or a
@@ -138,11 +140,11 @@ tables (the `.deploy` vocabulary discipline).
 
 `compile_cmmn_str` (normative contract on
 [`crates/rex-driver/src/lib.rs`](../crates/rex-driver/src/lib.rs)) resolves a
-`.cmmn` file against **four import buckets**: raw `.mox` domains, plus
-pre-compiled `EventModel`, `ActorModel`, and `DddModel` pairs the host
-provides. Imports match by exact path or lexical resolution relative to the
-case file (the `.deploy` rule); only design imports take an alias, because
-aliases exist for `execute`.
+`.cmmn` file against **five import buckets**: raw `.mox` domains, plus
+pre-compiled `EventModel`, `ActorModel`, `DddModel`, and `DmnModel` pairs
+the host provides. Imports match by exact path or lexical resolution relative
+to the case file (the `.deploy` rule); only design imports take an alias,
+because aliases exist for `execute`.
 
 The numbered rules (quoted here in brief, specified in full on the entry
 point): unprovided imports; case-name uniqueness; role uniqueness and
@@ -151,7 +153,9 @@ union (`unknown type`, `ambiguous type`); the shared plan-item/case-file
 namespace; performer placement and role resolution; `execute` placement,
 necessity, and design resolution; discretionary placement; criterion
 resolution (milestone exit criteria, on-part sources, transition
-vocabularies, event resolution); and `when` typing.
+vocabularies, event resolution); `when` typing; and decision-task
+placement, service resolution, and case-file binding
+([below](#decision-tasks)).
 
 **`when` conditions** type-check against a *synthetic case universe* (the
 `.deploy` settings-universe pattern): the case file as a class whose
@@ -160,7 +164,88 @@ item as a class of boolean transition predicates, and the case itself as
 the root class. `case_file.financials.size() > 0` and
 `VerifyBorrower.complete` are plain feature navigation from `self`; the
 condition must be boolean, and the expression rules R1–R9 of
-[docs/EXPRESSIONS.md](EXPRESSIONS.md) apply and are cited in errors.
+[docs/EXPRESSIONS.md](EXPRESSIONS.md) apply and are cited in errors. Every
+**resolved** decision task extends the universe with its service's output
+decisions — [below](#decision-tasks).
+
+## Decision tasks
+
+A **`decision` plan item** invokes a decision service declared in a
+sibling `.dmn` decision model — the decision dimension
+([docs/DMN.md](DMN.md)) as case work:
+
+```cmmn
+import "../tests/conformance/cmmn/decision.mox"
+import "../tests/conformance/cmmn/decision.dmn"
+
+case Underwriting {
+    case_file {
+        /// The application under assessment.
+        Application[1..1] application;
+        /// The assessment once the decision task has run.
+        Assessment[0..1] assessment;
+    }
+    stage Assessment {
+        entry on application.create;
+        decision assess {
+            invokes Underwriting.LoanAssessmentService;
+            inputs { application }
+            outputs { assessment }
+            entry on application.create when (Verdict);
+            required;
+        }
+        milestone Assessed {
+            entry on assess.complete;
+        }
+    }
+}
+```
+
+The body carries exactly one **`invokes <qualified-name>;`** clause (a
+duplicate is a parse error, the `execute`-clause rule) plus optional
+**`inputs { <name>... }`** and **`outputs { <name>... }`** brace
+name-lists — the `.dmn` service name-list shape, whitespace-separated
+names. Canonical member order is `invokes`, `inputs`, `outputs`, then the
+criteria and flags; decision tasks take no `performer` (the
+only-a-human-task-carries-performer rule extends, as do the stray-clause
+diagnostics for `inputs`/`outputs` on a non-decision item).
+
+- **Version pins.** The `invokes` clause may carry `version compatible`
+  or `version "X.Y.Z"` — the same pin grammar and resolution rules the
+  `.ddd` decision references use (rexlang#154; see the `.dmn` surface's
+  Versioning section): an exact pin resolves to the same-name service at
+  that version, `compatible` to the highest declared version in the
+  highest major present, and an unsatisfiable pin names the service, the
+  pin, and the versions available.
+- **Resolution.** The qualified name resolves **by its last segment** (the
+  rule-17 convention: `Underwriting.LoanAssessmentService` and the bare
+  `LoanAssessmentService` are the same service) union-wide against the
+  provided `.dmn` models' decision services. An empty decisions bucket
+  lowers the clause **unvalidated** (the plain-`compile_ddd_str`
+  records-names-unvalidated precedent); a non-empty bucket with an unknown
+  service errors naming the task and the service, with a did-you-mean help
+  line over the declared set. The artifact lowers the name **as authored**.
+- **Case-file binding.** Every `inputs`/`outputs` name must be a declared
+  **case-file item of the same case** (the execute-binding existence bar;
+  a plan-item name is not enough). Unknown names error with a
+  did-you-mean help over the case's case-file items.
+- **Universe.** Every resolved service's output decisions join the
+  synthetic case universe, so guards can reference them: a **single-output
+  decision** inserts an entry named by the decision typed with its output
+  type (`Verdict` above is a boolean guard); a **multi-output decision**
+  inserts a class named by the decision whose fields are its named
+  outputs (`LoanAssessment.outcome`). Unresolved tasks contribute nothing.
+  The universe is assembled on the `rex_expr::DomainTypes`
+  (`insert_class`) — never a fake model.
+
+**Documented deferrals.** There is no type-agreement check between the
+bound case-file items and the service's declared input/output types — the
+binding is by name; the runtime executor owns the value mapping. The
+engine `CaseDefinition` has no slot for task inputs/outputs either: the
+backend lowers a decision task exactly like a service task
+(`taskType: "Process"`, `processRef` = the **authored** `invokes` name —
+the key a decision-task executor registry resolves) and leaves the
+input/output mapping to that registry; it invents no engine fields.
 
 ## Tooling
 
@@ -175,8 +260,9 @@ rexlang artifact check case.json         # classifies + lint-checks the artifact
 plus its domain model into the engine's `CaseDefinition` JSON — the case
 file items (multiplicity vocabulary, domain-class features as properties),
 a synthetic root stage, generated sentries, `User` tasks with
-`requiredRole`, service tasks as `Process` compositions keyed by the
-`execute` binding (the engine's executor-seam `processRef`), and
+`requiredRole`, service tasks and decision tasks as `Process` compositions
+keyed by their binding (the `execute` reference and the **authored**
+`invokes` name respectively — the engine's executor-seam `processRef`), and
 discretionary tasks as planning tables. `when` conditions translate
 rex-expr → FEEL within a documented subset (`&&`→`and`, `size()`→`count`,
 `case_file.x`→`x`, `if/then/else`, …); everything outside the subset is a
@@ -198,11 +284,16 @@ The canonical fixture set lives in `tests/conformance/cmmn/`:
 `lending.cmmn.json` artifact golden, and round-trips through `from_json`
 (`crates/rex-driver/tests/cmmn_golden.rs`); the backend lowers the same
 artifact to the engine's `CaseDefinition` JSON, byte-pinned at
-`lending.case.json` (`crates/rex-backend-cmmn/tests/generate.rs`). The
-`examples/` side ships `support.cmmn` — the full-stack example whose
-imports span all four buckets and whose `execute` binding names a real
-`support.ddd` service operation — byte-pinned under `examples/artifacts/`
-(`examples_artifacts.rs`, plus the engine-definition golden in
-`rex-backend-cmmn`'s examples test). The CI fmt gate covers
+`lending.case.json` (`crates/rex-backend-cmmn/tests/generate.rs`).
+`decision.cmmn` (the decision-task fixture, over `decision.mox` and
+`decision.dmn`) pins the `decision` kind end to end — binding, resolution,
+universe — with its own `decision.cmmn.json` artifact golden and the
+exact-diagnostic negative tests in the same suite. The `examples/` side
+ships `support.cmmn` — the full-stack example whose imports span all five
+buckets, whose `execute` binding names a real `support.ddd` service
+operation, and whose decision task invokes `support.dmn`'s
+`RefundDecisions.AssessRefund` service — byte-pinned under
+`examples/artifacts/` (`examples_artifacts.rs`, plus the engine-definition
+golden in `rex-backend-cmmn`'s examples test). The CI fmt gate covers
 `tests/conformance/cmmn/*.cmmn` and `examples/*.cmmn`. Regenerate goldens
 with `REX_UPDATE_FIXTURES=1 cargo test --workspace`.

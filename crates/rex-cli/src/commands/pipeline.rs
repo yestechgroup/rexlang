@@ -122,6 +122,7 @@ fn gather_sibling_decisions(
                     &pair.pair.domains,
                     &pair.pair.imports(),
                     &pair.tables,
+                    &pair.events,
                 );
                 if let Some(model) = compilation.model {
                     project.store(&key, &Artifact::Decision(model.clone()));
@@ -195,8 +196,12 @@ pub(crate) fn compile_surface(
                     return Ok(None);
                 }
             };
-        let binding =
-            rex_ifml::check_ifml_with_actors(&compilation, inputs.domains.as_ref(), &inputs.actors);
+        let binding = rex_ifml::check_ifml_with_decisions(
+            &compilation,
+            inputs.domains.as_ref(),
+            &inputs.actors,
+            &inputs.decisions,
+        );
         // Warnings (the `ifml.lints` band) render but never fail the file;
         // only error-severity diagnostics do. `check --deny-warnings`
         // flips the rule via the outcome's warning count.
@@ -368,6 +373,7 @@ pub(crate) fn compile_surface(
             &pair.designs,
             &pair.actors,
             &pair.events,
+            &pair.decisions,
         );
         report_cmmn_diagnostics(&pair.pair, &compilation);
         let Some(case_model) = compilation.model else {
@@ -391,6 +397,7 @@ pub(crate) fn compile_surface(
             &pair.pair.domains,
             &pair.pair.imports(),
             &pair.tables,
+            &pair.events,
         );
         report_dmn_diagnostics(&pair.pair, &compilation);
         let Some(decision_model) = compilation.model else {

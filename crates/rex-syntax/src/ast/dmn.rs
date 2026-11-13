@@ -136,9 +136,9 @@ pub struct DmnBkm {
 }
 
 /// A `decision <name> { ... }` declaration of a decisions block: one
-/// decision — its outputs and optional logic (a decision may declare only
-/// its contract). The `description` comes from the doc comment directly
-/// above the declaration.
+/// decision — its outputs, optional logic, and optional `emits` block (a
+/// decision may declare only its contract). The `description` comes from
+/// the doc comment directly above the declaration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DmnDecision {
     /// The decision name.
@@ -152,7 +152,24 @@ pub struct DmnDecision {
     pub outputs: Vec<DmnOutput>,
     /// The `logic <kind>` clause, when written.
     pub logic: Option<DmnLogic>,
+    /// The `emits { ... }` block entries in source order: the declared
+    /// events the decision's outcome publishes.
+    pub emits: Vec<DmnEmits>,
     /// Span of the whole declaration.
+    pub span: Span,
+}
+
+/// One entry of a decision's `emits` block: a declared `.evt` event the
+/// decision's outcome publishes, with its optional `when "<FEEL>"`
+/// condition. Names are bare (single-segment) and resolve union-wide
+/// against the provided event contracts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DmnEmits {
+    /// The emitted event's name.
+    pub event: Name,
+    /// The `when "<FEEL>"` condition text, when written.
+    pub when: Option<String>,
+    /// Span of the whole entry.
     pub span: Span,
 }
 

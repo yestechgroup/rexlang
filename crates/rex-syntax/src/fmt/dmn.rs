@@ -185,12 +185,16 @@ impl<'src> Formatter<'src> {
         }
     }
 
-    /// One `decision` declaration of a decisions block.
+    /// One `decision` declaration of a decisions block. The body's members
+    /// are rewritten into the canonical order (`output`/`outputs` →
+    /// `logic` → `emits`, see `dmn_decision_member_rank`) before the
+    /// linear scan.
     pub(crate) fn scan_dmn_decisions_item(&mut self) {
         match self.peek_tok() {
             Some(Token::Ident(text)) if text == dmn::DECISION => {
                 self.advance();
                 self.take_name();
+                self.reorder_dmn_items(dmn_decision_member_rank);
                 self.scan_body(BodyKind::DmnDecision);
             }
             _ => self.scan_dmn_junk_member(),
@@ -198,7 +202,9 @@ impl<'src> Formatter<'src> {
     }
 
     /// One member of a decision body: the anonymous `output` line, the
-    /// named `outputs` block, or the `logic` clause. Source order is kept.
+    /// named `outputs` block, the `logic` clause, or the `emits` block.
+    /// Source order is kept — [`dmm_decision_member_rank`] already
+    /// canonicalized it.
     pub(crate) fn scan_dmn_decision_item(&mut self) {
         match self.peek_tok() {
             Some(Token::Ident(text)) if text == dmn::OUTPUT => {
@@ -211,6 +217,27 @@ impl<'src> Formatter<'src> {
                 self.scan_body(BodyKind::DmnInputs);
             }
             Some(Token::Ident(text)) if text == dmn::LOGIC => self.scan_dmn_logic(),
+            Some(Token::Ident(text)) if text == dmn::EMITS => {
+                self.advance();
+                self.scan_body(BodyKind::DmnEmits);
+            }
+            _ => self.scan_dmn_junk_member(),
+        }
+    }
+
+    /// One `name ("when" "<FEEL>")? ";"` entry of a decision's `emits`
+    /// block, with its canonical `;`. The optional `when` guard is the
+    /// real lexer keyword followed by its string.
+    pub(crate) fn scan_dmn_emits_item(&mut self) {
+        match self.peek_tok() {
+            Some(Token::Ident(_) | Token::IdentEscaped(_)) => {
+                self.take_name();
+                if matches!(self.peek_tok(), Some(Token::When)) {
+                    self.advance();
+                    self.take_if(|token| matches!(token, Token::Str(_)));
+                }
+                self.scan_dmn_semicolon();
+            }
             _ => self.scan_dmn_junk_member(),
         }
     }
@@ -572,7 +599,8 @@ impl<'src> Formatter<'src> {
     /// The exclusive end of the `.dmn` body member whose leading token
     /// sits at `start`. A statement member runs word + value + optional
     /// `;`; a named block runs word + name + balanced braces; a bare
-    /// block runs word + balanced braces (missing braces consume only
+    /// block runs word + balanced braces; a `logic` clause runs word +
+    /// kind word + string or named braces (missing braces consume only
     /// what the shape needs, so the enclosing body's `}` is never
     /// swallowed).
     pub(crate) fn dmn_member_extent(
@@ -616,6 +644,24 @@ impl<'src> Formatter<'src> {
                 self.dmn_brace_extent(i, inner_end)
             }
             DmnExtent::Block => self.dmn_brace_extent(i, inner_end),
+            DmnExtent::Clause => {
+                // `logic table "<path>"`, `logic expression "<text>"`, or
+                // `logic invoke <model> { ... }`: the kind word, then the
+                // string, or the invoked model's name and its brace block
+                // (a missing brace consumes only what exists).
+                if is_ident(i) {
+                    i += 1;
+                }
+                if matches!(self.nodes.get(i), Some(Node::Token(Token::Str(_), _))) {
+                    i += 1;
+                } else {
+                    if is_ident(i) {
+                        i += 1;
+                    }
+                    i = self.dmn_brace_extent(i, inner_end);
+                }
+                i
+            }
         }
     }
 
@@ -744,6 +790,9 @@ pub(crate) enum DmnExtent {
     Named,
     /// A bare block (inputs, decisions, ...): word + braces.
     Block,
+    /// A `logic <kind>` clause: word + kind word, then the kind's string
+    /// or the invoked model's named brace block.
+    Clause,
 }
 
 /// The canonical rank and extent shape of a `.dmn` model body member:
@@ -779,6 +828,26 @@ fn dmn_knowledge_member_rank(token: &Token<'_>) -> Option<(usize, DmnExtent)> {
     match token {
         Token::Ident(text) if *text == dmn::SOURCE => Some((0, DmnExtent::Named)),
         Token::Ident(text) if *text == dmn::MODEL => Some((1, DmnExtent::Named)),
+        _ => None,
+    }
+}
+
+/// The canonical rank and extent shape of a `.dmn` decision body member:
+/// `output`/`outputs` first, then the `logic` clause, then the `emits`
+/// block (the formatter's canonical order; source order kept within a
+/// rank).
+fn dmn_decision_member_rank(token: &Token<'_>) -> Option<(usize, DmnExtent)> {
+    match token {
+        Token::Ident(text) => {
+            let (rank, extent) = match *text {
+                dmn::OUTPUT => (0, DmnExtent::Statement),
+                dmn::OUTPUTS => (0, DmnExtent::Block),
+                dmn::LOGIC => (1, DmnExtent::Clause),
+                dmn::EMITS => (2, DmnExtent::Block),
+                _ => return None,
+            };
+            Some((rank, extent))
+        }
         _ => None,
     }
 }

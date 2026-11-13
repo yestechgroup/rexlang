@@ -1060,9 +1060,21 @@ fn canonical_fixture_parses_cleanly_and_recovers_a_full_model() {
     );
     let model = expect_model(result.ast.as_ref().expect("the fixture recovers to a file"));
     assert_eq!(model.name.text, "LoanApproval");
-    assert_eq!(model.decisions.len(), 3);
+    assert_eq!(model.decisions.len(), 4);
     assert_eq!(model.knowledge_sources.len(), 2);
     assert_eq!(model.models.len(), 3);
+    // The emitting decision: its entries parse in source order — event
+    // names bare, the `when` FEEL texts as written.
+    let notifier = model
+        .decisions
+        .iter()
+        .find(|decision| decision.name.text == "Notifier")
+        .expect("the emitting decision");
+    assert_eq!(notifier.emits.len(), 2);
+    assert_eq!(notifier.emits[0].event.text, "FeeQuoted");
+    assert_eq!(notifier.emits[0].when, None);
+    assert_eq!(notifier.emits[1].event.text, "LetterSent");
+    assert_eq!(notifier.emits[1].when.as_deref(), Some("waiver"));
 }
 
 #[test]

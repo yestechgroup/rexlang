@@ -2,13 +2,16 @@
 //! `examples/<name>.ifml` listed in [`EXAMPLES`] must exist, compile with
 //! zero diagnostics when its imports resolve from disk exactly the way the
 //! CLI resolves them, type-check against the union of its imported `.mox`
-//! domains, and be byte-identical to its own canonical formatting.
+//! domains and the decision services of its imported `.dmn` models, and be
+//! byte-identical to its own canonical formatting.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use rex_driver::{compile_str, DomainImports};
-use rex_ifml::{check_ifml, compile_ifml_str, IfmlCompilation, IfmlDiagnostic, IfmlImports};
+use rex_ifml::{
+    check_ifml_with_decisions, compile_ifml_str, IfmlCompilation, IfmlDiagnostic, IfmlImports,
+};
 
 /// The interaction-flow examples, hardcoded so a missing file fails loudly
 /// (the house convention for the `examples/` harnesses).
@@ -17,12 +20,16 @@ pub const EXAMPLES: [&str; 3] = ["cli", "ecommerce", "support"];
 const EXAMPLES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
 
 /// One example, ready for compilation: the main source, the `.ifml` import
-/// bundle, and every imported `.mox` domain as `(resolved path, source)`.
+/// bundle, every imported `.mox` domain as `(resolved path, source)`, and
+/// every imported `.dmn` model as gathered
+/// [`rex_driver::project::DecisionImport`]s — the raw material the
+/// decision dimension compiles.
 struct Example {
     path: String,
     source: String,
     imports: IfmlImports,
     domains: Vec<(String, String)>,
+    decision_imports: Vec<rex_driver::project::DecisionImport>,
 }
 
 /// Reads `examples/<name>.ifml` plus everything it imports through
@@ -30,8 +37,10 @@ struct Example {
 /// fetch closure resolves each import relative to the importing file's
 /// directory on disk, provides `.ifml` content under the walker's
 /// `(importer identity, import-as-written)` keys, and collects `.mox`
-/// domains (deduplicated by resolved path) as a side effect. Disk paths
-/// are tracked per identity here — the walker only sees identities.
+/// domains (deduplicated by resolved path) plus `.dmn` decision models —
+/// each with its own `.mox` imports and decision-table contents fetched
+/// under the model's resolved path — as side effects. Disk paths are
+/// tracked per identity here — the walker only sees identities.
 fn load(name: &str) -> Example {
     let source_path = Path::new(EXAMPLES_DIR).join(format!("{name}.ifml"));
     let source = fs::read_to_string(&source_path)
@@ -41,6 +50,7 @@ fn load(name: &str) -> Example {
         source,
         imports: IfmlImports::default(),
         domains: Vec::new(),
+        decision_imports: Vec::new(),
     };
     let mut disk_paths = std::collections::BTreeMap::new();
     disk_paths.insert(example.path.clone(), source_path);
@@ -73,6 +83,114 @@ fn load(name: &str) -> Example {
                         panic!("read imported file {}: {error}", resolved.display())
                     });
                     example.domains.push((resolved_path, domain));
+                }
+                None
+            } else if import.ends_with(".dmn") {
+                let resolved_path = resolved.display().to_string();
+                if !example
+                    .decision_imports
+                    .iter()
+                    .any(|existing| existing.key == resolved_path)
+                {
+                    let model = fs::read_to_string(&resolved).unwrap_or_else(|error| {
+                        panic!("read imported file {}: {error}", resolved.display())
+                    });
+                    // The model's own `.mox` imports and decision-table
+                    // contents resolve relative to the model's resolved
+                    // path — the CLI's gather discipline.
+                    let mut decision = rex_driver::project::DecisionImport {
+                        key: resolved_path.clone(),
+                        source: model.clone(),
+                        domains: Vec::new(),
+                        tables: Vec::new(),
+                        events: Vec::new(),
+                    };
+                    let imports: Vec<String> = rex_syntax::parse_dmn(&model)
+                        .ast
+                        .map(|ast| {
+                            ast.imports
+                                .iter()
+                                .map(|import| import.path.clone())
+                                .collect::<Vec<String>>()
+                        })
+                        .unwrap_or_default();
+                    for domain_import in imports.clone() {
+                        let domain_resolved = dir_of(&resolved).join(&domain_import);
+                        let domain_key = domain_resolved.display().to_string();
+                        if decision
+                            .domains
+                            .iter()
+                            .any(|(existing, _)| existing == &domain_key)
+                        {
+                            continue;
+                        }
+                        let domain = fs::read_to_string(&domain_resolved).unwrap_or_else(|error| {
+                            panic!(
+                                "read imported file {} (imported by {}): {error}",
+                                domain_resolved.display(),
+                                resolved.display()
+                            )
+                        });
+                        decision.domains.push((domain_key, domain));
+                    }
+                    let tables = rex_syntax::parse_dmn(&model)
+                        .ast
+                        .and_then(|ast| ast.model)
+                        .map(|model| {
+                            model
+                                .decisions
+                                .iter()
+                                .filter_map(|decision| match &decision.logic {
+                                    Some(rex_syntax::DmnLogic::Table { source, .. }) => {
+                                        Some(source.clone())
+                                    }
+                                    _ => None,
+                                })
+                                .collect::<Vec<String>>()
+                        })
+                        .unwrap_or_default();
+                    for table in tables {
+                        if decision
+                            .tables
+                            .iter()
+                            .any(|(existing, _)| *existing == table)
+                        {
+                            continue;
+                        }
+                        if let Ok(content) = fs::read_to_string(dir_of(&resolved).join(&table)) {
+                            decision.tables.push((table, content));
+                        }
+                    }
+                    // The model's `.evt` imports compile into the events
+                    // bucket (the emits dimension), keyed by the import
+                    // string as written.
+                    for import in imports {
+                        if !import.ends_with(".evt")
+                            || decision
+                                .events
+                                .iter()
+                                .any(|(existing, _)| *existing == import)
+                        {
+                            continue;
+                        }
+                        let event_resolved = dir_of(&resolved).join(&import);
+                        let event_compilation = rex_driver::compile_evt_str(
+                            event_resolved.to_str().expect("utf-8 event path"),
+                            &fs::read_to_string(&event_resolved).unwrap_or_else(|error| {
+                                panic!(
+                                    "read imported file {} (imported by {}): {error}",
+                                    event_resolved.display(),
+                                    resolved.display()
+                                )
+                            }),
+                            &decision.domains,
+                            &rex_driver::DomainImports::default(),
+                        );
+                        if let Some(model) = event_compilation.model {
+                            decision.events.push((import, model));
+                        }
+                    }
+                    example.decision_imports.push(decision);
                 }
                 None
             } else {
@@ -109,7 +227,8 @@ fn compile(name: &str) -> IfmlCompilation {
 }
 
 /// Compiles every imported `.mox` domain to Core IR and unions the
-/// packages — the model [`check_ifml`] binds expressions against.
+/// packages — the model [`check_ifml_with_decisions`] binds expressions
+/// against.
 fn domain_union(name: &str) -> rex_ir::Model {
     let example = load(name);
     assert!(
@@ -132,6 +251,17 @@ fn domain_union(name: &str) -> rex_ir::Model {
         );
     }
     union
+}
+
+/// Compiles every imported `.dmn` model — the decision dimension
+/// [`check_ifml_with_decisions`] resolves `data:` names against. A model
+/// that fails to compile (its types must resolve against its own gathered
+/// `.mox` imports; its tables must ingest) fails the harness loudly.
+fn decisions(name: &str) -> Vec<rex_ir::dmn::DmnModel> {
+    let example = load(name);
+    rex_driver::project::compile_decision_imports(&example.decision_imports).unwrap_or_else(
+        |message| panic!("{name}.ifml's imported decision models must compile: {message}"),
+    )
 }
 
 #[test]
@@ -170,7 +300,7 @@ fn every_example_type_checks_against_its_domain_union() {
     for name in &EXAMPLES {
         let compilation = compile(name);
         let union = domain_union(name);
-        let binding = check_ifml(&compilation, Some(&union));
+        let binding = check_ifml_with_decisions(&compilation, Some(&union), &[], &decisions(name));
         assert!(
             binding.is_empty(),
             "{name}.ifml must type-check against its domains:\n{}",
@@ -192,7 +322,12 @@ fn every_example_manifest_matches_its_golden_artifact() {
     for name in &EXAMPLES {
         let example = load(name);
         let compilation = compile(name);
-        let binding = check_ifml(&compilation, Some(&domain_union(name)));
+        let binding = check_ifml_with_decisions(
+            &compilation,
+            Some(&domain_union(name)),
+            &[],
+            &decisions(name),
+        );
         assert!(
             binding.is_empty(),
             "{name}.ifml must check clean before manifesting:\n{}",

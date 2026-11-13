@@ -1,0 +1,26 @@
+import "decision.mox"
+import "decision.dmn"
+
+/// An underwriting case: the automated assessment a sibling decision
+/// model supplies.
+case Underwriting {
+    case_file {
+        /// The application under assessment.
+        Application[1..1] application;
+        /// The assessment once the decision task has run.
+        Assessment[0..1] assessment;
+    }
+    stage Assessment {
+        entry on application.create;
+        decision assess {
+            invokes Underwriting.LoanAssessmentService;
+            inputs { application }
+            outputs { assessment }
+            entry on application.create when (Verdict);
+            required;
+        }
+        milestone Assessed {
+            entry on assess.complete;
+        }
+    }
+}

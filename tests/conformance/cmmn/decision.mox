@@ -1,0 +1,11 @@
+package underwriting
+
+class Application {
+    String applicant
+    int amount
+}
+
+class Assessment {
+    String outcome
+    String reason
+}

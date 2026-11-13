@@ -3,6 +3,7 @@
 
 use super::*;
 
+pub(crate) use rex_ir::dmn::DmnModel;
 pub(crate) use rex_ir::{
     ActorDef, ActorModel, ActorsDef, CapabilityDef, ClassDef, Feature, FeatureKind, Multiplicity,
     Operation, OperationParam, Package, PrimitiveType, TypeRef,
@@ -127,6 +128,51 @@ pub(crate) fn diags_with_actors(
     let compilation = crate::compile_ifml_str("app.ifml", source, &crate::IfmlImports::default())
         .expect("source must parse and resolve");
     check_ifml_with_actors(&compilation, Some(model), actors)
+        .into_iter()
+        .filter(|diagnostic| diagnostic.severity.is_error())
+        .collect()
+}
+
+/// A decision layer over the shop domain: the `AssessRefund` service
+/// exposing the `RefundVerdict` decision's typed outputs.
+pub(crate) fn shop_decision() -> DmnModel {
+    let mut model = DmnModel::new();
+    model.name = Some("ShopDecisions".to_string());
+    model.decisions.push(rex_ir::dmn::Decision {
+        name: "RefundVerdict".to_string(),
+        description: None,
+        outputs: vec![
+            rex_ir::dmn::Output {
+                name: "eligible".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::Boolean),
+            },
+            rex_ir::dmn::Output {
+                name: "reason".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::String),
+            },
+        ],
+        logic: None,
+        emits: Vec::new(),
+    });
+    model.services.push(rex_ir::dmn::DecisionService {
+        name: "AssessRefund".to_string(),
+        description: None,
+        inputs: vec!["Order".to_string()],
+        outputs: vec!["RefundVerdict".to_string()],
+        encapsulates: Vec::new(),
+    });
+    model
+}
+
+/// [`diags`] with a decision layer — error-severity only, like [`diags`].
+pub(crate) fn diags_with_decisions(
+    source: &str,
+    model: &Model,
+    decisions: &[DmnModel],
+) -> Vec<IfmlDiagnostic> {
+    let compilation = crate::compile_ifml_str("app.ifml", source, &crate::IfmlImports::default())
+        .expect("source must parse and resolve");
+    check_ifml_with_decisions(&compilation, Some(model), &[], decisions)
         .into_iter()
         .filter(|diagnostic| diagnostic.severity.is_error())
         .collect()

@@ -22,6 +22,9 @@ pub(super) struct IfmlImportClosure {
     /// Imported `.actor` policies, compiled — the authorization dimension
     /// `check_ifml_with_actors` resolves `requires:`/`roles:` against.
     pub(super) actors: Vec<rex_ir::ActorModel>,
+    /// Imported `.dmn` decision models, compiled — the decision dimension
+    /// `check_ifml_with_decisions` resolves `data:` names against.
+    pub(super) decisions: Vec<rex_ir::dmn::DmnModel>,
     /// Resolved disk path per import identity (the main file included).
     disk_paths: std::collections::BTreeMap<String, std::path::PathBuf>,
     /// URL (or identity string) of every fetched import — the transitive
@@ -32,11 +35,14 @@ pub(super) struct IfmlImportClosure {
 /// The gathered compile inputs of one open `.dmn` document (see
 /// [`RexBackend::dmn_sources_for`]): the imported `.mox` domain sources,
 /// the import bundle their own `import schema`/`import sigil` declarations
-/// need, and the decision-table contents the `logic table` clauses name.
+/// need, the decision-table contents the `logic table` clauses name, and
+/// the compiled `.evt` contracts the `import "<path>.evt"` lines name
+/// (rule 14's bucket).
 pub(super) struct DmnSources {
     domains: Vec<(String, String)>,
     imports: rex_driver::DomainImports,
     tables: Vec<(String, String)>,
+    events: Vec<(String, rex_ir::events::EventModel)>,
 }
 
 /// The compiled state of one open `.ifml` document for the navigation
@@ -188,6 +194,7 @@ impl RexBackend {
                     &sources.domains,
                     &sources.imports,
                     &sources.tables,
+                    &sources.events,
                 )
                 .diagnostics
                 .iter()
@@ -223,8 +230,12 @@ impl RexBackend {
         let (compilation, mut diagnostics) =
             rex_ifml::compile_ifml_lenient(&main_path, text, &closure.bundle);
         let domain_union = domain_union(&closure.domains);
-        let binding =
-            rex_ifml::check_ifml_with_actors(&compilation, domain_union.as_ref(), &closure.actors);
+        let binding = rex_ifml::check_ifml_with_decisions(
+            &compilation,
+            domain_union.as_ref(),
+            &closure.actors,
+            &closure.decisions,
+        );
         diagnostics.extend(binding);
         // Resolved URI per indexed file (same order as `index.files`), so
         // cross-file navigation can produce `Location`s. Unresolved
@@ -315,14 +326,19 @@ impl RexBackend {
 
     /// The `.mox` domains one open `.dmn` decision model imports (open
     /// documents win over disk), the import bundle its compile resolves
-    /// against, and the decision-table contents its `logic table` clauses
+    /// against, the decision-table contents its `logic table` clauses
     /// name — read from disk next to the document through
-    /// [`dmn_table_sources`]. A table file that cannot be read is not
-    /// provided: the driver's unprovided-table diagnostic (E0209) names
-    /// the written path.
+    /// [`dmn_table_sources`] — and the compiled `.evt` contracts its
+    /// `import "<path>.evt"` lines name (rule 14's bucket, gathered the
+    /// same open-documents-first way). A table file that cannot be read is
+    /// not provided: the driver's unprovided-table diagnostic (E0209)
+    /// names the written path. A contract that cannot be read or compile
+    /// contributes nothing: the driver's unprovided-import diagnostic
+    /// (rule 1) names it — the editor degrades gracefully.
     pub(super) fn dmn_sources_for(&self, uri: &Url, text: &str) -> DmnSources {
         let mut domains: Vec<(String, String)> = Vec::new();
         let mut tables: Vec<(String, String)> = Vec::new();
+        let mut events: Vec<(String, rex_ir::events::EventModel)> = Vec::new();
         if let Ok(path) = uri.to_file_path() {
             let path_key = path.display().to_string();
             let mut fetch =
@@ -331,13 +347,15 @@ impl RexBackend {
                 &path_key,
                 text,
                 |source| {
-                    rex_syntax::parse_dmn(source)
-                        .ast
-                        .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
-                        .unwrap_or_default()
+                    rex_driver::project::dmn_import_paths(source)
+                        .into_iter()
+                        .filter(|path| !path.ends_with(".evt"))
+                        .collect()
                 },
                 &mut fetch,
             );
+            events = rex_driver::project::gather_dmn_events(&path_key, text, &mut fetch)
+                .unwrap_or_default();
             if let Some(dir) = path.parent() {
                 tables = dmn_table_sources(dir, text);
             }
@@ -346,6 +364,7 @@ impl RexBackend {
             imports: domain_import_bundle(&domains),
             domains,
             tables,
+            events,
         }
     }
 
@@ -487,7 +506,9 @@ impl RexBackend {
     /// (open documents win over disk); a sibling that fails to compile
     /// contributes nothing. Decision tables resolve from disk next to each
     /// sibling through [`dmn_table_sources`] — an unprovided table names it
-    /// and the sibling drops out.
+    /// and the sibling drops out. The sibling's imported `.evt` contracts
+    /// gather the same way (rule 14's bucket), so a model with `emits`
+    /// still compiles into the pool.
     fn sibling_decision_models(&self, except: &Url) -> Vec<(String, rex_ir::dmn::DmnModel)> {
         let Ok(path) = except.to_file_path() else {
             return Vec::new();
@@ -501,13 +522,15 @@ impl RexBackend {
                 &key,
                 &text,
                 |source| {
-                    rex_syntax::parse_dmn(source)
-                        .ast
-                        .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
-                        .unwrap_or_default()
+                    rex_driver::project::dmn_import_paths(source)
+                        .into_iter()
+                        .filter(|path| !path.ends_with(".evt"))
+                        .collect()
                 },
                 &mut fetch,
             );
+            let events =
+                rex_driver::project::gather_dmn_events(&key, &text, &mut fetch).unwrap_or_default();
             let tables = sibling
                 .parent()
                 .map(|dir| dmn_table_sources(dir, &text))
@@ -518,6 +541,7 @@ impl RexBackend {
                 &domains,
                 &domain_import_bundle(&domains),
                 &tables,
+                &events,
             );
             if let Some(model) = compilation.model {
                 models.push((key, model));
@@ -529,16 +553,18 @@ impl RexBackend {
     /// The import closure of one `.ifml` document, gathered through
     /// [`rex_driver::project::gather_ifml_project`]: the resolver bundle,
     /// the imported `.mox` domain sources, the imported `.actor` policies
-    /// (compiled by [`rex_driver::project::compile_actor_imports`]), every
-    /// resolved disk path (identity → path), and the URLs of all fetched
-    /// imports — the transitive import set that reverse-dependency lookups
-    /// match against. Open documents win over disk (the editor's buffer is
-    /// the truth). Anything unresolvable or non-compiling degrades
+    /// (compiled by [`rex_driver::project::compile_actor_imports`]), the
+    /// imported `.dmn` decision models (compiled by
+    /// [`rex_driver::project::compile_decision_imports`]), every resolved
+    /// disk path (identity → path), and the URLs of all fetched imports —
+    /// the transitive import set that reverse-dependency lookups match
+    /// against. Open documents win over disk (the editor's buffer is the
+    /// truth). Anything unresolvable or non-compiling degrades
     /// silently: `.ifml` misses surface as resolver diagnostics, missing
-    /// `.mox`/`.actor` imports shrink the typed/authorization dimensions
-    /// (an empty actors slice skips the authorization pass) — the editor
-    /// must stay usable in incomplete workspaces; the CLI's hard error is
-    /// the authoring gate.
+    /// `.mox`/`.actor`/`.dmn` imports shrink the typed/authorization/
+    /// decision dimensions (an empty actors or decisions slice skips the
+    /// pass) — the editor must stay usable in incomplete workspaces; the
+    /// CLI's hard error is the authoring gate.
     pub(super) fn import_closure(&self, uri: &Url, text: &str) -> IfmlImportClosure {
         let main_path = uri.to_string();
         let mut closure = IfmlImportClosure::default();
@@ -590,6 +616,11 @@ impl RexBackend {
         // mirroring `domain_union`.
         closure.actors =
             rex_driver::project::compile_actor_imports(&project.actors).unwrap_or_default();
+        // The decision dimension degrades the same way: a model that
+        // fails to compile contributes nothing (its own open editor
+        // shows its diagnostics), and an empty slice skips the pass.
+        closure.decisions =
+            rex_driver::project::compile_decision_imports(&project.decisions).unwrap_or_default();
         closure
     }
 

@@ -5,6 +5,7 @@
 // dedicated class.
 
 import "support.mox";
+import "support.dmn";
 import "../patterns/ifml/communication.ifml";
 import "../patterns/ifml/workflow.ifml";
 
@@ -43,6 +44,11 @@ view "Queue" {
         on approve(row) if agent.active -> action("ApproveRefund", {
             ticket: queue.ticketNo;
         });
+    }
+
+    component "assessment" {
+        type: details;
+        data: AssessRefund;
     }
 
     component "intake" {

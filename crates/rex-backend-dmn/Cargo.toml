@@ -1,0 +1,27 @@
+[package]
+name = "rex-backend-dmn"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+dsntk-common = { workspace = true }
+rex-backend-common = { workspace = true }
+rex-ir = { workspace = true }
+dsntk-feel = { workspace = true }
+dsntk-model = { workspace = true }
+dsntk-model-evaluator = { workspace = true }
+dsntk-recognizer = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
+[dev-dependencies]
+dsntk-feel-evaluator = { workspace = true }
+dsntk-feel-parser = { workspace = true }
+rex-driver = { workspace = true }
