@@ -1,8 +1,8 @@
 // Support-desk case management over the full stack: the domain
 // (support.mox) types the case file, the design (support.ddd, aliased for
 // `execute`) supplies the automated refund assessment, the policy
-// (support.actor) names the role bindings, and the designed service
-// (support.ddd, via `execute`) automates the refund assessment. The case
+// (support.actor) names the role bindings, and the decision model
+// (support.dmn) is the decision layer a `decision` task consults. The case
 // reacts to the ticket's creation (a case-file transition, which the
 // engine's sentries watch); the `.evt` contracts remain the wider
 // integration vocabulary — TicketRaised and friends are what other
@@ -12,6 +12,7 @@
 import "support.mox"
 import "support.evt"
 import "support.actor"
+import "support.dmn"
 import "support.ddd" as support
 
 /// A refund-desk case: the work coordinated around one support ticket
@@ -41,6 +42,17 @@ case RefundDesk {
         service AssessRefund {
             execute support.TicketService.raiseRefund;
             entry on ReviewTicket.complete when (decision == null);
+            required;
+        }
+        /// The desk's decision layer: the sibling decision model
+        /// (support.dmn) assesses the ticket once the service has run, and
+        /// its assessment lands in the `decision` case-file item the case
+        /// coordinates around.
+        decision AssessAuthority {
+            invokes RefundDecisions.AssessRefund;
+            inputs { ticket }
+            outputs { decision }
+            entry on AssessRefund.complete when (decision == null);
             required;
         }
         /// Finance approves only what assessment could not settle.
