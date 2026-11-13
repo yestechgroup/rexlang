@@ -105,6 +105,11 @@ struct Gathered {
     actors: Vec<(String, String)>,
     /// `.evt` contract sources, keyed by resolved path.
     events: Vec<(String, String)>,
+    /// `.dmn` decision-model sources, keyed by resolved path. Gathered
+    /// and recursed into (a model's own `.mox` imports come along) but
+    /// consumed by nothing — the deploy lowering drops the decision
+    /// dimension, the CLI's gather discipline.
+    decisions: Vec<(String, String)>,
     /// `.ifml` sources, keyed by resolved path.
     flows: Vec<(String, String)>,
     /// `import sigil` rosetta sources, keyed by the path as written.
@@ -214,6 +219,7 @@ fn gather(base: &Path, source: &str, surface: &str) -> anyhow::Result<Gathered> 
                 "ddd" => gathered.designs.push((key.clone(), content.clone())),
                 "actor" => gathered.actors.push((key.clone(), content.clone())),
                 "evt" => gathered.events.push((key.clone(), content.clone())),
+                "dmn" => gathered.decisions.push((key.clone(), content.clone())),
                 "ifml" => gathered.flows.push((key.clone(), content.clone())),
                 other => anyhow::bail!("unsupported import extension .{other}: {key}"),
             }
