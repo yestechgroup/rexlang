@@ -209,6 +209,7 @@ impl NavigationIndex {
         for decl in &model.declarations {
             let (name, member_count) = match decl {
                 mox::Decl::Class(decl) => (&decl.name, decl.features.len()),
+                mox::Decl::Register(decl) => (&decl.name, decl.attributes.len()),
                 mox::Decl::Interface(decl) => (&decl.name, 0),
                 mox::Decl::Enum(decl) => (&decl.name, decl.literals.len()),
                 mox::Decl::Datatype(decl) => (&decl.name, 0),
@@ -236,6 +237,7 @@ impl NavigationIndex {
         for decl in &model.declarations {
             let (name, kind) = match decl {
                 mox::Decl::Class(decl) => (&decl.name, SymbolKind::Class),
+                mox::Decl::Register(decl) => (&decl.name, SymbolKind::Class),
                 mox::Decl::Interface(decl) => (&decl.name, SymbolKind::Interface),
                 mox::Decl::Enum(decl) => (&decl.name, SymbolKind::Enum),
                 mox::Decl::Datatype(decl) => (&decl.name, SymbolKind::Datatype),
@@ -260,6 +262,7 @@ impl NavigationIndex {
             index.definitions[decl_id].extends_text = extends_text;
             index.definitions[decl_id].doc = match decl {
                 mox::Decl::Class(decl) => decl.doc.clone(),
+                mox::Decl::Register(decl) => decl.doc.clone(),
                 mox::Decl::Interface(decl) => decl.doc.clone(),
                 mox::Decl::Enum(decl) => decl.doc.clone(),
                 mox::Decl::Datatype(decl) => decl.doc.clone(),
@@ -271,116 +274,26 @@ impl NavigationIndex {
                     for type_ref in &decl.extends {
                         index.add_type_reference(type_ref, &package, &top_level);
                     }
-                    for feature in &decl.features {
-                        let feature_id = index.push(
-                            feature.name().text.clone(),
-                            SymbolKind::Feature(FeatureSymbolKind::of(feature)),
-                            feature.name().span,
-                            Some(decl_id),
-                            feature.span(),
-                        );
-                        index.definitions[feature_id].modifiers = *feature.modifiers();
-                        index.definitions[feature_id].doc = feature.doc().map(str::to_string);
-                        match feature {
-                            mox::FeatureDecl::Attribute {
-                                type_ref,
-                                multiplicity,
-                                ..
-                            }
-                            | mox::FeatureDecl::Derived {
-                                type_ref,
-                                multiplicity,
-                                ..
-                            } => {
-                                index.definitions[feature_id].type_text =
-                                    Some(type_ref.name.full_name());
-                                index.definitions[feature_id].multiplicity_text =
-                                    multiplicity.as_ref().map(render_multiplicity);
-                                index.add_type_reference(type_ref, &package, &top_level);
-                            }
-                            mox::FeatureDecl::Containment {
-                                type_ref,
-                                multiplicity,
-                                opposite,
-                                ..
-                            }
-                            | mox::FeatureDecl::Reference {
-                                type_ref,
-                                multiplicity,
-                                opposite,
-                                ..
-                            } => {
-                                index.definitions[feature_id].type_text =
-                                    Some(type_ref.name.full_name());
-                                index.definitions[feature_id].multiplicity_text =
-                                    multiplicity.as_ref().map(render_multiplicity);
-                                index.definitions[feature_id].opposite_text =
-                                    opposite.as_ref().map(|opposite| opposite.text.clone());
-                                index.add_type_reference(type_ref, &package, &top_level);
-                                if let Some(opposite) = opposite {
-                                    opposites.push((
-                                        type_ref
-                                            .name
-                                            .segments
-                                            .last()
-                                            .map(|segment| segment.text.clone())
-                                            .unwrap_or_default(),
-                                        opposite.text.clone(),
-                                        opposite.span,
-                                    ));
-                                }
-                            }
-                            mox::FeatureDecl::Container {
-                                type_ref, opposite, ..
-                            } => {
-                                index.definitions[feature_id].type_text =
-                                    Some(type_ref.name.full_name());
-                                index.definitions[feature_id].opposite_text =
-                                    opposite.as_ref().map(|opposite| opposite.text.clone());
-                                index.add_type_reference(type_ref, &package, &top_level);
-                                if let Some(opposite) = opposite {
-                                    opposites.push((
-                                        type_ref
-                                            .name
-                                            .segments
-                                            .last()
-                                            .map(|segment| segment.text.clone())
-                                            .unwrap_or_default(),
-                                        opposite.text.clone(),
-                                        opposite.span,
-                                    ));
-                                }
-                            }
-                            mox::FeatureDecl::Op {
-                                return_type,
-                                params,
-                                bodies,
-                                ..
-                            } => {
-                                index.definitions[feature_id].type_text =
-                                    Some(return_type.name.full_name());
-                                index.definitions[feature_id].params_text = Some(
-                                    params
-                                        .iter()
-                                        .map(|param| {
-                                            format!(
-                                                "{}: {}",
-                                                param.name.text,
-                                                param.type_ref.name.full_name()
-                                            )
-                                        })
-                                        .collect::<Vec<_>>()
-                                        .join(", "),
-                                );
-                                index.definitions[feature_id].body_targets =
-                                    bodies.iter().map(|body| body.target.text.clone()).collect();
-                                index.add_type_reference(return_type, &package, &top_level);
-                                for param in params {
-                                    index.add_type_reference(&param.type_ref, &package, &top_level);
-                                }
-                            }
-                        }
-                    }
+                    index_features(
+                        &mut index,
+                        &decl.features,
+                        decl_id,
+                        &package,
+                        &top_level,
+                        &mut opposites,
+                    );
+                }
+                mox::Decl::Register(decl) => {
+                    // The register body is the attribute production only,
+                    // but the shared loop keeps every feature kind indexed.
+                    index_features(
+                        &mut index,
+                        &decl.attributes,
+                        decl_id,
+                        &package,
+                        &top_level,
+                        &mut opposites,
+                    );
                 }
                 mox::Decl::Enum(decl) => {
                     for literal in &decl.literals {
@@ -733,6 +646,123 @@ fn type_target(
         _ => return None,
     };
     top_level.get(local.as_str()).copied()
+}
+
+/// Indexes a declaration's features: a definition each (under `decl_id`),
+/// their type references, and the opposite mentions collected for pass 3.
+/// Shared by `class` and `register` declarations (issue rexlang#181), whose
+/// bodies index identically even though the register grammar admits the
+/// attribute production only.
+fn index_features(
+    index: &mut NavigationIndex,
+    features: &[mox::FeatureDecl],
+    decl_id: DefId,
+    package: &str,
+    top_level: &HashMap<&str, DefId>,
+    opposites: &mut Vec<(String, String, Span)>,
+) {
+    for feature in features {
+        let feature_id = index.push(
+            feature.name().text.clone(),
+            SymbolKind::Feature(FeatureSymbolKind::of(feature)),
+            feature.name().span,
+            Some(decl_id),
+            feature.span(),
+        );
+        index.definitions[feature_id].modifiers = *feature.modifiers();
+        index.definitions[feature_id].doc = feature.doc().map(str::to_string);
+        match feature {
+            mox::FeatureDecl::Attribute {
+                type_ref,
+                multiplicity,
+                ..
+            }
+            | mox::FeatureDecl::Derived {
+                type_ref,
+                multiplicity,
+                ..
+            } => {
+                index.definitions[feature_id].type_text = Some(type_ref.name.full_name());
+                index.definitions[feature_id].multiplicity_text =
+                    multiplicity.as_ref().map(render_multiplicity);
+                index.add_type_reference(type_ref, package, top_level);
+            }
+            mox::FeatureDecl::Containment {
+                type_ref,
+                multiplicity,
+                opposite,
+                ..
+            }
+            | mox::FeatureDecl::Reference {
+                type_ref,
+                multiplicity,
+                opposite,
+                ..
+            } => {
+                index.definitions[feature_id].type_text = Some(type_ref.name.full_name());
+                index.definitions[feature_id].multiplicity_text =
+                    multiplicity.as_ref().map(render_multiplicity);
+                index.definitions[feature_id].opposite_text =
+                    opposite.as_ref().map(|opposite| opposite.text.clone());
+                index.add_type_reference(type_ref, package, top_level);
+                if let Some(opposite) = opposite {
+                    opposites.push((
+                        type_ref
+                            .name
+                            .segments
+                            .last()
+                            .map(|segment| segment.text.clone())
+                            .unwrap_or_default(),
+                        opposite.text.clone(),
+                        opposite.span,
+                    ));
+                }
+            }
+            mox::FeatureDecl::Container {
+                type_ref, opposite, ..
+            } => {
+                index.definitions[feature_id].type_text = Some(type_ref.name.full_name());
+                index.definitions[feature_id].opposite_text =
+                    opposite.as_ref().map(|opposite| opposite.text.clone());
+                index.add_type_reference(type_ref, package, top_level);
+                if let Some(opposite) = opposite {
+                    opposites.push((
+                        type_ref
+                            .name
+                            .segments
+                            .last()
+                            .map(|segment| segment.text.clone())
+                            .unwrap_or_default(),
+                        opposite.text.clone(),
+                        opposite.span,
+                    ));
+                }
+            }
+            mox::FeatureDecl::Op {
+                return_type,
+                params,
+                bodies,
+                ..
+            } => {
+                index.definitions[feature_id].type_text = Some(return_type.name.full_name());
+                index.definitions[feature_id].params_text = Some(
+                    params
+                        .iter()
+                        .map(|param| {
+                            format!("{}: {}", param.name.text, param.type_ref.name.full_name())
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                );
+                index.definitions[feature_id].body_targets =
+                    bodies.iter().map(|body| body.target.text.clone()).collect();
+                index.add_type_reference(return_type, package, top_level);
+                for param in params {
+                    index.add_type_reference(&param.type_ref, package, top_level);
+                }
+            }
+        }
+    }
 }
 
 /// `true` for the built-in primitive type names, matched case-insensitively

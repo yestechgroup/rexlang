@@ -123,6 +123,15 @@ pub(crate) fn attach_docs(model: &mut Model, comments: &[crate::lexer::Comment<'
                 }
             }
             Decl::Datatype(decl) => decl.doc = doc_run_above(&docs, start_line),
+            Decl::Register(decl) => {
+                decl.doc = doc_run_above(&docs, start_line);
+                for attribute in &mut decl.attributes {
+                    let attribute_line = line_of(attribute.span().start);
+                    if attribute.doc().is_none() {
+                        attribute.set_doc(doc_run_above(&docs, attribute_line));
+                    }
+                }
+            }
             Decl::Vocabulary(decl) => decl.doc = doc_run_above(&docs, start_line),
             Decl::Annotation(_) | Decl::Actors(_) | Decl::ImportSchema(_) => {}
         }

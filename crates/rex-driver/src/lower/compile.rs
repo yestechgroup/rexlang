@@ -23,7 +23,7 @@ use super::actors::{
 };
 use super::classes::{
     detect_inheritance_cycles, lower_class, lower_datatype, lower_enum, lower_interface,
-    validate_opposites,
+    lower_register, validate_opposites,
 };
 use super::conditions::check_pending_conditions;
 use super::imports::{import_class_def, SchemaImport};
@@ -165,6 +165,7 @@ pub(crate) fn compile_multi(
         for decl in &ast.declarations {
             let (kind, decl_name) = match decl {
                 mox::Decl::Class(decl) => (TopKind::Class, &decl.name),
+                mox::Decl::Register(decl) => (TopKind::Class, &decl.name),
                 mox::Decl::Interface(decl) => (TopKind::Interface, &decl.name),
                 mox::Decl::Enum(decl) => (TopKind::Enum, &decl.name),
                 mox::Decl::Datatype(decl) => (TopKind::Datatype, &decl.name),
@@ -348,6 +349,18 @@ pub(crate) fn compile_multi(
                 mox::Decl::Interface(decl) => out.interfaces.push(lower_interface(decl)),
                 mox::Decl::Class(decl) => {
                     classes.push(lower_class(
+                        decl,
+                        file.source,
+                        file.path,
+                        &packages[package_index].name,
+                        &scope,
+                        &prep,
+                        &mut buckets[index],
+                    ));
+                    class_files.push(index);
+                }
+                mox::Decl::Register(decl) => {
+                    classes.push(lower_register(
                         decl,
                         file.source,
                         file.path,
@@ -577,6 +590,7 @@ pub(crate) fn compile_union_per_file(
         for decl in &ast.declarations {
             let (kind, decl_name) = match decl {
                 mox::Decl::Class(decl) => (TopKind::Class, &decl.name),
+                mox::Decl::Register(decl) => (TopKind::Class, &decl.name),
                 mox::Decl::Interface(decl) => (TopKind::Interface, &decl.name),
                 mox::Decl::Enum(decl) => (TopKind::Enum, &decl.name),
                 mox::Decl::Datatype(decl) => (TopKind::Datatype, &decl.name),
@@ -792,6 +806,17 @@ pub(crate) fn compile_union_per_file(
                 mox::Decl::Interface(decl) => out.interfaces.push(lower_interface(decl)),
                 mox::Decl::Class(decl) => {
                     classes.push(lower_class(
+                        decl,
+                        file.source,
+                        file.path,
+                        &packages[package_index].name,
+                        &scope,
+                        &prep,
+                        &mut buckets[index],
+                    ));
+                }
+                mox::Decl::Register(decl) => {
+                    classes.push(lower_register(
                         decl,
                         file.source,
                         file.path,
@@ -1031,6 +1056,7 @@ pub(crate) fn compile(
     for decl in &model.declarations {
         let (kind, name) = match decl {
             mox::Decl::Class(decl) => (TopKind::Class, &decl.name),
+            mox::Decl::Register(decl) => (TopKind::Class, &decl.name),
             mox::Decl::Interface(decl) => (TopKind::Interface, &decl.name),
             mox::Decl::Enum(decl) => (TopKind::Enum, &decl.name),
             mox::Decl::Datatype(decl) => (TopKind::Datatype, &decl.name),
@@ -1163,6 +1189,9 @@ pub(crate) fn compile(
             }
             mox::Decl::Interface(decl) => out.interfaces.push(lower_interface(decl)),
             mox::Decl::Class(decl) => classes.push(lower_class(
+                decl, source, path, &package, &scope, &prep, &mut diags,
+            )),
+            mox::Decl::Register(decl) => classes.push(lower_register(
                 decl, source, path, &package, &scope, &prep, &mut diags,
             )),
             // Imports lowered as nominal classes after the declared ones.

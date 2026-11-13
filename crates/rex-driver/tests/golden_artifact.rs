@@ -52,6 +52,10 @@ const MODELS: &[(&str, &str)] = &[
         "tests/conformance/models/name_uniqueness.mox",
         "tests/conformance/artifacts/name_uniqueness.rex.json",
     ),
+    (
+        "tests/conformance/models/register.mox",
+        "tests/conformance/artifacts/register.rex.json",
+    ),
 ];
 
 /// The one conformance model with `import schema` declarations. The driver
@@ -256,6 +260,41 @@ fn currency_model_lowers_embedded_vocabulary_entries() {
         rex_ir::TypeRef::Vocabulary {
             package: "nz.example.payments".to_string(),
             name: "Currency".to_string(),
+        }
+    );
+}
+
+/// The register conformance model pins the marker flow (issue rexlang#181):
+/// register classes lower with `kind: register` — their attributes as
+/// ordinary attribute features with stable declaration-order ids — while
+/// the ordinary classes of the same model stay entity classes.
+#[test]
+fn register_model_lowers_the_class_kind_marker() {
+    let model = compile_conformance_model("tests/conformance/models/register.mox");
+    let package = &model.packages[0];
+    assert_eq!(package.name, "nz.example.org");
+
+    let by_name = |name: &str| -> &rex_ir::ClassDef {
+        package
+            .classes
+            .iter()
+            .find(|class| class.name == name)
+            .unwrap_or_else(|| panic!("class '{name}' lowered"))
+    };
+    assert_eq!(by_name("Role").kind, rex_ir::ClassKind::Register);
+    assert_eq!(by_name("Team").kind, rex_ir::ClassKind::Register);
+    assert_eq!(by_name("CostCenter").kind, rex_ir::ClassKind::Entity);
+    assert_eq!(by_name("Person").kind, rex_ir::ClassKind::Entity);
+
+    // Feature ids assign like any class's: declaration order, 0-based.
+    let ids: Vec<u32> = by_name("Role").features.iter().map(|f| f.id).collect();
+    assert_eq!(ids, vec![0, 1, 2]);
+    // `refers Role` in the ordinary class resolves onto the register class.
+    assert_eq!(
+        by_name("Person").features[1].type_,
+        rex_ir::TypeRef::Class {
+            package: "nz.example.org".to_string(),
+            name: "Role".to_string(),
         }
     );
 }

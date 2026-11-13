@@ -62,9 +62,9 @@
 //! ```text
 //! model            := item*
 //! item             := package_decl | annotation_decl | import_schema_decl
-//!                   | import_sigil_decl | class_decl | interface_decl
-//!                   | enum_decl | datatype_decl | vocabulary_decl
-//!                   | actors_block
+//!                   | import_sigil_decl | class_decl | register_decl
+//!                   | interface_decl | enum_decl | datatype_decl
+//!                   | vocabulary_decl | actors_block
 //! package_decl     := "package" qualified_name
 //! annotation_decl  := "annotation" string ("as" name)?
 //! import_schema_decl := "import" "schema" string ("as" name)?
@@ -72,6 +72,7 @@
 //! class_decl       := "class" name table_annotation?
 //!                     ("extends" type_ref ("," type_ref)*)?
 //!                     "{" feature* "}"
+//! register_decl    := "register" name "{" attribute* "}"
 //! table_annotation := "table" string
 //! feature          := modifier* ( containment | reference | container
 //!                               | op_decl | derived_decl | attribute )
@@ -127,6 +128,21 @@
 //!   The annotation is recognized only directly after the class name and at
 //!   most once; it is a class declaration's grammar only (`enum` has no
 //!   table).
+//! * `register` (issue rexlang#181) is the same contextual discipline: the
+//!   ordinary identifier `register` is special only at the top-level item
+//!   position (no other `.mox` item starts with a bare identifier, so there
+//!   is no ambiguity); a class, feature, enum, or datatype may still be
+//!   named `register`, and the word stays a plain name inside every body.
+//!   A register body reuses the `attribute` production verbatim — no
+//!   `extends`, no `table` annotation, and no relationship features, which
+//!   are simply not accepted here (parse errors, no recovery shapeshifting).
+//!   The one narrowing: an attribute's type may not be a *bare keyword*
+//!   segment. A bare keyword can never name a declared type (declarations
+//!   name themselves with identifiers), so accepting one would silently
+//!   read class-only grammar as attributes (`extends Base` typed `extends`);
+//!   keyword-led qualified references keep parsing (`actors.Thing`, where
+//!   the package's last segment is a keyword). The driver lowers the
+//!   declaration onto a `ClassDef` carrying the register-class marker.
 //! * In a `datatype_block`, `format`, `create`, and `convert` each appear at
 //!   most once, and a binding target literally named `format` is an error —
 //!   the unescaped key declares the format (only writable escaped,
@@ -915,12 +931,13 @@ mod grammar_doc_tests {
     /// subscription/channel words plus the slice-2 clause words, and the
     /// parser-only `ranking` values (`crate::ddd` documents them as
     /// parser-only).
-    const CONTEXTUAL_WORDS: [&str; 32] = [
+    const CONTEXTUAL_WORDS: [&str; 33] = [
         "id",
         "readonly",
         "schema",
         "sigil",
         "to",
+        "register",
         "create",
         "convert",
         "format",

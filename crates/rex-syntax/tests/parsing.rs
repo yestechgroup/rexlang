@@ -1715,3 +1715,161 @@ fn a_table_annotation_is_class_grammar_only() {
         "`table` must not parse on an enum declaration"
     );
 }
+
+// --- `register` declarations (issue rexlang#181, part A) ---------------------
+
+const REGISTER_MODEL: &str = "package nz.example.org\n\n/// A role in the organisation.\nregister Role {\n    /// The role's display name.\n    String display_name\n    CostCenter cost_center\n    String[0..1] badge = \"none\"\n    String code { pattern \"[A-Z]{2,8}\" minLength 2 }\n}\n";
+
+fn expect_register<'a>(decl: &'a Decl, name: &str) -> &'a RegisterDecl {
+    match decl {
+        Decl::Register(register) => {
+            assert_eq!(register.name.text, name, "unexpected register declaration");
+            register
+        }
+        other => panic!("expected register `{name}`, found {other:?}"),
+    }
+}
+
+#[test]
+fn register_decl_parses_attributes_docs_defaults_and_constraints() {
+    let result = parse(REGISTER_MODEL);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.expect("ast");
+    assert_eq!(model.declarations.len(), 1);
+
+    let register = expect_register(&model.declarations[0], "Role");
+    // The doc comment above the declaration becomes its description.
+    assert_eq!(register.doc.as_deref(), Some("A role in the organisation."));
+    assert_eq!(register.attributes.len(), 4);
+
+    // The doc comment above the first attribute attaches to it.
+    let FeatureDecl::Attribute { doc, name, .. } = &register.attributes[0] else {
+        panic!("expected an attribute, found {:?}", register.attributes[0]);
+    };
+    assert_eq!(name.text, "display_name");
+    assert_eq!(doc.as_deref(), Some("The role's display name."));
+
+    // A plain class-typed attribute parses (resolution is the driver's job).
+    let (type_ref, multiplicity, default) = expect_attribute(&register.attributes[1]);
+    assert_eq!(type_ref.name.full_name(), "CostCenter");
+    assert_eq!(name_text(&register.attributes[1]), "cost_center");
+    assert_eq!(multiplicity, None);
+    assert_eq!(default, None);
+
+    // Multiplicity and default value.
+    let (type_ref, multiplicity, default) = expect_attribute(&register.attributes[2]);
+    assert_eq!(type_ref.name.full_name(), "String");
+    let Some(multiplicity) = multiplicity else {
+        panic!("expected the declared multiplicity");
+    };
+    assert!(matches!(
+        multiplicity.kind,
+        MultiplicityKind::Range(0, MultBound::Int(1))
+    ));
+    assert!(matches!(
+        default,
+        Some(DefaultValue::Str { value, .. }) if value == "none"
+    ));
+
+    // A constraint block rides on the last attribute.
+    let FeatureDecl::Attribute { constraints, .. } = &register.attributes[3] else {
+        panic!("expected an attribute, found {:?}", register.attributes[3]);
+    };
+    assert_eq!(constraints.len(), 2);
+    assert_eq!(constraints[0].name.text, "pattern");
+    assert_eq!(constraints[1].name.text, "minLength");
+}
+
+fn name_text(feature: &FeatureDecl) -> &str {
+    feature.name().text.as_str()
+}
+
+#[test]
+fn register_decl_empty_body_parses() {
+    let result = parse("package demo\n\nregister Empty {}");
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    let model = result.ast.expect("ast");
+    let register = expect_register(&model.declarations[0], "Empty");
+    assert!(register.attributes.is_empty());
+}
+
+#[test]
+fn register_body_rejects_class_only_grammar() {
+    // The register body is the `attribute` production only: containment,
+    // references, ops, derived features, `extends`, and the `table`
+    // annotation are parse errors here — no recovery shapeshifting.
+    let bodies = [
+        ("contains Part[0..*] parts", "contains"),
+        ("refers Tag[0..1] tag", "refers"),
+        ("container Group group", "container"),
+        ("op int size(String unit)", "op"),
+        ("derived String label", "derived"),
+        ("extends Base", "extends"),
+        ("table \"roles\"", "table"),
+    ];
+    for (body, word) in bodies {
+        let source = format!("package demo\n\nregister R {{\n    {body}\n}}");
+        let result = parse(&source);
+        assert!(
+            !result.errors.is_empty(),
+            "`{word}` must be a parse error inside a register body"
+        );
+    }
+}
+
+#[test]
+fn register_stays_a_contextual_identifier() {
+    // `register` is special only at the top-level item position. A class,
+    // an enum, and features may still be named `register`, and the word may
+    // appear inside class bodies as a feature's type or name.
+
+    // A class named `register`.
+    let result = parse("package demo\n\nclass register { int n }");
+    assert!(
+        result.errors.is_empty(),
+        "`class register` must still parse: {:?}",
+        result.errors
+    );
+    let model = result.ast.expect("ast");
+    expect_class(&model.declarations[0], "register");
+
+    // An enum named `register`.
+    let result = parse("package demo\n\nenum register { A = 0 }");
+    assert!(
+        result.errors.is_empty(),
+        "`enum register` must still parse: {:?}",
+        result.errors
+    );
+    let model = result.ast.expect("ast");
+    let Decl::Enum(enum_decl) = &model.declarations[0] else {
+        panic!("expected enum, found {:?}", model.declarations[0]);
+    };
+    assert_eq!(enum_decl.name.text, "register");
+
+    // A feature named `register`, and `register` as a feature's type.
+    let result = parse("package demo\n\nclass C { String register\n    register badge }");
+    assert!(
+        result.errors.is_empty(),
+        "a feature named `register` must still parse: {:?}",
+        result.errors
+    );
+    let model = result.ast.expect("ast");
+    let class = expect_class(&model.declarations[0], "C");
+    assert_eq!(class.features.len(), 2);
+    assert_eq!(class.features[0].name().text, "register");
+    assert_eq!(class.features[1].name().text, "badge");
+
+    // An escaped `^register` is an ordinary identifier, never the item.
+    let result = parse("package demo\n\nregister ^register { int n }");
+    assert!(
+        result.errors.is_empty(),
+        "an escaped `^register` must parse as the register's name: {:?}",
+        result.errors
+    );
+    let model = result.ast.expect("ast");
+    expect_register(&model.declarations[0], "register");
+}
