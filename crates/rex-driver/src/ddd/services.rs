@@ -513,7 +513,7 @@ pub(crate) fn lower_module_services<'a>(
                 let self_class = pin.or(service_self.as_ref());
                 let condition_text_out = op
                     .condition
-                    .map(|span| condition_text(design_source, span).to_string());
+                    .map(|span| crate::conditions::when_interior(design_source, span).to_string());
                 let condition_paths = op
                     .condition
                     .map(|condition| {
@@ -598,7 +598,7 @@ pub(crate) fn lower_module_services<'a>(
                     .collect();
                 let condition_text_out = op
                     .condition
-                    .map(|span| condition_text(design_source, span).to_string());
+                    .map(|span| crate::conditions::when_interior(design_source, span).to_string());
                 let condition_paths = op
                     .condition
                     .map(|condition| {

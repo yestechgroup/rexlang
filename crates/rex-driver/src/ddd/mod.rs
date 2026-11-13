@@ -15,13 +15,12 @@
 //! namespace helpers ([`crate::lower::resolve_ddd_class`],
 //! [`crate::lower::resolve_ddd_type`]) — never re-implemented here.
 
-use std::collections::BTreeSet;
-
 use rex_ir::ddd::{Application, DddModel, Module};
 use rex_syntax::ast as dsl;
 use rex_syntax::Span;
 
 use crate::diagnostic::{Diagnostic, DiagnosticCode};
+use crate::engine_common;
 use crate::lower::{self, DomainPackage, DomainUnit};
 use crate::pipeline;
 
@@ -35,7 +34,7 @@ mod searches;
 mod services;
 
 use crate::conditions::{
-    check_condition as pipeline_check_condition, ConditionSpanning, ConditionTriage,
+    check_condition as pipeline_check_condition, when_interior, ConditionSpanning, ConditionTriage,
     ConditionWording, LintWording, ParseErrorPolicy, WalkerPhase,
 };
 use bodies::lower_module_bodies;
@@ -377,24 +376,14 @@ fn rule_10_validate_capabilities(
         if actors.is_empty() {
             return local;
         }
-        let declared: BTreeSet<String> = actors
-            .iter()
-            .flat_map(|model| model.blocks.iter())
-            .flat_map(|block| block.capabilities.iter().map(|c| c.name.clone()))
-            .collect();
+        let declared = engine_common::declared_capabilities(actors.iter());
         for check in capability_checks {
             if !declared.contains(&check.capability.text) {
                 let suggestion =
                     rex_diagnostics::did_you_mean_adaptive(&check.capability.text, &declared);
                 let help = match &suggestion {
                     Some(suggestion) => format!("did you mean '{suggestion}'?"),
-                    None if declared.is_empty() => {
-                        "the actor model declares no capabilities".to_string()
-                    }
-                    None => format!(
-                        "the actor model declares: {}",
-                        declared.iter().cloned().collect::<Vec<_>>().join(", ")
-                    ),
+                    None => engine_common::declared_capabilities_help(&declared),
                 };
                 local.push(
                     Diagnostic::error(
@@ -691,29 +680,9 @@ fn signature_type(
 }
 /// Lowers one declared cardinality annotation.
 fn lower_multiplicity(multiplicity: &dsl::Multiplicity) -> rex_ir::Multiplicity {
-    match multiplicity.kind {
-        dsl::MultiplicityKind::Unbounded => rex_ir::Multiplicity::MANY,
-        dsl::MultiplicityKind::Exact(exact) => rex_ir::Multiplicity {
-            lower: exact.max(0) as u32,
-            upper: rex_ir::Upper::Finite(exact.max(0) as u32),
-        },
-        dsl::MultiplicityKind::Range(lower, ref upper) => rex_ir::Multiplicity {
-            lower: lower.max(0) as u32,
-            upper: match *upper {
-                dsl::MultBound::Star => rex_ir::Upper::Unbounded,
-                dsl::MultBound::Int(bound) => rex_ir::Upper::Finite(bound.max(0) as u32),
-            },
-        },
-    }
-}
-/// The condition text of one `when ( ... )` clause, sliced verbatim between
-/// the parentheses (the `when`-condition rule), plus the file-absolute span
-/// of the parenthesized region for diagnostics.
-fn condition_text(source: &str, span: rex_syntax::Span) -> &str {
-    source
-        .get(span.start + 1..span.end.saturating_sub(1))
-        .unwrap_or("")
-        .trim()
+    let (lower, upper) =
+        engine_common::multiplicity_bounds(&multiplicity.kind, |_, value| value.max(0) as u32);
+    rex_ir::Multiplicity { lower, upper }
 }
 /// The scope a `when` condition checks against: the implicit-self class
 /// (the module's unique machine-bearing class, or the class a transition
@@ -766,7 +735,7 @@ fn check_condition(
     check: ConditionCheck<'_>,
     local: &mut Vec<Diagnostic>,
 ) -> Vec<rex_ir::ddd::ConditionPath> {
-    let text = condition_text(source, span);
+    let text = when_interior(source, span);
     let mut paths: Vec<rex_ir::ddd::ConditionPath> = Vec::new();
     // Path resolution (issue rexlang#180) — service operations only, and
     // only against a fully lowered union (the deferral contract). The

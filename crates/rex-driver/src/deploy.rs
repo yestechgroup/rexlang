@@ -37,6 +37,7 @@ use crate::conditions::{
     ParseErrorPolicy,
 };
 use crate::diagnostic::Diagnostic;
+use crate::engine_common;
 use crate::import_matches;
 use crate::pipeline;
 
@@ -211,58 +212,46 @@ pub(crate) fn compile_deploy_file(
     let mut model = DeployModel::new();
 
     // Rule 2 — every import must name a provided `.ddd` design or `.ifml`
-    // flow (exact string or lexical resolution, the `.actor` rule).
-    for import in &ast.imports {
-        let provided_design = designs
-            .iter()
-            .any(|(provided, _)| import_matches(&import.path, path, provided));
-        let provided_flow = flows
-            .iter()
-            .any(|(provided, _)| import_matches(&import.path, path, provided));
-        if !provided_design && !provided_flow {
-            local.push(
-                Diagnostic::error(
-                    format!("imported file \"{}\" was not provided", import.path),
-                    Some(import.span),
+    // flow (exact string or lexical resolution, the `.actor` rule); an
+    // import that resolves to some other extension is rejected in the same
+    // pass.
+    let hits = engine_common::two_bucket_hits(&ast.imports, path, designs, flows);
+    let import_diagnostics = engine_common::import_hit_diagnostics(
+        &ast.imports,
+        &hits,
+        Some("imports must name a .ddd design or an .ifml flow the host provides"),
+        None,
+        |import| {
+            if !import.path.ends_with(".ddd") && !import.path.ends_with(".ifml") {
+                Some(
+                    Diagnostic::error(
+                        format!(
+                            "unsupported import \"{}\" (expected a .ddd design or an .ifml flow)",
+                            import.path
+                        ),
+                        Some(import.span),
+                    )
+                    .with_help("a deployment composes .ddd designs and .ifml flows"),
                 )
-                .with_help("imports must name a .ddd design or an .ifml flow the host provides"),
-            );
-        } else if !import.path.ends_with(".ddd") && !import.path.ends_with(".ifml") {
-            local.push(
-                Diagnostic::error(
-                    format!(
-                        "unsupported import \"{}\" (expected a .ddd design or an .ifml flow)",
-                        import.path
-                    ),
-                    Some(import.span),
-                )
-                .with_help("a deployment composes .ddd designs and .ifml flows"),
-            );
-        }
-    }
+            } else {
+                None
+            }
+        },
+    );
+    local.extend(import_diagnostics);
 
     // Applications: unique names; per application, unique component names,
     // validated kinds/capabilities/settings/bindings, and known connection
     // endpoints.
     let mut application_names: Vec<(String, Span)> = Vec::new();
     for application in &ast.applications {
-        if application_names
-            .iter()
-            .any(|(name, _)| *name == application.name.text)
-        {
-            local.push(
-                Diagnostic::error(
-                    format!("duplicate application '{}'", application.name.text),
-                    Some(application.name.span),
-                )
-                .with_help(format!(
-                    "'{}' is already declared in this file",
-                    application.name.text
-                )),
-            );
-        } else {
-            application_names.push((application.name.text.clone(), application.name.span));
-        }
+        engine_common::register_unique_declared(
+            &mut application_names,
+            &application.name.text,
+            application.name.span,
+            "application",
+            &mut local,
+        );
 
         let mut out = DeployApplication::new(application.name.text.clone());
         // Components keyed by name for connection and setting resolution,
@@ -328,26 +317,25 @@ pub(crate) fn compile_deploy_file(
 
             // Rule 5 — baseline settings use single-segment paths from the
             // kind's vocabulary.
-            let mut seen_settings: Vec<&str> = Vec::new();
+            let mut seen_settings: Vec<String> = Vec::new();
             let mut settings: Vec<DeploySetting> = Vec::new();
             for setting in &component.settings {
                 validate_setting_path_len(&setting.path, 1, &mut local);
                 let name = setting.path.segments.last().map(|name| name.text.as_str());
                 if let Some(name) = name {
-                    if seen_settings.contains(&name) {
-                        local.push(
-                            Diagnostic::error(
-                                format!(
-                                    "duplicate setting '{}' on component '{}'",
-                                    name, component.name.text
-                                ),
-                                Some(setting.path.span),
-                            )
-                            .with_help("a setting is declared once per level"),
-                        );
+                    if !engine_common::register_unique(
+                        &mut seen_settings,
+                        name,
+                        setting.path.span,
+                        format!(
+                            "duplicate setting '{}' on component '{}'",
+                            name, component.name.text
+                        ),
+                        Some("a setting is declared once per level"),
+                        &mut local,
+                    ) {
                         continue;
                     }
-                    seen_settings.push(name);
                 }
                 let Some(value) =
                     check_setting_value(&setting.path, &setting.value, kind, &mut local)
@@ -365,7 +353,7 @@ pub(crate) fn compile_deploy_file(
             // never joins the effective-settings map and is never
             // policy-addressable, so the only checks here are syntactic —
             // an empty or duplicated name on one component.
-            let mut seen_env: Vec<&str> = Vec::new();
+            let mut seen_env: Vec<String> = Vec::new();
             let mut env_out: Vec<DeployEnv> = Vec::new();
             for entry in &component.env {
                 if entry.name.text.is_empty() {
@@ -375,20 +363,19 @@ pub(crate) fn compile_deploy_file(
                     );
                     continue;
                 }
-                if seen_env.contains(&entry.name.text.as_str()) {
-                    local.push(
-                        Diagnostic::error(
-                            format!(
-                                "duplicate env '{}' on component '{}'",
-                                entry.name.text, component.name.text
-                            ),
-                            Some(entry.name.span),
-                        )
-                        .with_help("an env name is declared once per component"),
-                    );
+                if !engine_common::register_unique(
+                    &mut seen_env,
+                    &entry.name.text,
+                    entry.name.span,
+                    format!(
+                        "duplicate env '{}' on component '{}'",
+                        entry.name.text, component.name.text
+                    ),
+                    Some("an env name is declared once per component"),
+                    &mut local,
+                ) {
                     continue;
                 }
-                seen_env.push(&entry.name.text);
                 env_out.push(DeployEnv::new(entry.name.text.clone(), entry.value.clone()));
             }
 
@@ -461,23 +448,13 @@ pub(crate) fn compile_deploy_file(
     // validated mapping kinds.
     let mut profile_names: Vec<(String, Span)> = Vec::new();
     for profile in &ast.profiles {
-        if profile_names
-            .iter()
-            .any(|(name, _)| *name == profile.name.text)
-        {
-            local.push(
-                Diagnostic::error(
-                    format!("duplicate profile '{}'", profile.name.text),
-                    Some(profile.name.span),
-                )
-                .with_help(format!(
-                    "'{}' is already declared in this file",
-                    profile.name.text
-                )),
-            );
-        } else {
-            profile_names.push((profile.name.text.clone(), profile.name.span));
-        }
+        engine_common::register_unique_declared(
+            &mut profile_names,
+            &profile.name.text,
+            profile.name.span,
+            "profile",
+            &mut local,
+        );
 
         // Rule 7 — a profile selects an implementation-provided target.
         let target = match profile.target.as_ref() {
@@ -526,20 +503,19 @@ pub(crate) fn compile_deploy_file(
         for setting in &profile.defaults {
             validate_setting_path_len(&setting.path, 2, &mut local);
             if let Some(full) = Some(setting.path.full_name()) {
-                if seen_defaults.contains(&full) {
-                    local.push(
-                        Diagnostic::error(
-                            format!(
-                                "duplicate default '{}' in profile '{}'",
-                                full, profile.name.text
-                            ),
-                            Some(setting.path.span),
-                        )
-                        .with_help("a setting is declared once per level"),
-                    );
+                if !engine_common::register_unique(
+                    &mut seen_defaults,
+                    &full,
+                    setting.path.span,
+                    format!(
+                        "duplicate default '{}' in profile '{}'",
+                        full, profile.name.text
+                    ),
+                    Some("a setting is declared once per level"),
+                    &mut local,
+                ) {
                     continue;
                 }
-                seen_defaults.push(full);
             }
             profile_out.defaults.push(DeploySetting {
                 path: setting.path.full_name(),
@@ -612,23 +588,13 @@ pub(crate) fn compile_deploy_file(
         }
     }
     for deployment in &ast.deployments {
-        if deployment_names
-            .iter()
-            .any(|(name, _)| *name == deployment.name.text)
-        {
-            local.push(
-                Diagnostic::error(
-                    format!("duplicate deployment '{}'", deployment.name.text),
-                    Some(deployment.name.span),
-                )
-                .with_help(format!(
-                    "'{}' is already declared in this file",
-                    deployment.name.text
-                )),
-            );
-        } else {
-            deployment_names.push((deployment.name.text.clone(), deployment.name.span));
-        }
+        engine_common::register_unique_declared(
+            &mut deployment_names,
+            &deployment.name.text,
+            deployment.name.span,
+            "deployment",
+            &mut local,
+        );
 
         let application = match model
             .applications
@@ -722,20 +688,19 @@ pub(crate) fn compile_deploy_file(
         for setting in &deployment.configure {
             validate_setting_path_len(&setting.path, 2, &mut local);
             let full = setting.path.full_name();
-            if seen_configure.contains(&full) {
-                local.push(
-                    Diagnostic::error(
-                        format!(
-                            "duplicate override '{}' in deployment '{}'",
-                            full, deployment.name.text
-                        ),
-                        Some(setting.path.span),
-                    )
-                    .with_help("a setting is declared once per level"),
-                );
+            if !engine_common::register_unique(
+                &mut seen_configure,
+                &full,
+                setting.path.span,
+                format!(
+                    "duplicate override '{}' in deployment '{}'",
+                    full, deployment.name.text
+                ),
+                Some("a setting is declared once per level"),
+                &mut local,
+            ) {
                 continue;
             }
-            seen_configure.push(full.clone());
             if let Some(value) = check_setting_against_application(
                 &setting.path,
                 &setting.value,
@@ -1065,18 +1030,20 @@ fn apply_settings(
     for setting in settings {
         validate_setting_path_len(&setting.path, 2, local);
         let full = setting.path.full_name();
-        if seen.contains(&full) {
-            local.push(Diagnostic::error(
-                format!(
-                    "duplicate {} '{}' — a setting is declared once per level",
-                    level.label(),
-                    full
-                ),
-                Some(setting.path.span),
-            ));
+        if !engine_common::register_unique(
+            &mut seen,
+            &full,
+            setting.path.span,
+            format!(
+                "duplicate {} '{}' — a setting is declared once per level",
+                level.label(),
+                full
+            ),
+            None,
+            local,
+        ) {
             continue;
         }
-        seen.push(full.clone());
         let Some(value) = check_setting_against_application(
             &setting.path,
             &setting.value,

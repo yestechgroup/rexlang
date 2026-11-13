@@ -10,6 +10,7 @@ use rex_syntax::ast as mox;
 use rex_syntax::Span;
 
 use crate::diagnostic::{Diagnostic, DiagnosticCode};
+use crate::engine_common;
 
 use super::compile::lower_target_bodies;
 use super::*;
@@ -919,23 +920,19 @@ pub(crate) fn lower_multiplicity(
     multiplicity: &mox::Multiplicity,
     diags: &mut Vec<Diagnostic>,
 ) -> ir::Multiplicity {
-    match &multiplicity.kind {
-        mox::MultiplicityKind::Unbounded => ir::Multiplicity::MANY,
-        mox::MultiplicityKind::Exact(exact) => {
-            let bound = bound_value(*exact, multiplicity.span, diags).unwrap_or(1);
-            ir::Multiplicity::new(bound, ir::Upper::Finite(bound))
-        }
-        mox::MultiplicityKind::Range(lower, upper) => {
-            let lower = bound_value(*lower, multiplicity.span, diags).unwrap_or(0);
-            let upper = match upper {
-                mox::MultBound::Star => ir::Upper::Unbounded,
-                mox::MultBound::Int(value) => ir::Upper::Finite(
-                    bound_value(*value, multiplicity.span, diags).unwrap_or(lower),
-                ),
-            };
-            ir::Multiplicity::new(lower, upper)
-        }
-    }
+    let (lower, upper) =
+        engine_common::multiplicity_bounds(&multiplicity.kind, |slot, value| match slot {
+            engine_common::MultiplicitySlot::Exact => {
+                bound_value(value, multiplicity.span, diags).unwrap_or(1)
+            }
+            engine_common::MultiplicitySlot::Lower => {
+                bound_value(value, multiplicity.span, diags).unwrap_or(0)
+            }
+            engine_common::MultiplicitySlot::Upper { lower } => {
+                bound_value(value, multiplicity.span, diags).unwrap_or(lower)
+            }
+        });
+    ir::Multiplicity::new(lower, upper)
 }
 
 /// Converts a multiplicity bound, reporting out-of-range values.

@@ -32,13 +32,9 @@ use crate::conditions::{
     ParseErrorPolicy,
 };
 use crate::diagnostic::Diagnostic;
-use crate::import_matches;
+use crate::engine_common;
 use crate::lower::{self, DomainPackage, DomainUnit};
 use crate::pipeline;
-
-/// The provided-artifact bucket an import hits when it names a `.ddd`
-/// design (the designs entry of the four-bucket hit array).
-const BUCKET_DESIGNS: usize = 1;
 
 /// A use case scenario node: the identity every succession reference
 /// resolves to (rule 8).
@@ -118,55 +114,14 @@ pub(crate) fn compile_usecase_file(
 ) -> (Option<UseCaseModel>, Vec<(String, Diagnostic)>) {
     let imports = ast.map(|file| file.imports.as_slice()).unwrap_or_default();
 
-    // Which provided bucket each import resolves against (exact path or
-    // lexical resolution, the `.deploy` rule): domains, designs, actors,
-    // events.
-    let hits: Vec<[bool; 4]> = imports
-        .iter()
-        .map(|import| {
-            [
-                domains
-                    .iter()
-                    .any(|unit| import_matches(&import.path, path, &unit.path)),
-                designs
-                    .iter()
-                    .any(|(provided, _)| import_matches(&import.path, path, provided)),
-                actors
-                    .iter()
-                    .any(|(provided, _)| import_matches(&import.path, path, provided)),
-                events
-                    .iter()
-                    .any(|(provided, _)| import_matches(&import.path, path, provided)),
-            ]
-        })
-        .collect();
-
-    let mut import_diagnostics = Vec::new();
-    for (import, hit) in imports.iter().zip(&hits) {
-        // Rule 1 — every import must name a provided artifact of any
-        // surface.
-        if !hit.iter().any(|hit| *hit) {
-            import_diagnostics.push(Diagnostic::error(
-                format!("imported file \"{}\" was not provided", import.path),
-                Some(import.span),
-            ));
-            continue;
-        }
-        // Rule 1 — aliases exist for `realizes`, which names designs; every
-        // other surface rejects them.
-        if import.alias.is_some() && !hit[BUCKET_DESIGNS] {
-            import_diagnostics.push(
-                Diagnostic::error(
-                    format!(
-                        "import \"{}\" is not a design; only design imports take an alias",
-                        import.path
-                    ),
-                    Some(import.span),
-                )
-                .with_help("alias the `.ddd` design a `realizes` binding names"),
-            );
-        }
-    }
+    let hits = engine_common::four_bucket_hits(imports, path, domains, designs, actors, events);
+    let import_diagnostics = engine_common::import_hit_diagnostics(
+        imports,
+        &hits,
+        None,
+        Some("alias the `.ddd` design a `realizes` binding names"),
+        |_| None,
+    );
 
     let diags = pipeline::engine_diags(path, parse_diagnostics, import_diagnostics, domains);
 
@@ -197,47 +152,24 @@ pub(crate) fn compile_usecase_file(
     // the `.cmmn` typing pattern with no synthetic classes, since a guard's
     // `self` is the subject's resolved domain class. The checker is
     // constructed per step with that class as `self`.
-    let mut types = rex_expr::DomainTypes::default();
-    for unit in domains {
-        if let Some(model) = &unit.model {
-            types.merge(rex_expr::DomainTypes::from_model(model));
-        }
-    }
+    let types = engine_common::union_types(domains);
 
     // Design imports by alias (rule 12): the first aliased design match per
     // alias wins.
-    let mut designs_by_alias: Vec<(&str, &DddModel)> = Vec::new();
-    for (import, hit) in imports.iter().zip(&hits) {
-        let Some(alias) = &import.alias else {
-            continue;
-        };
-        if !hit[BUCKET_DESIGNS] || designs_by_alias.iter().any(|(seen, _)| seen == alias) {
-            continue;
-        }
-        if let Some((_, design)) = designs
-            .iter()
-            .find(|(provided, _)| import_matches(&import.path, path, provided))
-        {
-            designs_by_alias.push((alias.as_str(), design));
-        }
-    }
+    let designs_by_alias = engine_common::designs_by_alias(imports, &hits, designs, path);
 
     let mut model = UseCaseModel::new();
     let mut use_case_names: Vec<(String, Span)> = Vec::new();
 
     for decl in &ast.use_cases {
         // Rule 9 — usecase names are unique within the file.
-        if use_case_names.iter().any(|(name, _)| *name == decl.name) {
-            local.push(
-                Diagnostic::error(
-                    format!("duplicate use case '{}'", decl.name),
-                    Some(decl.span),
-                )
-                .with_help(format!("'{}' is already declared in this file", decl.name)),
-            );
-        } else {
-            use_case_names.push((decl.name.clone(), decl.span));
-        }
+        engine_common::register_unique_declared(
+            &mut use_case_names,
+            &decl.name,
+            decl.span,
+            "use case",
+            &mut local,
+        );
 
         let mut out = UseCaseDef {
             name: decl.name.clone(),
@@ -262,22 +194,17 @@ pub(crate) fn compile_usecase_file(
         for (participant_ast, is_subject) in declared_subject.chain(declared_actors) {
             // Rule 9 — the shared namespace.
             if !participant_ast.name.is_empty() {
-                if namespace.contains(&participant_ast.name) {
-                    local.push(
-                        Diagnostic::error(
-                            format!(
-                                "duplicate name '{}' in use case '{}'",
-                                participant_ast.name, decl.name
-                            ),
-                            Some(participant_ast.span),
-                        )
-                        .with_help(
-                            "participants, steps, and messages share one namespace per use case",
-                        ),
-                    );
-                } else {
-                    namespace.push(participant_ast.name.clone());
-                }
+                engine_common::register_unique(
+                    &mut namespace,
+                    &participant_ast.name,
+                    participant_ast.span,
+                    format!(
+                        "duplicate name '{}' in use case '{}'",
+                        participant_ast.name, decl.name
+                    ),
+                    Some("participants, steps, and messages share one namespace per use case"),
+                    &mut local,
+                );
             }
 
             // Rule 2 — participant typing. A bare actor is a policy
@@ -297,7 +224,7 @@ pub(crate) fn compile_usecase_file(
                     (local.len() == before).then_some(ty)
                 }
                 None => {
-                    if !is_subject && !actor_known(&participant_ast.name, actors) {
+                    if !is_subject && !engine_common::actor_known(&participant_ast.name, actors) {
                         local.push(
                             Diagnostic::error(
                                 format!(
@@ -324,20 +251,17 @@ pub(crate) fn compile_usecase_file(
             for occurrence in &participant_ast.occurrences {
                 match occurrence {
                     dsl::UcOccurrence::Named(name) => {
-                        if occurrence_names.contains(name) {
-                            local.push(
-                                Diagnostic::error(
-                                    format!(
-                                        "duplicate occurrence '{}' on participant '{}' in use case '{}'",
-                                        name, participant_ast.name, decl.name
-                                    ),
-                                    Some(participant_ast.span),
-                                )
-                                .with_help("an occurrence is declared once per participant"),
-                            );
-                        } else {
-                            occurrence_names.push(name.clone());
-                        }
+                        engine_common::register_unique(
+                            &mut occurrence_names,
+                            name,
+                            participant_ast.span,
+                            format!(
+                                "duplicate occurrence '{}' on participant '{}' in use case '{}'",
+                                name, participant_ast.name, decl.name
+                            ),
+                            Some("an occurrence is declared once per participant"),
+                            &mut local,
+                        );
                         occurrences_out.push(Occurrence::Named(name.clone()));
                     }
                     dsl::UcOccurrence::MessageEnd { message, target } => {
@@ -387,22 +311,14 @@ pub(crate) fn compile_usecase_file(
             let mut steps_out: Vec<Step> = Vec::new();
             for step in &participant_ast.steps {
                 if !step.name.is_empty() {
-                    if namespace.contains(&step.name) {
-                        local.push(
-                            Diagnostic::error(
-                                format!(
-                                    "duplicate name '{}' in use case '{}'",
-                                    step.name, decl.name
-                                ),
-                                Some(step.span),
-                            )
-                            .with_help(
-                                "participants, steps, and messages share one namespace per use case",
-                            ),
-                        );
-                    } else {
-                        namespace.push(step.name.clone());
-                    }
+                    engine_common::register_unique(
+                        &mut namespace,
+                        &step.name,
+                        step.span,
+                        format!("duplicate name '{}' in use case '{}'", step.name, decl.name),
+                        Some("participants, steps, and messages share one namespace per use case"),
+                        &mut local,
+                    );
                 }
                 // Rule 3 — the step's operation names an operation on the
                 // subject's resolved class, walking extends; the optional
@@ -461,22 +377,17 @@ pub(crate) fn compile_usecase_file(
             .collect();
         for message in &decl.messages {
             if !message.name.is_empty() {
-                if namespace.contains(&message.name) {
-                    local.push(
-                        Diagnostic::error(
-                            format!(
-                                "duplicate name '{}' in use case '{}'",
-                                message.name, decl.name
-                            ),
-                            Some(message.span),
-                        )
-                        .with_help(
-                            "participants, steps, and messages share one namespace per use case",
-                        ),
-                    );
-                } else {
-                    namespace.push(message.name.clone());
-                }
+                engine_common::register_unique(
+                    &mut namespace,
+                    &message.name,
+                    message.span,
+                    format!(
+                        "duplicate name '{}' in use case '{}'",
+                        message.name, decl.name
+                    ),
+                    Some("participants, steps, and messages share one namespace per use case"),
+                    &mut local,
+                );
             }
 
             let payload = message.payload.as_ref().and_then(|payload| {
@@ -1289,18 +1200,6 @@ fn resolve_payload(
             None
         }
     }
-}
-
-/// `true` when some provided actor model declares the actor name. Every
-/// member of an `extends` chain is a declared actor itself, so chain
-/// members match by name directly.
-fn actor_known(name: &str, actors: &[(String, ActorModel)]) -> bool {
-    actors.iter().any(|(_, model)| {
-        model
-            .blocks
-            .iter()
-            .any(|block| block.actors.iter().any(|actor| actor.name == name))
-    })
 }
 
 /// `true` when some provided actor model declares the capability name.
