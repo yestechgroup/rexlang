@@ -705,6 +705,23 @@
             }
           ],
           "condition": null
+        },
+        {
+          "name": "tier",
+          "componentType": {
+            "type": "details"
+          },
+          "spec": null,
+          "properties": [
+            {
+              "key": "data",
+              "value": {
+                "type": "identifier",
+                "value": "AssessCustomer"
+              }
+            }
+          ],
+          "condition": null
         }
       ],
       "events": [
@@ -832,6 +849,7 @@
     }
   ],
   "imports": [
-    "rexlang/auth.actor"
+    "rexlang/auth.actor",
+    "rexlang/decisions.dmn"
   ]
 }

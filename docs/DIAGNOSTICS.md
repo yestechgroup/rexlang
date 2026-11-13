@@ -7,7 +7,7 @@ Every diagnostic a rexlang surface emits carries a stable string code. The codes
 | Band | Range | Owner | Severity | Next free |
 |------|-------|-------|----------|-----------|
 | `ifml.resolver` | E0001–E0099 | rex-ifml resolver | error | E0010 |
-| `ifml.check` | E0100–E0149 | rex-ifml typed checker | error | E0110 |
+| `ifml.check` | E0100–E0149 | rex-ifml typed checker | error | E0112 |
 | `ifml.lints` | W0150–W0199 | rex-ifml lints | warning | W0155 |
 | `driver.payload` | camelCase names | rex-driver DiagnosticCode | error | n/a |
 | `driver.integrity` | X0001–X0099 | rex-driver integrity pass | error | X0009 |
@@ -43,6 +43,8 @@ Every diagnostic a rexlang surface emits carries a stable string code. The codes
 | `E0107` | error | Unknown capability | A `requires:` capability name no provided actor model declares (`capability 'X' is not declared`). | add "capability X on <Class>;" to an actors block |
 | `E0108` | error | Unknown role | A `roles:` name no provided actor model declares as an actor (`role 'X' is not declared`). | add "actor X;" to an actors block |
 | `E0109` | error | Unknown action target | An action declaration's `target:` entity does not resolve to exactly one class in the domain model (`unknown target entity 'X'`, or `ambiguous target entity 'X'` when several packages declare the name) — the `data:` discipline applied to the lowering's payload. | Point `target:` at a domain class that resolves to exactly one `(package, class)`. |
+| `E0110` | error | Decision service without outputs | A component's `data:` names a decision service that declares no outputs (`decision service 'X' declares no outputs`) — the service exposes nothing, so the component has no data contract. | Declare at least one output decision on the service (`outputs { ... }`), or bind the component to a domain class. |
+| `E0111` | error | Ambiguous decision service | A component's `data:` names a decision service that two or more of the provided decision models declare (`decision service 'X' is declared by two models — 'A' and 'B'`, `… declared by multiple models — 'A', 'B' and 'C'`); resolution is bare-name union-wide, so the reference is ambiguous. The models are named by their declared `decision_model` names (the checker receives artifacts, not paths). | Rename the service in one of the decision models, or bind the component to a domain class. |
 
 ## Band `ifml.lints` (W0150–W0199)
 

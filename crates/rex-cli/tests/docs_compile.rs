@@ -105,7 +105,9 @@ struct Gathered {
     actors: Vec<(String, String)>,
     /// `.evt` contract sources, keyed by resolved path.
     events: Vec<(String, String)>,
-    /// `.dmn` decision-model sources, keyed by resolved path.
+    /// `.dmn` decision-model sources, keyed by resolved path. Gathered
+    /// and recursed into (a model's own `.mox` imports come along) and
+    /// joined by the gathered `.evt` contracts — the emits dimension.
     decisions: Vec<(String, String)>,
     /// `.ifml` sources, keyed by resolved path.
     flows: Vec<(String, String)>,

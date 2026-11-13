@@ -174,6 +174,22 @@ pub struct AuthSite {
     pub name_span: (usize, usize),
 }
 
+/// One component's `data:` binding: the bare identifier the component
+/// binds (`data: Customer`), wherever a component is declared. Exactly
+/// the values that lower to `ValueExpression::Identifier` — the shape the
+/// checker's `data:` resolution reads — so the index and the IR can never
+/// disagree about what is a data site. Compound values (`data: a.b`,
+/// `data: x == y`), literals, and calls are not data sites.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataSite {
+    /// File the site appears in (index into [`IfmlIndex::files`]).
+    pub file: usize,
+    /// The bound name (the identifier as written).
+    pub name: String,
+    /// Byte span of the name token itself — the editor squiggle.
+    pub name_span: (usize, usize),
+}
+
 /// What [`IfmlIndex::at`] found at a byte offset: one of the site kinds
 /// the index tracks.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -204,6 +220,8 @@ pub struct IfmlIndex {
     pub action_targets: Vec<TargetSite>,
     /// `requires:`/`roles:` authorization names, in compilation order.
     pub auth_sites: Vec<AuthSite>,
+    /// Component `data:` binding names, in compilation order.
+    pub data_sites: Vec<DataSite>,
     /// View declaration sites.
     pub views: Vec<NamedSite>,
     /// Action declaration sites.
@@ -233,6 +251,7 @@ impl IfmlIndex {
             module_uses: Vec::new(),
             action_targets: Vec::new(),
             auth_sites: Vec::new(),
+            data_sites: Vec::new(),
             views: Vec::new(),
             actions: Vec::new(),
             actors: Vec::new(),
@@ -285,6 +304,10 @@ impl IfmlIndex {
         for mut site in other.auth_sites {
             site.file = file;
             self.auth_sites.push(site);
+        }
+        for mut site in other.data_sites {
+            site.file = file;
+            self.data_sites.push(site);
         }
     }
 
@@ -452,6 +475,7 @@ fn index_pair(pair: &Pair<'_, Rule>, file: usize, index: &mut IfmlIndex) {
                     span,
                 });
             }
+            capture_component_data_property(pair, file, index);
             recurse(pair, file, index);
         }
         Rule::container_declaration => {
@@ -589,6 +613,72 @@ fn capture_view_auth_property(pair: &Pair<'_, Rule>, file: usize, index: &mut If
             name: identifier.as_str().to_string(),
             name_span: pair_span(&identifier),
         });
+    }
+}
+
+/// Captures one component body's `data:` binding as a [`DataSite`]: only
+/// the bare-identifier form (`data: Customer`) — exactly the values that
+/// lower to `ValueExpression::Identifier`, the shape the checker's
+/// `data:` resolution reads. Only direct property assignments of the
+/// component body count (nested components are captured by the walk's
+/// own recursion).
+fn capture_component_data_property(pair: &Pair<'_, Rule>, file: usize, index: &mut IfmlIndex) {
+    for child in pair.clone().into_inner() {
+        if child.as_rule() != Rule::component_body {
+            continue;
+        }
+        for grandchild in child.clone().into_inner() {
+            if grandchild.as_rule() != Rule::property_assignment {
+                continue;
+            }
+            let mut inner = grandchild.clone().into_inner();
+            let key = inner.next().map(|part| part.as_str().to_string());
+            if key.as_deref() != Some("data") {
+                continue;
+            }
+            let Some(value) = inner.next() else {
+                continue;
+            };
+            if let Some((name, name_span)) = bare_identifier(&value) {
+                index.data_sites.push(DataSite {
+                    file,
+                    name,
+                    name_span,
+                });
+            }
+        }
+    }
+}
+
+/// The bare identifier a value spells, when it spells one: the
+/// single-child descent the lowering applies (operator chains collapse to
+/// their leaf), stopping at every primary leaf. Returns exactly the
+/// values that lower to `ValueExpression::Identifier` — compound values,
+/// literals, calls, field access, and groups are `None`.
+fn bare_identifier(pair: &Pair<'_, Rule>) -> Option<(String, (usize, usize))> {
+    let mut current = pair.clone();
+    loop {
+        match current.as_rule() {
+            Rule::identifier => {
+                return Some((current.as_str().to_string(), pair_span(&current)));
+            }
+            Rule::call_expr
+            | Rule::field_expr
+            | Rule::string
+            | Rule::number
+            | Rule::boolean
+            | Rule::array_literal
+            | Rule::object_literal
+            | Rule::group_expr => return None,
+            _ => {}
+        }
+        let mut inner = current.clone().into_inner();
+        let single = inner.next()?;
+        if inner.next().is_some() {
+            // An operator chain with operands — not a bare identifier.
+            return None;
+        }
+        current = single;
     }
 }
 

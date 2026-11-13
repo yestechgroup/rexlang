@@ -224,6 +224,14 @@
     },
     {
       "view": "Dashboard",
+      "name": "tier",
+      "componentType": {
+        "type": "details"
+      },
+      "data": "AssessCustomer"
+    },
+    {
+      "view": "Dashboard",
       "name": "pager",
       "componentType": {
         "type": "list"

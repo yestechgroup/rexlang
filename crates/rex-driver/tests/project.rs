@@ -8,8 +8,9 @@
 use std::collections::BTreeMap;
 
 use rex_driver::project::{
-    compile_actor_imports, compile_domain_union, gather_deploy_imports, gather_domain_sources,
-    gather_ifml_project, gather_usecase_imports, ActorImport,
+    compile_actor_imports, compile_decision_imports, compile_domain_union, gather_deploy_imports,
+    gather_domain_sources, gather_ifml_project, gather_usecase_imports, ActorImport,
+    DecisionImport,
 };
 
 const WIDGET_MOX: &str = "package test.widgets\n\nclass Widget {\n    id readonly String widgetId\n    String label\n}\n";
@@ -27,6 +28,11 @@ const OPS_EVT: &str = "import \"widgets.mox\"\n\nevent WidgetMade version \"1.0.
 const GUI_IFML: &str = "import \"pager.ifml\";\n\nmodule \"Pager\" {\n    input { page: Int }\n    output { total: Int }\n}\n";
 
 const PAGER_IFML: &str = "view \"PagerPage\" {}\n";
+
+const WIDGET_DMN: &str = "import \"widgets.mox\"\n\ndecision_model WidgetDecisions {\n    namespace test.decisions\n    inputs {\n        widget: Widget;\n    }\n    decisions {\n        decision WidgetVerdict {\n            outputs {\n                verdict: string;\n            }\n            logic table \"./tables/verdict.md\"\n        }\n    }\n    services {\n        service AssessWidget {\n            inputs { widget }\n            outputs { WidgetVerdict }\n        }\n    }\n}\n";
+
+const VERDICT_TABLE: &str =
+    "> # Widget verdict\n\n| U | verdict |\n|:-:|:-------:|\n|   |   `o`   |\n| 1 | \"ok\"   |\n";
 
 /// The in-memory two-key fetch: `(importer, import) -> (resolved key,
 /// text)`, exactly the contract [`rex_ifml::walk_ifml_imports`] and
@@ -104,6 +110,82 @@ fn gather_ifml_project_classifies_by_extension_and_dedups_by_resolved_key() {
             ("app.ifml".to_string(), "missing.mox".to_string()),
             ("app.ifml".to_string(), "missing.actor".to_string()),
         ]
+    );
+}
+
+#[test]
+fn gather_ifml_project_classifies_decision_imports_with_their_domains_and_tables() {
+    let entry = "import \"verdicts.dmn\";\nimport \"missing.dmn\";\nimport \"notes.txt\";\n";
+    let mut host = pair_fetch(BTreeMap::from([
+        (
+            ("app.ifml", "verdicts.dmn"),
+            ("lib/verdicts.dmn", WIDGET_DMN),
+        ),
+        (
+            ("lib/verdicts.dmn", "widgets.mox"),
+            ("lib/widgets.mox", WIDGET_MOX),
+        ),
+        (
+            ("lib/verdicts.dmn", "./tables/verdict.md"),
+            ("lib/tables/verdict.md", VERDICT_TABLE),
+        ),
+    ]));
+    let project = gather_ifml_project("app.ifml", entry, &mut host);
+
+    // The decision model carries its own gathered `.mox` imports and
+    // decision-table contents, keyed as written; the walker is not sent
+    // into the `.dmn` (sources stay `.ifml`-only).
+    let identities: Vec<&str> = project.sources.iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(identities, vec!["app.ifml"]);
+    assert_eq!(project.decisions.len(), 1);
+    assert_eq!(project.decisions[0].key, "lib/verdicts.dmn");
+    assert_eq!(project.decisions[0].source, WIDGET_DMN);
+    assert_eq!(
+        project.decisions[0].domains,
+        vec![("lib/widgets.mox".to_string(), WIDGET_MOX.to_string())]
+    );
+    assert_eq!(
+        project.decisions[0].tables,
+        vec![("./tables/verdict.md".to_string(), VERDICT_TABLE.to_string())]
+    );
+
+    // A missing `.dmn` import is unresolved under the importer's
+    // identity; unknown extensions stay ignored entirely.
+    assert_eq!(
+        project.unresolved,
+        vec![("app.ifml".to_string(), "missing.dmn".to_string())]
+    );
+}
+
+#[test]
+fn compile_decision_imports_compiles_models_against_their_domains_and_tables() {
+    let decisions = vec![DecisionImport {
+        key: "lib/verdicts.dmn".to_string(),
+        source: WIDGET_DMN.to_string(),
+        domains: vec![("lib/widgets.mox".to_string(), WIDGET_MOX.to_string())],
+        tables: vec![("./tables/verdict.md".to_string(), VERDICT_TABLE.to_string())],
+    }];
+    let models = compile_decision_imports(&decisions).expect("model compiles against its inputs");
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].services.len(), 1);
+    assert_eq!(models[0].services[0].name, "AssessWidget");
+}
+
+#[test]
+fn compile_decision_imports_reports_a_non_compiling_model() {
+    let decisions = vec![DecisionImport {
+        key: "lib/verdicts.dmn".to_string(),
+        source: WIDGET_DMN.to_string(),
+        // The model's types resolve against its own gathered domains: an
+        // empty slice leaves `Widget` unknown — the hard error names the
+        // import key.
+        domains: Vec::new(),
+        tables: vec![("./tables/verdict.md".to_string(), VERDICT_TABLE.to_string())],
+    }];
+    let error = compile_decision_imports(&decisions).unwrap_err();
+    assert!(
+        error.contains("imported decision model lib/verdicts.dmn does not compile"),
+        "unexpected error: {error}"
     );
 }
 

@@ -436,7 +436,8 @@ byte-identically to the pre-#80 shape.
 ## Downstream Consumption
 
 The `rexlang` language server supports the surface: diagnostics (resolver
-`E0001`–`E0009` + typed-binding `E0100`–`E0109`, authorization included —
+`E0001`–`E0009` + typed-binding `E0100`–`E0111`, authorization and
+decision data included —
 the code table is
 [docs/DIAGNOSTICS.md](DIAGNOSTICS.md), rendered by `rexlang explain`),
 document symbols, hover
@@ -467,11 +468,11 @@ Expression evaluation is **deferred to generation time** — the artifact stores
 crates/rex-ifml/
 ├── Cargo.toml
 ├── src/
-│   ├── lib.rs            # Public API: parse_ifml, parse_ifml_file, parse_ifml_indexed, compile_ifml_str, check_ifml(+_with_actors), expand_ifml, manifest_ifml, format_ifml + re-exports of rex_ir::ifml
+│   ├── lib.rs            # Public API: parse_ifml, parse_ifml_file, parse_ifml_indexed, compile_ifml_str, check_ifml(+_with_actors/+_with_decisions), expand_ifml, manifest_ifml, format_ifml + re-exports of rex_ir::ifml
 │   ├── parser.rs         # Pest parser wrapper + IfmlParseError
 │   ├── index.rs          # Span side-table (IfmlIndex): module decls/uses, views, containers, actions, actors, components, commands, auth sites — never serialized
 │   ├── resolve.rs        # Cross-file module resolution: IfmlImports bundle, compile_ifml_str, IfmlDiagnostic (E0001–E0009)
-│   ├── check/           # Typed expression checking against a domain Model, via rex_expr::DomainTypes; interaction cross-reference, authorization, and lint passes over instantiated-module sites (code table: docs/DIAGNOSTICS.md)
+│   ├── check/           # Typed expression checking against a domain Model, via rex_expr::DomainTypes; interaction cross-reference, authorization, decision, and lint passes over instantiated-module sites (code table: docs/DIAGNOSTICS.md)
 │   ├── expand.rs         # Module-use expansion (opt-in for the IR artifact; the manifest always derives from it)
 │   ├── manifest.rs       # The control/route manifest emitter: IfmlCompilation (+ imports, + optional domain union) → rex_ir::ifml_manifest::IfmlManifest
 │   ├── fmt.rs            # Comment-preserving canonical formatter
@@ -517,7 +518,7 @@ What is checked, and with which bindings:
 | Context | Bindings in scope |
 |---|---|
 | View/container `if` conditions | the view's `params` |
-| Component `filter:` / condition properties | view params + the `data:` entity's features (`with_self`) |
+| Component `filter:` / condition properties | view params + the `data:` entity's features (`with_self`); no self when the component binds a decision service (decision outputs are not typed — see [Decision Data](#decision-data)) |
 | Table `column "L" -> expr …` | same as its component; deferred when the table declares no `data:` (no row type to bind — the explicit `Class.feature` column spelling is a generation-time shape) |
 | Event guards | same, minus event parameters (untyped — expressions naming them are skipped) |
 | Navigation binding pairs | same |
@@ -614,10 +615,52 @@ on a capability no policy declares can no longer compile clean — the
 `tests/conformance/ifml/rexlang/auth.{mox,actor}` makes `app.ifml`'s
 `import "rexlang/auth.actor"` load-bearing.
 
+### Decision Data
+
+`check_ifml_with_decisions(&compilation, domains, actors, decisions)`
+adds the decision dimension: a component's `data:` name resolves
+**domain classes first** (unchanged behavior and diagnostics when it
+resolves), then — only when the name resolved to no domain class —
+against the **decision services** of the provided decision models,
+bare-name union-wide across all of them (the `requires:` discipline).
+
+| `data:` name resolves to | Behavior |
+|---|---|
+| exactly one domain class | unchanged: the class is the component's self type, its features bind expressions |
+| several domain classes | unchanged: `E0100` — `ambiguous data entity 'X'` (the decision dimension never rescues domain ambiguity) |
+| one decision service | **check-only**: the service's output decisions form the component's data contract — no diagnostic, no IR change |
+| one decision service that declares no outputs | `E0110` — `decision service 'X' declares no outputs` (the component has no data contract) |
+| decision services of two or more models | `E0111` — `decision service 'X' is declared by two models — 'A' and 'B'` (the declaring models are named by their `decision_model` names) |
+| nothing | `E0100` — `unknown data entity 'X'`, with a did-you-mean hint over service names when a decisions slice is provided (`…; did you mean 'AssessRefund'?`) |
+
+The contract is **check-only**: the `IfmlModel` artifact and the
+control/route manifest are unchanged — the manifest's `data:`/`target:`
+resolution stays domain-only, so a service-named binding rides along as
+the bare spelling. Decision outputs are **not typed** in v1: a component
+bound to a service gets no self type, so expressions naming the
+service's outputs defer (the same deferral family as the decision
+*inputs* collected by controls — also not typed in v1). The pass reads
+the index's `data_sites` — every component's bare-identifier `data:`
+binding, exactly the shape the checker resolves — and applies the same
+instantiation reachability rule as the interaction and authorization
+passes: a module the app `use`s contributes its sites; uninstantiated
+modules keep theirs. An empty decisions slice skips the pass entirely
+and keeps every diagnostic byte-identical.
+
+Hosts gather the flow's `.dmn` imports the same way they gather `.actor`
+policies: the CLI resolves them relative to the importing file, gathers
+each model's own `.mox` imports and `logic table` markdown contents, and
+hard-errors on a missing or non-compiling model; the LSP degrades to no
+decision checking in incomplete workspaces. The conformance fixture
+`tests/conformance/ifml/rexlang/decisions.dmn` makes `app.ifml`'s
+`import "rexlang/decisions.dmn"` load-bearing, and
+`examples/support.ifml` binds `data: AssessRefund` to the service
+`examples/support.dmn` declares.
+
 ### Warnings and Lints
 
 Every diagnostic carries a severity class. The resolver and checker
-bands (`E0001`–`E0009`, `E0100`–`E0109`) are **errors**: they fail
+bands (`E0001`–`E0009`, `E0100`–`E0111`) are **errors**: they fail
 `rexlang check`/`ir`/`build`/`manifest` and the LSP publishes them as
 errors. The lint pass (`check_ifml_with_actors`, after the
 authorization pass) adds the `ifml.lints` band — **warnings**
@@ -657,7 +700,11 @@ for what the interaction model lowers to, derived from the compilation
   is indistinguishable from app-authored UI), flattened with its
   container path, carrying the component type, the `data:` entity as
   written plus its resolved `(package, class)` when the host provides
-  the domain union, and the form fields / table columns;
+  the domain union, and the form fields / table columns. Resolution is
+  **domain-only**: a `data:` that names a decision service (the
+  [decision dimension](#decision-data)) rides along as the bare
+  spelling with no `resolvedData` — the manifest never encodes decision
+  contracts;
 - **edges**: every `navigate` / `refresh` / `action(...)` invocation with
   its trigger event, `if` guard, `requires:` gates, and binding pairs;
   nested action-body handlers (`on success`/`on error`) become their own

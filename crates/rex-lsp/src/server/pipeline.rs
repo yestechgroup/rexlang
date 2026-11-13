@@ -22,6 +22,9 @@ pub(super) struct IfmlImportClosure {
     /// Imported `.actor` policies, compiled — the authorization dimension
     /// `check_ifml_with_actors` resolves `requires:`/`roles:` against.
     pub(super) actors: Vec<rex_ir::ActorModel>,
+    /// Imported `.dmn` decision models, compiled — the decision dimension
+    /// `check_ifml_with_decisions` resolves `data:` names against.
+    pub(super) decisions: Vec<rex_ir::dmn::DmnModel>,
     /// Resolved disk path per import identity (the main file included).
     disk_paths: std::collections::BTreeMap<String, std::path::PathBuf>,
     /// URL (or identity string) of every fetched import — the transitive
@@ -227,8 +230,12 @@ impl RexBackend {
         let (compilation, mut diagnostics) =
             rex_ifml::compile_ifml_lenient(&main_path, text, &closure.bundle);
         let domain_union = domain_union(&closure.domains);
-        let binding =
-            rex_ifml::check_ifml_with_actors(&compilation, domain_union.as_ref(), &closure.actors);
+        let binding = rex_ifml::check_ifml_with_decisions(
+            &compilation,
+            domain_union.as_ref(),
+            &closure.actors,
+            &closure.decisions,
+        );
         diagnostics.extend(binding);
         // Resolved URI per indexed file (same order as `index.files`), so
         // cross-file navigation can produce `Location`s. Unresolved
@@ -546,16 +553,18 @@ impl RexBackend {
     /// The import closure of one `.ifml` document, gathered through
     /// [`rex_driver::project::gather_ifml_project`]: the resolver bundle,
     /// the imported `.mox` domain sources, the imported `.actor` policies
-    /// (compiled by [`rex_driver::project::compile_actor_imports`]), every
-    /// resolved disk path (identity → path), and the URLs of all fetched
-    /// imports — the transitive import set that reverse-dependency lookups
-    /// match against. Open documents win over disk (the editor's buffer is
-    /// the truth). Anything unresolvable or non-compiling degrades
+    /// (compiled by [`rex_driver::project::compile_actor_imports`]), the
+    /// imported `.dmn` decision models (compiled by
+    /// [`rex_driver::project::compile_decision_imports`]), every resolved
+    /// disk path (identity → path), and the URLs of all fetched imports —
+    /// the transitive import set that reverse-dependency lookups match
+    /// against. Open documents win over disk (the editor's buffer is the
+    /// truth). Anything unresolvable or non-compiling degrades
     /// silently: `.ifml` misses surface as resolver diagnostics, missing
-    /// `.mox`/`.actor` imports shrink the typed/authorization dimensions
-    /// (an empty actors slice skips the authorization pass) — the editor
-    /// must stay usable in incomplete workspaces; the CLI's hard error is
-    /// the authoring gate.
+    /// `.mox`/`.actor`/`.dmn` imports shrink the typed/authorization/
+    /// decision dimensions (an empty actors or decisions slice skips the
+    /// pass) — the editor must stay usable in incomplete workspaces; the
+    /// CLI's hard error is the authoring gate.
     pub(super) fn import_closure(&self, uri: &Url, text: &str) -> IfmlImportClosure {
         let main_path = uri.to_string();
         let mut closure = IfmlImportClosure::default();
@@ -607,6 +616,11 @@ impl RexBackend {
         // mirroring `domain_union`.
         closure.actors =
             rex_driver::project::compile_actor_imports(&project.actors).unwrap_or_default();
+        // The decision dimension degrades the same way: a model that
+        // fails to compile contributes nothing (its own open editor
+        // shows its diagnostics), and an empty slice skips the pass.
+        closure.decisions =
+            rex_driver::project::compile_decision_imports(&project.decisions).unwrap_or_default();
         closure
     }
 

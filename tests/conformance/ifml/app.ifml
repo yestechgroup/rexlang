@@ -6,6 +6,7 @@
 // committed golden artifact.
 
 import "rexlang/auth.actor";
+import "rexlang/decisions.dmn";
 
 domain "sales" {
     schema "sales";
@@ -120,6 +121,11 @@ view "Dashboard" {
         on select(row) -> navigate("CustomerDetail", {
             customerId: row.customerId
         });
+    }
+
+    component "tier" {
+        type: details;
+        data: AssessCustomer;
     }
 }
 

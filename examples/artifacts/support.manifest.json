@@ -167,6 +167,14 @@
     },
     {
       "view": "Queue",
+      "name": "assessment",
+      "componentType": {
+        "type": "details"
+      },
+      "data": "AssessRefund"
+    },
+    {
+      "view": "Queue",
       "name": "intake",
       "componentType": {
         "type": "form"

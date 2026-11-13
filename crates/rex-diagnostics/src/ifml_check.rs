@@ -36,6 +36,12 @@ pub const E_UNKNOWN_ROLE: &str = "E0108";
 /// An action declaration's `target:` entity does not resolve to exactly
 /// one class in the domain model.
 pub const E_UNKNOWN_ACTION_TARGET: &str = "E0109";
+/// A component's `data:` names a decision service that declares no
+/// outputs.
+pub const E_EMPTY_DECISION_SERVICE: &str = "E0110";
+/// A component's `data:` names a decision service declared by two or more
+/// of the provided decision models.
+pub const E_AMBIGUOUS_DECISION_SERVICE: &str = "E0111";
 
 pub(crate) const ENTRIES: &[Entry] = &[
     Entry {
@@ -117,5 +123,21 @@ pub(crate) const ENTRIES: &[Entry] = &[
         title: "Unknown action target",
         meaning: "An action declaration's `target:` entity does not resolve to exactly one class in the domain model (`unknown target entity 'X'`, or `ambiguous target entity 'X'` when several packages declare the name) — the `data:` discipline applied to the lowering's payload.",
         fix: "Point `target:` at a domain class that resolves to exactly one `(package, class)`.",
+    },
+    Entry {
+        code: E_EMPTY_DECISION_SERVICE,
+        band: CHECK_BAND,
+        severity: Severity::Error,
+        title: "Decision service without outputs",
+        meaning: "A component's `data:` names a decision service that declares no outputs (`decision service 'X' declares no outputs`) — the service exposes nothing, so the component has no data contract.",
+        fix: "Declare at least one output decision on the service (`outputs { ... }`), or bind the component to a domain class.",
+    },
+    Entry {
+        code: E_AMBIGUOUS_DECISION_SERVICE,
+        band: CHECK_BAND,
+        severity: Severity::Error,
+        title: "Ambiguous decision service",
+        meaning: "A component's `data:` names a decision service that two or more of the provided decision models declare (`decision service 'X' is declared by two models — 'A' and 'B'`, `… declared by multiple models — 'A', 'B' and 'C'`); resolution is bare-name union-wide, so the reference is ambiguous. The models are named by their declared `decision_model` names (the checker receives artifacts, not paths).",
+        fix: "Rename the service in one of the decision models, or bind the component to a domain class.",
     },
 ];

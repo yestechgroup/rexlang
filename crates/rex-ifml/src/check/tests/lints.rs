@@ -1185,15 +1185,22 @@ fn canonical_fixture_checks_clean_against_its_reference_domain() {
     // domain it was written against (`domain "sales"`) is clean —
     // including the doc-promoted `params.customerId` navigation
     // binding, the `params`-free examples' bare spellings, the bare
-    // calls (`len`, `today`, `score`), and the field navigation
-    // (`Customer.name`, `Customer.status`).
+    // calls (`len`, `today`, `score`), the field navigation
+    // (`Customer.name`, `Customer.status`), and the decision-dimension
+    // `data: AssessCustomer` binding (the service table the fixture's
+    // `rexlang/decisions.dmn` import declares).
     let source = include_str!("../../../../../tests/conformance/ifml/app.ifml");
     let auth = include_str!("../../../../../tests/conformance/ifml/rexlang/auth.actor");
     let mut imports = crate::IfmlImports::default();
     imports.provide("app.ifml", "rexlang/auth.actor", auth.to_string());
     let compilation = crate::compile_ifml_str("app.ifml", source, &imports)
         .expect("the canonical fixture must compile");
-    let diags = check_ifml(&compilation, Some(&sales_reference_model()));
+    let diags = check_ifml_with_decisions(
+        &compilation,
+        Some(&sales_reference_model()),
+        &[],
+        &[fixture_view_decisions()],
+    );
     assert!(diags.is_empty(), "{}", {
         let rendered = diags
             .iter()
@@ -1207,6 +1214,38 @@ fn canonical_fixture_checks_clean_against_its_reference_domain() {
             .join("\n");
         format!("the canonical fixture must check clean:\n{rendered}")
     });
+}
+
+/// The decision model the fixture's `rexlang/decisions.dmn` import
+/// declares: the `AssessCustomer` service exposing the `CustomerTier`
+/// decision's outputs — the shape the fixture's `data: AssessCustomer`
+/// resolves against.
+fn fixture_view_decisions() -> DmnModel {
+    let mut model = DmnModel::new();
+    model.name = Some("ViewDecisions".to_string());
+    model.decisions.push(rex_ir::dmn::Decision {
+        name: "CustomerTier".to_string(),
+        description: None,
+        outputs: vec![
+            rex_ir::dmn::Output {
+                name: "tier".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::String),
+            },
+            rex_ir::dmn::Output {
+                name: "discount_cents".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::Int),
+            },
+        ],
+        logic: None,
+    });
+    model.services.push(rex_ir::dmn::DecisionService {
+        name: "AssessCustomer".to_string(),
+        description: None,
+        inputs: vec!["customer".to_string()],
+        outputs: vec!["CustomerTier".to_string()],
+        encapsulates: Vec::new(),
+    });
+    model
 }
 
 /// The domain the canonical fixture was written against: the classes

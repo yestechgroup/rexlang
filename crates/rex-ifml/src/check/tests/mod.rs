@@ -6,6 +6,7 @@ use super::*;
 mod support;
 
 mod authorization;
+mod decisions;
 mod instantiated_modules;
 mod interaction_reference;
 mod lints;

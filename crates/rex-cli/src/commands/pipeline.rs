@@ -196,8 +196,12 @@ pub(crate) fn compile_surface(
                     return Ok(None);
                 }
             };
-        let binding =
-            rex_ifml::check_ifml_with_actors(&compilation, inputs.domains.as_ref(), &inputs.actors);
+        let binding = rex_ifml::check_ifml_with_decisions(
+            &compilation,
+            inputs.domains.as_ref(),
+            &inputs.actors,
+            &inputs.decisions,
+        );
         // Warnings (the `ifml.lints` band) render but never fail the file;
         // only error-severity diagnostics do. `check --deny-warnings`
         // flips the rule via the outcome's warning count.

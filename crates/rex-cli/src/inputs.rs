@@ -12,9 +12,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use rex_driver::{
-    compile_actor_imports, compile_domain_union, compile_files, compile_str, gather_case_imports,
-    gather_deploy_imports, gather_domain_sources, gather_ifml_project, gather_usecase_imports,
-    DomainImports, MultiCompilation, SchemaImports,
+    compile_actor_imports, compile_decision_imports, compile_domain_union, compile_files,
+    compile_str, gather_case_imports, gather_deploy_imports, gather_domain_sources,
+    gather_ifml_project, gather_usecase_imports, DomainImports, MultiCompilation, SchemaImports,
 };
 
 use crate::imports::{collect_schema_imports, collect_sigil_imports, SigilSources};
@@ -255,24 +255,34 @@ pub(crate) struct IfmlInputs {
     /// `requires:`/`roles:` against. Empty when the file imports no actor
     /// models (authorization checking is then skipped).
     pub(crate) actors: Vec<rex_ir::ActorModel>,
+    /// Every imported `.dmn` decision model, compiled — the decision
+    /// dimension [`rex_ifml::check_ifml_with_decisions`] resolves `data:`
+    /// names against. Empty when the file imports no decision models
+    /// (decision checking is then skipped).
+    pub(crate) decisions: Vec<rex_ir::dmn::DmnModel>,
 }
 
-/// Reads an `.ifml` file plus every `.ifml`, `.mox`, and `.actor` file it
-/// imports, transitively — gathered through [`rex_driver::project`], the
-/// shared host-side resolver. Import paths resolve relative to the importing
-/// file's own directory on disk, while the resolver keys each import by
-/// the importing file's identity and the import string **as written** (the
-/// resolver is filesystem-free and sees only the strings). The fetch is
-/// map-first within `project` (the snapshot serves project files; the
-/// CLI's open-documents-first analog), disk-second otherwise — and the
-/// disk fallback fills the map. The disk fetch keeps the CLI's read-error
-/// policy: the first unreadable import surfaces as an error after the
-/// walk, naming the resolved path. Imported `.mox` files are compiled to
-/// Core IR and unioned for typed expression binding; imported `.actor`
-/// files are compiled to actor models for authorization checking —
-/// lookup-before-compute within `project`, so a policy the batch already
-/// checked is reused, not recompiled — and a domain or actor model that
-/// fails to compile is a hard error.
+/// Reads an `.ifml` file plus every `.ifml`, `.mox`, `.actor`, and `.dmn`
+/// file it imports, transitively — gathered through
+/// [`rex_driver::project`], the shared host-side resolver. Import paths
+/// resolve relative to the importing file's own directory on disk, while
+/// the resolver keys each import by the importing file's identity and the
+/// import string **as written** (the resolver is filesystem-free and sees
+/// only the strings). The fetch is map-first within `project` (the
+/// snapshot serves project files; the CLI's open-documents-first analog),
+/// disk-second otherwise — and the disk fallback fills the map. The disk
+/// fetch keeps the CLI's read-error policy: the first unreadable surface
+/// import (`.ifml`/`.mox`/`.actor`/`.dmn`) surfaces as an error after the
+/// walk, naming the resolved path, while a gathered `.dmn` model's
+/// decision-table references (leaf files fetched under the model's
+/// resolved key) degrade to the driver's unprovided-table diagnostic.
+/// Imported `.mox` files are compiled to Core IR and unioned for typed
+/// expression binding; imported `.actor` files are compiled to actor
+/// models for authorization checking; imported `.dmn` files are compiled
+/// to decision models for decision checking — lookup-before-compute
+/// within `project`, so a file the batch already checked is reused, not
+/// recompiled — and a domain, actor, or decision model that fails to
+/// compile is a hard error.
 pub(crate) fn read_ifml_inputs(
     file: &Path,
     mut project: Option<&mut Project>,
@@ -285,13 +295,23 @@ pub(crate) fn read_ifml_inputs(
     // resolved keys this closure hands back (an imported `.actor` policy's
     // own `.mox` imports are fetched under the policy's resolved key) — so
     // every key handed out is mapped the same way the entry identity is.
-    // Other extensions pass through unread (today's silent pass-through).
+    // Other extensions pass through unread unless the importer is a
+    // gathered `.dmn` model, whose decision-table references they are.
     let mut disk_paths: BTreeMap<String, PathBuf> = BTreeMap::new();
     disk_paths.insert(path.clone(), file.to_path_buf());
     let mut read_error: Option<anyhow::Error> = None;
     let mut fetch = |importer: &str, import: &str| -> Option<(String, String)> {
-        if !(import.ends_with(".ifml") || import.ends_with(".mox") || import.ends_with(".actor")) {
-            return None;
+        let known_surface = import.ends_with(".ifml")
+            || import.ends_with(".mox")
+            || import.ends_with(".actor")
+            || import.ends_with(".dmn");
+        if !known_surface {
+            let importer_is_dmn = disk_paths.get(importer).is_some_and(|disk| {
+                disk.extension().and_then(|extension| extension.to_str()) == Some("dmn")
+            });
+            if !importer_is_dmn {
+                return None;
+            }
         }
         let resolved = {
             let importer_disk = disk_paths.get(importer)?;
@@ -305,7 +325,11 @@ pub(crate) fn read_ifml_inputs(
         let text = match fetched {
             Ok(text) => text,
             Err(error) => {
-                if read_error.is_none() {
+                // Decision-table contents degrade to the driver's
+                // unprovided-table diagnostic (E0209 names the written
+                // path); a surface import that cannot be read is the
+                // CLI's hard error, raised after the walk.
+                if read_error.is_none() && known_surface {
                     read_error = Some(anyhow::anyhow!(
                         "cannot read imported file {} (imported by {}): {error}",
                         resolved.display(),
@@ -344,6 +368,27 @@ pub(crate) fn read_ifml_inputs(
         };
         actors.push(model);
     }
+    let mut decisions = Vec::new();
+    for decision in &gathered.decisions {
+        let model = match project.as_deref_mut() {
+            Some(project) => {
+                let artifact = project.artifact(&decision.key, || {
+                    compile_decision_imports(std::slice::from_ref(decision))
+                        .map(|mut models| models.pop().expect("one import, one model"))
+                        .map_err(|message| anyhow::anyhow!(message))
+                        .map(Artifact::Decision)
+                })?;
+                match artifact {
+                    Artifact::Decision(model) => model,
+                    _ => unreachable!("decision cache slots only hold decision artifacts"),
+                }
+            }
+            None => compile_decision_imports(std::slice::from_ref(decision))
+                .map(|mut models| models.pop().expect("one import, one model"))
+                .map_err(|message| anyhow::anyhow!(message))?,
+        };
+        decisions.push(model);
+    }
     let domains = if gathered.domains.is_empty() {
         None
     } else {
@@ -356,6 +401,7 @@ pub(crate) fn read_ifml_inputs(
         sources: gathered.sources,
         domains,
         actors,
+        decisions,
     })
 }
 
