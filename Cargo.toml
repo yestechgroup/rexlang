@@ -10,6 +10,7 @@ members = [
     "crates/rex-backend-jsonschema",
     "crates/rex-backend-cedar",
     "crates/rex-backend-cmmn",
+    "crates/rex-backend-dmn",
     "crates/rex-backend-common",
     "crates/rex-vocab",
     "crates/rex-lsp",
@@ -73,9 +74,14 @@ xstate-ir = { git = "https://github.com/yestechgroup/restingstate.git", rev = "3
 # dsntk-feel-parser. The validation contract lives in `crates/rex-driver/src/dmn.rs`
 # and `docs/DMN.md`; the recognizer's decision-table type is the
 # compatibility boundary (rex-ir stays ours).
-dsntk-recognizer = { git = "https://github.com/yestechgroup/dsntk-rs.git", rev = "c452751f7d5dc72c705684f2c2a372217f3ab460" }
-dsntk-feel = { git = "https://github.com/yestechgroup/dsntk-rs.git", rev = "c452751f7d5dc72c705684f2c2a372217f3ab460" }
-dsntk-feel-parser = { git = "https://github.com/yestechgroup/dsntk-rs.git", rev = "c452751f7d5dc72c705684f2c2a372217f3ab460" }
+dsntk-recognizer = { git = "https://github.com/yestechgroup/dsntk-rs.git", rev = "bb508d96f94039445582f4dcd201a327d11634bf" }
+dsntk-model = { git = "https://github.com/yestechgroup/dsntk-rs.git", rev = "bb508d96f94039445582f4dcd201a327d11634bf" }
+dsntk-model-evaluator = { git = "https://github.com/yestechgroup/dsntk-rs.git", rev = "bb508d96f94039445582f4dcd201a327d11634bf" }
+dsntk-common = { git = "https://github.com/yestechgroup/dsntk-rs.git", rev = "bb508d96f94039445582f4dcd201a327d11634bf" }
+rex-backend-dmn = { path = "crates/rex-backend-dmn" }
+dsntk-feel = { git = "https://github.com/yestechgroup/dsntk-rs.git", rev = "bb508d96f94039445582f4dcd201a327d11634bf" }
+dsntk-feel-parser = { git = "https://github.com/yestechgroup/dsntk-rs.git", rev = "bb508d96f94039445582f4dcd201a327d11634bf" }
+dsntk-feel-evaluator = { git = "https://github.com/yestechgroup/dsntk-rs.git", rev = "bb508d96f94039445582f4dcd201a327d11634bf" }
 
 anyhow = "1.0"
 ariadne = "0.5"

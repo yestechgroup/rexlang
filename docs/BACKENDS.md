@@ -28,8 +28,10 @@ docs](https://docs.rs/rex-ir)** (also rendered by `cargo doc -p rex-ir`).
 - The in-tree backends (`rex-backend-rust`, `rex-backend-jsonschema`,
   `rex-backend-cedar`, `rex-backend-cmmn` — the last lowering
   `CmmnModel` + domain model to the cmmn-rs engine's `CaseDefinition`
-  JSON) are reference implementations of exactly this discipline; reading
-  them is the fastest way to learn the shapes.
+  JSON, and `rex-backend-dmn` — lowering `DmnModel` + the markdown table
+  contents into the dsntk engine model it evaluates, recording
+  decision-table provenance) are reference implementations of exactly
+  this discipline; reading them is the fastest way to learn the shapes.
 
 ## The serialized-artifact contract (summary)
 

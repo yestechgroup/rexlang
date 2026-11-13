@@ -787,7 +787,7 @@ dependencies = [
 [[package]]
 name = "dsntk-common"
 version = "0.3.0-dev"
-source = "git+https://github.com/yestechgroup/dsntk-rs.git?rev=c452751f7d5dc72c705684f2c2a372217f3ab460#c452751f7d5dc72c705684f2c2a372217f3ab460"
+source = "git+https://github.com/yestechgroup/dsntk-rs.git?rev=bb508d96f94039445582f4dcd201a327d11634bf#bb508d96f94039445582f4dcd201a327d11634bf"
 dependencies = [
  "dsntk-macros",
  "serde",
@@ -798,9 +798,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dsntk-examples"
+version = "0.3.0-dev"
+source = "git+https://github.com/yestechgroup/dsntk-rs.git?rev=bb508d96f94039445582f4dcd201a327d11634bf#bb508d96f94039445582f4dcd201a327d11634bf"
+
+[[package]]
 name = "dsntk-feel"
 version = "0.3.0-dev"
-source = "git+https://github.com/yestechgroup/dsntk-rs.git?rev=c452751f7d5dc72c705684f2c2a372217f3ab460#c452751f7d5dc72c705684f2c2a372217f3ab460"
+source = "git+https://github.com/yestechgroup/dsntk-rs.git?rev=bb508d96f94039445582f4dcd201a327d11634bf#bb508d96f94039445582f4dcd201a327d11634bf"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -814,9 +819,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "dsntk-feel-evaluator"
+version = "0.3.0-dev"
+source = "git+https://github.com/yestechgroup/dsntk-rs.git?rev=bb508d96f94039445582f4dcd201a327d11634bf#bb508d96f94039445582f4dcd201a327d11634bf"
+dependencies = [
+ "dsntk-common",
+ "dsntk-feel",
+ "dsntk-feel-parser",
+ "dsntk-feel-regex",
+ "dsntk-feel-temporal",
+ "dsntk-macros",
+ "regex",
+]
+
+[[package]]
 name = "dsntk-feel-grammar"
 version = "0.3.0-dev"
-source = "git+https://github.com/yestechgroup/dsntk-rs.git?rev=c452751f7d5dc72c705684f2c2a372217f3ab460#c452751f7d5dc72c705684f2c2a372217f3ab460"
+source = "git+https://github.com/yestechgroup/dsntk-rs.git?rev=bb508d96f94039445582f4dcd201a327d11634bf#bb508d96f94039445582f4dcd201a327d11634bf"
 dependencies = [
  "convert_case",
  "regex",
@@ -825,7 +844,7 @@ dependencies = [
 [[package]]
 name = "dsntk-feel-number"
 version = "0.3.0-dev"
-source = "git+https://github.com/yestechgroup/dsntk-rs.git?rev=c452751f7d5dc72c705684f2c2a372217f3ab460#c452751f7d5dc72c705684f2c2a372217f3ab460"
+source = "git+https://github.com/yestechgroup/dsntk-rs.git?rev=bb508d96f94039445582f4dcd201a327d11634bf#bb508d96f94039445582f4dcd201a327d11634bf"
 dependencies = [
  "dfp-number-sys",
  "dsntk-common",
@@ -835,7 +854,7 @@ dependencies = [
 [[package]]
 name = "dsntk-feel-parser"
 version = "0.3.0-dev"
-source = "git+https://github.com/yestechgroup/dsntk-rs.git?rev=c452751f7d5dc72c705684f2c2a372217f3ab460#c452751f7d5dc72c705684f2c2a372217f3ab460"
+source = "git+https://github.com/yestechgroup/dsntk-rs.git?rev=bb508d96f94039445582f4dcd201a327d11634bf#bb508d96f94039445582f4dcd201a327d11634bf"
 dependencies = [
  "antex",
  "dsntk-common",
@@ -845,9 +864,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "dsntk-feel-regex"
+version = "0.3.0-dev"
+source = "git+https://github.com/yestechgroup/dsntk-rs.git?rev=bb508d96f94039445582f4dcd201a327d11634bf#bb508d96f94039445582f4dcd201a327d11634bf"
+dependencies = [
+ "dsntk-common",
+ "dsntk-macros",
+ "regex",
+]
+
+[[package]]
 name = "dsntk-feel-temporal"
 version = "0.3.0-dev"
-source = "git+https://github.com/yestechgroup/dsntk-rs.git?rev=c452751f7d5dc72c705684f2c2a372217f3ab460#c452751f7d5dc72c705684f2c2a372217f3ab460"
+source = "git+https://github.com/yestechgroup/dsntk-rs.git?rev=bb508d96f94039445582f4dcd201a327d11634bf#bb508d96f94039445582f4dcd201a327d11634bf"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -860,7 +889,7 @@ dependencies = [
 [[package]]
 name = "dsntk-macros"
 version = "0.3.0-dev"
-source = "git+https://github.com/yestechgroup/dsntk-rs.git?rev=c452751f7d5dc72c705684f2c2a372217f3ab460#c452751f7d5dc72c705684f2c2a372217f3ab460"
+source = "git+https://github.com/yestechgroup/dsntk-rs.git?rev=bb508d96f94039445582f4dcd201a327d11634bf#bb508d96f94039445582f4dcd201a327d11634bf"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -868,9 +897,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "dsntk-model"
+version = "0.3.0-dev"
+source = "git+https://github.com/yestechgroup/dsntk-rs.git?rev=bb508d96f94039445582f4dcd201a327d11634bf#bb508d96f94039445582f4dcd201a327d11634bf"
+dependencies = [
+ "dsntk-common",
+ "dsntk-examples",
+ "dsntk-feel",
+ "dsntk-feel-parser",
+ "dsntk-macros",
+ "dsntk-recognizer",
+ "petgraph",
+ "roxmltree",
+]
+
+[[package]]
+name = "dsntk-model-evaluator"
+version = "0.3.0-dev"
+source = "git+https://github.com/yestechgroup/dsntk-rs.git?rev=bb508d96f94039445582f4dcd201a327d11634bf#bb508d96f94039445582f4dcd201a327d11634bf"
+dependencies = [
+ "dsntk-common",
+ "dsntk-feel",
+ "dsntk-feel-evaluator",
+ "dsntk-feel-parser",
+ "dsntk-feel-temporal",
+ "dsntk-macros",
+ "dsntk-model",
+]
+
+[[package]]
 name = "dsntk-recognizer"
 version = "0.3.0-dev"
-source = "git+https://github.com/yestechgroup/dsntk-rs.git?rev=c452751f7d5dc72c705684f2c2a372217f3ab460#c452751f7d5dc72c705684f2c2a372217f3ab460"
+source = "git+https://github.com/yestechgroup/dsntk-rs.git?rev=bb508d96f94039445582f4dcd201a327d11634bf#bb508d96f94039445582f4dcd201a327d11634bf"
 dependencies = [
  "dsntk-common",
  "dsntk-macros",
@@ -2637,6 +2695,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "rex-backend-dmn"
+version = "0.1.0"
+dependencies = [
+ "dsntk-common",
+ "dsntk-feel",
+ "dsntk-feel-evaluator",
+ "dsntk-feel-parser",
+ "dsntk-model",
+ "dsntk-model-evaluator",
+ "dsntk-recognizer",
+ "rex-driver",
+ "rex-ir",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "rex-backend-jsonschema"
 version = "0.1.0"
 dependencies = [
@@ -2835,6 +2911,12 @@ dependencies = [
  "untrusted",
  "windows-sys 0.52.0",
 ]
+
+[[package]]
+name = "roxmltree"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 
 [[package]]
 name = "rustc-hash"

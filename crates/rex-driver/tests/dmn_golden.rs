@@ -616,7 +616,10 @@ decision_model M {{
 "#
         );
         let compilation = compile(&source, &[], &[]);
-        expect_diagnostic(&compilation, "E0208 invalid FEEL expression on decision 'd'");
+        expect_diagnostic(
+            &compilation,
+            "E0208 invalid FEEL expression on decision 'd'",
+        );
     }
 }
 
