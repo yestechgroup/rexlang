@@ -4,6 +4,7 @@
 use salsa::Database as Db;
 
 use crate::compilation::ActorCompilation;
+use crate::entry::finish_surface;
 use crate::imports::DomainImports;
 use crate::lower;
 use crate::session::{parse_actors_query, Database, SourceFile};
@@ -61,13 +62,7 @@ fn compile_actors_with(
         &domains.domain_units,
         designs,
     );
-    let mut diagnostics = diagnostics;
-    diagnostics.extend(domains.sigil_diagnostics);
-    ActorCompilation {
-        model,
-        domains_model: domains.domains_model,
-        diagnostics,
-    }
+    finish_surface(domains, model, diagnostics, ActorCompilation::assemble)
 }
 /// Compiles an `.actor` file against its imported domain models in one call.
 ///

@@ -4,6 +4,7 @@
 use salsa::Database as Db;
 
 use crate::compilation::EventCompilation;
+use crate::entry::finish_surface;
 use crate::events;
 use crate::imports::DomainImports;
 use crate::session::{parse_evt_query, Database, SourceFile};
@@ -53,13 +54,7 @@ fn compile_evt_with(
         &parsed.diagnostics,
         &domains.domain_units,
     );
-    let mut diagnostics = diagnostics;
-    diagnostics.extend(domains.sigil_diagnostics);
-    EventCompilation {
-        model,
-        domains_model: domains.domains_model,
-        diagnostics,
-    }
+    finish_surface(domains, model, diagnostics, EventCompilation::assemble)
 }
 /// Compiles an `.evt` event-contract file against its imported domain models
 /// in one call.

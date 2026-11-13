@@ -4,6 +4,7 @@
 use salsa::Database as Db;
 
 use crate::compilation::UseCaseCompilation;
+use crate::entry::finish_surface;
 use crate::imports::DomainImports;
 use crate::session::{parse_usecase_query, Database, SourceFile};
 use crate::union::{domain_files, lower_domains};
@@ -56,7 +57,7 @@ fn compile_usecase_with(
         .unwrap_or_default();
     let domains = lower_domains(db, &path, &domain_imports, &domains, imports);
 
-    let (model, mut diagnostics) = usecases::compile_usecase_file(
+    let (model, diagnostics) = usecases::compile_usecase_file(
         &path,
         &source,
         parsed.ast.as_ref(),
@@ -66,12 +67,7 @@ fn compile_usecase_with(
         actors,
         events,
     );
-    diagnostics.extend(domains.sigil_diagnostics);
-    UseCaseCompilation {
-        model,
-        domains_model: domains.domains_model,
-        diagnostics,
-    }
+    finish_surface(domains, model, diagnostics, UseCaseCompilation::assemble)
 }
 
 /// Compiles a `.uc` use case file against its imported domain models and

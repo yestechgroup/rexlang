@@ -2,6 +2,50 @@
 //! — twin `(mox path, import path)` providers — bundled in
 //! [`DomainImports`], which every compile entry point takes.
 
+/// The private `(mox path, import path, content)` entry store behind
+/// [`SchemaImports`] and [`SigilImports`]: entries in first-appearance
+/// order, a re-provided pair replacing its earlier content in place.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ImportEntries {
+    entries: Vec<(String, String, String)>,
+}
+
+impl ImportEntries {
+    /// Inserts one `(mox path, import path)` pair, replacing any earlier
+    /// entry for the same pair in place.
+    fn insert(
+        &mut self,
+        mox_path: impl Into<String>,
+        import_path: impl Into<String>,
+        content: impl Into<String>,
+    ) {
+        let mox_path = mox_path.into();
+        let import_path = import_path.into();
+        let content = content.into();
+        match self
+            .entries
+            .iter_mut()
+            .find(|(mox, import, _)| *mox == mox_path && *import == import_path)
+        {
+            Some(entry) => entry.2 = content,
+            None => self.entries.push((mox_path, import_path, content)),
+        }
+    }
+
+    /// The provided content for the `(mox path, import path)` pair, if any.
+    fn get(&self, mox_path: &str, import_path: &str) -> Option<&str> {
+        self.entries
+            .iter()
+            .find(|(mox, import, _)| mox == mox_path && import == import_path)
+            .map(|(_, _, content)| content.as_str())
+    }
+
+    /// `true` when no content is provided at all.
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
 /// The JSON content of the `import schema` declarations of a compilation.
 ///
 /// The driver is filesystem-free: a host that reads `.mox` files from disk
@@ -34,7 +78,7 @@
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SchemaImports {
-    entries: Vec<(String, String, String)>,
+    entries: ImportEntries,
 }
 
 impl SchemaImports {
@@ -62,25 +106,12 @@ impl SchemaImports {
         import_path: impl Into<String>,
         json: impl Into<String>,
     ) {
-        let mox_path = mox_path.into();
-        let import_path = import_path.into();
-        let json = json.into();
-        match self
-            .entries
-            .iter_mut()
-            .find(|(mox, import, _)| *mox == mox_path && *import == import_path)
-        {
-            Some(entry) => entry.2 = json,
-            None => self.entries.push((mox_path, import_path, json)),
-        }
+        self.entries.insert(mox_path, import_path, json);
     }
 
     /// The provided JSON text for the `(mox path, import path)` pair, if any.
     pub fn get(&self, mox_path: &str, import_path: &str) -> Option<&str> {
-        self.entries
-            .iter()
-            .find(|(mox, import, _)| mox == mox_path && import == import_path)
-            .map(|(_, _, json)| json.as_str())
+        self.entries.get(mox_path, import_path)
     }
 
     /// `true` when no content is provided at all.
@@ -137,7 +168,7 @@ impl SchemaImports {
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SigilImports {
-    entries: Vec<(String, String, String)>,
+    entries: ImportEntries,
 }
 
 impl SigilImports {
@@ -165,32 +196,19 @@ impl SigilImports {
         import_path: impl Into<String>,
         rosetta: impl Into<String>,
     ) {
-        let mox_path = mox_path.into();
-        let import_path = import_path.into();
-        let rosetta = rosetta.into();
-        match self
-            .entries
-            .iter_mut()
-            .find(|(mox, import, _)| *mox == mox_path && *import == import_path)
-        {
-            Some(entry) => entry.2 = rosetta,
-            None => self.entries.push((mox_path, import_path, rosetta)),
-        }
+        self.entries.insert(mox_path, import_path, rosetta);
     }
 
     /// The provided rosetta text for the `(mox path, import path)` pair, if
     /// any.
     pub fn get(&self, mox_path: &str, import_path: &str) -> Option<&str> {
-        self.entries
-            .iter()
-            .find(|(mox, import, _)| mox == mox_path && import == import_path)
-            .map(|(_, _, rosetta)| rosetta.as_str())
+        self.entries.get(mox_path, import_path)
     }
 
     /// Every provided entry as `(mox path, import path, rosetta text)`, in
     /// insertion order.
     pub fn entries(&self) -> &[(String, String, String)] {
-        &self.entries
+        &self.entries.entries
     }
 
     /// `true` when no content is provided at all.

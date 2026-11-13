@@ -1,6 +1,30 @@
 //! The per-surface compile entry points: tracked (salsa-memoized) queries
 //! and their one-shot wrappers, one module per surface.
 
+use crate::union::LoweredDomains;
+use crate::Diagnostic;
+
+/// The shared tail of every per-surface `compile_*_with` body: append the
+/// lowered domains' sigil diagnostics after the surface engine's own
+/// diagnostics (compilation order: surface file first, then the domain
+/// files in import order, then the sigil content) and assemble the
+/// compilation with the domains' union model.
+pub(crate) fn finish_surface<A, C>(
+    lowered: LoweredDomains,
+    model: Option<A>,
+    diagnostics: Vec<(String, Diagnostic)>,
+    assemble: impl FnOnce(Option<A>, Option<rex_ir::Model>, Vec<(String, Diagnostic)>) -> C,
+) -> C {
+    let LoweredDomains {
+        domains_model,
+        sigil_diagnostics,
+        ..
+    } = lowered;
+    let mut diagnostics = diagnostics;
+    diagnostics.extend(sigil_diagnostics);
+    assemble(model, domains_model, diagnostics)
+}
+
 pub mod actors;
 pub mod cmmn;
 pub mod ddd;
