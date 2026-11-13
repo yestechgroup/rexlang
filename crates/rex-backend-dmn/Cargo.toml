@@ -9,6 +9,7 @@ readme.workspace = true
 
 [dependencies]
 dsntk-common = { workspace = true }
+rex-backend-common = { workspace = true }
 rex-ir = { workspace = true }
 dsntk-feel = { workspace = true }
 dsntk-model = { workspace = true }

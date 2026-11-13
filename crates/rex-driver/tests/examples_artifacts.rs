@@ -422,12 +422,26 @@ fn compile_cmmn(name: &str) -> rex_ir::cmmn::CmmnModel {
             "./tables/refund-authority.md".to_string(),
             read(&dir.join("tables/refund-authority.md")),
         )];
+        // The example's `.evt` import resolves next to the file and joins
+        // the events bucket (the emits rule joins it the same way).
+        let events = [(
+            "support.evt".to_string(),
+            rex_driver::compile_evt_str(
+                dir.join("support.evt").to_str().expect("utf-8 event path"),
+                &read(&dir.join("support.evt")),
+                &dmn_domains,
+                &rex_driver::DomainImports::default(),
+            )
+            .model
+            .expect("support.evt must lower to an event artifact"),
+        )];
         let compilation = rex_driver::compile_dmn_str(
             dmn_path.to_str().expect("utf-8 example path"),
             &dmn_source,
             &dmn_domains,
             &rex_driver::DomainImports::default(),
             &tables,
+            &events,
         );
         assert_clean("support.dmn", &compilation.diagnostics);
         vec![(

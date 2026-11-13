@@ -453,8 +453,14 @@ fn compile_fence(fence: &Fence, workspace: &Path) -> String {
                 .decisions
                 .iter()
                 .map(|(path, source)| {
-                    let compiled =
-                        rex_driver::compile_dmn_str(path, source, &gathered.domains, &empty, &[]);
+                    let compiled = rex_driver::compile_dmn_str(
+                        path,
+                        source,
+                        &gathered.domains,
+                        &empty,
+                        &[],
+                        &events,
+                    );
                     (path.clone(), compiled.model.expect("decision artifact"))
                 })
                 .collect();

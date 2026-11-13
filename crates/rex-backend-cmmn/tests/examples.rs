@@ -60,6 +60,25 @@ fn support_cmmn_lowers_to_the_engine_definition() {
     // against.
     let decisions_source = read("support.dmn");
     let decisions_path = dir.join("support.dmn").display().to_string();
+    // The example's `.evt` import resolves next to the file and joins
+    // the events bucket (the emits rule joins it the same way).
+    let events_path = dir.join("support.evt").display().to_string();
+    let events = compile_evt_str(
+        &events_path,
+        &read("support.evt"),
+        &domain,
+        &rex_driver::DomainImports::default(),
+    );
+    assert!(
+        events.diagnostics.is_empty(),
+        "support.evt must compile clean"
+    );
+    // The DMN rule-1 import check matches the bucket keys exactly as
+    // written — the authored import string, not the resolved path.
+    let event_bucket = vec![(
+        "support.evt".to_string(),
+        events.model.clone().expect("event artifact"),
+    )];
     let decisions = compile_dmn_str(
         &decisions_path,
         &decisions_source,
@@ -69,6 +88,7 @@ fn support_cmmn_lowers_to_the_engine_definition() {
             "./tables/refund-authority.md".to_string(),
             read("tables/refund-authority.md"),
         )],
+        &event_bucket,
     );
     assert!(
         decisions.diagnostics.is_empty(),

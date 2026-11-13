@@ -87,6 +87,7 @@ use dsntk_model::{
 use dsntk_model_evaluator::trace::TableTrace;
 use dsntk_model_evaluator::ModelEvaluator;
 use rex_ir::dmn::{DecisionLogic, DecisionService as IrDecisionService, DmnModel, MetadataKind};
+use rex_backend_common::canonical_key_order;
 use rex_ir::{PrimitiveType, TypeRef};
 use serde::Serialize;
 
@@ -736,13 +737,18 @@ impl DecisionEngine {
             &input_context,
         );
         let value = value_to_json(service, value)?;
+        // Key order is canonicalized (the shared backend discipline): the
+        // JSON echoes into the provenance record must not drift with the
+        // workspace's serde_json feature unification.
+        let value = canonical_key_order(value);
+        let inputs = canonical_key_order(inputs.clone());
         let provenance = Provenance {
             model_id: self.model_id.clone(),
             model_version: self.model_version.clone(),
             namespace: self.namespace.clone(),
             model_name: self.model_name.clone(),
             service: service.to_string(),
-            inputs: inputs.clone(),
+            inputs,
             outputs: value.clone(),
             // One decision may evaluate more than once within a service
             // invocation (as an encapsulated pre-evaluation and again as

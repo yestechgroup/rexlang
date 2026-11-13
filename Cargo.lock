@@ -2705,6 +2705,7 @@ dependencies = [
  "dsntk-model",
  "dsntk-model-evaluator",
  "dsntk-recognizer",
+ "rex-backend-common",
  "rex-driver",
  "rex-ir",
  "serde",
