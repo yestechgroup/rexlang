@@ -184,6 +184,7 @@ fn compile_decision_conformance() -> CmmnCompilation {
         &domain,
         &DomainImports::default(),
         &[],
+        &[],
     );
     assert!(
         decisions.diagnostics.is_empty(),
@@ -223,6 +224,7 @@ fn compile_with_decisions(source: &str, decisions: bool) -> CmmnCompilation {
             &decisions_source,
             &domain,
             &DomainImports::default(),
+            &[],
             &[],
         );
         vec![(decisions_path, decisions.model.expect("decision artifact"))]
