@@ -31,7 +31,8 @@ const PAGER_IFML: &str = "view \"PagerPage\" {}\n";
 
 const WIDGET_DMN: &str = "import \"widgets.mox\"\n\ndecision_model WidgetDecisions {\n    namespace test.decisions\n    inputs {\n        widget: Widget;\n    }\n    decisions {\n        decision WidgetVerdict {\n            outputs {\n                verdict: string;\n            }\n            logic table \"./tables/verdict.md\"\n        }\n    }\n    services {\n        service AssessWidget {\n            inputs { widget }\n            outputs { WidgetVerdict }\n        }\n    }\n}\n";
 
-const VERDICT_TABLE: &str = "> # Widget verdict\n\n| U | verdict |\n|:-:|:-------:|\n|   |   `o`   |\n| 1 | \"ok\"   |\n";
+const VERDICT_TABLE: &str =
+    "> # Widget verdict\n\n| U | verdict |\n|:-:|:-------:|\n|   |   `o`   |\n| 1 | \"ok\"   |\n";
 
 /// The in-memory two-key fetch: `(importer, import) -> (resolved key,
 /// text)`, exactly the contract [`rex_ifml::walk_ifml_imports`] and

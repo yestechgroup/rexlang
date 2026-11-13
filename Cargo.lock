@@ -2745,6 +2745,7 @@ dependencies = [
  "rex-driver",
  "rex-expr",
  "rex-ir",
+ "rex-syntax",
  "serde_json",
  "thiserror",
 ]
