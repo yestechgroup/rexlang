@@ -22,7 +22,9 @@
 //! deferral: conditional (`if`) forms are not gated, because the rev-pinned
 //! parser mis-rejects several valid conditional forms; deep FEEL typing is
 //! out of scope for the compile (expressions are stored verbatim in the
-//! artifact).
+//! artifact). A decision's `emits` entries lower as authored — the
+//! declared events its outcome publishes, validated by the driver in a
+//! later slice.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -34,8 +36,8 @@ use rex_diagnostics::dmn::{
     E_UNKNOWN_SERVICE_ENDPOINT, E_UNKNOWN_TYPE, E_UNKNOWN_VIEW_ELEMENT,
 };
 use rex_ir::dmn::{
-    Binding, Bkm, Decision, DecisionLogic, DecisionService, DecisionView, DmnModel, InputData,
-    KnowledgeSource, MetadataKind, ModelMetadata, Output, Parameter, Requirement,
+    Binding, Bkm, Decision, DecisionEmits, DecisionLogic, DecisionService, DecisionView, DmnModel,
+    InputData, KnowledgeSource, MetadataKind, ModelMetadata, Output, Parameter, Requirement,
 };
 use rex_syntax::ast as dsl;
 use rex_syntax::{Name, Span};
@@ -220,7 +222,9 @@ fn lower_model(
         });
     }
 
-    // Decisions lower with resolved output types (Rule 4).
+    // Decisions lower with resolved output types (Rule 4) and their
+    // `emits` entries as authored (name resolution is a later slice;
+    // the names ride along verbatim).
     for decision in &model_decl.decisions {
         let mut outputs = Vec::new();
         for output in &decision.outputs {
@@ -237,11 +241,20 @@ fn lower_model(
             });
         }
         let logic = decision.logic.as_ref().map(lower_logic);
+        let emits = decision
+            .emits
+            .iter()
+            .map(|emit| DecisionEmits {
+                event: emit.event.text.clone(),
+                when: emit.when.clone(),
+            })
+            .collect();
         model.decisions.push(Decision {
             name: decision.name.text.clone(),
             description: decision.description.clone(),
             outputs,
             logic,
+            emits,
         });
     }
 
