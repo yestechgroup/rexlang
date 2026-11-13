@@ -201,8 +201,9 @@ fn braced_items<'src, T>(
 }
 
 /// A `<keyword> { items }` block whose brace is committed: a missing `{` is
-/// a reported error and only the introducing word is consumed.
-fn keyword_block<'src, T>(
+/// a reported error and only the introducing word is consumed. Shared with
+/// the `.cmmn` decision name lists (the same committed-brace shape).
+pub(crate) fn keyword_block<'src, T>(
     keyword: &'static str,
     item: impl Parser<'src, Tokens<'src>, Option<T>, MoxExtra<'src>> + Clone,
 ) -> impl Parser<'src, Tokens<'src>, Vec<T>, MoxExtra<'src>> + Clone {

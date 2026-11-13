@@ -263,6 +263,7 @@ fn check_contribution(files: &[PathBuf]) -> anyhow::Result<Vec<Contribution>> {
             &pair.designs,
             &pair.actors,
             &pair.events,
+            &pair.decisions,
         );
         if compilation.model.is_none() {
             report_cmmn_diagnostics(&pair.pair, &compilation);

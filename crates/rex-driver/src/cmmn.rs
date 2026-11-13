@@ -18,11 +18,15 @@
 //! [`crate::deploy`] policy pattern): the case file as a root class, plan
 //! items as classes of boolean transition predicates.
 
+use std::collections::BTreeSet;
+
 use rex_ir::cmmn::{
-    CaseDef, CaseFileItem, CaseFileTransition, CmmnModel, ControlRules, Criterion, OnPart,
-    PlanItem, PlanItemKind, PlanItemTransition, PlanningMode, Role, ServiceDef, StageBody, TaskDef,
+    CaseDef, CaseFileItem, CaseFileTransition, CmmnModel, ControlRules, Criterion,
+    DecisionTaskBinding, OnPart, PlanItem, PlanItemKind, PlanItemTransition, PlanningMode, Role,
+    ServiceDef, StageBody, TaskDef,
 };
 use rex_ir::ddd::DddModel;
+use rex_ir::dmn::DmnModel;
 use rex_ir::events::EventModel;
 use rex_ir::{ActorModel, Multiplicity, TypeRef};
 use rex_syntax::ast as dsl;
@@ -101,10 +105,12 @@ pub(crate) fn compile_cmmn_file(
     designs: &[(String, DddModel)],
     actors: &[(String, ActorModel)],
     events: &[(String, EventModel)],
+    decisions: &[(String, DmnModel)],
 ) -> (Option<CmmnModel>, Vec<(String, Diagnostic)>) {
     let imports = ast.map(|file| file.imports.as_slice()).unwrap_or_default();
 
-    let hits = engine_common::four_bucket_hits(imports, path, domains, designs, actors, events);
+    let hits =
+        engine_common::five_bucket_hits(imports, path, domains, designs, actors, events, decisions);
     let import_diagnostics = engine_common::import_hit_diagnostics(
         imports,
         &hits,
@@ -246,6 +252,20 @@ pub(crate) fn compile_cmmn_file(
                 .collect();
             types.insert_class("", name, Vec::new(), predicates, Vec::new());
         }
+        // Rule 12 — the resolved decision tasks' outputs join the
+        // synthetic universe so guards can reference them: a
+        // single-output decision inserts an entry named by the decision
+        // typed with its output type, a multi-output decision inserts a
+        // class named by the decision whose fields are its named outputs.
+        // Unresolved tasks (empty bucket, unknown service) contribute
+        // nothing.
+        let mut decision_outputs: Vec<rex_ir::Feature> = Vec::new();
+        decision_output_features(
+            &decl.plan_items,
+            decisions,
+            &mut types,
+            &mut decision_outputs,
+        );
         {
             let mut root_features: Vec<rex_ir::Feature> = case_file_features;
             root_features.push(rex_ir::Feature::new(
@@ -268,8 +288,18 @@ pub(crate) fn compile_cmmn_file(
                     Multiplicity::REQUIRED,
                 ));
             }
+            root_features.extend(decision_outputs);
             types.insert_class("", &decl.name, Vec::new(), root_features, Vec::new());
         }
+
+        // The decision-service pool the `invokes` resolution and its
+        // did-you-mean help read: the services of every provided model,
+        // pooled union-wide (the rule-17 shape). An empty bucket leaves
+        // the pool empty and the resolution unvalidated.
+        let decision_pool: BTreeSet<String> = decisions
+            .iter()
+            .flat_map(|(_, model)| model.services.iter().map(|service| service.name.clone()))
+            .collect();
 
         // Plan items, depth-first so children follow their parent stage in
         // the flat artifact graph. `seen` carries the plan-item names
@@ -286,6 +316,8 @@ pub(crate) fn compile_cmmn_file(
                 &mut seen,
                 &designs_by_alias,
                 events,
+                decisions,
+                &decision_pool,
                 &types,
                 &mut plan_items,
                 &mut local,
@@ -327,9 +359,135 @@ fn collect_names(decl: &dsl::CmmnCase) -> CaseNames {
     }
 }
 
+/// The last `.`-segment of an authored qualified name: the rule-17
+/// resolution key (`Underwriting.LoanAssessmentService` and the bare
+/// `LoanAssessmentService` are the same service).
+fn last_segment(authored: &str) -> &str {
+    authored.rsplit('.').next().unwrap_or_default()
+}
+
+/// Resolves an authored `invokes` name by its **last segment** against the
+/// provided decision models' services (the names pool union-wide, the
+/// rule-17 shape): the first model declaring the service wins. `None`
+/// leaves the clause unvalidated.
+fn resolve_decision_service<'a>(
+    authored: &str,
+    decisions: &'a [(String, DmnModel)],
+) -> Option<(&'a DmnModel, &'a rex_ir::dmn::DecisionService)> {
+    let name = last_segment(authored);
+    for (_, model) in decisions {
+        if let Some(service) = model.services.iter().find(|service| service.name == name) {
+            return Some((model, service));
+        }
+    }
+    None
+}
+
+/// Gathers the output features of every resolved `decision` plan item in
+/// the containment tree (rule 12): a **single-output** decision
+/// contributes a feature named by the decision typed with its output
+/// type; a **multi-output** decision inserts a class named by the decision
+/// (its named outputs as features) and contributes a feature of that
+/// class. Resolution is by the `invokes` clause's last segment over the
+/// provided decision models; unresolved tasks contribute nothing. The
+/// features join the synthetic case universe's root class — the
+/// `insert_class`/`merge` discipline, never a fake `Model`.
+fn decision_output_features(
+    items: &[dsl::CmmnItemDecl],
+    decisions: &[(String, DmnModel)],
+    types: &mut rex_expr::DomainTypes,
+    features: &mut Vec<rex_ir::Feature>,
+) {
+    for item in items {
+        if let dsl::CmmnItemKind::Stage { items } = &item.kind {
+            decision_output_features(items, decisions, types, features);
+        }
+        if !matches!(item.kind, dsl::CmmnItemKind::Decision) {
+            continue;
+        }
+        let Some(invokes) = &item.invokes else {
+            continue;
+        };
+        let Some((model, service)) = resolve_decision_service(&invokes.service, decisions) else {
+            continue;
+        };
+        for output in &service.outputs {
+            let Some(decision) = model
+                .decisions
+                .iter()
+                .find(|decision| decision.name == *output)
+            else {
+                continue;
+            };
+            if decision.outputs.len() == 1 {
+                features.push(rex_ir::Feature::new(
+                    decision.name.clone(),
+                    rex_ir::FeatureKind::Attribute,
+                    decision.outputs[0].type_ref.clone(),
+                    Multiplicity::REQUIRED,
+                ));
+            } else {
+                let fields = decision
+                    .outputs
+                    .iter()
+                    .map(|output| {
+                        rex_ir::Feature::new(
+                            output.name.clone(),
+                            rex_ir::FeatureKind::Attribute,
+                            output.type_ref.clone(),
+                            Multiplicity::REQUIRED,
+                        )
+                    })
+                    .collect();
+                types.insert_class("", &decision.name, Vec::new(), fields, Vec::new());
+                features.push(rex_ir::Feature::new(
+                    decision.name.clone(),
+                    rex_ir::FeatureKind::Attribute,
+                    TypeRef::Class {
+                        package: String::new(),
+                        name: decision.name.clone(),
+                    },
+                    Multiplicity::REQUIRED,
+                ));
+            }
+        }
+    }
+}
+
+/// The did-you-mean help for an unknown case-file item reference: the
+/// rule-17 help shape over the case's case-file items.
+fn case_file_items_help(file_items: &[String], name: &str) -> String {
+    let candidates: BTreeSet<String> = file_items.iter().cloned().collect();
+    match rex_diagnostics::did_you_mean_adaptive(name, &candidates) {
+        Some(suggestion) => format!("did you mean '{suggestion}'?"),
+        None if candidates.is_empty() => "the case declares no case-file items".to_string(),
+        None => format!(
+            "the case declares: {}",
+            candidates.iter().cloned().collect::<Vec<_>>().join(", ")
+        ),
+    }
+}
+
+/// The did-you-mean help for an unknown decision service: the rule-17
+/// help shape verbatim (a suggestion, the declared set, or the
+/// empty-vocabulary wording).
+fn decision_services_help(name: &str, declared: &BTreeSet<String>) -> String {
+    match rex_diagnostics::did_you_mean_adaptive(name, declared) {
+        Some(suggestion) => format!("did you mean '{suggestion}'?"),
+        None if declared.is_empty() => {
+            "the decision models declare no decision services".to_string()
+        }
+        None => format!(
+            "the decision models declare: {}",
+            declared.iter().cloned().collect::<Vec<_>>().join(", ")
+        ),
+    }
+}
+
 /// Lowers one plan item (and, for stages, its children) into the artifact,
-/// running the kind checks (rule 6), the execute resolution (rule 7), and
-/// the criterion resolution + `when` typing (rules 9 and 10).
+/// running the kind checks (rule 6), the execute resolution (rule 7), the
+/// decision-task resolution (rules 11 and 12), and the criterion
+/// resolution + `when` typing (rules 9 and 10).
 #[allow(clippy::too_many_arguments)]
 fn lower_plan_item(
     item: &dsl::CmmnItemDecl,
@@ -340,6 +498,8 @@ fn lower_plan_item(
     seen: &mut Vec<String>,
     designs_by_alias: &[(&str, &DddModel)],
     events: &[(String, EventModel)],
+    decisions: &[(String, DmnModel)],
+    decision_pool: &BTreeSet<String>,
     types: &rex_expr::DomainTypes,
     out: &mut Vec<PlanItem>,
     local: &mut Vec<Diagnostic>,
@@ -401,6 +561,100 @@ fn lower_plan_item(
             ),
             Some(item.span),
         ));
+    }
+
+    // Rule 11 — decision-task clauses: only a decision task invokes a
+    // decision service (the execute-on-service precedent), and only a
+    // decision task declares the `inputs`/`outputs` name lists. A stray
+    // clause is a diagnosed error, never a silent drop.
+    if item.invokes.is_some() && !matches!(item.kind, dsl::CmmnItemKind::Decision) {
+        local.push(Diagnostic::error(
+            format!(
+                "plan item '{}' in case '{}' cannot invoke a decision service",
+                item.name, case
+            ),
+            Some(item.span),
+        ));
+    }
+    if !item.inputs.is_empty() && !matches!(item.kind, dsl::CmmnItemKind::Decision) {
+        local.push(Diagnostic::error(
+            format!(
+                "plan item '{}' in case '{}' cannot declare decision inputs",
+                item.name, case
+            ),
+            Some(item.span),
+        ));
+    }
+    if !item.outputs.is_empty() && !matches!(item.kind, dsl::CmmnItemKind::Decision) {
+        local.push(Diagnostic::error(
+            format!(
+                "plan item '{}' in case '{}' cannot declare decision outputs",
+                item.name, case
+            ),
+            Some(item.span),
+        ));
+    }
+
+    // Rule 11 — the decision binding: every decision task carries one
+    // `invokes` clause; the qualified name resolves by its **last
+    // segment** (the rule-17 convention: `model.Service` and the bare
+    // `Service` are the same service) union-wide against the provided
+    // decision models' services. An empty bucket lowers the clause
+    // unvalidated (the plain-`compile_ddd_str` records-names-unvalidated
+    // precedent); a non-empty bucket with an unknown service errors with
+    // the did-you-mean help over the declared set. Every `inputs`/`outputs`
+    // name must be a declared case-file item of the same case (the
+    // execute-binding existence bar).
+    let mut lowered_decision: Option<DecisionTaskBinding> = None;
+    if matches!(item.kind, dsl::CmmnItemKind::Decision) {
+        for name in item
+            .inputs
+            .iter()
+            .map(|name| ("input", name))
+            .chain(item.outputs.iter().map(|name| ("output", name)))
+        {
+            if !names.is_file_item(&name.1.text) {
+                local.push(
+                    Diagnostic::error(
+                        format!(
+                            "unknown {} '{}' on decision task '{}' in case '{}'",
+                            name.0, name.1.text, item.name, case
+                        ),
+                        Some(name.1.span),
+                    )
+                    .with_help(case_file_items_help(&names.file_items, &name.1.text)),
+                );
+            }
+        }
+        let authored = item.invokes.as_ref().map(|clause| clause.service.clone());
+        if let Some(clause) = &item.invokes {
+            let name = last_segment(&clause.service);
+            if !decisions.is_empty() && !decision_pool.contains(name) {
+                local.push(
+                    Diagnostic::error(
+                        format!(
+                            "unknown decision service '{}' on decision task '{}' in case '{}'",
+                            name, item.name, case
+                        ),
+                        Some(clause.span),
+                    )
+                    .with_help(decision_services_help(name, decision_pool)),
+                );
+            }
+        } else {
+            local.push(Diagnostic::error(
+                format!(
+                    "decision task '{}' in case '{}' does not declare an invokes clause",
+                    item.name, case
+                ),
+                Some(item.span),
+            ));
+        }
+        lowered_decision = Some(DecisionTaskBinding {
+            invokes: authored.unwrap_or_default(),
+            inputs: item.inputs.iter().map(|name| name.text.clone()).collect(),
+            outputs: item.outputs.iter().map(|name| name.text.clone()).collect(),
+        });
     }
 
     // Rule 7 — the execute binding resolves through the aliased design
@@ -610,6 +864,10 @@ fn lower_plan_item(
         dsl::CmmnItemKind::Service => PlanItemKind::Service(ServiceDef {
             execute: lowered_execute.unwrap_or_default(),
         }),
+        // A decision task lowers as a performer-less task carrying the
+        // `decision_task` binding — the kind vocabulary stays at four
+        // shapes and the binding is the additive discriminator.
+        dsl::CmmnItemKind::Decision => PlanItemKind::Task(TaskDef { performer: None }),
         dsl::CmmnItemKind::Milestone => PlanItemKind::Milestone,
         dsl::CmmnItemKind::Stage { items } => PlanItemKind::Stage(StageBody {
             children: items.iter().map(|child| child.name.clone()).collect(),
@@ -637,6 +895,7 @@ fn lower_plan_item(
         } else {
             PlanningMode::None
         },
+        decision_task: lowered_decision,
     });
 
     if let dsl::CmmnItemKind::Stage { items } = &item.kind {
@@ -650,6 +909,8 @@ fn lower_plan_item(
                 seen,
                 designs_by_alias,
                 events,
+                decisions,
+                decision_pool,
                 types,
                 out,
                 local,

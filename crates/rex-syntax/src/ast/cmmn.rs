@@ -64,9 +64,9 @@ pub struct CmmnFileItem {
     pub span: Span,
 }
 
-/// A plan item declaration: a `task`, `service`, `milestone`, or `stage`
-/// (optionally prefixed `discretionary` for tasks and services), with its
-/// body members folded into per-kind fields.
+/// A plan item declaration: a `task`, `service`, `decision`, `milestone`,
+/// or `stage` (optionally prefixed `discretionary` for tasks, services,
+/// and decisions), with its body members folded into per-kind fields.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CmmnItemDecl {
     /// The plan item name.
@@ -84,6 +84,15 @@ pub struct CmmnItemDecl {
     /// was declared — the driver validates that only a service task
     /// carries one.
     pub execute: Option<CmmnExecute>,
+    /// The `invokes <qualified-name>;` clause, wherever it was declared —
+    /// the driver validates that only a decision task carries one.
+    pub invokes: Option<CmmnInvoke>,
+    /// The `inputs { <name>* }` lists of a decision body, merged in source
+    /// order (the `.dmn` service-list rule: repeated blocks extend).
+    pub inputs: Vec<Name>,
+    /// The `outputs { <name>* }` lists of a decision body, merged in
+    /// source order.
+    pub outputs: Vec<Name>,
     /// `entry` criteria in source order.
     pub entry: Vec<CmmnCriterion>,
     /// `exit` criteria in source order.
@@ -105,6 +114,8 @@ pub enum CmmnItemKind {
     Task,
     /// A service task invoking a `.ddd` service operation.
     Service,
+    /// A decision task invoking a `.dmn` decision service.
+    Decision,
     /// A milestone: a case goal reached when its entry criteria satisfy.
     Milestone,
     /// A stage grouping nested plan items.
@@ -123,6 +134,17 @@ pub struct CmmnExecute {
     pub service: String,
     /// The operation's name.
     pub operation: String,
+    /// Span of the whole clause, `;` included.
+    pub span: Span,
+}
+
+/// An `invokes <qualified-name>;` clause of a decision body.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CmmnInvoke {
+    /// The invoked decision service's qualified name, **as written** — the
+    /// driver resolves it by its last segment (the rule-17 convention) and
+    /// the artifact lowers the authored spelling.
+    pub service: String,
     /// Span of the whole clause, `;` included.
     pub span: Span,
 }

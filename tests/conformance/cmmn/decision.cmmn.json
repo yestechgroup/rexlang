@@ -1,0 +1,124 @@
+{
+  "formatVersion": 1,
+  "cases": [
+    {
+      "name": "Underwriting",
+      "description": "An underwriting case: the automated assessment a sibling decision\nmodel supplies.",
+      "caseFile": [
+        {
+          "name": "application",
+          "description": "The application under assessment.",
+          "type": {
+            "type": "class",
+            "value": {
+              "package": "underwriting",
+              "name": "Application"
+            }
+          },
+          "multiplicity": {
+            "lower": 1,
+            "upper": {
+              "finite": 1
+            }
+          }
+        },
+        {
+          "name": "assessment",
+          "description": "The assessment once the decision task has run.",
+          "type": {
+            "type": "class",
+            "value": {
+              "package": "underwriting",
+              "name": "Assessment"
+            }
+          },
+          "multiplicity": {
+            "lower": 0,
+            "upper": {
+              "finite": 1
+            }
+          }
+        }
+      ],
+      "planItems": [
+        {
+          "name": "Assessment",
+          "kind": {
+            "type": "stage",
+            "value": {
+              "children": [
+                "assess",
+                "Assessed"
+              ]
+            }
+          },
+          "entry": [
+            {
+              "onParts": [
+                {
+                  "type": "caseFile",
+                  "value": {
+                    "item": "application",
+                    "transition": "create"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "assess",
+          "kind": {
+            "type": "task",
+            "value": {}
+          },
+          "entry": [
+            {
+              "onParts": [
+                {
+                  "type": "caseFile",
+                  "value": {
+                    "item": "application",
+                    "transition": "create"
+                  }
+                }
+              ],
+              "when": "Verdict"
+            }
+          ],
+          "control": {
+            "required": true
+          },
+          "decisionTask": {
+            "invokes": "Underwriting.LoanAssessmentService",
+            "inputs": [
+              "application"
+            ],
+            "outputs": [
+              "assessment"
+            ]
+          }
+        },
+        {
+          "name": "Assessed",
+          "kind": {
+            "type": "milestone"
+          },
+          "entry": [
+            {
+              "onParts": [
+                {
+                  "type": "item",
+                  "value": {
+                    "item": "assess",
+                    "event": "complete"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

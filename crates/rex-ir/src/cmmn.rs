@@ -74,6 +74,12 @@
 //! - [`ServiceDef::execute`] names a `.ddd` service operation as
 //!   `alias.Service.operation`, resolved by the driver (the use-case
 //!   `realizes` rule).
+//! - [`PlanItem::decision_task`] carries a decision task's `.dmn` binding:
+//!   [`DecisionTaskBinding::invokes`] names a `.dmn` decision service
+//!   **as written** (resolution by the last segment, the rule-17
+//!   convention — a driver concern), and its `inputs`/`outputs` name
+//!   case-file items of the same case. Every other plan item omits the
+//!   field (the empty = minimal rule).
 //!
 //! [rexlang]: https://github.com/anton-makes/rexlang
 
@@ -224,6 +230,12 @@ pub struct PlanItem {
     /// the case.
     #[serde(default, skip_serializing_if = "PlanningMode::is_none")]
     pub planning: PlanningMode,
+    /// The decision-task binding, when this item invokes a `.dmn` decision
+    /// service (the `decision` plan-item kind). `None` for every other
+    /// kind. The invoked service's qualified name is carried **as
+    /// written** — resolution is a driver concern, never a wire concern.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_task: Option<DecisionTaskBinding>,
 }
 
 /// The structural kind of a [`PlanItem`].
@@ -263,6 +275,26 @@ pub struct ServiceDef {
     /// The invoked operation as `alias.Service.operation`, resolved by the
     /// driver (the use-case `realizes` rule).
     pub execute: String,
+}
+
+/// A decision task's binding: the invoked `.dmn` decision service plus the
+/// case-file items feeding it and receiving its outputs. The plan item's
+/// `decision` kind carries it; every other kind leaves it `None`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecisionTaskBinding {
+    /// The invoked decision service's qualified name, **as written** (the
+    /// rule-17 convention: the driver resolves it by its last segment;
+    /// the wire keeps the authored spelling — the key a decision-task
+    /// executor registry resolves).
+    pub invokes: String,
+    /// The case-file items feeding the decision, in declaration order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<String>,
+    /// The case-file items receiving the decision's outputs, in
+    /// declaration order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<String>,
 }
 
 /// A [`PlanItemKind::Stage`]: a grouping of child plan items, referenced by

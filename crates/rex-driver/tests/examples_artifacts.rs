@@ -405,6 +405,7 @@ fn compile_cmmn(name: &str) -> rex_ir::cmmn::CmmnModel {
         &designs,
         &actors,
         &events,
+        &[],
     );
     assert_clean(&format!("{name}.cmmn"), &compilation.diagnostics);
     compilation

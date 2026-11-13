@@ -5,15 +5,18 @@
 //! exact-message diagnostic test.
 
 use rex_driver::{
-    compile_actors_str, compile_cmmn_str, compile_ddd_str, compile_evt_str, CmmnCompilation,
-    DomainImports,
+    compile_actors_str, compile_cmmn_str, compile_ddd_str, compile_dmn_str, compile_evt_str,
+    CmmnCompilation, DomainImports,
 };
 use rex_ir::cmmn::{
-    CaseFileTransition, OnPart, PlanItemKind, PlanItemTransition, ServiceDef, StageBody, TaskDef,
+    CaseFileTransition, DecisionTaskBinding, OnPart, PlanItemKind, PlanItemTransition, ServiceDef,
+    StageBody, TaskDef,
 };
 
 const CMMN_PATH: &str = "tests/conformance/cmmn/lending.cmmn";
 const ARTIFACT_PATH: &str = "tests/conformance/cmmn/lending.cmmn.json";
+const DECISION_CMMN_PATH: &str = "tests/conformance/cmmn/decision.cmmn";
+const DECISION_ARTIFACT_PATH: &str = "tests/conformance/cmmn/decision.cmmn.json";
 
 /// Compiles the conformance case file, resolving its four imports exactly
 /// the way the CLI does (relative to the `.cmmn` file; the resolved
@@ -81,6 +84,7 @@ fn compile_conformance() -> CmmnCompilation {
         &[(design_path, design.model.expect("design artifact"))],
         &[(actors_path, actors.model.expect("actor artifact"))],
         &[(events_path, events.model.expect("event artifact"))],
+        &[],
     )
 }
 
@@ -135,6 +139,7 @@ fn compile_with_buckets(source: &str) -> CmmnCompilation {
         &[(design_path.clone(), design.model.expect("design artifact"))],
         &[(actors_path.clone(), actors.model.expect("actor artifact"))],
         &[(events_path.clone(), events.model.expect("event artifact"))],
+        &[],
     )
 }
 
@@ -155,6 +160,87 @@ fn expect_diagnostic(compilation: &CmmnCompilation, needle: &str) {
             .map(|(_, diagnostic)| &diagnostic.message)
             .collect::<Vec<_>>()
     );
+}
+
+/// Compiles the decision conformance fixture (`decision.cmmn` over
+/// `decision.mox` + `decision.dmn`), resolving its imports exactly the way
+/// the CLI does — the sibling `.dmn` compiled into the decisions bucket.
+fn compile_decision_conformance() -> CmmnCompilation {
+    let cmmn_absolute = fixture_path(DECISION_CMMN_PATH);
+    let source = std::fs::read_to_string(&cmmn_absolute).expect("read decision conformance case");
+    let dir = cmmn_absolute.parent().expect("case directory");
+
+    let domain_path = dir.join("decision.mox");
+    let domain_source =
+        std::fs::read_to_string(&domain_path).expect("read conformance domain decision.mox");
+    let domain = [(domain_path.display().to_string(), domain_source.clone())];
+
+    let decisions_source =
+        std::fs::read_to_string(dir.join("decision.dmn")).expect("read imported decisions");
+    let decisions_path = dir.join("decision.dmn").display().to_string();
+    let decisions = compile_dmn_str(
+        &decisions_path,
+        &decisions_source,
+        &domain,
+        &DomainImports::default(),
+        &[],
+    );
+    assert!(
+        decisions.diagnostics.is_empty(),
+        "imported decisions must compile clean: {:?}",
+        decisions.diagnostics
+    );
+
+    compile_cmmn_str(
+        cmmn_absolute.to_str().expect("utf-8 path"),
+        &source,
+        &domain,
+        &DomainImports::default(),
+        &[],
+        &[],
+        &[],
+        &[(decisions_path, decisions.model.expect("decision artifact"))],
+    )
+}
+
+/// Compiles a case source against the decision-fixture imports (the
+/// underwriting domain plus the compiled decision model). Paths inside the
+/// source should be written as `decision.<ext>`; the harness resolves them
+/// relative to the fixture directory. `decisions` selects whether the
+/// sibling `.dmn` enters the bucket.
+fn compile_with_decisions(source: &str, decisions: bool) -> CmmnCompilation {
+    let dir = fixture_path("tests/conformance/cmmn");
+    let domain_path = dir.join("decision.mox");
+    let domain_source = std::fs::read_to_string(&domain_path).expect("read decision.mox");
+    let domain = [(domain_path.display().to_string(), domain_source.clone())];
+
+    let decisions_source =
+        std::fs::read_to_string(dir.join("decision.dmn")).expect("read decision.dmn");
+    let decisions_path = dir.join("decision.dmn").display().to_string();
+    let decisions_bucket = if decisions {
+        let decisions = compile_dmn_str(
+            &decisions_path,
+            &decisions_source,
+            &domain,
+            &DomainImports::default(),
+            &[],
+        );
+        vec![(decisions_path, decisions.model.expect("decision artifact"))]
+    } else {
+        Vec::new()
+    };
+
+    let cmmn_path = dir.join("decision-case.cmmn");
+    compile_cmmn_str(
+        cmmn_path.to_str().expect("utf-8 path"),
+        source,
+        &domain,
+        &DomainImports::default(),
+        &[],
+        &[],
+        &[],
+        &decisions_bucket,
+    )
 }
 
 // --- golden ----------------------------------------------------------------
@@ -567,6 +653,7 @@ fn compile_with_sigil_domain(source: &str) -> CmmnCompilation {
         &[],
         &[],
         &[],
+        &[],
     )
 }
 
@@ -631,4 +718,281 @@ fn discretionary_tasks_and_flags_lower_to_their_wire_fields() {
     assert!(control.repetition);
     assert_eq!(control.manual_activation, Some(false));
     assert!(!control.required);
+}
+
+// --- decision tasks (issue rexlang#152) --------------------------------------
+
+#[test]
+fn decision_cmmn_file_matches_golden_artifact() {
+    let compilation = compile_decision_conformance();
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "decision fixture must compile clean: {:?}",
+        compilation
+            .diagnostics
+            .iter()
+            .map(|(_, diagnostic)| &diagnostic.message)
+            .collect::<Vec<_>>()
+    );
+    let model = compilation.model.expect("case artifact");
+    assert_eq!(
+        model.format_version,
+        rex_ir::cmmn::CMMN_MODEL_FORMAT_VERSION
+    );
+
+    let artifact_path = fixture_path(DECISION_ARTIFACT_PATH);
+    let json = model.to_json_pretty().expect("serialize artifact");
+    if std::env::var("REX_UPDATE_FIXTURES").is_ok() {
+        std::fs::create_dir_all(artifact_path.parent().unwrap()).unwrap();
+        std::fs::write(&artifact_path, &json).unwrap();
+        eprintln!("updated {}", artifact_path.display());
+        return;
+    }
+    let expected = std::fs::read_to_string(&artifact_path).expect("golden artifact");
+    assert_eq!(
+        json, expected,
+        "the compiled artifact must match the golden"
+    );
+}
+
+/// The decision binding lowers as authored: the qualified service name
+/// verbatim, the case-file items by name, and the item stays a
+/// performer-less task with the binding as the additive discriminator.
+#[test]
+fn the_decision_binding_lowers_as_authored() {
+    let compilation = compile_decision_conformance();
+    let model = compilation.model.expect("case artifact");
+    let case = &model.cases[0];
+    let assess = case
+        .plan_items
+        .iter()
+        .find(|item| item.name == "assess")
+        .expect("decision task");
+    let PlanItemKind::Task(TaskDef { performer }) = &assess.kind else {
+        panic!("a decision task lowers as a performer-less task")
+    };
+    assert_eq!(performer.as_deref(), None);
+    assert_eq!(
+        assess.decision_task,
+        Some(DecisionTaskBinding {
+            invokes: "Underwriting.LoanAssessmentService".to_string(),
+            inputs: vec!["application".to_string()],
+            outputs: vec!["assessment".to_string()],
+        })
+    );
+}
+
+/// The resolved service's output decisions join the synthetic universe: a
+/// single-output decision is an entry named by the decision, a
+/// multi-output decision is a class named by the decision, both
+/// navigable from the case root in `when` guards.
+#[test]
+fn resolved_decision_outputs_type_in_when_guards() {
+    let compilation = compile_with_decisions(
+        "import \"decision.mox\"\nimport \"decision.dmn\"\ncase Underwriting {\n    case_file {\n        Application[1..1] application;\n        Assessment[0..1] assessment;\n    }\n    decision assess {\n        invokes Underwriting.LoanAssessmentService;\n        inputs { application }\n        outputs { assessment }\n        entry on application.create when (Verdict && LoanAssessment.outcome != \"\");\n    }\n}\n",
+        true,
+    );
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "expected clean compile: {:?}",
+        compilation
+            .diagnostics
+            .iter()
+            .map(|(_, diagnostic)| &diagnostic.message)
+            .collect::<Vec<_>>()
+    );
+    let model = compilation.model.expect("artifact");
+    assert_eq!(
+        model.cases[0].plan_items[0].entry[0].when.as_deref(),
+        Some("Verdict && LoanAssessment.outcome != \"\"")
+    );
+}
+
+/// An unresolved task (empty decisions bucket) contributes nothing to the
+/// universe: the clause lowers unvalidated, but a guard referencing the
+/// decision output is then an unknown name. The source imports no `.dmn`
+/// file — the empty bucket is the plain shape.
+#[test]
+fn an_empty_decisions_bucket_lowers_unvalidated() {
+    let compilation = compile_with_decisions(
+        "import \"decision.mox\"\ncase Underwriting {\n    case_file {\n        Application[1..1] application;\n    }\n    decision assess {\n        invokes Underwriting.LoanAssessmentService;\n        entry on application.create;\n    }\n}\n",
+        false,
+    );
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "the invokes clause lowers unvalidated against an empty bucket: {:?}",
+        compilation
+            .diagnostics
+            .iter()
+            .map(|(_, diagnostic)| &diagnostic.message)
+            .collect::<Vec<_>>()
+    );
+    let model = compilation.model.expect("artifact");
+    assert_eq!(
+        model.cases[0].plan_items[0]
+            .decision_task
+            .as_ref()
+            .expect("binding")
+            .invokes,
+        "Underwriting.LoanAssessmentService"
+    );
+    let guarded = compile_with_decisions(
+        "import \"decision.mox\"\ncase Underwriting {\n    case_file {\n        Application[1..1] application;\n    }\n    decision assess {\n        invokes Underwriting.LoanAssessmentService;\n        entry on application.create when (Verdict);\n    }\n}\n",
+        false,
+    );
+    assert!(
+        !guarded.diagnostics.is_empty(),
+        "an unresolved decision contributes no universe entry"
+    );
+}
+
+#[test]
+fn an_unknown_decision_service_is_an_error_with_the_declared_set() {
+    let compilation = compile_with_decisions(
+        "import \"decision.mox\"\nimport \"decision.dmn\"\ncase Underwriting {\n    case_file {\n        Application[1..1] application;\n    }\n    decision assess {\n        invokes Underwriting.Nope;\n        entry on application.create;\n    }\n}\n",
+        true,
+    );
+    expect_diagnostic(
+        &compilation,
+        "unknown decision service 'Nope' on decision task 'assess' in case 'Underwriting'",
+    );
+    assert!(compilation.diagnostics.iter().any(|(_, diagnostic)| {
+        diagnostic.help.as_deref() == Some("the decision models declare: LoanAssessmentService")
+    }));
+}
+
+#[test]
+fn an_unknown_decision_service_suggests_the_close_name() {
+    let compilation = compile_with_decisions(
+        "import \"decision.mox\"\nimport \"decision.dmn\"\ncase Underwriting {\n    case_file {\n        Application[1..1] application;\n    }\n    decision assess {\n        invokes Underwriting.LoanAssesmentService;\n        entry on application.create;\n    }\n}\n",
+        true,
+    );
+    expect_diagnostic(
+        &compilation,
+        "unknown decision service 'LoanAssesmentService' on decision task 'assess' in case 'Underwriting'",
+    );
+    assert!(compilation.diagnostics.iter().any(|(_, diagnostic)| {
+        diagnostic.help.as_deref() == Some("did you mean 'LoanAssessmentService'?")
+    }));
+}
+
+/// Resolution is by the **last segment**: `Underwriting.LoanAssessmentService`
+/// and the bare `LoanAssessmentService` are the same service, and the
+/// artifact lowers whichever spelling was authored.
+#[test]
+fn an_invokes_clause_resolves_by_its_last_segment() {
+    let compilation = compile_with_decisions(
+        "import \"decision.mox\"\nimport \"decision.dmn\"\ncase Underwriting {\n    case_file {\n        Application[1..1] application;\n        Assessment[0..1] assessment;\n    }\n    decision assess {\n        invokes LoanAssessmentService;\n        inputs { application }\n        outputs { assessment }\n        entry on application.create;\n    }\n}\n",
+        true,
+    );
+    assert!(
+        compilation.diagnostics.is_empty(),
+        "expected clean compile: {:?}",
+        compilation
+            .diagnostics
+            .iter()
+            .map(|(_, diagnostic)| &diagnostic.message)
+            .collect::<Vec<_>>()
+    );
+    let model = compilation.model.expect("artifact");
+    assert_eq!(
+        model.cases[0].plan_items[0]
+            .decision_task
+            .as_ref()
+            .expect("binding")
+            .invokes,
+        "LoanAssessmentService",
+        "the qualified name lowers as authored"
+    );
+}
+
+#[test]
+fn an_unknown_decision_input_is_an_error_with_did_you_mean() {
+    let compilation = compile_with_decisions(
+        "import \"decision.mox\"\nimport \"decision.dmn\"\ncase Underwriting {\n    case_file {\n        Application[1..1] application;\n    }\n    decision assess {\n        invokes Underwriting.LoanAssessmentService;\n        inputs { applications }\n        entry on application.create;\n    }\n}\n",
+        true,
+    );
+    expect_diagnostic(
+        &compilation,
+        "unknown input 'applications' on decision task 'assess' in case 'Underwriting'",
+    );
+    assert!(compilation.diagnostics.iter().any(|(_, diagnostic)| {
+        diagnostic.help.as_deref() == Some("did you mean 'application'?")
+    }));
+}
+
+#[test]
+fn an_unknown_decision_output_is_an_error_listing_the_case_file() {
+    let compilation = compile_with_decisions(
+        "import \"decision.mox\"\nimport \"decision.dmn\"\ncase Underwriting {\n    case_file {\n        Application[1..1] application;\n    }\n    decision assess {\n        invokes Underwriting.LoanAssessmentService;\n        outputs { assessment }\n        entry on application.create;\n    }\n}\n",
+        true,
+    );
+    expect_diagnostic(
+        &compilation,
+        "unknown output 'assessment' on decision task 'assess' in case 'Underwriting'",
+    );
+    assert!(compilation.diagnostics.iter().any(|(_, diagnostic)| {
+        diagnostic.help.as_deref() == Some("the case declares: application")
+    }));
+}
+
+/// Inputs and outputs must be **case-file items**: a plan-item name is in
+/// the shared namespace but is not a case-file item.
+#[test]
+fn a_plan_item_name_is_not_a_decision_input() {
+    let compilation = compile_with_decisions(
+        "import \"decision.mox\"\nimport \"decision.dmn\"\ncase Underwriting {\n    case_file {\n        Application[1..1] application;\n    }\n    decision assess {\n        invokes Underwriting.LoanAssessmentService;\n        inputs { assess }\n        entry on application.create;\n    }\n}\n",
+        true,
+    );
+    expect_diagnostic(
+        &compilation,
+        "unknown input 'assess' on decision task 'assess' in case 'Underwriting'",
+    );
+}
+
+#[test]
+fn invokes_on_a_non_decision_kind_is_an_error() {
+    let compilation = compile_with_decisions(
+        "import \"decision.mox\"\nimport \"decision.dmn\"\ncase Underwriting {\n    case_file {\n        Application[1..1] application;\n    }\n    task T {\n        invokes Underwriting.LoanAssessmentService;\n    }\n}\n",
+        true,
+    );
+    expect_diagnostic(
+        &compilation,
+        "plan item 'T' in case 'Underwriting' cannot invoke a decision service",
+    );
+}
+
+#[test]
+fn decision_inputs_on_a_non_decision_kind_are_an_error() {
+    let compilation = compile_with_decisions(
+        "import \"decision.mox\"\nimport \"decision.dmn\"\ncase Underwriting {\n    case_file {\n        Application[1..1] application;\n    }\n    service S {}\n    task T {\n        inputs { application }\n    }\n}\n",
+        true,
+    );
+    expect_diagnostic(
+        &compilation,
+        "plan item 'T' in case 'Underwriting' cannot declare decision inputs",
+    );
+}
+
+#[test]
+fn a_decision_task_without_invokes_is_an_error() {
+    let compilation = compile_with_decisions(
+        "import \"decision.mox\"\nimport \"decision.dmn\"\ncase Underwriting {\n    case_file {\n        Application[1..1] application;\n    }\n    decision assess {\n        entry on application.create;\n    }\n}\n",
+        true,
+    );
+    expect_diagnostic(
+        &compilation,
+        "decision task 'assess' in case 'Underwriting' does not declare an invokes clause",
+    );
+}
+
+/// A duplicate `invokes` clause is a parse error (the `execute` clause
+/// rule): the parser reports it and the driver sees one clause.
+#[test]
+fn a_duplicate_invokes_clause_is_a_parse_error() {
+    let compilation = compile_with_decisions(
+        "import \"decision.mox\"\nimport \"decision.dmn\"\ncase Underwriting {\n    case_file {\n        Application[1..1] application;\n    }\n    decision assess {\n        invokes Underwriting.LoanAssessmentService;\n        invokes Underwriting.LoanAssessmentService;\n        entry on application.create;\n    }\n}\n",
+        true,
+    );
+    expect_diagnostic(&compilation, "duplicate `invokes` clause");
 }

@@ -368,6 +368,7 @@ pub(crate) fn compile_surface(
             &pair.designs,
             &pair.actors,
             &pair.events,
+            &pair.decisions,
         );
         report_cmmn_diagnostics(&pair.pair, &compilation);
         let Some(case_model) = compilation.model else {

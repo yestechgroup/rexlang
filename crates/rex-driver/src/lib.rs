@@ -51,8 +51,9 @@ pub use navigation::{
     DefId, Definition, FeatureSymbolKind, Lookup, NavigationIndex, Reference, SymbolKind,
 };
 pub use project::{
-    compile_actor_imports, compile_domain_union, gather_deploy_imports, gather_domain_sources,
-    gather_ifml_project, gather_usecase_imports, ActorImport, DeployPairs, IfmlProject, UcBuckets,
+    compile_actor_imports, compile_domain_union, gather_case_imports, gather_deploy_imports,
+    gather_domain_sources, gather_ifml_project, gather_usecase_imports, ActorImport, CmmnBuckets,
+    DeployPairs, IfmlProject, UcBuckets,
 };
 
 /// Byte-offset span into the source text.

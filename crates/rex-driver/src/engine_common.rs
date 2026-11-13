@@ -72,6 +72,41 @@ pub(crate) fn four_bucket_hits(
         .collect()
 }
 
+/// The five-bucket `.cmmn` variant: the four use-case buckets plus the
+/// decision models a `decision` task's `invokes` clause resolves against.
+pub(crate) fn five_bucket_hits(
+    imports: &[dsl::Import],
+    origin_path: &str,
+    domains: &[DomainUnit],
+    designs: &[(String, DddModel)],
+    actors: &[(String, ActorModel)],
+    events: &[(String, EventModel)],
+    decisions: &[(String, rex_ir::dmn::DmnModel)],
+) -> Vec<[bool; 5]> {
+    imports
+        .iter()
+        .map(|import| {
+            [
+                domains
+                    .iter()
+                    .any(|unit| import_matches(&import.path, origin_path, &unit.path)),
+                designs
+                    .iter()
+                    .any(|(provided, _)| import_matches(&import.path, origin_path, provided)),
+                actors
+                    .iter()
+                    .any(|(provided, _)| import_matches(&import.path, origin_path, provided)),
+                events
+                    .iter()
+                    .any(|(provided, _)| import_matches(&import.path, origin_path, provided)),
+                decisions
+                    .iter()
+                    .any(|(provided, _)| import_matches(&import.path, origin_path, provided)),
+            ]
+        })
+        .collect()
+}
+
 /// The two-bucket `.deploy` variant: designs, then `.ifml` flows.
 pub(crate) fn two_bucket_hits(
     imports: &[dsl::Import],
@@ -153,10 +188,12 @@ pub(crate) fn import_hit_diagnostics<const N: usize>(
 /// Design imports by alias: the first aliased design match per alias wins
 /// (rule 12 of the design engine, reused by the `.uc` and `.cmmn`
 /// engines), so a duplicate alias binds the first import's design and the
-/// rest contribute nothing.
-pub(crate) fn designs_by_alias<'a>(
+/// rest contribute nothing. Generic over the bucket arity — the `.cmmn`
+/// five-bucket hit table slots into the same helper (only the designs
+/// column is read).
+pub(crate) fn designs_by_alias<'a, const N: usize>(
     imports: &'a [dsl::Import],
-    hits: &[[bool; 4]],
+    hits: &[[bool; N]],
     designs: &'a [(String, DddModel)],
     origin_path: &str,
 ) -> Vec<(&'a str, &'a DddModel)> {

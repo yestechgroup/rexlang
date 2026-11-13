@@ -447,6 +447,7 @@ fn compile_fence(fence: &Fence, workspace: &Path) -> String {
                 &designs,
                 &actors,
                 &events,
+                &[],
             );
             problems(tagged_errors_of(&compilation.diagnostics))
         }

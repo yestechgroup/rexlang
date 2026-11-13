@@ -1,5 +1,5 @@
 //! The `.cmmn` entry points: case compilation against the imported domain
-//! union and pre-compiled design, actor, and event artifacts.
+//! union and pre-compiled design, actor, event, and decision artifacts.
 
 use salsa::Database as Db;
 
@@ -14,17 +14,27 @@ use crate::union::{domain_files, lower_domains};
 /// salsa) with **empty artifact buckets**: under this query every bare event
 /// on-part, unknown role binding, and `execute` binding errors by design
 /// (the [`compile_usecase`](fn.compile_usecase) empty-import-bundle
-/// precedent). Designs, actor models, and event contracts enter only
-/// through the one-shot [`compile_cmmn_str`]. Use it for parse/domain
-/// editing feedback, not for full validation.
+/// precedent). Designs, actor models, event contracts, and decision models
+/// enter only through the one-shot [`compile_cmmn_str`]. Use it for
+/// parse/domain editing feedback, not for full validation.
 #[salsa::tracked]
 pub fn compile_cmmn(db: &dyn Db, file: SourceFile, domains: Vec<SourceFile>) -> CmmnCompilation {
-    compile_cmmn_with(db, file, domains, &[], &[], &[], &DomainImports::default())
+    compile_cmmn_with(
+        db,
+        file,
+        domains,
+        &[],
+        &[],
+        &[],
+        &[],
+        &DomainImports::default(),
+    )
 }
 
 /// The body of [`compile_cmmn`], parameterized over the pre-compiled
-/// design/actor/event artifacts and the provided import content for the
-/// domain files (see [`compile_file`] for the import shape).
+/// design/actor/event/decision artifacts and the provided import content
+/// for the domain files (see [`compile_file`] for the import shape).
+#[allow(clippy::too_many_arguments)]
 fn compile_cmmn_with(
     db: &dyn Db,
     file: SourceFile,
@@ -32,6 +42,7 @@ fn compile_cmmn_with(
     designs: &[(String, rex_ir::ddd::DddModel)],
     actors: &[(String, rex_ir::ActorModel)],
     events: &[(String, rex_ir::events::EventModel)],
+    decisions: &[(String, rex_ir::dmn::DmnModel)],
     imports: &DomainImports,
 ) -> CmmnCompilation {
     let path = file.path(db);
@@ -56,19 +67,20 @@ fn compile_cmmn_with(
         designs,
         actors,
         events,
+        decisions,
     );
     finish_surface(domains, model, diagnostics, CmmnCompilation::assemble)
 }
 
 /// Compiles a `.cmmn` case file against its imported domain models and
-/// pre-compiled design, actor, and event artifacts in one call.
+/// pre-compiled design, actor, event, and decision artifacts in one call.
 ///
-/// The `domains` pairs are raw `.mox` texts; `designs`, `actors`, and
-/// `events` hold the pre-compiled artifacts the file's imports pull in,
-/// each keyed by the path the host resolved (the `.deploy` pattern). Every
-/// import — whatever its surface — matches a provided entry by exact path
-/// or by lexical resolution relative to the `.cmmn` file's directory (the
-/// `.deploy` rule). `imports` carries the domain files' own
+/// The `domains` pairs are raw `.mox` texts; `designs`, `actors`, `events`,
+/// and `decisions` hold the pre-compiled artifacts the file's imports pull
+/// in, each keyed by the path the host resolved (the `.deploy` pattern).
+/// Every import — whatever its surface — matches a provided entry by exact
+/// path or by lexical resolution relative to the `.cmmn` file's directory
+/// (the `.deploy` rule). `imports` carries the domain files' own
 /// `import schema`/`import sigil` content (see [`DomainImports`]).
 ///
 /// The artifact is `None` on any error-severity diagnostic anywhere;
@@ -88,6 +100,14 @@ fn compile_cmmn_with(
 ///   aliased `DddModel` (the use-case `realizes` rule): the alias comes
 ///   from the import, the service must exist exactly once in that design,
 ///   and the operation must exist on it.
+/// * **`invokes` clauses** name a `.dmn` decision service as written; the
+///   qualified name resolves **by its last segment** (the rule-17
+///   convention: `model.Service` and the bare `Service` are the same
+///   service) union-wide against the provided decision models' services.
+///   An empty `decisions` bucket lowers the clause unvalidated (the plain
+///   `compile_ddd_str` records-names-unvalidated precedent); a non-empty
+///   bucket resolves strictly, with a did-you-mean help over the declared
+///   set. The artifact lowers the name **as authored**.
 /// * **On-parts** resolve by shape: a dotted reference `name.tail` names a
 ///   plan item (or case-file item) declared in the same case and the tail
 ///   must be a known transition of that kind; a bare `name` must name an
@@ -101,9 +121,16 @@ fn compile_cmmn_with(
 ///   and the case as the root class — so `case_file.x` navigation and
 ///   `PlanItem.completed` predicates type-check with the standard
 ///   `docs/EXPRESSIONS.md` semantics (rules R1–R9 apply; the condition
-///   must be boolean). The artifact carries the condition's **verbatim
-///   interior text** (wire rule 9); parsing, typing, and translation are
-///   driver/backend concerns.
+///   must be boolean). Every **resolved** decision task extends the
+///   universe with its service's output decisions: a single-output
+///   decision inserts an entry named by the decision typed with its
+///   output type, a multi-output decision inserts a class named by the
+///   decision whose fields are its named outputs — both reachable as
+///   features of the case root (`insert_class` on the `DomainTypes`,
+///   never a fake `Model`). Unresolved tasks (empty bucket, unknown
+///   service) contribute nothing. The artifact carries the condition's
+///   **verbatim interior text** (wire rule 9); parsing, typing, and
+///   translation are driver/backend concerns.
 ///
 /// # Validation rules
 ///
@@ -148,12 +175,28 @@ fn compile_cmmn_with(
 ///     universe (`criterion condition must be boolean, found <ty>`); the
 ///     expression rules R1–R4 of `docs/EXPRESSIONS.md` apply and are cited
 ///     in the errors.
+/// 11. **Decision tasks** — only a decision task may `invokes`, declare
+///     `inputs`, or declare `outputs` (`plan item '<p>' in case '<c>'
+///     cannot invoke a decision service` / `... cannot declare decision
+///     inputs` / `... cannot declare decision outputs`); every decision
+///     task carries exactly one `invokes` clause (a duplicate is a parse
+///     error, the `execute` clause rule; `decision task '<d>' in case
+///     '<c>' does not declare an invokes clause`); the clause's qualified
+///     name resolves by its last segment union-wide against the provided
+///     decision models' services — an empty bucket lowers it unvalidated,
+///     an unknown service errors (`unknown decision service '<s>' on
+///     decision task '<t>' in case '<c>'`) with the did-you-mean help over
+///     the declared set; every `inputs`/`outputs` name must be a declared
+///     case-file item of the same case (`unknown input '<n>' on decision
+///     task '<t>' in case '<c>'`, `unknown output ...` likewise) with the
+///     did-you-mean help over the case's case-file items.
 ///
 /// Diagnostics are ordered deterministically: the case file's parse
 /// diagnostics first, then the import errors, then each domain's own
 /// diagnostics (import order), then the case's semantic diagnostics grouped
 /// by declaration kind (roles, case-file items, then plan items
 /// depth-first; each in source order).
+#[allow(clippy::too_many_arguments)]
 pub fn compile_cmmn_str(
     path: &str,
     source: &str,
@@ -162,9 +205,12 @@ pub fn compile_cmmn_str(
     designs: &[(String, rex_ir::ddd::DddModel)],
     actors: &[(String, rex_ir::ActorModel)],
     events: &[(String, rex_ir::events::EventModel)],
+    decisions: &[(String, rex_ir::dmn::DmnModel)],
 ) -> CmmnCompilation {
     let db = Database::new();
     let file = SourceFile::new(&db, path.to_string(), source.to_string());
     let files = domain_files(&db, domains);
-    compile_cmmn_with(&db, file, files, designs, actors, events, imports)
+    compile_cmmn_with(
+        &db, file, files, designs, actors, events, decisions, imports,
+    )
 }

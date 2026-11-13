@@ -12,9 +12,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use rex_driver::{
-    compile_actor_imports, compile_domain_union, compile_files, compile_str, gather_deploy_imports,
-    gather_domain_sources, gather_ifml_project, gather_usecase_imports, DomainImports,
-    MultiCompilation, SchemaImports,
+    compile_actor_imports, compile_domain_union, compile_files, compile_str, gather_case_imports,
+    gather_deploy_imports, gather_domain_sources, gather_ifml_project, gather_usecase_imports,
+    DomainImports, MultiCompilation, SchemaImports,
 };
 
 use crate::imports::{collect_schema_imports, collect_sigil_imports, SigilSources};
@@ -722,8 +722,9 @@ pub(crate) fn read_uc_pair(file: &Path, project: Option<&mut Project>) -> anyhow
 }
 
 /// A `.cmmn` file and its compiled imports: the case-management
-/// counterpart of [`UcPair`] — domains, events, actors, and aliased
-/// designs, each keyed by its resolved path.
+/// counterpart of [`UcPair`] — domains, events, actors, aliased designs,
+/// and the sibling `.dmn` decision models a `decision` task's `invokes`
+/// clause resolves against, each keyed by its resolved path.
 pub(crate) struct CmmnPair {
     /// The case file plus its raw imported domains.
     pub(crate) pair: DomainPair,
@@ -733,13 +734,17 @@ pub(crate) struct CmmnPair {
     pub(crate) actors: Vec<(String, rex_ir::ActorModel)>,
     /// Each imported `.evt` contract, compiled, keyed by its resolved path.
     pub(crate) events: Vec<(String, rex_ir::events::EventModel)>,
+    /// Each imported `.dmn` decision model, compiled, keyed by its
+    /// resolved path. Empty when the file imports no decision models —
+    /// exactly the plain behavior.
+    pub(crate) decisions: Vec<(String, rex_ir::dmn::DmnModel)>,
 }
 
 /// Reads a `.cmmn` file and gathers its imports exactly like
-/// [`read_uc_pair`], through [`gather_usecase_imports`]: paths relative to
+/// [`read_uc_pair`], through [`gather_case_imports`]: paths relative to
 /// the case file's directory, bucketed by resolved extension (`.mox` raw,
-/// `.ddd`/`.actor`/`.evt` compiled). Unknown extensions pass through so
-/// the driver reports them.
+/// `.ddd`/`.actor`/`.evt`/`.dmn` compiled). Unknown extensions pass
+/// through so the driver reports them.
 pub(crate) fn read_cmmn_pair(
     file: &Path,
     project: Option<&mut Project>,
@@ -756,10 +761,10 @@ pub(crate) fn read_cmmn_pair(
         })
         .unwrap_or_default();
     let mut fetch = project_fetch(project);
-    let buckets = gather_usecase_imports(
+    let buckets = gather_case_imports(
         &file.display().to_string(),
         &source,
-        |source| {
+        &|source| {
             rex_syntax::parse_cmmn(source)
                 .ast
                 .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
@@ -782,6 +787,7 @@ pub(crate) fn read_cmmn_pair(
         designs: buckets.designs,
         actors: buckets.actors,
         events: buckets.events,
+        decisions: buckets.decisions,
     })
 }
 
