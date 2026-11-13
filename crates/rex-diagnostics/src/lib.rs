@@ -165,7 +165,7 @@ const BANDS: &[Band] = &[
         range: "E0100–E0149",
         owner: "rex-ifml typed checker",
         severity_note: "error",
-        next_free: "E0110",
+        next_free: "E0112",
     },
     Band {
         id: "ifml.lints",
