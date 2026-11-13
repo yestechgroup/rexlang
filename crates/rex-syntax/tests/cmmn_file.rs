@@ -427,6 +427,76 @@ fn an_execute_binding_with_wrong_arity_is_reported() {
     );
 }
 
+/// The `version` pin of a decision task's `invokes` clause (rexlang#154):
+/// `version compatible` and the exact string both parse and lower with
+/// the authored service name.
+#[test]
+fn a_decision_task_pin_parses() {
+    let source = concat!(
+        "case U {\n",
+        "    decision assess {\n",
+        "        invokes Underwriting.LoanAssessmentService version compatible;\n",
+        "    }\n",
+        "    decision fraud {\n",
+        "        invokes FraudScreen version \"1.4.2\";\n",
+        "    }\n",
+        "}\n",
+    );
+    let file = parse_ok(source);
+    let case = expect_case(&file, "U");
+    let assess = &case.plan_items[0];
+    assert_eq!(
+        assess.invokes.as_ref().expect("the invokes clause").service,
+        "Underwriting.LoanAssessmentService"
+    );
+    assert_eq!(
+        assess.invokes.as_ref().expect("the invokes clause").pin,
+        Some(rex_syntax::ast::DddVersionPin::Compatible)
+    );
+    let fraud = &case.plan_items[1];
+    let clause = fraud.invokes.as_ref().expect("the invokes clause");
+    assert_eq!(clause.service, "FraudScreen");
+    assert_eq!(
+        clause.pin,
+        Some(rex_syntax::ast::DddVersionPin::Exact("1.4.2".into()))
+    );
+}
+
+/// The pin formatting round-trips: the pinned clause carries
+/// `version <pin>` before the `;` and the result is a fixpoint.
+#[test]
+fn decision_task_pin_formatting_round_trips() {
+    let pinned = "case U {\n    decision assess {\n        invokes Underwriting.LoanAssessmentService version compatible;\n    }\n}\n";
+    let once = format_cmmn(pinned).expect("format");
+    assert_eq!(once, pinned, "the pinned clause is already canonical");
+    assert_eq!(format_cmmn(&once).expect("format twice"), once);
+
+    let sloppy =
+        "case U {\n    decision assess {\n        invokes FraudScreen version \"1.4.2\"\n    }\n}\n";
+    let once = format_cmmn(sloppy).expect("format");
+    assert!(
+        once.contains("invokes FraudScreen version \"1.4.2\";"),
+        "the missing `;` is canonicalized: {once}"
+    );
+}
+
+/// A bare `version` (no value) is a committed parse error.
+#[test]
+fn a_bare_decision_task_pin_is_reported() {
+    let source = concat!(
+        "case U {\n",
+        "    decision assess {\n",
+        "        invokes FraudScreen version;\n",
+        "    }\n",
+        "}\n",
+    );
+    let result = parse_cmmn(source);
+    assert!(
+        !result.errors.is_empty(),
+        "a bare `version` pin is a reported error"
+    );
+}
+
 #[test]
 fn a_duplicate_performer_is_reported_and_first_wins() {
     let source = concat!(

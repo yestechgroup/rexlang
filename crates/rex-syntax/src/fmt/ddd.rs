@@ -202,11 +202,13 @@ impl<'src> Formatter<'src> {
             Some(Token::Ident(ddd::INJECT)) => {
                 self.advance();
                 if matches!(self.peek_tok(), Some(Token::Ident(ddd::DECISION))) {
-                    // The `inject decision <qualified-name>;` form: the
-                    // discriminator re-emits verbatim, the reference scans
-                    // as one dotted name.
+                    // The `inject decision <qualified-name> version <pin>?;`
+                    // form: the discriminator re-emits verbatim, the
+                    // reference scans as one dotted name, and the optional
+                    // `version` pin (rexlang#154) re-emits verbatim.
                     self.advance();
                     self.scan_qname();
+                    self.scan_version_pin();
                 } else {
                     self.take_name();
                 }
@@ -283,22 +285,42 @@ impl<'src> Formatter<'src> {
         }
     }
 
-    /// Consumes and emits an optional `invokes A.B, C` clause, kept on the
-    /// operation's line: the canonical position between the `capability`
-    /// clause and the `emits` clause (the parser enforces that order, so
-    /// re-emitting in scan order is the canonical order). `invokes` is a
-    /// contextual word — an ordinary identifier everywhere else — so the
-    /// scan matches the [`ddd::INVOKES`] identifier, not a keyword token.
-    /// The names are qualified and re-emitted as dotted references.
-    /// Repository operations never take the clause.
+    /// Consumes and emits an optional `invokes A.B version <pin>?, C
+    /// version <pin>?` clause, kept on the operation's line: the canonical
+    /// position between the `capability` clause and the `emits` clause
+    /// (the parser enforces that order, so re-emitting in scan order is
+    /// the canonical order). `invokes` is a contextual word — an ordinary
+    /// identifier everywhere else — so the scan matches the
+    /// [`ddd::INVOKES`] identifier, not a keyword token. The names are
+    /// qualified and re-emitted as dotted references; each entry's
+    /// optional `version` pin (rexlang#154) re-emits verbatim after its
+    /// name. Repository operations never take the clause.
     pub(crate) fn scan_ddd_invokes(&mut self) {
         if !self.take_if(|token| matches!(token, Token::Ident(ddd::INVOKES))) {
             return;
         }
         self.scan_qname();
+        self.scan_version_pin();
         while self.take_if(|token| matches!(token, Token::Comma)) {
             self.scan_qname();
+            self.scan_version_pin();
         }
+    }
+
+    /// Consumes and emits an optional `version compatible` /
+    /// `version "X.Y.Z"` pin of a decision-service reference (rexlang#154),
+    /// re-emitted verbatim. The `version` discriminator is the existing
+    /// lexer keyword token; the value is the contextual `compatible` word
+    /// or the exact-version string. Anything else after the discriminator
+    /// stays unconsumed — the parser already reported the malformed pin.
+    pub(crate) fn scan_version_pin(&mut self) {
+        if !self.take_if(|token| matches!(token, Token::Version)) {
+            return;
+        }
+        self.take_if(|token| {
+            matches!(token, Token::Str(_))
+                || matches!(token, Token::Ident(ddd::COMPATIBLE))
+        });
     }
 
     /// Consumes and emits an optional `emits A, B` clause, kept on the

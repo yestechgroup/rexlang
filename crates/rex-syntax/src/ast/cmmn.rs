@@ -138,13 +138,19 @@ pub struct CmmnExecute {
     pub span: Span,
 }
 
-/// An `invokes <qualified-name>;` clause of a decision body.
+/// An `invokes <qualified-name> [version <pin>];` clause of a decision
+/// body. Committed once `invokes` matched: a missing `;` is a reported
+/// error. The qualified name lowers **as written** (joined segments); the
+/// optional `version` pin (rexlang#154) lowers with it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CmmnInvoke {
     /// The invoked decision service's qualified name, **as written** — the
     /// driver resolves it by its last segment (the rule-17 convention) and
     /// the artifact lowers the authored spelling.
     pub service: String,
+    /// The `version compatible` / `version "<X.Y.Z>"` pin, when written
+    /// (rexlang#154) — the same shape the `.ddd` decision references take.
+    pub pin: Option<DddVersionPin>,
     /// Span of the whole clause, `;` included.
     pub span: Span,
 }

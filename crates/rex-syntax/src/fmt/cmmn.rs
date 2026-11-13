@@ -102,6 +102,10 @@ impl<'src> Formatter<'src> {
             Some(Token::Ident(text)) if text == cmmn::INVOKES => {
                 self.advance();
                 self.scan_qname();
+                // The optional `version compatible` / `version "X.Y.Z"`
+                // pin of the decision task's reference (rexlang#154),
+                // re-emitted verbatim between the name and the `;`.
+                self.scan_version_pin();
                 self.scan_cmmn_semicolon();
             }
             Some(Token::Ident(text)) if text == cmmn::INPUTS || text == cmmn::OUTPUTS => {

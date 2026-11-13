@@ -332,16 +332,37 @@ pub(crate) fn execute_clause<'src>(
         })
 }
 
-/// An `invokes <qualified-name>;` clause of a decision body. Committed
-/// once `invokes` matched: a missing `;` is a reported error. The
-/// qualified name lowers **as written** (joined segments).
+/// An `invokes <qualified-name> [version <pin>];` clause of a decision
+/// body. Committed once `invokes` matched: a missing `;` is a reported
+/// error. The qualified name lowers **as written** (joined segments); the
+/// optional `version` pin (rexlang#154) lowers with it — the same shape
+/// the `.ddd` decision references take.
 pub(crate) fn invoke_clause<'src>(
 ) -> impl Parser<'src, Tokens<'src>, CmmnInvoke, MoxExtra<'src>> + Clone {
+    let pin = kw(Token::Version)
+        .ignore_then(
+            choice((
+                cmmn_keyword(cmmn::COMPATIBLE).to(DddVersionPin::Compatible),
+                string_lit().map(DddVersionPin::Exact),
+            ))
+            .or_not(),
+        )
+        .map_with(|pin, e| (pin, e.span()))
+        .validate(|(pin, span), _e, emitter| {
+            pin.unwrap_or_else(|| {
+                emitter.emit(Rich::custom(
+                    span,
+                    "`version` requires `compatible` or an \"X.Y.Z\" version string",
+                ));
+                DddVersionPin::Compatible
+            })
+        });
     cmmn_keyword(cmmn::INVOKES)
         .ignore_then(qname())
+        .then(pin.or_not())
         .then(kw(Token::Other(';')).or_not())
-        .map_with(|(name, semi), e| (name, semi, e.span()))
-        .validate(|(name, semi, span), _e, emitter| {
+        .map_with(|((name, pin), semi), e| (name, pin, semi, e.span()))
+        .validate(|(name, pin, semi, span), _e, emitter| {
             if semi.is_none() {
                 emitter.emit(Rich::custom(span, "expected `;` after the invokes clause"));
             }
@@ -352,6 +373,7 @@ pub(crate) fn invoke_clause<'src>(
                 .collect();
             CmmnInvoke {
                 service: segments.join("."),
+                pin,
                 span,
             }
         })

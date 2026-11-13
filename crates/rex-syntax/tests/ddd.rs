@@ -1899,16 +1899,18 @@ fn invokes_clauses_parse_on_declared_and_delegated_ops() {
     let invokes: Vec<String> = approve
         .invokes
         .iter()
-        .map(|name| name.full_name())
+        .map(|entry| entry.name.full_name())
         .collect();
     assert_eq!(invokes, vec!["RiskScore", "underwriting.FraudScreen"]);
-    // The spans cover the references themselves, source order kept.
+    // The entries carry no pin here; the spans cover the references
+    // themselves, source order kept.
+    assert!(approve.invokes.iter().all(|entry| entry.pin.is_none()));
     assert_eq!(
-        span_text(DECISION_LINKS, approve.invokes[0].span),
+        span_text(DECISION_LINKS, approve.invokes[0].name.span),
         "RiskScore"
     );
     assert_eq!(
-        span_text(DECISION_LINKS, approve.invokes[1].span),
+        span_text(DECISION_LINKS, approve.invokes[1].name.span),
         "underwriting.FraudScreen"
     );
 
@@ -1919,12 +1921,12 @@ fn invokes_clauses_parse_on_declared_and_delegated_ops() {
         route
             .invokes
             .iter()
-            .map(|name| name.full_name())
+            .map(|entry| entry.name.full_name())
             .collect::<Vec<_>>(),
         vec!["CreditBureau"]
     );
     assert_eq!(
-        span_text(DECISION_LINKS, route.invokes[0].span),
+        span_text(DECISION_LINKS, route.invokes[0].name.span),
         "CreditBureau"
     );
 }
@@ -1954,10 +1956,80 @@ fn inject_decision_parses_beside_the_plain_form() {
         service
             .decision_dependencies
             .iter()
-            .map(|name| name.full_name())
+            .map(|entry| entry.name.full_name())
             .collect::<Vec<_>>(),
         vec!["underwriting.RiskScore", "FraudScreen"]
     );
+    assert!(service
+        .decision_dependencies
+        .iter()
+        .all(|entry| entry.pin.is_none()));
+}
+
+/// The `version` pins (rexlang#154): `compatible` and the exact string,
+/// per `invokes` entry and on the `inject decision` line, and the
+/// committed-missing-value error.
+#[test]
+fn version_pins_parse_on_invokes_and_inject_decision() {
+    let source = r#"
+application A {
+    module m {
+        service LoanService {
+            inject decision underwriting.RiskScore version compatible;
+            inject decision FraudScreen version "1.4.2";
+            boolean approve() invokes RiskScore version compatible, underwriting.FraudScreen version "1.4.2", CreditBureau;
+        }
+    }
+}
+"#;
+    let result = parse_ddd(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let file = result.ast.expect("expected an AST");
+    let service = &expect_module(&file, "m").services[0];
+
+    use rex_syntax::ast::DddVersionPin;
+    let injects = &service.decision_dependencies;
+    assert_eq!(
+        injects
+            .iter()
+            .map(|entry| entry.name.full_name())
+            .collect::<Vec<_>>(),
+        vec!["underwriting.RiskScore", "FraudScreen"]
+    );
+    assert_eq!(injects[0].pin, Some(DddVersionPin::Compatible));
+    assert_eq!(injects[1].pin, Some(DddVersionPin::Exact("1.4.2".into())));
+
+    let invokes = &service.operations[0].invokes;
+    assert_eq!(invokes.len(), 3);
+    assert_eq!(invokes[0].pin, Some(DddVersionPin::Compatible));
+    assert_eq!(invokes[1].pin, Some(DddVersionPin::Exact("1.4.2".into())));
+    assert_eq!(invokes[2].pin, None, "the pin-less entry keeps today's shape");
+}
+
+#[test]
+fn a_bare_version_pin_recovers_with_an_error() {
+    // The pin is committed once `version` matched: a missing value is a
+    // syntax error, and the clause still recovers.
+    let source = r#"
+application A {
+    module m {
+        service S {
+            boolean broken() invokes RiskScore version;
+            boolean fine();
+        }
+    }
+}
+"#;
+    let result = parse_ddd(source);
+    assert!(
+        !result.errors.is_empty(),
+        "a bare `version` pin is a reported error"
+    );
+    assert!(result.ast.is_some(), "the service still recovers");
 }
 
 #[test]

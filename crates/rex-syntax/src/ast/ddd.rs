@@ -79,9 +79,9 @@ pub struct DddService {
     /// Injected dependency names (`inject <name>;`), in source order.
     pub dependencies: Vec<Name>,
     /// Injected decision-service references (`inject decision
-    /// <qualified-name>;`), in source order — the `.dmn` dimension,
-    /// loosely coupled to the decision surface.
-    pub decision_dependencies: Vec<QualifiedName>,
+    /// <qualified-name> [version <pin>];`), in source order — the `.dmn`
+    /// dimension, loosely coupled to the decision surface.
+    pub decision_dependencies: Vec<DddDecisionRef>,
     /// Span of the whole declaration, `service` keyword included.
     pub span: Span,
 }
@@ -107,10 +107,11 @@ pub struct DddServiceOp {
     pub is_protected: bool,
     /// Actor capability names from the `capability` clause, in source order.
     pub capabilities: Vec<Name>,
-    /// Decision-service names from the `invokes` clause, in source order —
-    /// the decision services the operation invokes (the `.dmn` dimension,
-    /// loosely coupled to the decision surface).
-    pub invokes: Vec<QualifiedName>,
+    /// Decision-service references from the `invokes` clause, in source
+    /// order — the decision services the operation invokes (the `.dmn`
+    /// dimension, loosely coupled to the decision surface), each with its
+    /// optional `version` pin.
+    pub invokes: Vec<DddDecisionRef>,
     /// Event names from the `emits` clause, in source order — the events
     /// the operation produces (loosely coupled to the `.evt` layer).
     pub emits: Vec<Name>,
@@ -229,6 +230,34 @@ pub struct DddDelegation {
     pub operation: Name,
     /// Span covering `target.operation`.
     pub span: Span,
+}
+
+/// One decision-service reference of a `.ddd` service: an `invokes` entry
+/// or an `inject decision` line — the qualified name plus its optional
+/// `version` pin (rexlang#154). The pin is the reference's declared
+/// compatibility contract; entries without one keep the pin-less shape.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DddDecisionRef {
+    /// The referenced decision service's qualified name. The driver
+    /// resolves it by its **last segment** (the rule-17 convention); the
+    /// AST keeps it as written.
+    pub name: QualifiedName,
+    /// The `version compatible` / `version "<X.Y.Z>"` pin, when written.
+    pub pin: Option<DddVersionPin>,
+}
+
+/// The `version <pin>` clause of a [`DddDecisionRef`] (rexlang#154).
+///
+/// `version` is the existing lexer token (the `.mox` vocabulary
+/// keyword); `compatible` is a contextual word — an ordinary identifier
+/// everywhere else, so a service may still be named `compatible`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DddVersionPin {
+    /// `version compatible` — the highest version in the highest major
+    /// present among the candidates resolves.
+    Compatible,
+    /// `version "<X.Y.Z>"` — exactly this version resolves.
+    Exact(String),
 }
 
 /// One parameter of a declared operation: `type_ref multiplicity? name`.
