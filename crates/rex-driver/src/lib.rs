@@ -27,6 +27,7 @@
 //! [salsa]: https://crates.io/crates/salsa
 
 pub(crate) mod cmmn;
+pub(crate) mod conditions;
 mod ddd;
 pub(crate) mod deploy;
 pub mod diagnostic;

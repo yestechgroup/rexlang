@@ -11,6 +11,7 @@ use rex_ir as ir;
 use rex_syntax::ast as mox;
 use rex_syntax::Span;
 
+use crate::conditions::{check_pending_conditions, PendingCondition};
 use crate::ddd::NounClassification;
 use crate::diagnostic::Diagnostic;
 use crate::pipeline;
@@ -25,7 +26,6 @@ use super::classes::{
     detect_inheritance_cycles, lower_class, lower_datatype, lower_enum, lower_interface,
     lower_register, validate_opposites,
 };
-use super::conditions::check_pending_conditions;
 use super::imports::{import_class_def, SchemaImport};
 use super::vocabulary::lower_vocabulary;
 use super::vocabulary::primitive_facet_type;

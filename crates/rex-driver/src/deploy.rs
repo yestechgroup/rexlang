@@ -32,6 +32,10 @@ use rex_ir::ifml::IfmlModel;
 use rex_syntax::ast as dsl;
 use rex_syntax::Span;
 
+use crate::conditions::{
+    check_condition, ConditionSpanning, ConditionTriage, ConditionWording, LintWording,
+    ParseErrorPolicy,
+};
 use crate::diagnostic::Diagnostic;
 use crate::import_matches;
 use crate::pipeline;
@@ -1207,28 +1211,6 @@ fn check_policy(
     effective: &BTreeMap<String, BTreeMap<String, DeployValue>>,
     local: &mut Vec<Diagnostic>,
 ) {
-    let parsed = rex_expr::parse(&policy.expression);
-    for error in &parsed.errors {
-        local.push(
-            Diagnostic::error(
-                format!("invalid policy condition: {}", error.message),
-                Some(deployment.span),
-            )
-            .with_help(format!(
-                "in `{} ({})`",
-                if policy.prohibit {
-                    "prohibit"
-                } else {
-                    "require"
-                },
-                policy.expression
-            )),
-        );
-    }
-    let Some(ast) = parsed.ast else {
-        return;
-    };
-
     // The synthetic settings universe: one class per component (features =
     // the kind's setting vocabulary), plus the application as a root class
     // whose features are the components. `api.replicas` is then plain
@@ -1271,47 +1253,40 @@ fn check_policy(
     types.insert_class("", &application.name, Vec::new(), root_features, Vec::new());
 
     let checker = rex_expr::TypeChecker::new(types).with_self("", &application.name);
-    match checker.type_of(&ast) {
-        Ok(ty) if ty == rex_expr::Ty::boolean() => {}
-        Ok(ty) => {
-            local.push(
-                Diagnostic::error(
-                    format!("policy condition must be boolean, found {ty}"),
-                    Some(deployment.span),
-                )
-                .with_help(format!(
-                    "in `{} ({})`",
-                    if policy.prohibit {
-                        "prohibit"
-                    } else {
-                        "require"
-                    },
-                    policy.expression
-                )),
-            );
-            return;
-        }
-        Err(errors) => {
-            for error in errors {
-                local.push(
-                    Diagnostic::error(
-                        format!("invalid policy condition: {}", error.message),
-                        Some(deployment.span),
-                    )
-                    .with_help(format!(
-                        "in `{} ({})`",
-                        if policy.prohibit {
-                            "prohibit"
-                        } else {
-                            "require"
-                        },
-                        policy.expression
-                    )),
-                );
-            }
-            return;
-        }
+    let policy_help = format!(
+        "in `{} ({})`",
+        if policy.prohibit {
+            "prohibit"
+        } else {
+            "require"
+        },
+        policy.expression
+    );
+    let wording = ConditionWording {
+        parse_errors: ParseErrorPolicy::Emit,
+        parse_prefix: "invalid policy condition: ".to_string(),
+        type_errors_raw: false,
+        boolean_prefix: "policy condition ".to_string(),
+        lint: LintWording::Skip,
+        parse_help: Some(policy_help.clone()),
+        typed_help: Some(policy_help),
+    };
+    let outcome = check_condition(
+        &policy.expression,
+        ConditionSpanning::Fixed(deployment.span),
+        wording,
+        Some(checker),
+        None,
+        local,
+    );
+    // A policy only evaluates when it typed as boolean; every other
+    // triage verdict has been diagnosed above.
+    if outcome.triage != ConditionTriage::Boolean {
+        return;
     }
+    let ast = outcome
+        .ast
+        .expect("the boolean verdict implies a parsed tree");
 
     let value = match evaluate(&ast, effective) {
         Ok(value) => value,

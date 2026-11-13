@@ -18,7 +18,6 @@
 //! [`crate::deploy`] policy pattern): the case file as a root class, plan
 //! items as classes of boolean transition predicates.
 
-use rex_expr::Ty;
 use rex_ir::cmmn::{
     CaseDef, CaseFileItem, CaseFileTransition, CmmnModel, ControlRules, Criterion, OnPart,
     PlanItem, PlanItemKind, PlanItemTransition, PlanningMode, Role, ServiceDef, StageBody, TaskDef,
@@ -29,6 +28,10 @@ use rex_ir::{ActorModel, Multiplicity, TypeRef};
 use rex_syntax::ast as dsl;
 use rex_syntax::Span;
 
+use crate::conditions::{
+    check_condition, when_interior, ConditionSpanning, ConditionTriage, ConditionWording,
+    LintWording, ParseErrorPolicy,
+};
 use crate::diagnostic::Diagnostic;
 use crate::import_matches;
 use crate::lower::{self, DomainUnit};
@@ -735,58 +738,30 @@ fn check_when(
 ) -> Option<String> {
     // The span covers the raw parens; slice strictly inside (the
     // `when`-condition convention).
-    let interior = source
-        .get(span.start + 1..span.end.saturating_sub(1))
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    let parsed = rex_expr::parse(&interior);
-    for error in &parsed.errors {
-        local.push(
-            Diagnostic::error(
-                format!("invalid criterion condition: {}", error.message),
-                Some(span),
-            )
-            .with_help(format!(
-                "in the `when` of plan item '{item}' in case '{case}'"
-            )),
-        );
-    }
-    let ast = parsed.ast?;
+    let interior = when_interior(source, span).to_string();
     let checker = rex_expr::TypeChecker::new(types.clone()).with_self("", case);
     let when_help = format!("in the `when` of plan item '{item}' in case '{case}'");
-    match checker.type_of(&ast) {
-        Ok(ty) if ty == Ty::boolean() => {
-            // The use-based guard lint (issue #142): a String-typed
-            // operand compared to a string literal in a criterion `when`
-            // warns that the field could be an enum.
-            for lint in checker.guard_string_lints(&ast) {
-                local.push(
-                    Diagnostic::warning(&lint.message, Some(span)).with_help(when_help.clone()),
-                );
-            }
-            Some(interior)
-        }
-        Ok(ty) => {
-            local.push(
-                Diagnostic::error(
-                    format!("criterion condition must be boolean, found {ty}"),
-                    Some(span),
-                )
-                .with_help(when_help),
-            );
-            Some(interior)
-        }
-        Err(errors) => {
-            for error in errors {
-                local.push(
-                    Diagnostic::error(error.message, Some(span)).with_help(format!(
-                        "in the `when` of plan item '{item}' in case '{case}'"
-                    )),
-                );
-            }
-            Some(interior)
-        }
+    let wording = ConditionWording {
+        parse_errors: ParseErrorPolicy::Emit,
+        parse_prefix: "invalid criterion condition: ".to_string(),
+        type_errors_raw: true,
+        boolean_prefix: "criterion condition ".to_string(),
+        lint: LintWording::Raw,
+        parse_help: Some(when_help.clone()),
+        typed_help: Some(when_help),
+    };
+    let outcome = check_condition(
+        &interior,
+        ConditionSpanning::Fixed(span),
+        wording,
+        Some(checker),
+        None,
+        local,
+    );
+    local.extend(outcome.lints);
+    match outcome.triage {
+        ConditionTriage::Unparsed => None,
+        _ => Some(interior),
     }
 }
 

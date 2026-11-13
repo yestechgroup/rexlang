@@ -27,6 +27,10 @@ use rex_ir::{ActorModel, GrantEffect, Model as DomainModel, TypeRef};
 use rex_syntax::ast as dsl;
 use rex_syntax::Span;
 
+use crate::conditions::{
+    check_condition, when_interior, ConditionSpanning, ConditionWording, LintWording,
+    ParseErrorPolicy,
+};
 use crate::diagnostic::Diagnostic;
 use crate::import_matches;
 use crate::lower::{self, DomainPackage, DomainUnit};
@@ -758,11 +762,7 @@ fn check_step_guard(
     let span = step.when?;
     // The span covers the raw parens; slice strictly inside (the
     // `when`-condition convention).
-    let interior = source
-        .get(span.start + 1..span.end.saturating_sub(1))
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+    let interior = when_interior(source, span).to_string();
     let Some(TypeRef::Class { package, name }) = resolved else {
         return Some(interior);
     };
@@ -770,47 +770,28 @@ fn check_step_guard(
         "in the `when` of step '{}' in use case '{}'",
         step.name, decl.name
     );
-    let parsed = rex_expr::parse(&interior);
-    for error in &parsed.errors {
-        local.push(
-            Diagnostic::error(
-                format!("invalid step guard condition: {}", error.message),
-                Some(span),
-            )
-            .with_help(help.clone()),
-        );
-    }
-    let Some(ast) = parsed.ast else {
-        return Some(interior);
-    };
     let checker = rex_expr::TypeChecker::new(types.clone()).with_self(package, name);
-    match checker.type_of(&ast) {
-        Ok(ty) if ty == rex_expr::Ty::boolean() => {
-            // The use-based guard lint (issue #142): a String-typed operand
-            // compared to a string literal in a step `when` warns that the
-            // field could be an enum.
-            for lint in checker.guard_string_lints(&ast) {
-                local.push(Diagnostic::warning(&lint.message, Some(span)).with_help(help.clone()));
-            }
-            Some(interior)
-        }
-        Ok(ty) => {
-            local.push(
-                Diagnostic::error(
-                    format!("step guard condition must be boolean, found {ty}"),
-                    Some(span),
-                )
-                .with_help(help),
-            );
-            Some(interior)
-        }
-        Err(errors) => {
-            for error in errors {
-                local.push(Diagnostic::error(error.message, Some(span)).with_help(help.clone()));
-            }
-            Some(interior)
-        }
-    }
+    let wording = ConditionWording {
+        parse_errors: ParseErrorPolicy::Emit,
+        parse_prefix: "invalid step guard condition: ".to_string(),
+        type_errors_raw: true,
+        boolean_prefix: "step guard condition ".to_string(),
+        lint: LintWording::Raw,
+        parse_help: Some(help.clone()),
+        typed_help: Some(help),
+    };
+    let outcome = check_condition(
+        &interior,
+        ConditionSpanning::Fixed(span),
+        wording,
+        Some(checker),
+        None,
+        local,
+    );
+    local.extend(outcome.lints);
+    // The guard text lowers whatever the typing did — the artifact is
+    // dropped on any error anyway.
+    Some(interior)
 }
 
 /// Rule 5 — one message end's binding: the inline endpoint xor exactly one

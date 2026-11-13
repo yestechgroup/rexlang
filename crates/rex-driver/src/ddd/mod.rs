@@ -34,6 +34,10 @@ mod machines;
 mod searches;
 mod services;
 
+use crate::conditions::{
+    check_condition as pipeline_check_condition, ConditionSpanning, ConditionTriage,
+    ConditionWording, LintWording, ParseErrorPolicy, WalkerPhase,
+};
 use bodies::lower_module_bodies;
 use child_ops::lower_module_child_operations;
 use conditions::{resolve_condition_paths, PathScan};
@@ -752,10 +756,10 @@ pub(crate) struct ConditionCheck<'a> {
 /// bare, every field also under its enum-derived spelling (issue
 /// rexlang#180) — and the service's injected repositories bind as
 /// class-typed roots. Service-operation conditions additionally run the
-/// path walker (`conditionPaths` + the E0353/E0354 checks); the checker
-/// errors on walker-suppressed spans are dropped so one root cause yields
-/// one diagnostic. Returns the resolved paths (empty outside service
-/// operations).
+/// path walker (`conditionPaths` + the E0353/E0354 checks) through the
+/// shared skeleton's walker hook; the checker errors on walker-suppressed
+/// spans are dropped so one root cause yields one diagnostic. Returns the
+/// resolved paths (empty outside service operations).
 fn check_condition(
     source: &str,
     span: rex_syntax::Span,
@@ -763,29 +767,17 @@ fn check_condition(
     local: &mut Vec<Diagnostic>,
 ) -> Vec<rex_ir::ddd::ConditionPath> {
     let text = condition_text(source, span);
-    let inner_start = span.start + 1;
-    let parsed = rex_expr::parse(text);
-    for error in &parsed.errors {
-        let start = inner_start.saturating_add(error.span.start).min(span.end);
-        let end = inner_start
-            .saturating_add(error.span.end)
-            .clamp(start, span.end);
-        local.push(Diagnostic::error(
-            format!("invalid condition in {}: {}", check.label, error.message),
-            Some((start..end).into()),
-        ));
-    }
-    let Some(ast) = parsed.ast else {
-        // A condition still parses when the domain failed to lower (its
-        // diagnostics already block the artifact).
-        return Vec::new();
-    };
     let mut paths: Vec<rex_ir::ddd::ConditionPath> = Vec::new();
-    let mut suppressed: Vec<rex_expr::ast::Span> = Vec::new();
     // Path resolution (issue rexlang#180) — service operations only, and
-    // only against a fully lowered union (the deferral contract).
-    if !check.dependencies.is_empty() {
-        if let Some(union) = check.union {
+    // only against a fully lowered union (the deferral contract). The
+    // walker hooks into the shared skeleton between the parse-error and
+    // typing phases: its diagnostics emit first, and its resolved spans
+    // suppress the checker's duplicate unknown-name/unknown-feature
+    // errors (one root cause, one diagnostic).
+    let mut walker_fn = (!check.dependencies.is_empty())
+        .then_some(check.union)
+        .flatten()
+        .map(|union| {
             let scan = PathScan {
                 label: check.label.clone(),
                 module: check.module,
@@ -795,107 +787,90 @@ fn check_condition(
                 dependencies: check.dependencies,
                 union,
             };
-            let outcome = resolve_condition_paths(&ast, &scan);
-            suppressed = outcome.suppressed;
-            local.extend(outcome.diagnostics);
-            paths = outcome.paths;
-        }
-    }
-    let Some(context) = check.context else {
-        // The union failed to lower; its diagnostics already block the
-        // artifact and the typed checks defer.
-        return paths;
-    };
-    let mut checker = rex_expr::TypeChecker::new(context.clone());
-    if let Some(self_class) = check.self_class {
-        checker = checker.with_self(&self_class.0, &self_class.1);
-    }
-    let multi_machine = check.scopes.is_multi_machine();
-    if multi_machine {
-        // No implicit self: the module's machine fields carry the
-        // own-record scope, bare when the name is unique across the
-        // module's machines and always under the enum-derived spelling.
-        for field in &check.scopes.fields {
-            let binding = rex_expr::Ty::from_type_ref(&rex_ir::TypeRef::Enum {
-                package: field.enum_type.0.clone(),
-                name: field.enum_type.1.clone(),
-            });
-            if field.unique {
-                checker = checker.with_binding(field.field.clone(), binding.clone());
-            }
-            checker = checker.with_binding(field.alias.clone(), binding);
-        }
-    }
-    for machine in &check.scopes.machines {
-        let binding = rex_expr::Ty::from_type_ref(&rex_ir::TypeRef::Enum {
-            package: machine.enum_type.0.clone(),
-            name: machine.enum_type.1.clone(),
-        });
-        for state in &machine.states {
-            checker = checker.with_binding(state.clone(), binding.clone());
-        }
-    }
-    for (name, (package, class)) in check.injections {
-        checker = checker.with_binding(name.clone(), rex_expr::Ty::class(package, class));
-    }
-    // The operation's declared parameters (issue rexlang#179): child
-    // operations' guards read them (`line.quantity`), and they shadow
-    // same-named features of the `self` class. Empty for service and
-    // repository operations, whose typing is unchanged.
-    for param in check.params {
-        let mut ty = rex_expr::Ty::from_type_ref(&param.type_);
-        if param.multiplicity.as_ref().is_some_and(|m| m.is_many()) {
-            ty = ty.list();
-        }
-        checker = checker.with_binding(param.name.clone(), ty);
-    }
-    match checker.type_of(&ast) {
-        Err(errors) => {
-            for error in errors {
-                if suppressed.contains(&error.span) {
-                    // The path walker diagnosed this reference (E0353/E0354);
-                    // the checker's unknown-name/unknown-feature error is
-                    // the duplicate, not a second finding.
-                    continue;
+            // The walker's resolved rows land in the caller's `paths`
+            // (borrowed for the skeleton call only).
+            let paths = &mut paths;
+            move |ast: &rex_expr::Expr| {
+                let outcome = resolve_condition_paths(ast, &scan);
+                paths.extend(outcome.paths);
+                WalkerPhase {
+                    suppressed: outcome.suppressed,
+                    diagnostics: outcome.diagnostics,
                 }
-                let start = inner_start.saturating_add(error.span.start).min(span.end);
-                let end = inner_start
-                    .saturating_add(error.span.end)
-                    .clamp(start, span.end);
-                local.push(Diagnostic::error(
-                    format!("invalid condition in {}: {}", check.label, error.message),
-                    Some((start..end).into()),
-                ));
+            }
+        });
+    let wording = ConditionWording {
+        parse_errors: ParseErrorPolicy::Emit,
+        parse_prefix: format!("invalid condition in {}: ", check.label),
+        type_errors_raw: false,
+        boolean_prefix: format!("invalid condition in {}: condition ", check.label),
+        lint: LintWording::Prefixed(format!("{}: ", check.label)),
+        parse_help: None,
+        typed_help: None,
+    };
+    let spanning = ConditionSpanning::RebasedCapped {
+        inner_start: span.start + 1,
+        cap: span.end,
+    };
+    let checker = check.context.map(|context| {
+        let mut checker = rex_expr::TypeChecker::new(context.clone());
+        if let Some(self_class) = check.self_class {
+            checker = checker.with_self(&self_class.0, &self_class.1);
+        }
+        let multi_machine = check.scopes.is_multi_machine();
+        if multi_machine {
+            // No implicit self: the module's machine fields carry the
+            // own-record scope, bare when the name is unique across the
+            // module's machines and always under the enum-derived spelling.
+            for field in &check.scopes.fields {
+                let binding = rex_expr::Ty::from_type_ref(&rex_ir::TypeRef::Enum {
+                    package: field.enum_type.0.clone(),
+                    name: field.enum_type.1.clone(),
+                });
+                if field.unique {
+                    checker = checker.with_binding(field.field.clone(), binding.clone());
+                }
+                checker = checker.with_binding(field.alias.clone(), binding);
             }
         }
-        // A guard is a predicate: anything that types but is not boolean is
-        // a mistake the actor/deploy/cmmn conditions already refuse.
-        Ok(ty) if ty != rex_expr::Ty::boolean() => {
-            local.push(Diagnostic::error(
-                format!(
-                    "invalid condition in {}: condition must be boolean, \
-                     found {ty}",
-                    check.label
-                ),
-                Some((inner_start..span.end).into()),
-            ));
-        }
-        Ok(_) => {
-            // The use-based guard lint (issue #142): a String-typed operand
-            // compared to a string literal warns that the field could be an
-            // enum. Type-driven, never name-based; defers silently when the
-            // type context is absent (no lints are produced then).
-            for lint in checker.guard_string_lints(&ast) {
-                let start = inner_start.saturating_add(lint.span.start).min(span.end);
-                let end = inner_start
-                    .saturating_add(lint.span.end)
-                    .clamp(start, span.end);
-                local.push(Diagnostic::warning(
-                    format!("{}: {}", check.label, lint.message),
-                    Some((start..end).into()),
-                ));
+        for machine in &check.scopes.machines {
+            let binding = rex_expr::Ty::from_type_ref(&rex_ir::TypeRef::Enum {
+                package: machine.enum_type.0.clone(),
+                name: machine.enum_type.1.clone(),
+            });
+            for state in &machine.states {
+                checker = checker.with_binding(state.clone(), binding.clone());
             }
         }
+        for (name, (package, class)) in check.injections {
+            checker = checker.with_binding(name.clone(), rex_expr::Ty::class(package, class));
+        }
+        // The operation's declared parameters (issue rexlang#179): child
+        // operations' guards read them (`line.quantity`), and they shadow
+        // same-named features of the `self` class. Empty for service and
+        // repository operations, whose typing is unchanged.
+        for param in check.params {
+            let mut ty = rex_expr::Ty::from_type_ref(&param.type_);
+            if param.multiplicity.as_ref().is_some_and(|m| m.is_many()) {
+                ty = ty.list();
+            }
+            checker = checker.with_binding(param.name.clone(), ty);
+        }
+        checker
+    });
+    let outcome = pipeline_check_condition(
+        text,
+        spanning,
+        wording,
+        checker,
+        walker_fn.as_mut().map(|walker| walker as _),
+        local,
+    );
+    local.extend(outcome.lints);
+    if outcome.triage == ConditionTriage::Unparsed {
+        // A condition still parses when the domain failed to lower (its
+        // diagnostics already block the artifact).
+        return Vec::new();
     }
     paths
 }

@@ -9,6 +9,7 @@ use rex_ir as ir;
 use rex_syntax::ast as mox;
 use rex_syntax::Span;
 
+use crate::conditions::{check_when_syntax, pending_condition, when_text, PendingCondition};
 use crate::ddd::{AggregateVerdict, NounClassification};
 use crate::diagnostic::{Diagnostic, DiagnosticCode};
 

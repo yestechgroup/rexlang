@@ -17,6 +17,10 @@ use rex_ir::events::{ChannelDef, CloudEventsAttributes, DeliveryMode, EventDef, 
 use rex_syntax::ast as dsl;
 use rex_syntax::Span;
 
+use crate::conditions::{
+    check_condition, when_interior, ConditionSpanning, ConditionTriage, ConditionWording,
+    LintWording, ParseErrorPolicy,
+};
 use crate::diagnostic::Diagnostic;
 use crate::lower::{self, DomainUnit};
 use crate::pipeline;
@@ -362,25 +366,30 @@ pub(crate) fn compile_evt_file(
         if let Some(when_span) = subscription.when {
             // The span covers the raw parens; slice strictly inside (the
             // `when`-condition convention).
-            let interior = source
-                .get(when_span.start + 1..when_span.end.saturating_sub(1))
-                .unwrap_or_default()
-                .trim()
-                .to_string();
-            let parsed = rex_expr::parse(&interior);
-            for error in &parsed.errors {
-                local.push(
-                    Diagnostic::error(
-                        format!("invalid when filter: {}", error.message),
-                        Some(when_span),
-                    )
-                    .with_help(format!(
-                        "in the `when` of subscription '{}'",
-                        subscription.name.text
-                    )),
-                );
-            }
-            if let Some(expr) = parsed.ast {
+            let interior = when_interior(source, when_span).to_string();
+            // The parse-error pass: one diagnostic per parse error, help
+            // naming the subscription.
+            let parse_wording = ConditionWording {
+                parse_errors: ParseErrorPolicy::Emit,
+                parse_prefix: "invalid when filter: ".to_string(),
+                type_errors_raw: true,
+                boolean_prefix: String::new(),
+                lint: LintWording::Skip,
+                parse_help: Some(format!(
+                    "in the `when` of subscription '{}'",
+                    subscription.name.text
+                )),
+                typed_help: None,
+            };
+            let outcome = check_condition(
+                &interior,
+                ConditionSpanning::Fixed(when_span),
+                parse_wording,
+                None,
+                None,
+                &mut local,
+            );
+            if outcome.triage != ConditionTriage::Unparsed {
                 for event_name in &subscription_out.events {
                     // Unknown events were diagnosed above; typing skips
                     // them (their payload shape is unknown).
@@ -408,43 +417,34 @@ pub(crate) fn compile_evt_file(
                         "in the `when` of subscription '{}' against event '{}'",
                         subscription.name.text, event_name
                     );
-                    match checker.type_of(&expr) {
-                        Ok(ty) if ty == rex_expr::Ty::boolean() => {
-                            // The use-based guard lint (issue #142): a
-                            // String-typed payload field compared to a
-                            // string literal warns that the field could be
-                            // an enum. Deduped across the per-event
-                            // universes: the same comparison against every
-                            // listed event is one warning.
-                            for lint in checker.guard_string_lints(&expr) {
-                                let message = format!(
-                                    "{} (in the `when` of subscription '{}')",
-                                    lint.message, subscription.name.text
-                                );
-                                if seen_lints.insert((when_span.start, message.clone())) {
-                                    local.push(
-                                        Diagnostic::warning(message, Some(when_span))
-                                            .with_help(where_help.clone()),
-                                    );
-                                }
-                            }
-                        }
-                        Ok(ty) => {
-                            local.push(
-                                Diagnostic::error(
-                                    format!("when filter must be boolean, found {ty}"),
-                                    Some(when_span),
-                                )
-                                .with_help(where_help),
-                            );
-                        }
-                        Err(errors) => {
-                            for error in errors {
-                                local.push(
-                                    Diagnostic::error(error.message, Some(when_span))
-                                        .with_help(where_help.clone()),
-                                );
-                            }
+                    let wording = ConditionWording {
+                        // The parse errors were emitted above; the
+                        // recovered expression still types per event.
+                        parse_errors: ParseErrorPolicy::ReportedElsewhere,
+                        parse_prefix: String::new(),
+                        type_errors_raw: true,
+                        boolean_prefix: "when filter ".to_string(),
+                        lint: LintWording::Suffixed(format!(
+                            " (in the `when` of subscription '{}')",
+                            subscription.name.text
+                        )),
+                        parse_help: None,
+                        typed_help: Some(where_help),
+                    };
+                    let outcome = check_condition(
+                        &interior,
+                        ConditionSpanning::Fixed(when_span),
+                        wording,
+                        Some(checker),
+                        None,
+                        &mut local,
+                    );
+                    // The use-based guard lint (issue #142), deduped
+                    // across the per-event universes: the same comparison
+                    // against every listed event is one warning.
+                    for lint in outcome.lints {
+                        if seen_lints.insert((when_span.start, lint.message.clone())) {
+                            local.push(lint);
                         }
                     }
                 }
