@@ -7,3 +7,4 @@ mod agents_and_delegations;
 mod navigation;
 mod obligations;
 mod purposes_and_delegation_purposes;
+mod session_kinds;
