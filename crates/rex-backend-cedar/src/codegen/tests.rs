@@ -1,4 +1,3 @@
-
 use super::*;
 use rex_ir::{
     ActorDef, ActorKind, ActorModel, ActorsDef, CapabilityDef, ClassDef, DelegationDef, Feature,

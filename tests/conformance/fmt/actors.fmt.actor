@@ -8,13 +8,13 @@ actors Escalation {
     obligation audit
 
     grant Finance {
-        permit EscalateTicket when (amount > 0)
+        permit human EscalateTicket when (amount > 0)
     }
 
     delegation EscalateHelp {
         from Finance
         to Helper
-        permit EscalateTicket
+        permit agent EscalateTicket
     }
 
     delegation SupportHelp {
