@@ -55,11 +55,11 @@
 //!
 //! # Diagnostic codes
 //!
-//! The checker's diagnostic codes (`E0100`–`E0109`, the interaction
-//! cross-reference and authorization passes included) are allocated in
-//! the central registry — the `rex-diagnostics` crate's `ifml_check`
-//! band, re-exported below — and their meanings, fixes, and the
-//! allocation ledger live in
+//! The checker's diagnostic codes (`E0100`–`E0111`, the interaction
+//! cross-reference, authorization, and decision passes included) are
+//! allocated in the central registry — the `rex-diagnostics` crate's
+//! `ifml_check` band, re-exported below — and their meanings, fixes, and
+//! the allocation ledger live in
 //! [docs/DIAGNOSTICS.md](https://github.com/yestechgroup/rexlang/blob/main/docs/DIAGNOSTICS.md)
 //! (`rexlang explain E0104` renders one). A new code is a table row
 //! there, never a local constant.
@@ -95,6 +95,29 @@
 //! properties, `event_requires` prefixes) — so the index and the IR can
 //! never disagree about what is an authorization site. Diagnostics land
 //! with the interaction references, before the expression diagnostics.
+//!
+//! # Decision data
+//!
+//! [`check_ifml_with_decisions`] adds the decision dimension: `data:`
+//! names resolve against the decision services of the provided decision
+//! models — bare-name union-wide, **after** the domain classes (a name
+//! that resolves to a domain class keeps the domain behavior and its
+//! diagnostics unchanged). The pass over the index's `data_sites`
+//! diagnoses the service outcomes on the entry file plus every module
+//! body it instantiates: a service that declares no outputs is `E0110`
+//! (the component has no data contract), a service name two models
+//! declare is `E0111` (the declaring models are listed). A name that
+//! resolves to a healthy service is silent — the service's output
+//! decisions form the component's data contract, a **check-only** fact:
+//! the IR artifact and the manifest are unchanged (the manifest's
+//! `data:`/`target:` resolution stays domain-only; the bare spelling
+//! rides along), and expressions are not typed against decision outputs
+//! in v1. The expression walk consults the same service table to
+//! suppress the unknown-data-entity error for service-resolved names and
+//! to draw the did-you-mean hint (over service names, when a decisions
+//! slice is provided) for names that match nothing. An empty decisions
+//! slice skips the pass entirely and keeps every diagnostic
+//! byte-identical.
 //!
 //! Declarations resolve one step further when a domain model is available:
 //! an action declaration's `target:` entity must name exactly one class of
@@ -165,6 +188,7 @@ use rex_expr::{
     BinOp as ExprBinOp, DomainTypes, Expr, ExprKind, Span, Spanned, Ty, TypeChecker,
     UnOp as ExprUnOp,
 };
+use rex_ir::dmn::DmnModel;
 use rex_ir::ifml::{
     render_expression, BinOp as IfmlBinOp, ColumnDef, ComponentDeclaration, ComponentSpec,
     EventAction, EventHandler, Expression, IfmlModel, ModuleUse, ParameterDecl, PromptKind,
@@ -176,9 +200,9 @@ use crate::index::{IfmlIndex, LiteralKind};
 use crate::resolve::{IfmlCompilation, IfmlDiagnostic};
 
 pub use rex_diagnostics::ifml_check::{
-    E_TYPE_MISMATCH, E_UNKNOWN_ACTION, E_UNKNOWN_ACTION_TARGET, E_UNKNOWN_CAPABILITY,
-    E_UNKNOWN_COMPONENT, E_UNKNOWN_ENTITY, E_UNKNOWN_FEATURE, E_UNKNOWN_ROLE, E_UNKNOWN_VARIABLE,
-    E_UNKNOWN_VIEW,
+    E_AMBIGUOUS_DECISION_SERVICE, E_EMPTY_DECISION_SERVICE, E_TYPE_MISMATCH, E_UNKNOWN_ACTION,
+    E_UNKNOWN_ACTION_TARGET, E_UNKNOWN_CAPABILITY, E_UNKNOWN_COMPONENT, E_UNKNOWN_ENTITY,
+    E_UNKNOWN_FEATURE, E_UNKNOWN_ROLE, E_UNKNOWN_VARIABLE, E_UNKNOWN_VIEW,
 };
 pub use rex_diagnostics::ifml_lints::{
     W_COMPONENT_WITHOUT_DATA, W_DEAD_ACTION, W_SHADOWED_MODULE, W_UNREACHABLE_VIEW,
@@ -213,7 +237,7 @@ pub use rex_diagnostics::ifml_lints::{
 /// assert!(check_ifml(&compilation, None).is_empty());
 /// ```
 pub fn check_ifml(compilation: &IfmlCompilation, domains: Option<&Model>) -> Vec<IfmlDiagnostic> {
-    check_ifml_with_actors(compilation, domains, &[])
+    check_ifml_with_decisions(compilation, domains, &[], &[])
 }
 
 /// [`check_ifml`] plus the authorization dimension: every
@@ -229,8 +253,26 @@ pub fn check_ifml_with_actors(
     domains: Option<&Model>,
     actors: &[ActorModel],
 ) -> Vec<IfmlDiagnostic> {
+    check_ifml_with_decisions(compilation, domains, actors, &[])
+}
+
+/// [`check_ifml_with_actors`] plus the decision dimension: `data:` names
+/// resolve against the decision services of the provided decision models
+/// (bare-name union-wide, after the domain classes; the instantiation
+/// reachability rule of the interaction pass). An empty slice provides no
+/// decision dimension and skips the pass entirely — every diagnostic
+/// stays byte-identical to [`check_ifml_with_actors`]. See the [decision
+/// data section](self#decision-data) of the module docs for the
+/// resolution order and the check-only contract.
+pub fn check_ifml_with_decisions(
+    compilation: &IfmlCompilation,
+    domains: Option<&Model>,
+    actors: &[ActorModel],
+    decisions: &[DmnModel],
+) -> Vec<IfmlDiagnostic> {
     let mut diags = check_references(compilation);
     diags.extend(check_authorization(compilation, actors));
+    diags.extend(decisions::check_decisions(compilation, decisions));
     diags.extend(check_lints(compilation));
     let Some(domains) = domains else {
         return diags;
@@ -243,8 +285,10 @@ pub fn check_ifml_with_actors(
             override_spans.insert(override_item.span, site);
         }
     }
+    let decision_index = (!decisions.is_empty()).then(|| DecisionIndex::new(decisions));
     let mut checker = Checker {
         domains: &mut domain_index,
+        decisions: decision_index.as_ref(),
         index,
         file: index.files[0].path.clone(),
         override_spans,
@@ -256,12 +300,14 @@ pub fn check_ifml_with_actors(
 }
 
 mod authorization;
+mod decisions;
 mod domains;
 mod lints;
 mod reachability;
 mod references;
 
 use authorization::check_authorization;
+use decisions::{DecisionData, DecisionIndex};
 use lints::check_lints;
 use references::check_references;
 #[cfg(test)]
@@ -373,6 +419,10 @@ struct Site {
 
 struct Checker<'a> {
     domains: &'a mut DomainIndex<'a>,
+    /// The decision-service table the host provided, `None` when the
+    /// decisions slice is empty — the service-resolution suppressions
+    /// and the did-you-mean hint are exactly this dimension.
+    decisions: Option<&'a DecisionIndex<'a>>,
     index: &'a IfmlIndex,
     file: String,
     /// Property-assignment span → index of the module use site that
@@ -670,16 +720,37 @@ impl<'a> Checker<'a> {
                         self_class = Some((package.to_string(), class.to_string()));
                     }
                     Err(EntityError::Unknown) => {
-                        let site = Site {
-                            context: component_context.clone(),
-                            span,
-                            source: name.clone(),
-                        };
-                        self.push(
-                            E_UNKNOWN_ENTITY,
-                            &site,
-                            format!("unknown data entity '{name}'"),
+                        // Decision services resolve after domain classes: a
+                        // name the service table declares is the component's
+                        // data contract (check-only — the IR and the manifest
+                        // are unchanged), silent here; the decision pass
+                        // diagnoses the output-less and ambiguous shapes.
+                        let service_resolved = matches!(
+                            self.decisions.map(|table| table.resolve(name)),
+                            Some(DecisionData::Service { .. } | DecisionData::Ambiguous(_))
                         );
+                        if !service_resolved {
+                            // The did-you-mean universe gains the decision
+                            // services when a decisions slice is provided —
+                            // a name near a service name probably meant the
+                            // service. The hint is unique-candidate: with
+                            // two near-misses the checker says nothing.
+                            let hint = self
+                                .decisions
+                                .and_then(|table| table.suggestion(name))
+                                .map(|candidate| format!("; did you mean `{candidate}`?"))
+                                .unwrap_or_default();
+                            let site = Site {
+                                context: component_context.clone(),
+                                span,
+                                source: name.clone(),
+                            };
+                            self.push(
+                                E_UNKNOWN_ENTITY,
+                                &site,
+                                format!("unknown data entity '{name}'{hint}"),
+                            );
+                        }
                     }
                     Err(EntityError::Ambiguous) => {
                         let site = Site {

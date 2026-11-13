@@ -39,10 +39,15 @@
 //! model against an optional domain model (the union `rex_ir::Model` every
 //! domain surface lowers into), via `rex_expr`'s
 //! [`DomainTypes`](rex_expr::DomainTypes) — the same
-//! checker `.mox` operation bodies use. Constructs the shared expression
-//! language cannot type (bare calls such as `today()`, regex operators,
-//! non-integral numbers) are silently skipped, still deferred to generation
-//! time. See `check` for the walk order and diagnostic codes.
+//! checker `.mox` operation bodies use. [`check_ifml_with_actors`] adds
+//! the authorization dimension (`requires:`/`roles:` against compiled
+//! `.actor` policies); [`check_ifml_with_decisions`] adds the decision
+//! dimension (`data:` names against the decision services of compiled
+//! `.dmn` imports, after the domain classes). Constructs the shared
+//! expression language cannot type (bare calls such as `today()`, regex
+//! operators, non-integral numbers) are silently skipped, still deferred
+//! to generation time. See `check` for the walk order and diagnostic
+//! codes.
 //!
 //! # Transitional architecture
 //!
@@ -68,12 +73,12 @@ mod manifest;
 mod parser;
 mod resolve;
 
-pub use check::{check_ifml, check_ifml_with_actors};
+pub use check::{check_ifml, check_ifml_with_actors, check_ifml_with_decisions};
 pub use expand::expand_ifml;
 pub use fmt::format_ifml;
 pub use index::{
-    parse_ifml_indexed, AtSite, AuthKind, AuthSite, IfmlIndex, IndexFile, IndexParam, LiteralKind,
-    ModuleDeclSite, ModuleUseSite, NamedSite, TargetSite, UseOverride,
+    parse_ifml_indexed, AtSite, AuthKind, AuthSite, DataSite, IfmlIndex, IndexFile, IndexParam,
+    LiteralKind, ModuleDeclSite, ModuleUseSite, NamedSite, TargetSite, UseOverride,
 };
 pub use manifest::manifest_ifml;
 pub use parser::*;
