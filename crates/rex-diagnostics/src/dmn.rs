@@ -7,7 +7,7 @@
 //! information requirements (inputs and other decisions) and authority
 //! requirements (knowledge sources), exposed through decision services,
 //! with logic in FEEL expressions and external markdown decision tables
-//! the host provides. `E0200`–`E0214` are the `.dmn` surface's codes;
+//! the host provides. `E0200`–`E0215` are the `.dmn` surface's codes;
 //! `E0250`–`E0251` are the `.ddd` decision-link codes, joined against
 //! the decision surface at compile time. Claim a new code by adding a
 //! documented constant plus an `Entry` to `ENTRIES`.
@@ -58,6 +58,8 @@ pub const E_TABLE_OUTPUT_MISMATCH: &str = "E0212";
 pub const E_BINDING_MISMATCH: &str = "E0213";
 /// `duplicate '<word>' metadata`.
 pub const E_DUPLICATE_METADATA: &str = "E0214";
+/// `unknown event '<event>' emitted by decision '<decision>'`.
+pub const E_UNKNOWN_EMITTED_EVENT: &str = "E0215";
 /// `unknown decision service '<name>' invoked by operation '<op>' of
 /// service '<service>'`.
 pub const E_UNKNOWN_INVOKED_SERVICE: &str = "E0250";
@@ -184,6 +186,14 @@ pub(crate) const ENTRIES: &[Entry] = &[
         title: "Duplicate metadata",
         meaning: "`duplicate '<word>' metadata` — the same metadata word (description, owner, …) is declared twice on one element, so the element carries two values for one attribute.",
         fix: "Keep one occurrence of the metadata word and merge the values.",
+    },
+    Entry {
+        code: E_UNKNOWN_EMITTED_EVENT,
+        band: DMN_BAND,
+        severity: Severity::Error,
+        title: "Unknown emitted event",
+        meaning: "`unknown event '<event>' emitted by decision '<decision>'` — the decision's `emits` block names an event no provided `.evt` contract declares; the emitted names resolve union-wide against every provided event contract (the rule-10 pooling), and a `.dmn` that emits nothing provided is the loosely-coupled record (an empty events bucket with no `.evt` imports lowers the entries as authored, unchecked).",
+        fix: "Declare the event in an imported `.evt` contract, import the contract that declares it, or fix the spelling.",
     },
     Entry {
         code: E_UNKNOWN_INVOKED_SERVICE,
