@@ -1,0 +1,36 @@
+import "decision.mox";
+
+decision_model Underwriting {
+    namespace nz.example.underwriting;
+    inputs {
+        amount: int;
+    }
+    decisions {
+        /// Whether the application clears the automated floor.
+        decision Verdict {
+            output boolean;
+            logic expression "amount > 0"
+        }
+        /// The recorded assessment the case file holds.
+        decision LoanAssessment {
+            outputs {
+                outcome: string;
+                reason: string;
+            }
+        }
+    }
+    requirements {
+        information {
+            Verdict requires amount;
+            LoanAssessment requires amount;
+        }
+    }
+    services {
+        /// The case-facing contract: assess one application.
+        service LoanAssessmentService {
+            inputs { amount }
+            outputs { Verdict LoanAssessment }
+            encapsulates { Verdict LoanAssessment }
+        }
+    }
+}

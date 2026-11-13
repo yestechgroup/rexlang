@@ -85,6 +85,38 @@
         "exit_criteria": [],
         "control": null
       },
+      "AssessAuthority": {
+        "id": "AssessAuthority",
+        "name": "AssessAuthority",
+        "kind": {
+          "Task": {
+            "task_type": "Process",
+            "required_role": null,
+            "planning_mode": "None",
+            "composition": {
+              "Process": {
+                "process_ref": "RefundDecisions.AssessRefund",
+                "is_blocking": true,
+                "mappings": []
+              }
+            }
+          }
+        },
+        "entry_criteria": [
+          {
+            "id": "crit_AssessAuthority_entry_0",
+            "sentry_ref": "sentry_AssessAuthority_entry_0"
+          }
+        ],
+        "exit_criteria": [],
+        "control": {
+          "manual_activation_rule": null,
+          "required_rule": {
+            "condition": null
+          },
+          "repetition_rule": null
+        }
+      },
       "AssessRefund": {
         "id": "AssessRefund",
         "name": "AssessRefund",
@@ -125,6 +157,7 @@
             "children": [
               "ReviewTicket",
               "AssessRefund",
+              "AssessAuthority",
               "RefundSettled",
               "CloseTicket"
             ],
@@ -244,6 +277,21 @@
           }
         ],
         "if_part": null
+      },
+      "sentry_AssessAuthority_entry_0": {
+        "id": "sentry_AssessAuthority_entry_0",
+        "on_parts": [
+          {
+            "PlanItem": {
+              "source": "AssessRefund",
+              "event": "Complete"
+            }
+          }
+        ],
+        "if_part": {
+          "language": "Feel",
+          "source": "decision = null"
+        }
       },
       "sentry_AssessRefund_entry_0": {
         "id": "sentry_AssessRefund_entry_0",

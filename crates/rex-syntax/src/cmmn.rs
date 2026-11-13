@@ -37,6 +37,13 @@ pub(crate) const EXIT: &str = "exit";
 pub(crate) const PERFORMER: &str = "performer";
 /// The `execute <alias>.<Service>.<operation>;` clause of a service body.
 pub(crate) const EXECUTE: &str = "execute";
+/// The `invokes <qualified-name>;` clause of a decision body.
+pub(crate) const INVOKES: &str = "invokes";
+/// The `inputs { <name>* }` list of a decision body (the `.dmn` service
+/// name-list shape).
+pub(crate) const INPUTS: &str = "inputs";
+/// The `outputs { <name>* }` list of a decision body.
+pub(crate) const OUTPUTS: &str = "outputs";
 /// The `required;` control flag of a plan item body.
 pub(crate) const REQUIRED: &str = "required";
 /// The `repeats;` control flag of a plan item body.
@@ -51,5 +58,8 @@ pub(crate) const STAGE: &str = "stage";
 pub(crate) const TASK: &str = "task";
 /// The `service <name> { ... }` keyword.
 pub(crate) const SERVICE: &str = "service";
+/// The `decision <name> { ... }` keyword: a plan item invoking a decision
+/// service declared in a sibling `.dmn` decision model.
+pub(crate) const DECISION: &str = "decision";
 /// The `milestone <name> { ... }` keyword.
 pub(crate) const MILESTONE: &str = "milestone";

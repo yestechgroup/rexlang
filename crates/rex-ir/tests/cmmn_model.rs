@@ -63,6 +63,7 @@ fn lending_model() -> CmmnModel {
                     exit: Vec::new(),
                     control: None,
                     planning: PlanningMode::None,
+                    decision_task: None,
                 },
                 PlanItem {
                     name: "VerifyBorrower".into(),
@@ -80,6 +81,7 @@ fn lending_model() -> CmmnModel {
                     }],
                     control: None,
                     planning: PlanningMode::None,
+                    decision_task: None,
                 },
                 PlanItem {
                     name: "ApplicationReady".into(),
@@ -95,6 +97,7 @@ fn lending_model() -> CmmnModel {
                     exit: Vec::new(),
                     control: None,
                     planning: PlanningMode::None,
+                    decision_task: None,
                 },
                 PlanItem {
                     name: "ScoreApplication".into(),
@@ -119,6 +122,7 @@ fn lending_model() -> CmmnModel {
                         repetition: false,
                     }),
                     planning: PlanningMode::Manual,
+                    decision_task: None,
                 },
             ],
         }],

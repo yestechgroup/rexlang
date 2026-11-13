@@ -599,14 +599,16 @@
 //! file_item        := type_ref multiplicity? name ";"
 //! plan_item_decl   := "discretionary" simple_item_decl
 //!                   | simple_item_decl | stage_decl
-//! simple_item_decl := ("task" | "service" | "milestone") name plan_body?
+//! simple_item_decl := ("task" | "service" | "decision" | "milestone") name plan_body?
 //! stage_decl       := "stage" name stage_body?
 //! plan_body        := "{" plan_member* "}"
 //! stage_body       := "{" (plan_member | plan_item_decl)* "}"
-//! plan_member      := performer_clause | execute_clause
-//!                   | criterion_decl | flag_decl
+//! plan_member      := performer_clause | execute_clause | invoke_clause
+//!                   | decision_name_list | criterion_decl | flag_decl
 //! performer_clause := "performer" ":" name ";"
 //! execute_clause   := "execute" name "." name "." name ";"
+//! invoke_clause    := "invokes" qualified_name ";"
+//! decision_name_list := ("inputs" | "outputs") "{" name* "}"
 //! criterion_decl   := ("entry" | "exit") "on" on_part ("," on_part)*
 //!                     ("when" raw_parens)? ";"
 //! on_part          := name ("." name)?
@@ -633,14 +635,22 @@
 //!   the parens (the `when`-condition convention) and types the text with
 //!   rex-expr.
 //! * The `discretionary` prefix is grammatical before a simple item
-//!   (`task`, `service`, or `milestone`) but not before a `stage`; the
-//!   driver rejects it on milestones — discretionary planning is a
-//!   task/service concept.
+//!   (`task`, `service`, `decision`, or `milestone`) but not before a
+//!   `stage`; the driver rejects it on milestones — discretionary
+//!   planning is a task/service concept.
+//! * A `decision` plan item invokes a `.dmn` decision service: one
+//!   `invokes <qualified-name>;` clause (a duplicate is a parse error,
+//!   the `execute` clause rule; the driver validates placement,
+//!   resolution, and the missing clause), plus optional `inputs { name* }`
+//!   and `outputs { name* }` bare name lists (the `.dmn` service
+//!   name-list shape; repeated blocks merge — the `.dmn` rule). The
+//!   qualified name lowers as written; resolution is a driver concern.
 //! * Semicolons follow the `.evt` rule: every statement line (`role`,
-//!   case-file item, `performer`, `execute`, criterion, flag) ends in `;`;
-//!   block declarations (`case`, `stage`, `task`, `service`, `milestone`,
-//!   `roles`, `case_file`) end without one. The formatter emits the
-//!   canonical `;` whether or not the source had one.
+//!   case-file item, `performer`, `execute`, `invokes`, criterion, flag)
+//!   ends in `;`; block declarations (`case`, `stage`, `task`, `service`,
+//!   `decision`, `milestone`, `roles`, `case_file`, the `inputs`/`outputs`
+//!   name lists) end without one. The formatter emits the canonical `;`
+//!   whether or not the source had one.
 //! * Imports must precede the first `case` declaration; a later `import`
 //!   is an error (recovered, and the misplaced import is dropped),
 //!   mirroring the `.actor`/`.evt`/`.uc` rule. Duplicate imports are a
@@ -1173,6 +1183,9 @@ mod grammar_doc_tests {
             cmmn::EXIT,
             cmmn::PERFORMER,
             cmmn::EXECUTE,
+            cmmn::INVOKES,
+            cmmn::INPUTS,
+            cmmn::OUTPUTS,
             cmmn::REQUIRED,
             cmmn::REPEATS,
             cmmn::AUTO,
@@ -1180,6 +1193,7 @@ mod grammar_doc_tests {
             cmmn::STAGE,
             cmmn::TASK,
             cmmn::SERVICE,
+            cmmn::DECISION,
             cmmn::MILESTONE,
         ] {
             words.push(word);

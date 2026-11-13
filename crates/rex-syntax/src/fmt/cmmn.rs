@@ -40,6 +40,7 @@ impl<'src> Formatter<'src> {
             Some(Token::Ident(text))
                 if text == cmmn::TASK
                     || text == cmmn::SERVICE
+                    || text == cmmn::DECISION
                     || text == cmmn::MILESTONE
                     || text == cmmn::STAGE
                     || text == cmmn::DISCRETIONARY =>
@@ -50,15 +51,17 @@ impl<'src> Formatter<'src> {
         }
     }
 
-    /// One member of a plan item body: a `performer`/`execute` clause, an
-    /// `entry`/`exit` criterion, a control flag, or (in a stage) a nested
-    /// plan item. Nested items inside a non-stage body are junk — the
-    /// formatter echoes them on one line, mirroring the parser's recovery.
+    /// One member of a plan item body: a `performer`/`execute`/`invokes`
+    /// clause, an `inputs`/`outputs` name list, an `entry`/`exit`
+    /// criterion, a control flag, or (in a stage) a nested plan item.
+    /// Nested items inside a non-stage body are junk — the formatter
+    /// echoes them on one line, mirroring the parser's recovery.
     pub(crate) fn scan_cmmn_plan_item(&mut self) {
         match self.peek_tok() {
             Some(Token::Ident(text))
                 if text == cmmn::TASK
                     || text == cmmn::SERVICE
+                    || text == cmmn::DECISION
                     || text == cmmn::MILESTONE
                     || text == cmmn::STAGE =>
             {
@@ -72,6 +75,7 @@ impl<'src> Formatter<'src> {
                     Some(Token::Ident(text))
                         if text == cmmn::TASK
                             || text == cmmn::SERVICE
+                            || text == cmmn::DECISION
                             || text == cmmn::MILESTONE =>
                     {
                         self.advance();
@@ -94,6 +98,15 @@ impl<'src> Formatter<'src> {
                 self.advance();
                 self.scan_qname();
                 self.scan_cmmn_semicolon();
+            }
+            Some(Token::Ident(text)) if text == cmmn::INVOKES => {
+                self.advance();
+                self.scan_qname();
+                self.scan_cmmn_semicolon();
+            }
+            Some(Token::Ident(text)) if text == cmmn::INPUTS || text == cmmn::OUTPUTS => {
+                self.advance();
+                self.scan_dmn_name_list(CMMN_DECISION_LIST_STOPS);
             }
             Some(Token::Ident(text)) if text == cmmn::ENTRY || text == cmmn::EXIT => {
                 self.advance();
@@ -273,3 +286,20 @@ impl<'src> Formatter<'src> {
         self.flush_line();
     }
 }
+
+/// The words that end a decision body's bare `{ name* }` list in the
+/// formatter: the words that can begin the next plan-item body member
+/// (the parser's `DECISION_NAME_LIST_STOPS` twin — the two consumers of
+/// the `crate::cmmn` word table must agree).
+const CMMN_DECISION_LIST_STOPS: &[&str] = &[
+    cmmn::PERFORMER,
+    cmmn::EXECUTE,
+    cmmn::INVOKES,
+    cmmn::INPUTS,
+    cmmn::OUTPUTS,
+    cmmn::ENTRY,
+    cmmn::EXIT,
+    cmmn::REQUIRED,
+    cmmn::REPEATS,
+    cmmn::AUTO,
+];

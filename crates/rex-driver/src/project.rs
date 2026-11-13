@@ -52,8 +52,8 @@ use std::collections::BTreeMap;
 use crate::engine_common::dir_of;
 use crate::workspace_imports::{collect_schema_imports, collect_sigil_imports};
 use crate::{
-    compile_actors_str, compile_ddd_str, compile_evt_str, compile_str, render, Diagnostic,
-    DomainImports,
+    compile_actors_str, compile_ddd_str, compile_dmn_str, compile_evt_str, compile_str, render,
+    Diagnostic, DomainImports,
 };
 
 /// One imported `.actor` policy as gathered from a project: the source
@@ -338,9 +338,131 @@ pub fn gather_usecase_imports(
     Ok(buckets)
 }
 
-/// The pre-compiled design and flow artifacts a `.deploy` file's imports
-/// resolve to, keyed by resolved path — [`crate::compile_deploy_str`]'s
-/// input slices.
+/// The buckets a `.cmmn` case file's imports resolve to: the `.uc` buckets
+/// plus the pre-compiled `.dmn` decision models a `decision` task's
+/// `invokes` clause resolves against — keyed by resolved path, the same
+/// discovery (extension bucketing) and compilation discipline as the
+/// `.evt` bucket.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CmmnBuckets {
+    /// Each imported `.mox` domain as `(resolved key, source)`.
+    pub domains: Vec<(String, String)>,
+    /// Each imported `.ddd` design, compiled.
+    pub designs: Vec<(String, rex_ir::ddd::DddModel)>,
+    /// Each imported `.actor` policy, compiled.
+    pub actors: Vec<(String, rex_ir::ActorModel)>,
+    /// Each imported `.evt` contract, compiled.
+    pub events: Vec<(String, rex_ir::events::EventModel)>,
+    /// Each imported `.dmn` decision model, compiled.
+    pub decisions: Vec<(String, rex_ir::dmn::DmnModel)>,
+}
+
+/// Gathers a `.cmmn` file's imports into [`CmmnBuckets`] — the four
+/// use-case buckets through [`gather_usecase_imports`] (identical
+/// discovery, dedup, and error text), plus a decision pass over the same
+/// imports compiling each `.dmn` into the bucket (its own `.mox` imports
+/// and decision tables resolve relative to its resolved key). Unknown
+/// extensions pass through so the driver reports them.
+pub fn gather_case_imports(
+    path_key: &str,
+    source: &str,
+    import_paths: &dyn Fn(&str) -> Vec<String>,
+    fetch: &mut dyn FnMut(&str) -> Option<String>,
+) -> Result<CmmnBuckets, String> {
+    let uc = gather_usecase_imports(path_key, source, import_paths, fetch)?;
+    let mut buckets = CmmnBuckets {
+        domains: uc.domains,
+        designs: uc.designs,
+        actors: uc.actors,
+        events: uc.events,
+        decisions: Vec::new(),
+    };
+    let dir = dir_of(path_key);
+    for import in import_paths(source) {
+        let resolved = dir.join(&import);
+        let key = resolved.display().to_string();
+        if resolved
+            .extension()
+            .and_then(|extension| extension.to_str())
+            != Some("dmn")
+        {
+            continue;
+        }
+        if buckets
+            .decisions
+            .iter()
+            .any(|(existing, _)| *existing == key)
+        {
+            continue;
+        }
+        let text = fetch(&key).ok_or_else(|| cannot_read(&key, path_key))?;
+        let model = gather_decision_model(&key, &text, fetch)?;
+        buckets.decisions.push((key, model));
+    }
+    Ok(buckets)
+}
+
+/// Gathers and compiles one imported `.dmn` decision model: its own `.mox`
+/// imports resolve relative to its resolved key, and each `logic table
+/// "<path>"` clause's markdown content is fetched the same way and keyed
+/// by the path **as written** (the driver matches table paths exactly as
+/// written). Compilation failure reads ``imported decision model {key}
+/// does not compile`` plus the error-diagnostic lines.
+fn gather_decision_model(
+    key: &str,
+    text: &str,
+    fetch: &mut dyn FnMut(&str) -> Option<String>,
+) -> Result<rex_ir::dmn::DmnModel, String> {
+    let domains = gather_domains_relative(
+        key,
+        text,
+        |source| {
+            rex_syntax::parse_dmn(source)
+                .ast
+                .map(|ast| ast.imports.into_iter().map(|import| import.path).collect())
+                .unwrap_or_default()
+        },
+        fetch,
+        true,
+    )?;
+    let schemas = collect_schema_imports(&domains).map_err(|error| error.to_string())?;
+    let sigil = collect_sigil_imports(&domains).map_err(|error| error.to_string())?;
+    let dir = dir_of(key);
+    let mut tables: Vec<(String, String)> = Vec::new();
+    if let Some(ast) = rex_syntax::parse_dmn(text).ast.and_then(|ast| ast.model) {
+        for decision in &ast.decisions {
+            let source = match &decision.logic {
+                Some(rex_syntax::DmnLogic::Table { source, .. }) => source,
+                _ => continue,
+            };
+            if tables.iter().any(|(name, _)| name == source) {
+                continue;
+            }
+            let resolved = dir.join(source).display().to_string();
+            if let Some(content) = fetch(&resolved) {
+                tables.push((source.clone(), content));
+            }
+        }
+    }
+    let compilation = compile_dmn_str(
+        key,
+        text,
+        &domains,
+        &DomainImports {
+            schemas,
+            sigil: sigil.imports,
+        },
+        &tables,
+    );
+    let Some(model) = compilation.model else {
+        return Err(does_not_compile(
+            "imported decision model",
+            key,
+            &compilation.diagnostics,
+        ));
+    };
+    Ok(model)
+}
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DeployPairs {
     /// Each imported `.ddd` design, compiled.
