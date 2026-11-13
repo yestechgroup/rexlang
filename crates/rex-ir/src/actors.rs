@@ -163,6 +163,35 @@ pub enum ActorKind {
     Agent,
 }
 
+/// Which session kinds a [`GrantEntry`] applies to: `human` (human
+/// sessions only), `agent` (automation sessions only), or `any` (the
+/// default — every session kind). Modeling-only: the downstream
+/// enforcement mapping is deferred (rexlang#181).
+///
+/// Serializes as a bare camelCase tag string: `"human"`, `"agent"`,
+/// `"any"` — but `any` is the default and never serializes (wire
+/// contract rule 9), so entries without a modifier stay byte-identical.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SessionKind {
+    /// `human` — human sessions only.
+    Human,
+    /// `agent` — automation (LLM-agent) sessions only.
+    Agent,
+    /// Any session kind — the default, omitted on the wire.
+    #[default]
+    Any,
+}
+
+impl SessionKind {
+    /// Whether this is the default [`SessionKind::Any`]: the wire rule
+    /// skips the field entirely for the default, so entries without a
+    /// modifier serialize exactly as before.
+    pub fn is_any(&self) -> bool {
+        matches!(self, SessionKind::Any)
+    }
+}
+
 /// A single `capability <name> on <class>` of an [`ActorsDef`]: an action
 /// that can be granted to actors, on a resolved class.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -224,8 +253,9 @@ pub enum GrantEffect {
 }
 
 /// One entry of a [`GrantDef`]: a `permit`/`forbid` effect on a capability,
-/// with an optional condition, obligations, and an optional verbatim `cedar`
-/// policy body.
+/// with an optional session kind, an optional condition, obligations, and
+/// an optional verbatim `cedar` policy body. Delegations reuse the entry
+/// unchanged.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GrantEntry {
@@ -233,6 +263,11 @@ pub struct GrantEntry {
     pub effect: GrantEffect,
     /// The capability the effect applies to (block-local name).
     pub capability: String,
+    /// The session kinds the entry applies to. Additive (wire contract
+    /// rule 9, rexlang#181): the default [`SessionKind::Any`] is omitted,
+    /// so entries without a modifier stay byte-identical.
+    #[serde(default, skip_serializing_if = "SessionKind::is_any")]
+    pub session_kind: SessionKind,
     /// The condition source text, strictly inside the `when (...)` parens
     /// (ends-trimmed). Verbatim: the IR never parses or reformats it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -247,11 +282,13 @@ pub struct GrantEntry {
 }
 
 impl GrantEntry {
-    /// Creates an entry with the given effect and no optional parts.
+    /// Creates an entry with the given effect and no optional parts. The
+    /// session kind defaults to [`SessionKind::Any`].
     pub fn new(effect: GrantEffect, capability: impl Into<String>) -> Self {
         Self {
             effect,
             capability: capability.into(),
+            session_kind: SessionKind::Any,
             when: None,
             obligations: Vec::new(),
             cedar: None,
@@ -273,6 +310,13 @@ impl GrantEntry {
     /// Chainable setter for the `when (...)` condition source text.
     pub fn when(mut self, condition: impl Into<String>) -> Self {
         self.when = Some(condition.into());
+        self
+    }
+
+    /// Chainable setter for the session kinds the entry applies to
+    /// (rexlang#181 part B). [`SessionKind::Any`] is the default.
+    pub fn with_session_kind(mut self, session_kind: SessionKind) -> Self {
+        self.session_kind = session_kind;
         self
     }
 

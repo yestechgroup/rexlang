@@ -48,7 +48,9 @@ expression language is normative in [`docs/EXPRESSIONS.md`](EXPRESSIONS.md).
   [Importing JSON Schema types](#importing-json-schema-types)),
   and `sigil`, special in the same position (see
   [Importing Rune models](#importing-rune-models)), and `to`, which is
-  special only on a delegation's `to` line.
+  special only on a delegation's `to` line, and `human`, which is special
+  only in a grant or delegation effect entry's session-kind modifier
+  position (see [Session kinds](#session-kinds)).
 
 ## Model structure
 
@@ -77,9 +79,10 @@ vocabularies — the block grammar is the shared `actors_block` production of
 the parser module docs, identical to the one in
 [.actor files](#actor-policy-files-actor) (`actor`/`agent` with `extends`,
 `capability <name> on <type_ref>`, `purpose`, `grant` with `permit`/`forbid`
-entries, `when` conditions, obligations, `cedar` bodies, `delegation`,
-`never_both`). Each block lands on its declaring package as an `ActorsDef`
-in the Core IR (`Package.actors`).
+entries with optional session-kind modifiers (see
+[Session kinds](#session-kinds)), `when` conditions, obligations, `cedar`
+bodies, `delegation`, `never_both`). Each block lands on its declaring
+package as an `ActorsDef` in the Core IR (`Package.actors`).
 
 Blocks compile and validate exactly like the standalone surface: one block
 per name per file, and across files of a multi-file model same-named blocks
@@ -564,6 +567,71 @@ forbid bindings) reach it, and each grant entry emits one policy per
 holding actor, because Cedar's `is` matches the exact principal type and
 hierarchy membership (`memberOfTypes`) alone would leave an agent's
 request validated but unauthorized.
+
+#### Session kinds
+
+A grant or delegation effect entry may carry a session-kind modifier between
+the effect and the capability name — `permit human SubmitPayRun when
+(payRunStatus == PayRunStatus.Draft)` (human sessions only),
+`forbid agent IngestHours` (automation sessions only), `permit SubmitPayRun`
+(unchanged: any session). In context:
+
+```mox
+package payroll
+
+enum PayRunStatus { Draft = 0 Approved = 1 }
+
+class PayRun {
+    id String id
+    PayRunStatus payRunStatus
+}
+
+actors Payroll {
+    actor Finance
+    agent Helper extends Finance
+    capability SubmitPayRun on PayRun
+    capability IngestHours on PayRun
+
+    grant Finance {
+        permit human SubmitPayRun when (payRunStatus == PayRunStatus.Draft)
+        forbid agent IngestHours
+    }
+}
+```
+
+The semantics are a closed three-valued set on the entry:
+
+| Modifier | Meaning | IR (`GrantEntry.sessionKind`) |
+|---|---|---|
+| `human` | human sessions only | `"human"` |
+| `agent` | automation (LLM-agent) sessions only | `"agent"` |
+| *(absent)* | any session kind — the default | `any` (omitted on the wire) |
+
+The modifier is **modeling-only in v1**: it is carried in the IR so models
+can express session-kind intent, but no enforcement mapping exists yet. The
+Cedar backend refuses any entry whose kind is not `any` as a generate-time
+error naming the capability and the grant authority (emitting a restricted
+entry as an unconditional policy would widen the grant), and the downstream
+enforcement semantics — how a human- or agent-session restriction joins the
+codegraph v1 API-key authentication model — are explicitly deferred pending
+the codegraph security sign-off (rexlang#181). Until that sign-off lands,
+session kinds change nothing about how credentials authorize sessions.
+
+`agent` is the real lexer keyword — a capability named `agent` needs the
+`^agent` escape, so an unescaped `agent` in the modifier position is always
+the modifier. `human` is *contextual*: it is the modifier iff the next token
+is a valid capability-name token, so
+
+- `permit human X` restricts the permit of `X` to human sessions;
+- `permit human when (...)` permits a capability literally named `human`
+  with a guard (`when` is a keyword, not a name);
+- `permit human obligation done` attaches an obligation to the capability
+  `human`;
+- `permit robot X` is a parse error — no other kind words are accepted.
+
+Delegation entries reuse the grant-entry grammar, so a delegated entry may
+carry the same modifier. The formatter renders the modifier on the entry's
+line (`permit human X`).
 
 Blocks declare obligations with `obligation <name>` lines — the named
 follow-through actions entries attach — under the same discipline as

@@ -211,6 +211,15 @@ pub(crate) fn lower_actors(
                         mox::Effect::Forbid => ir::GrantEffect::Forbid,
                     };
                     let mut ir_entry = ir::GrantEntry::new(ir_effect, &effect.capability.text);
+                    // Session-kind modifier (rexlang#181 part B): the
+                    // grammar already restricts the words to human/agent;
+                    // lowering only maps. `None` stays the `Any` default.
+                    if let Some(modifier) = effect.session_kind {
+                        ir_entry = ir_entry.with_session_kind(match modifier {
+                            mox::SessionKindModifier::Human => ir::SessionKind::Human,
+                            mox::SessionKindModifier::Agent => ir::SessionKind::Agent,
+                        });
+                    }
                     if let Some(when_span) = effect.when {
                         ir_entry = ir_entry.when(when_text(source, when_span));
                         check_when_syntax(source, when_span, diags);
@@ -277,6 +286,14 @@ pub(crate) fn lower_actors(
                 mox::Effect::Forbid => ir::GrantEffect::Forbid,
             };
             let mut ir_entry = ir::GrantEntry::new(ir_effect, &entry.capability.text);
+            // Session-kind modifier (rexlang#181 part B): same mapping as
+            // grant entries — delegations reuse the entry shape.
+            if let Some(modifier) = entry.session_kind {
+                ir_entry = ir_entry.with_session_kind(match modifier {
+                    mox::SessionKindModifier::Human => ir::SessionKind::Human,
+                    mox::SessionKindModifier::Agent => ir::SessionKind::Agent,
+                });
+            }
             if let Some(when_span) = entry.when {
                 ir_entry = ir_entry.when(when_text(source, when_span));
                 check_when_syntax(source, when_span, diags);

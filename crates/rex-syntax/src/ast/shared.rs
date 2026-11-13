@@ -284,11 +284,27 @@ pub enum Effect {
     Forbid,
 }
 
+/// The session-kind modifier of a [`GrantEffectDecl`]: `human` restricts the
+/// entry to human sessions, `agent` to automation (LLM-agent) sessions.
+/// `human` is a contextual word (an ordinary identifier outside the
+/// modifier position); `agent` is the real lexer keyword.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionKindModifier {
+    /// `human` — human sessions only.
+    Human,
+    /// `agent` — automation sessions only.
+    Agent,
+}
+
 /// A `permit`/`forbid` entry of a [`GrantDecl`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct GrantEffectDecl {
     /// Whether the capability is permitted or forbidden.
     pub effect: Effect,
+    /// The session-kind modifier, when the entry carries one (`permit human
+    /// X` / `forbid agent X`). `None` — the default — applies to any
+    /// session kind.
+    pub session_kind: Option<SessionKindModifier>,
     /// The capability the effect applies to.
     pub capability: Name,
     /// Span of the raw `(...)` condition, parens inclusive. The condition

@@ -833,6 +833,176 @@ fn purpose_before_from_or_to_in_delegation_is_an_error() {
     );
 }
 
+// --- session-kind grant modifiers (rexlang#181 part B) ---------------------------
+
+/// One effect entry, unpacked.
+fn effect_of(actors: &ActorsDecl, grant_index: usize, entry_index: usize) -> &GrantEffectDecl {
+    match &actors.grants[grant_index].entries[entry_index] {
+        GrantEntryDecl::Effect(effect) => effect,
+        other => panic!("expected an effect entry, found {other:?}"),
+    }
+}
+
+#[test]
+fn permit_human_is_a_human_session_modifier() {
+    let source = "actors A { capability SubmitPayRun on T grant A { permit human SubmitPayRun } }";
+    let result = parse(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.expect("expected a recovered AST");
+    let actors = expect_actors(&model.declarations[0], "A");
+    let effect = effect_of(actors, 0, 0);
+    assert_eq!(effect.session_kind, Some(SessionKindModifier::Human));
+    assert_eq!(effect.capability.text, "SubmitPayRun");
+}
+
+#[test]
+fn forbid_agent_is_an_agent_session_modifier() {
+    let source = "actors A { capability IngestHours on T grant A { forbid agent IngestHours } }";
+    let result = parse(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.expect("expected a recovered AST");
+    let actors = expect_actors(&model.declarations[0], "A");
+    let effect = effect_of(actors, 0, 0);
+    assert_eq!(effect.session_kind, Some(SessionKindModifier::Agent));
+    assert_eq!(effect.capability.text, "IngestHours");
+}
+
+#[test]
+fn plain_permit_has_no_session_kind() {
+    let result = parse("actors A { capability C on T grant A { permit C } }");
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.expect("expected a recovered AST");
+    let actors = expect_actors(&model.declarations[0], "A");
+    assert_eq!(effect_of(actors, 0, 0).session_kind, None);
+}
+
+#[test]
+fn session_kind_modifier_combines_with_when_and_obligations() {
+    let source = concat!(
+        "actors A { capability C on T obligation audit ",
+        "grant A { permit human C when (a > 0) obligation audit } }"
+    );
+    let result = parse(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.expect("expected a recovered AST");
+    let actors = expect_actors(&model.declarations[0], "A");
+    let effect = effect_of(actors, 0, 0);
+    assert_eq!(effect.session_kind, Some(SessionKindModifier::Human));
+    let when = effect.when.expect("`when` span");
+    assert_eq!(&source[when.start..when.end], "(a > 0)");
+    assert_eq!(effect.obligations.len(), 1);
+    assert_eq!(effect.obligations[0].text, "audit");
+}
+
+#[test]
+fn session_kind_modifier_in_delegation_entry() {
+    let source = concat!(
+        "actors A { capability C on T agent B ",
+        "delegation D { from A to B permit human C } }"
+    );
+    let result = parse(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.expect("expected a recovered AST");
+    let actors = expect_actors(&model.declarations[0], "A");
+    let delegation = &actors.delegations[0];
+    assert_eq!(delegation.entries.len(), 1);
+    assert_eq!(
+        delegation.entries[0].session_kind,
+        Some(SessionKindModifier::Human)
+    );
+    assert_eq!(delegation.entries[0].capability.text, "C");
+}
+
+/// The pinned ambiguity rule: `human` is the modifier iff the next token is
+/// a valid capability-name token. `when` and `obligation` are keywords, not
+/// names — so in those positions `human` is itself the capability name.
+#[test]
+fn human_is_the_modifier_only_before_a_name_token() {
+    // `permit human when (...)` = permit of a capability literally named
+    // `human` with a guard.
+    let source = "actors A { capability human on T grant A { permit human when (a > 0) } }";
+    let result = parse(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.expect("expected a recovered AST");
+    let actors = expect_actors(&model.declarations[0], "A");
+    let effect = effect_of(actors, 0, 0);
+    assert_eq!(effect.session_kind, None);
+    assert_eq!(effect.capability.text, "human");
+    assert!(effect.when.is_some());
+
+    // `permit human obligation done` = capability `human` plus obligation.
+    let source = "actors A { capability human on T obligation done grant A { permit human obligation done } }";
+    let result = parse(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.expect("expected a recovered AST");
+    let actors = expect_actors(&model.declarations[0], "A");
+    let effect = effect_of(actors, 0, 0);
+    assert_eq!(effect.session_kind, None);
+    assert_eq!(effect.capability.text, "human");
+    assert_eq!(effect.obligations.len(), 1);
+    assert_eq!(effect.obligations[0].text, "done");
+}
+
+/// A capability named `agent` needs the `^agent` escape (already true
+/// today); the escaped form is never a modifier.
+#[test]
+fn escaped_agent_capability_is_not_a_modifier() {
+    let source = "actors A { capability ^agent on T grant A { permit ^agent } }";
+    let result = parse(source);
+    assert!(
+        result.errors.is_empty(),
+        "unexpected errors: {:?}",
+        result.errors
+    );
+    let model = result.ast.expect("expected a recovered AST");
+    let actors = expect_actors(&model.declarations[0], "A");
+    let effect = effect_of(actors, 0, 0);
+    assert_eq!(effect.session_kind, None);
+    assert_eq!(effect.capability.text, "agent");
+    assert!(effect.capability.escaped);
+}
+
+/// `robot` is not a session kind: `permit robot X` leaves the second name
+/// dangling, so the entry is a parse error (the grammar accepts no other
+/// kind words).
+#[test]
+fn unknown_session_kind_word_is_a_parse_error() {
+    let result = parse("actors A { capability C on T grant A { permit robot C } }");
+    assert!(
+        !result.errors.is_empty(),
+        "`permit robot C` must be a parse error, got {:?}",
+        result.errors
+    );
+}
+
 #[test]
 fn escaped_purpose_is_usable_as_an_identifier() {
     let source = concat!(

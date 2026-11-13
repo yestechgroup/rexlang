@@ -5,7 +5,30 @@ use super::banner;
 use super::condition::{cedar_string_literal, condition_text};
 use super::mapping::capability_class;
 use super::reach::actors_inheriting;
-use rex_ir::{ActorsDef, GrantEffect, Model};
+use rex_ir::{ActorsDef, GrantEffect, GrantEntry, Model, SessionKind};
+
+/// The session-kind gate (rexlang#181 part B): a grant or delegation entry
+/// restricted to `human` or `agent` sessions is a named generate-time
+/// rejection. The Cedar backend cannot express session provenance in v1 —
+/// the downstream enforcement mapping is deferred pending the codegraph
+/// security sign-off — and emitting a restricted entry as an unconditional
+/// policy would silently widen the grant, so generation refuses instead.
+/// `any` entries (the default) pass untouched, byte-identical.
+fn reject_session_kind(entry: &GrantEntry, authority: &str) -> anyhow::Result<()> {
+    let kind = match entry.session_kind {
+        SessionKind::Any => return Ok(()),
+        SessionKind::Human => "human",
+        SessionKind::Agent => "agent",
+    };
+    anyhow::bail!(
+        "capability `{capability}` granted to {authority} applies only to {kind} \
+         sessions, which the Cedar backend cannot express in v1: emitting it as \
+         an unconditional policy would widen the grant, so generation refuses \
+         (session-kind enforcement is deferred pending the codegraph security \
+         sign-off, rexlang#181)",
+        capability = entry.capability,
+    )
+}
 
 /// Builds the policy set for one actors block: banner, then one paragraph
 /// per grant entry (effect policy or verbatim cedar splice) in IR order,
@@ -19,6 +42,7 @@ pub(super) fn policy_set(actors: &ActorsDef, model: &Model) -> anyhow::Result<St
             match &entry.cedar {
                 Some(text) => paragraphs.push(text.clone()),
                 None => {
+                    reject_session_kind(entry, &format!("actor `{}`", grant.actor))?;
                     let class = capability_class(actors, model, &entry.capability)?;
                     // Extends confers grant inheritance (the same
                     // effective-permit rule the driver's delegation
@@ -74,6 +98,18 @@ pub(super) fn policy_set(actors: &ActorsDef, model: &Model) -> anyhow::Result<St
     // declared purpose appends ` purpose: <P>`; without one the line ends
     // right after the count.
     for delegation in &actors.delegations {
+        // A session-kind entry rides the delegation to the same refused
+        // v1 posture (rexlang#181 part B): the authority line names the
+        // receiving actor and the delegation.
+        for entry in &delegation.entries {
+            reject_session_kind(
+                entry,
+                &format!(
+                    "actor `{}` via delegation `{}`",
+                    delegation.to, delegation.name
+                ),
+            )?;
+        }
         let permits = delegation
             .entries
             .iter()

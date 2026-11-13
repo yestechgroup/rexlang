@@ -295,6 +295,47 @@ fn when_condition_bytes_are_preserved_verbatim() {
 }
 
 #[test]
+fn session_kind_modifiers_format_canonically() {
+    // The modifier rides the entry's line between effect and capability.
+    let messy = "actors S { grant G { permit  human C forbid agent D permit E } }";
+    let canonical = concat!(
+        "actors S {\n",
+        "    grant G {\n",
+        "        permit human C\n",
+        "        forbid agent D\n",
+        "        permit E\n",
+        "    }\n",
+        "}\n",
+    );
+    assert_eq!(fmt(messy), canonical);
+    assert_eq!(fmt(canonical), canonical, "not a fixpoint");
+
+    // The ambiguity rule, formatter side: `human` before a keyword is a
+    // capability name, not a modifier.
+    let human_named = "actors S { grant G { permit human when (a > 0) } }";
+    let human_named_canonical =
+        "actors S {\n    grant G {\n        permit human when (a > 0)\n    }\n}\n";
+    assert_eq!(fmt(human_named), human_named_canonical);
+    assert_eq!(fmt(human_named_canonical), human_named_canonical);
+
+    // The same modifier handling inside a delegation body (and the escaped
+    // `^agent` capability never reads as a modifier).
+    assert_eq!(
+        fmt("actors S { delegation D { from A to B permit human C permit ^agent } }"),
+        concat!(
+            "actors S {\n",
+            "    delegation D {\n",
+            "        from A\n",
+            "        to B\n",
+            "        permit human C\n",
+            "        permit ^agent\n",
+            "    }\n",
+            "}\n",
+        )
+    );
+}
+
+#[test]
 fn cedar_entry_formats_like_target_bodies() {
     let formatted = fmt("actors S { grant G { cedar { if x { y } } } }");
     assert_eq!(
