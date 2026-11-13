@@ -539,6 +539,64 @@ fn a_receiver_call_still_resolves_class_ops_only() {
     );
 }
 
+/// A receiver call lifts by the operation's declared return cardinality,
+/// exactly like a bare function call: the `.ddd` body checker's synthetic
+/// repository operations rely on it (`findById` → `Option`, `findAll` →
+/// `List`). Domain operations never set the field, so their calls are
+/// unchanged.
+#[test]
+fn a_receiver_call_lifts_by_the_operation_return_multiplicity() {
+    let mut context = DomainTypes::default();
+    let mut find_by_id = Operation::new(
+        "findById",
+        class_ref("Book"),
+        vec![OperationParam {
+            name: "key".to_string(),
+            type_: TypeRef::Primitive(PrimitiveType::String),
+            multiplicity: None,
+        }],
+    );
+    find_by_id.return_multiplicity = Some(Multiplicity::OPTIONAL);
+    let mut find_all = Operation::new("findAll", class_ref("Book"), Vec::new());
+    find_all.return_multiplicity = Some(Multiplicity::MANY);
+    context.insert_class(
+        "design",
+        "BookRepository",
+        Vec::new(),
+        Vec::new(),
+        vec![
+            find_by_id,
+            find_all,
+            Operation::new("touch", class_ref("Book"), Vec::new()),
+        ],
+    );
+    let checker =
+        TypeChecker::new(context).with_binding("repo", Ty::class("design", "BookRepository"));
+    let type_of = |source: &str| {
+        let parsed = parse(source);
+        assert!(parsed.errors.is_empty(), "{source:?}: {:?}", parsed.errors);
+        checker
+            .clone()
+            .type_of(parsed.ast.as_ref().expect("ast"))
+            .unwrap_or_else(|errors| panic!("{source:?}: {errors:?}"))
+    };
+    assert_eq!(
+        type_of(r#"repo.findById("x")"#),
+        book().optional(),
+        "a (0..1) receiver return types the call as Option"
+    );
+    assert_eq!(
+        type_of("repo.findAll()"),
+        book().list(),
+        "a (0..*) receiver return types the call as List"
+    );
+    assert_eq!(
+        type_of("repo.touch()"),
+        book(),
+        "an unset multiplicity stays the plain type"
+    );
+}
+
 #[test]
 fn a_function_return_multiplicity_lifts_the_call_type() {
     // The declared return cardinality lifts the call's type the same way a
@@ -617,6 +675,7 @@ fn algebra_types_follow_a1_to_a6() {
                                                                        // A3 with a boolean lambda: List(boolean)
     assert_ty("library.books.map(b => b.pages > 5)", Ty::boolean().list());
     assert_ty("library.books.any(b => b.pages > 500)", Ty::boolean()); // A4
+    assert_ty("library.books.all(b => b.pages > 500)", Ty::boolean()); // A4
     assert_ty("library.books.first()", book().optional()); // A1
     assert_ty("library.books.first(b => b.pages > 10)", book().optional());
     assert_ty("library.books.map(b => b.pages).sum()", Ty::int()); // A6
@@ -626,9 +685,10 @@ fn algebra_types_follow_a1_to_a6() {
 fn algebra_requires_collections_and_matching_lambdas() {
     // algebra on a non-list
     assert_err("book.pages.size()", "collection");
-    // filter/any/first lambdas must produce boolean
+    // filter/any/all/first lambdas must produce boolean
     assert_err("library.books.filter(b => b.pages)", "boolean");
     assert_err("library.books.any(b => b.pages)", "boolean");
+    assert_err("library.books.all(b => b.pages)", "boolean");
     // sum requires a numeric element type (A6)
     assert_err("library.books.sum()", "numeric");
     assert_err("library.books.map(b => b.title).sum()", "numeric");

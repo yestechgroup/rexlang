@@ -1,0 +1,59 @@
+import "bodies.mox";
+
+application Payroll {
+    base nz.example.payroll
+    module payroll {
+        service PayRunService {
+            inject PayRunRepository;
+            inject PayRunAuditRepository;
+            submit(PayRunLineDraft draft) capability ApprovePayRun => PayRunRepository {
+                let run = self.findById("current") else error NotFound("PayRun", "current");
+                guard run.total >= 0 else error Conflict("total");
+                let units = run.lines.map(line => line.quantity).sum();
+                let anyPositive = run.lines.any(line => line.quantity > 0);
+                let allCosted = run.lines.all(line => line.unitCost >= 0);
+                let lineCount = run.lines.size();
+                run.total = units;
+                let saved = self.save(run);
+                let audit = PayRunAuditRepository.record("submit");
+            }
+            boolean approve() capability ApprovePayRun when (status == Draft) => PayRunRepository {
+                let run = self.findById("current") else error NotFound("PayRun", "current");
+                if (run.total > 0) {
+                    return true;
+                } else {
+                    return false;
+                }
+            }
+            boolean audit(String note) => PayRunAuditRepository {
+                let entry = self.record(note);
+                return entry.accepted;
+            }
+            int totalFor(String runId) => PayRunRepository {
+                let run = self.findById(runId) else error NotFound("PayRun", runId);
+                return run.lines.map(line => line.quantity * line.unitCost).sum();
+            }
+        }
+        entity PayRun repository PayRunRepository {
+            findById;
+            findAll;
+            save;
+            delete;
+            int totalQuantity(String runId) when (status == Draft) {
+                let run = self.findById(runId) else error NotFound("PayRun", runId);
+                return run.lines.map(line => line.quantity).sum();
+            }
+        }
+        machine status: PayRunStatus {
+            initial Draft;
+            Draft -> Approved via Approve;
+            Approved -> Posted via Post;
+            terminal Posted;
+        }
+        entity PayRunAudit repository PayRunAuditRepository {
+            findById;
+            save;
+            AuditEntry record(String note);
+        }
+    }
+}

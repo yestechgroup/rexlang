@@ -1,0 +1,192 @@
+{
+  "formatVersion": 1,
+  "application": {
+    "name": "Payroll",
+    "base": "nz.example.payroll"
+  },
+  "modules": [
+    {
+      "name": "payroll",
+      "services": [
+        {
+          "name": "PayRunService",
+          "operations": [
+            {
+              "name": "approve",
+              "returnType": {
+                "type": "primitive",
+                "value": "boolean"
+              },
+              "capabilities": [
+                "ApprovePayRun"
+              ]
+            },
+            {
+              "name": "persist",
+              "delegation": {
+                "target": "PayRunRepository",
+                "operation": "save"
+              }
+            }
+          ],
+          "dependencies": [
+            "PayRunRepository"
+          ]
+        }
+      ],
+      "designs": [
+        {
+          "class": "PayRun",
+          "stereotype": "entity",
+          "flags": {
+            "auditable": true,
+            "optimisticLocking": true
+          },
+          "repository": {
+            "name": "PayRunRepository",
+            "operations": [
+              {
+                "name": "findById",
+                "builtin": "findById"
+              },
+              {
+                "name": "findAll",
+                "builtin": "findAll"
+              },
+              {
+                "name": "save",
+                "builtin": "save"
+              },
+              {
+                "name": "delete",
+                "builtin": "delete"
+              }
+            ]
+          },
+          "childOperations": [
+            {
+              "name": "addLine",
+              "returnType": {
+                "type": "primitive",
+                "value": "boolean"
+              },
+              "params": [
+                {
+                  "name": "line",
+                  "type": {
+                    "type": "class",
+                    "value": {
+                      "package": "nz.example.payroll",
+                      "name": "PayRunLineDraft"
+                    }
+                  }
+                }
+              ],
+              "childScope": {
+                "feature": "lines",
+                "class": "nz.example.payroll.PayRunLine",
+                "action": "add"
+              }
+            },
+            {
+              "name": "removeLine",
+              "returnType": {
+                "type": "primitive",
+                "value": "boolean"
+              },
+              "params": [
+                {
+                  "name": "lineId",
+                  "type": {
+                    "type": "primitive",
+                    "value": "string"
+                  }
+                }
+              ],
+              "childScope": {
+                "feature": "lines",
+                "class": "nz.example.payroll.PayRunLine",
+                "action": "remove"
+              }
+            },
+            {
+              "name": "recalculateLine",
+              "returnType": {
+                "type": "primitive",
+                "value": "boolean"
+              },
+              "params": [
+                {
+                  "name": "line",
+                  "type": {
+                    "type": "class",
+                    "value": {
+                      "package": "nz.example.payroll",
+                      "name": "PayRunLineDraft"
+                    }
+                  }
+                }
+              ],
+              "condition": "line.quantity > 0 && line.unitCost > 0",
+              "childScope": {
+                "feature": "lines",
+                "class": "nz.example.payroll.PayRunLine",
+                "action": "save"
+              }
+            },
+            {
+              "name": "describeLine",
+              "returnType": {
+                "type": "primitive",
+                "value": "boolean"
+              },
+              "params": [
+                {
+                  "name": "line",
+                  "type": {
+                    "type": "class",
+                    "value": {
+                      "package": "nz.example.payroll",
+                      "name": "PayRunLineDraft"
+                    }
+                  }
+                }
+              ],
+              "condition": "description != \"\"",
+              "childScope": {
+                "feature": "lines",
+                "class": "nz.example.payroll.PayRunLine",
+                "action": "save"
+              }
+            },
+            {
+              "name": "annotate",
+              "returnType": {
+                "type": "primitive",
+                "value": "boolean"
+              },
+              "params": [
+                {
+                  "name": "text",
+                  "type": {
+                    "type": "primitive",
+                    "value": "string"
+                  }
+                }
+              ],
+              "childScope": {
+                "feature": "note",
+                "class": "nz.example.payroll.PayRunNote",
+                "action": "save"
+              }
+            }
+          ]
+        },
+        {
+          "class": "PayRunLineDraft",
+          "stereotype": "dto"
+        }
+      ]
+    }
+  ]
+}

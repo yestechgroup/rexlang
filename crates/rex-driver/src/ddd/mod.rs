@@ -25,6 +25,8 @@ use crate::diagnostic::{Diagnostic, DiagnosticCode};
 use crate::lower::{self, DomainPackage, DomainUnit};
 use crate::pipeline;
 
+mod bodies;
+mod child_ops;
 mod conditions;
 mod designs;
 mod graph;
@@ -32,6 +34,8 @@ mod machines;
 mod searches;
 mod services;
 
+use bodies::lower_module_bodies;
+use child_ops::lower_module_child_operations;
 use conditions::{resolve_condition_paths, PathScan};
 use designs::lower_module_designs;
 use graph::{rule_13_aggregate_references, rule_6_aggregate_boundary};
@@ -150,7 +154,9 @@ struct Registries<'a> {
 /// [`pipeline::engine_diags`]), rule 1 + the union model
 /// ([`rule_1_base_package`], [`union_model`]), the per-module lowering
 /// stages ([`collect_machine_scopes`], [`lower_module_services`],
-/// [`lower_module_designs`], [`lower_module_searches`]), and the deferred
+/// [`lower_module_designs`] — including the `extend` child-operation blocks
+/// (issue rexlang#179) and [`lower_module_bodies`] (issue rexlang#178) —
+/// [`lower_module_searches`]), and the deferred
 /// validations ([`rule_11_bind_searches`], [`rule_6_aggregate_boundary`],
 /// [`rule_13_aggregate_references`], [`rule_9_resolve_injects`],
 /// [`rule_8_resolve_delegations`], [`rule_10_validate_capabilities`],
@@ -282,6 +288,21 @@ pub(crate) fn compile_ddd_file(
         );
         local.extend(stage_diags);
         module_out.designs = designs;
+
+        // Stage 5c — the module's executable operation bodies (issue
+        // rexlang#178), after services and designs lowered (their signatures
+        // and repositories are the body scope) and before the deferred
+        // passes.
+        local.extend(lower_module_bodies(
+            module,
+            design_source,
+            &packages,
+            base.as_deref(),
+            union.as_ref(),
+            expr_context.as_ref(),
+            &mut module_out.services,
+            &mut module_out.designs,
+        ));
 
         // Stage 6 — the module's search projections (rule 11).
         let (searches, stage_diags) = lower_module_searches(
@@ -718,6 +739,11 @@ pub(crate) struct ConditionCheck<'a> {
     pub(crate) union: Option<&'a rex_ir::Model>,
     /// The shared expression context; `None` under the same deferral.
     pub(crate) context: Option<&'a rex_expr::TypeContext>,
+    /// The operation's declared parameters, bound in the guard's scope so a
+    /// child operation's `when` can read `line.quantity` (issue
+    /// rexlang#179). Service and repository operations pass an empty slice,
+    /// which keeps their condition typing byte-identical.
+    pub(crate) params: &'a [rex_ir::OperationParam],
 }
 /// Type-checks one sliced condition and resolves its field paths. The
 /// machine states of the module bind as enum-typed names (acceptance:
@@ -811,6 +837,17 @@ fn check_condition(
     }
     for (name, (package, class)) in check.injections {
         checker = checker.with_binding(name.clone(), rex_expr::Ty::class(package, class));
+    }
+    // The operation's declared parameters (issue rexlang#179): child
+    // operations' guards read them (`line.quantity`), and they shadow
+    // same-named features of the `self` class. Empty for service and
+    // repository operations, whose typing is unchanged.
+    for param in check.params {
+        let mut ty = rex_expr::Ty::from_type_ref(&param.type_);
+        if param.multiplicity.as_ref().is_some_and(|m| m.is_many()) {
+            ty = ty.list();
+        }
+        checker = checker.with_binding(param.name.clone(), ty);
     }
     match checker.type_of(&ast) {
         Err(errors) => {

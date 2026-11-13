@@ -41,6 +41,20 @@
 //!   and its `guard`/an operation's `condition` are the `when`-condition
 //!   rule: verbatim source text between the parentheses, typed by the
 //!   driver.
+//! - **Child-scoped operations.** A [`Design`] may carry child operations
+//!   ([`Design::child_operations`]) declared by module-level `extend
+//!   <Class>` blocks (issue rexlang#179): operations over the aggregate's
+//!   contained children, each naming the child feature, its resolved
+//!   class, and the validated action through
+//!   [`ServiceOperation::child_scope`] ([`ChildRef`]).
+//! - **Executable bodies.** An operation may carry a checked statement body
+//!   (issue rexlang#178): the [`ServiceOperation::bodies`] /
+//!   [`RepositoryOperation::bodies`] map's `"stmt"` target holds the
+//!   canonical JSON of the `rex_expr::stmt::StmtBody` (opaque here — the
+//!   crate does not depend on rex-expr, the [`crate::Operation::bodies`]
+//!   precedent), and a service body written `name(...) => Repository { ... }`
+//!   also records that repository as [`ServiceOperation::body_receiver`]
+//!   (the binding `self` names in the body).
 //! - **Equality policy.** Like every artifact root, [`DddModel`] derives
 //!   [`Eq`] (wire contract rule 14): the one floating-point field in any
 //!   artifact — [`SearchField::boost`] — is wrapped in the ordered
@@ -68,6 +82,8 @@
 //! hard to author.
 //!
 //! [rexlang]: https://github.com/anton-makes/rexlang
+
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -304,12 +320,33 @@ pub struct ServiceOperation {
     /// driver against the target repository's designed machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transition: Option<TransitionRef>,
+    /// The child-scoped target of a module-level `extend <Class>` operation
+    /// (issue rexlang#179): `boolean addLine(PayRunLineDraft line) =>
+    /// lines.add` lowers with the root's child feature (`lines`) and the
+    /// resolved child class. `None` for every ordinary service operation
+    /// (the additive-field discipline: absent from body-less artifacts, so
+    /// existing goldens stay byte-identical).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_scope: Option<ChildRef>,
+    /// Checked executable bodies, keyed by target name (the
+    /// [`crate::Operation::bodies`] discipline; issue rexlang#178). The
+    /// `"stmt"` target holds the canonical JSON of the operation's
+    /// `rex_expr::stmt::StmtBody` — rex-ir deliberately does not depend on
+    /// rex-expr, so the value is opaque here. Additive; a body-less
+    /// operation omits the key.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub bodies: BTreeMap<String, String>,
+    /// For a statement-body operation written `name(...) => Repository
+    /// { ... }`: the `=>` repository bound as `self` in the body. Additive;
+    /// absent from every operation without a body receiver.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_receiver: Option<String>,
 }
 
 impl ServiceOperation {
     /// Creates an operation with no return type, parameters, delegation,
     /// capabilities, invoked decision services, emitted events, condition
-    /// paths, or transition binding.
+    /// paths, transition binding, child scope, or body.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -324,6 +361,9 @@ impl ServiceOperation {
             condition: None,
             condition_paths: Vec::new(),
             transition: None,
+            child_scope: None,
+            bodies: BTreeMap::new(),
+            body_receiver: None,
         }
     }
 
@@ -363,6 +403,26 @@ impl ServiceOperation {
         self.transition = transition;
         self
     }
+
+    /// Chainable setter for the child-scoped target (issue rexlang#179).
+    pub fn with_child_scope(mut self, child_scope: Option<ChildRef>) -> Self {
+        self.child_scope = child_scope;
+        self
+    }
+
+    /// Chainable setter for the checked executable bodies (issue
+    /// rexlang#178).
+    pub fn with_bodies(mut self, bodies: BTreeMap<String, String>) -> Self {
+        self.bodies = bodies;
+        self
+    }
+
+    /// Chainable setter for the `=>` body receiver bound as `self` (issue
+    /// rexlang#178).
+    pub fn with_body_receiver(mut self, body_receiver: Option<String>) -> Self {
+        self.body_receiver = body_receiver;
+        self
+    }
 }
 
 /// The explicit transition binding of a delegated [`ServiceOperation`]
@@ -399,6 +459,46 @@ impl TransitionRef {
     pub fn with_machine(mut self, machine: Option<String>) -> Self {
         self.machine = machine;
         self
+    }
+}
+
+/// The child-scoped target of a module-level `extend <Class>` operation
+/// (issue rexlang#179).
+///
+/// An `extend PayRun { boolean addLine(PayRunLineDraft line) => lines.add; }`
+/// block declares root-side operations over the aggregate's contained
+/// children; the lowered operation carries the root's child feature
+/// ([`ChildRef::feature`], as authored), the child class that feature
+/// resolves to ([`ChildRef::class`], package-qualified — the
+/// [`Delegation::target`] convention), and the validated action
+/// ([`ChildRef::action`] — `add`, `remove`, or `save`) so consumers can
+/// distinguish the commands without re-reading the source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChildRef {
+    /// The root class's child feature name, exactly as declared in the
+    /// domain model (`lines`).
+    pub feature: String,
+    /// The child class the feature resolves to, package-qualified
+    /// (`nz.example.payroll.PayRunLine`).
+    pub class: String,
+    /// The validated child action: `"add"`, `"remove"`, or `"save"`.
+    pub action: String,
+}
+
+impl ChildRef {
+    /// Creates a child reference from the feature name, its resolved
+    /// class's full name, and the validated action.
+    pub fn new(
+        feature: impl Into<String>,
+        class: impl Into<String>,
+        action: impl Into<String>,
+    ) -> Self {
+        Self {
+            feature: feature.into(),
+            class: class.into(),
+            action: action.into(),
+        }
     }
 }
 
@@ -544,10 +644,18 @@ pub struct Design {
     /// The class's lifecycle state machine, when designed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<StateMachine>,
+    /// Child-scoped operations declared by the module's `extend <Class>`
+    /// blocks (issue rexlang#179), in declaration order: root-side
+    /// operations over the aggregate's contained children. Each carries a
+    /// [`ChildRef`] in [`ServiceOperation::child_scope`]. Additive; an
+    /// extend-less design omits the key (the byte-identical discipline).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub child_operations: Vec<ServiceOperation>,
 }
 
 impl Design {
-    /// Creates a concrete design with default flags and no repository.
+    /// Creates a concrete design with default flags, no repository, no
+    /// machine, and no child operations.
     pub fn new(class: impl Into<String>, stereotype: Stereotype) -> Self {
         Self {
             class: class.into(),
@@ -556,7 +664,14 @@ impl Design {
             flags: DesignFlags::default(),
             repository: None,
             machine: None,
+            child_operations: Vec::new(),
         }
+    }
+
+    /// Chainable setter for the child-scoped operations (issue rexlang#179).
+    pub fn with_child_operations(mut self, child_operations: Vec<ServiceOperation>) -> Self {
+        self.child_operations = child_operations;
+        self
     }
 }
 
@@ -714,6 +829,14 @@ pub struct RepositoryOperation {
     /// A built-in never carries one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub condition: Option<String>,
+    /// Checked executable bodies, keyed by target name (the
+    /// [`crate::Operation::bodies`] discipline; issue rexlang#178). The
+    /// `"stmt"` target holds the canonical JSON of the operation's
+    /// `rex_expr::stmt::StmtBody` — opaque here. Additive; a body-less
+    /// operation omits the key. A repository body binds `self` to the
+    /// operation's own repository design, so no receiver is recorded.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub bodies: BTreeMap<String, String>,
 }
 
 impl RepositoryOperation {
@@ -727,6 +850,7 @@ impl RepositoryOperation {
             params: Vec::new(),
             is_protected: false,
             condition: None,
+            bodies: BTreeMap::new(),
         }
     }
 
@@ -745,6 +869,7 @@ impl RepositoryOperation {
             params,
             is_protected: false,
             condition: None,
+            bodies: BTreeMap::new(),
         }
     }
 
@@ -763,6 +888,13 @@ impl RepositoryOperation {
     /// Chainable setter installing the `when (...)` condition's source text.
     pub fn with_condition(mut self, condition: Option<String>) -> Self {
         self.condition = condition;
+        self
+    }
+
+    /// Chainable setter for the checked executable bodies (issue
+    /// rexlang#178).
+    pub fn with_bodies(mut self, bodies: BTreeMap<String, String>) -> Self {
+        self.bodies = bodies;
         self
     }
 }
@@ -1137,6 +1269,9 @@ mod tests {
                             condition: None,
                             condition_paths: Vec::new(),
                             transition: None,
+                            child_scope: None,
+                            bodies: BTreeMap::new(),
+                            body_receiver: None,
                         },
                         ServiceOperation {
                             name: "renew".to_string(),
@@ -1154,6 +1289,9 @@ mod tests {
                             condition: None,
                             condition_paths: Vec::new(),
                             transition: None,
+                            child_scope: None,
+                            bodies: BTreeMap::new(),
+                            body_receiver: None,
                         },
                     ],
                     dependencies: vec![
@@ -1193,6 +1331,7 @@ mod tests {
                             ],
                         }),
                         machine: None,
+                        child_operations: Vec::new(),
                     },
                     Design {
                         class: "Money".to_string(),
@@ -1201,6 +1340,7 @@ mod tests {
                         flags: DesignFlags::default(),
                         repository: None,
                         machine: None,
+                        child_operations: Vec::new(),
                     },
                     Design {
                         class: "LoanSummary".to_string(),
@@ -1214,6 +1354,7 @@ mod tests {
                         },
                         repository: None,
                         machine: None,
+                        child_operations: Vec::new(),
                     },
                 ],
                 searches: Vec::new(),
@@ -1318,6 +1459,48 @@ mod tests {
         assert!(!json.contains("transition"), "{json}");
     }
 
+    /// Issue rexlang#179's additive fields are byte-silent when absent: a
+    /// body-less design and an operation with no child scope serialize
+    /// exactly as before the fields existed, and the populated forms use
+    /// the documented camelCase wire shapes.
+    #[test]
+    fn child_scope_and_child_operations_are_absent_unless_declared() {
+        let design = Design::new("Money", Stereotype::Value);
+        assert_eq!(
+            serde_json::to_string(&design).expect("serialize"),
+            r#"{"class":"Money","stereotype":"value"}"#,
+            "a child-operation-less design omits the key"
+        );
+        let op = ServiceOperation::new("approve");
+        assert_eq!(
+            serde_json::to_string(&op).expect("serialize"),
+            r#"{"name":"approve"}"#,
+            "an unscoped operation omits `childScope`"
+        );
+
+        let scoped = ServiceOperation::new("addLine").with_child_scope(Some(ChildRef::new(
+            "lines",
+            "nz.example.payroll.PayRunLine",
+            "add",
+        )));
+        let json = serde_json::to_string(&scoped).expect("serialize");
+        assert_eq!(
+            json,
+            r#"{"name":"addLine","childScope":{"feature":"lines","class":"nz.example.payroll.PayRunLine","action":"add"}}"#
+        );
+        let parsed: ServiceOperation = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, scoped);
+
+        let design = Design::new("PayRun", Stereotype::Entity).with_child_operations(vec![scoped]);
+        let json = serde_json::to_string(&design).expect("serialize");
+        assert_eq!(
+            json,
+            r#"{"class":"PayRun","stereotype":"entity","childOperations":[{"name":"addLine","childScope":{"feature":"lines","class":"nz.example.payroll.PayRunLine","action":"add"}}]}"#
+        );
+        let parsed: Design = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, design);
+    }
+
     #[test]
     fn builtin_ops_serialize_as_camel_case_strings() {
         assert_eq!(
@@ -1369,6 +1552,7 @@ mod tests {
             flags: DesignFlags::default(),
             repository: None,
             machine: None,
+            child_operations: Vec::new(),
         };
         assert_eq!(
             serde_json::to_string(&design).expect("serialize"),
@@ -1391,6 +1575,7 @@ mod tests {
             },
             repository: None,
             machine: None,
+            child_operations: Vec::new(),
         };
         assert_eq!(
             serde_json::to_string(&design).expect("serialize"),
@@ -1653,6 +1838,69 @@ mod tests {
         assert_ne!(
             hash_of(f32::NAN),
             hash_of(f32::from_bits(f32::NAN.to_bits() + 1))
+        );
+    }
+
+    /// Issue #178's body fields are additive: absent from every body-less
+    /// operation (the byte-identical discipline) and present in the
+    /// documented camelCase shapes when populated. The `"stmt"` value is an
+    /// opaque canonical-JSON string — rex-ir never depends on rex-expr.
+    #[test]
+    fn operation_bodies_are_additive_and_round_trip() {
+        const BODY: &str = r#"{"stmts":[{"kind":"return","expr":"true"}]}"#;
+
+        let plain = ServiceOperation::new("approve");
+        assert_eq!(
+            serde_json::to_string(&plain).expect("serialize"),
+            r#"{"name":"approve"}"#,
+            "a body-less operation omits `bodies` and `bodyReceiver`"
+        );
+        let plain_repository = RepositoryOperation::declared(
+            "total",
+            Some(TypeRef::Primitive(PrimitiveType::Int)),
+            Vec::new(),
+        );
+        assert_eq!(
+            serde_json::to_string(&plain_repository).expect("serialize"),
+            r#"{"name":"total","returnType":{"type":"primitive","value":"int"}}"#,
+            "a body-less repository operation omits `bodies`"
+        );
+
+        let mut bodies = std::collections::BTreeMap::new();
+        bodies.insert("stmt".to_string(), BODY.to_string());
+        let operation = ServiceOperation::new("approve")
+            .with_bodies(bodies.clone())
+            .with_body_receiver(Some("PayRunRepository".to_string()));
+        assert_eq!(
+            serde_json::to_string(&operation).expect("serialize"),
+            format!(
+                r#"{{"name":"approve","bodies":{{"stmt":{}}},"bodyReceiver":"PayRunRepository"}}"#,
+                serde_json::to_string(BODY).expect("quote the body")
+            )
+        );
+        let round: ServiceOperation =
+            serde_json::from_str(&serde_json::to_string(&operation).unwrap()).expect("reload");
+        assert_eq!(round, operation);
+
+        let repository_operation = RepositoryOperation::declared(
+            "total",
+            Some(TypeRef::Primitive(PrimitiveType::Int)),
+            Vec::new(),
+        )
+        .with_bodies(bodies);
+        let json = serde_json::to_string(&repository_operation).expect("serialize");
+        assert!(json.contains(r#""bodies":{"stmt":"#), "{json}");
+        assert!(
+            !json.contains("bodyReceiver"),
+            "repositories carry no receiver"
+        );
+        let round: RepositoryOperation = serde_json::from_str(&json).expect("reload");
+        assert_eq!(round, repository_operation);
+
+        let empty = DddModel::new();
+        assert_eq!(
+            empty.to_json().expect("serialize"),
+            r#"{"formatVersion":1}"#
         );
     }
 

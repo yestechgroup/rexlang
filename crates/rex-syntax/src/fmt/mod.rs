@@ -369,6 +369,8 @@ enum BodyKind {
     DddMachine,
     /// members of a `.ddd` search projection.
     DddSearch,
+    /// child operations of a `.ddd` module-level `extend` block.
+    DddExtend,
     /// indexed fields of a `.ddd` search's `text` clause.
     DddSearchField,
     /// names of a `.ddd` search's `filters`/`sort` clauses.
@@ -1109,6 +1111,7 @@ impl<'src> Formatter<'src> {
                 BodyKind::DddRepository => self.scan_ddd_repository_item(),
                 BodyKind::DddMachine => self.scan_ddd_machine_item(),
                 BodyKind::DddSearch => self.scan_ddd_search_item(),
+                BodyKind::DddExtend => self.scan_ddd_child_op_item(),
                 BodyKind::DddSearchField => self.scan_ddd_search_field_item(),
                 BodyKind::DddSearchNames => self.scan_ddd_search_name_item(),
                 BodyKind::DddSearchDocument => self.scan_ddd_search_document_item(),

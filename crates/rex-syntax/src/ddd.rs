@@ -25,10 +25,10 @@
 //!   [`search_member_kind`].
 //!
 //! The remaining single words ([`APPLICATION`], [`BASE`], [`MODULE`],
-//! [`SERVICE`], [`SEARCH`], [`ABSTRACT`], [`REPOSITORY`], [`INJECT`],
-//! [`DECISION`], [`EMITS`], [`INVOKES`], [`TRANSITION`], [`BOOST`],
-//! [`ANALYZER`], [`LIMIT`], [`MAX`], [`CURSOR`]) are matched on both sides
-//! at fixed grammar positions; they carry no canonical order.
+//! [`SERVICE`], [`SEARCH`], [`EXTEND`], [`ABSTRACT`], [`REPOSITORY`],
+//! [`INJECT`], [`DECISION`], [`EMITS`], [`INVOKES`], [`TRANSITION`],
+//! [`BOOST`], [`ANALYZER`], [`LIMIT`], [`MAX`], [`CURSOR`]) are matched on
+//! both sides at fixed grammar positions; they carry no canonical order.
 //! The `ranking` value words (`bm25`, `tfIdf`, `exact`, `custom`) are
 //! parser-only — the formatter re-emits whatever follows the `ranking`
 //! keyword — so they stay in the parser alone.
@@ -50,6 +50,13 @@ pub(crate) const MODULE: &str = "module";
 pub(crate) const SERVICE: &str = "service";
 /// The `search <name> { ... }` keyword of a module body.
 pub(crate) const SEARCH: &str = "search";
+/// The `extend <Class> { ... }` keyword of a module body (issue
+/// rexlang#179): module-level child-scoped operations over an aggregate
+/// root's contained children (`add`/`remove`/`save`). A contextual word
+/// like the rest — special only in module-member position, an ordinary
+/// identifier everywhere else (`^extend` escapes). A class may carry
+/// several `extend` blocks; they merge in source order.
+pub(crate) const EXTEND: &str = "extend";
 /// The optional `abstract` modifier of a design declaration.
 pub(crate) const ABSTRACT: &str = "abstract";
 /// The `repository <name> { ... }` keyword of a design declaration.
@@ -120,6 +127,24 @@ pub(crate) const LIMIT: &str = "limit";
 pub(crate) const MAX: &str = "max";
 /// The `cursor` member of a `pagination` block.
 pub(crate) const CURSOR: &str = "cursor";
+
+// The executable statement-body words (issue rexlang#178). They are
+// contextual like every `.ddd` word: `let`/`guard`/`if`/`return` lead a
+// statement, `else` follows a `let` initializer or `guard` condition (or an
+// `if` branch), `error` introduces a raise, and `self` is the primary
+// repository receiver — everywhere else they are ordinary names.
+/// The `let <name> = <expr>;` statement word.
+pub(crate) const LET: &str = "let";
+/// The `guard <expr> else error ...;` statement word.
+pub(crate) const GUARD: &str = "guard";
+/// The `else` word of a let-else, a guard, or an `if` branch.
+pub(crate) const ELSE: &str = "else";
+/// The `error <Variant>(<args>)` raise word.
+pub(crate) const ERROR: &str = "error";
+/// The `if <cond> { ... } else { ... }` statement word.
+pub(crate) const IF: &str = "if";
+/// The `return <expr>?;` statement word.
+pub(crate) const RETURN: &str = "return";
 
 /// The stereotype keywords, in grammar order: the parser's `choice`
 /// alternatives are built from this table in order, and the canonical

@@ -207,7 +207,7 @@ const BANDS: &[Band] = &[
         range: "E0350–E0399",
         owner: "rex-driver `.ddd` lifecycle checks",
         severity_note: "error",
-        next_free: "E0355",
+        next_free: "E0361",
     },
 ];
 

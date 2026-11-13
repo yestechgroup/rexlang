@@ -186,9 +186,10 @@ where
                 let shape_ok = match algebra {
                     AlgebraKind::Size | AlgebraKind::Sum => args.is_empty(),
                     AlgebraKind::First => args.len() <= 1 && args.first().is_none_or(is_lambda),
-                    AlgebraKind::Filter | AlgebraKind::Map | AlgebraKind::Any => {
-                        args.len() == 1 && is_lambda(&args[0])
-                    }
+                    AlgebraKind::Filter
+                    | AlgebraKind::Map
+                    | AlgebraKind::Any
+                    | AlgebraKind::All => args.len() == 1 && is_lambda(&args[0]),
                 };
                 if !shape_ok {
                     let message = match algebra {

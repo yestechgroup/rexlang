@@ -487,6 +487,7 @@ pub(crate) fn lower_design_machine(
                     dependencies: &[],
                     union: None,
                     context,
+                    params: &[],
                 },
                 local,
             );

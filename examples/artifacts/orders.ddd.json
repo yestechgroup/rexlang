@@ -124,7 +124,82 @@
                 "isProtected": true
               }
             ]
-          }
+          },
+          "childOperations": [
+            {
+              "name": "addLine",
+              "returnType": {
+                "type": "class",
+                "value": {
+                  "package": "nz.example.shop",
+                  "name": "OrderLine"
+                }
+              },
+              "params": [
+                {
+                  "name": "line",
+                  "type": {
+                    "type": "class",
+                    "value": {
+                      "package": "nz.example.shop",
+                      "name": "OrderLine"
+                    }
+                  }
+                }
+              ],
+              "childScope": {
+                "feature": "lines",
+                "class": "nz.example.shop.OrderLine",
+                "action": "add"
+              }
+            },
+            {
+              "name": "removeLine",
+              "returnType": {
+                "type": "primitive",
+                "value": "boolean"
+              },
+              "params": [
+                {
+                  "name": "sku",
+                  "type": {
+                    "type": "primitive",
+                    "value": "string"
+                  }
+                }
+              ],
+              "childScope": {
+                "feature": "lines",
+                "class": "nz.example.shop.OrderLine",
+                "action": "remove"
+              }
+            },
+            {
+              "name": "saveLine",
+              "returnType": {
+                "type": "primitive",
+                "value": "boolean"
+              },
+              "params": [
+                {
+                  "name": "line",
+                  "type": {
+                    "type": "class",
+                    "value": {
+                      "package": "nz.example.shop",
+                      "name": "OrderLine"
+                    }
+                  }
+                }
+              ],
+              "condition": "line.quantity > 0",
+              "childScope": {
+                "feature": "lines",
+                "class": "nz.example.shop.OrderLine",
+                "action": "save"
+              }
+            }
+          ]
         },
         {
           "class": "OrderLine",

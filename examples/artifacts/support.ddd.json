@@ -173,7 +173,11 @@
               ],
               "capabilities": [
                 "UpdateTicket"
-              ]
+              ],
+              "bodies": {
+                "stmt": "{\"stmts\":[{\"kind\":\"letElse\",\"name\":\"ticket\",\"expr\":\"self.findById(ticketNo)\",\"error\":{\"variant\":\"NotFound\",\"args\":[\"\\\"Ticket\\\"\",\"ticketNo\"]}},{\"kind\":\"guard\",\"expr\":\"ticket.state != TicketState.Resolved\",\"error\":{\"variant\":\"Conflict\",\"args\":[\"\\\"already resolved\\\"\"]}},{\"kind\":\"assign\",\"path\":[\"ticket\",\"internal\"],\"expr\":\"false\"},{\"kind\":\"let\",\"name\":\"saved\",\"expr\":\"self.save(ticket)\"},{\"kind\":\"return\",\"expr\":\"true\"}]}"
+              },
+              "bodyReceiver": "TicketRepository"
             },
             {
               "name": "resolveTicket",

@@ -194,17 +194,23 @@
 //! base_decl         := "base" qualified_name
 //! module_decl       := "module" name "{" module_member* "}"
 //! module_member     := service_decl | design_decl | search_decl
+//!                    | extend_decl
 //! service_decl      := "service" name "{" service_member* "}"
 //! service_member    := service_op | inject_decl
 //! service_op        := "protected"? signature capability_clause?
 //!                      invokes_clause? emits_clause? transition_clause?
 //!                      guard_clause? ";"
+//!                    | "protected"? body_signature capability_clause?
+//!                      invokes_clause? emits_clause? transition_clause?
+//!                      guard_clause? "=>" name statement_body
 //!                    | "protected"? name "=>" qualified_name
 //!                      capability_clause? invokes_clause? emits_clause?
 //!                      transition_clause? guard_clause? ";"
 //! inject_decl       := "inject" name ";"
 //!                    | "inject" "decision" qualified_name ";"
 //! signature         := type_ref multiplicity? name
+//!                      "(" (param ("," param)*)? ")"
+//! body_signature    := (type_ref multiplicity?)? name
 //!                      "(" (param ("," param)*)? ")"
 //! param             := type_ref multiplicity? name
 //! capability_clause := "capability" name ("," name)*
@@ -217,10 +223,23 @@
 //! design_flag       := "!"? ("scaffold" | "auditable" | "optimisticLocking"
 //!                               | "nonPersistent" | "cache")
 //! repository_decl   := "repository" name "{" repository_op* "}"
-//! repository_op     := "protected"? (repository_builtin | signature)
-//!                      guard_clause? ";"
+//! repository_op     := "protected"? (repository_builtin ";"
+//!                    | body_signature guard_clause? statement_body
+//!                    | signature guard_clause? ";")
 //! repository_builtin := "findById" | "findAll" | "findByExample"
 //!                    | "findByKeys" | "save" | "delete"
+//! statement_body    := "{" statement* "}"
+//! statement         := let_stmt | let_else_stmt | assign_stmt
+//!                    | guard_stmt | if_stmt | return_stmt
+//! let_stmt          := "let" name "=" raw_expr ";"
+//! let_else_stmt     := "let" name "=" raw_expr "else" raise ";"
+//! assign_stmt       := path "=" raw_expr ";"
+//! guard_stmt        := "guard" raw_expr "else" raise ";"
+//! if_stmt           := "if" raw_expr "{" statement* "}"
+//!                      ("else" "{" statement* "}")?
+//! return_stmt       := "return" raw_expr? ";"
+//! raise             := "error" name "(" (raw_expr ("," raw_expr)*)? ")"
+//! path              := name ("." name)*
 //! machine_decl      := "machine" name ":" type_ref "{" machine_member* "}"
 //! machine_member    := "initial" name ";" | "terminal" name ";"
 //!                    | transition ";"
@@ -240,6 +259,9 @@
 //! search_field      := qualified_name ("boost" int)? ("analyzer" string)?
 //! document_entry    := name "=" raw_expr ";"
 //! pagination_member := "limit" int | "max" int | "cursor"
+//! extend_decl       := "extend" name "{" child_op* "}"
+//! child_op          := "protected"? signature "=>" name "." name
+//!                      guard_clause? ";"
 //! ```
 //!
 //! * Every `.ddd` word above is a **contextual identifier** (the `id`/
@@ -293,6 +315,28 @@
 //!   guard/op state references, the bound feature and its enum) and derives
 //!   the workflow actions (`via` names; bare arrows get a documented
 //!   derivation) — see `docs/DDD.md`.
+//! * An `extend_decl` (issue rexlang#179) declares child-scoped operations
+//!   over an aggregate root's contained children: the `signature` is the
+//!   service-operation production, and the dotted pair names the root's
+//!   child feature and the action (`add`, `remove`, `save` — the closed
+//!   vocabulary the driver validates against the feature's multiplicity).
+//!   Blocks may repeat for one class and merge in source order; the target
+//!   must be an aggregate root designed in the same module (the driver's
+//!   `E0358`). A `child_op`'s `when` guard types against the operation's
+//!   parameters and the child feature's target class as `self`.
+//! * Executable operation bodies (issue rexlang#178) are the `statement_body`
+//!   forms: a service operation writes `Type? name(params) clauses? =>
+//!   <Repository> { ... }` (the `=>` name is the primary repository bound as
+//!   `self`), a declared repository operation writes `Type? name(params)
+//!   when? { ... }`. A builtin repository operation takes no body (the
+//!   parser refuses it by name), and a qualified body receiver is a syntax
+//!   error. The subset is closed — `let`, `let … else error …`, assignment,
+//!   `guard … else error …`, `if`/`else`, `return`; any other statement is a
+//!   named parse error. Each `raw_expr` is a token run ending at the
+//!   depth-0 terminator (`;`, an `else`, an `if` block's `{`, or a raise
+//!   argument's `,`/`)`), tracking `()`/`[]`/`{}` nesting and consuming a
+//!   whole expression-level `if cond { … } else { … }` atom; `let`, `guard`,
+//!   `else`, `error`, `if`, `return`, and `self` are contextual words.
 //!
 //! ## `.evt` event-contract sources ([`parse_evt`])
 //!
@@ -1025,6 +1069,13 @@ mod grammar_doc_tests {
             ddd::LIMIT,
             ddd::MAX,
             ddd::CURSOR,
+            ddd::EXTEND,
+            ddd::LET,
+            ddd::GUARD,
+            ddd::ELSE,
+            ddd::ERROR,
+            ddd::IF,
+            ddd::RETURN,
         ]);
         for (keyword, _) in ddd::STEREOTYPES {
             words.push(keyword);
@@ -1219,5 +1270,9 @@ mod grammar_doc_tests {
                 check(keyword);
             }
         }
+        // The single-word `.ddd` keywords have no table (they sit at fixed
+        // grammar positions), so the extend keyword is checked explicitly
+        // (issue rexlang#179).
+        check(ddd::EXTEND);
     }
 }

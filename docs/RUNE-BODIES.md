@@ -154,6 +154,35 @@ synthesized `Model`:
 3. Later backends consume the same statement IR; nobody re-parses the
    `"rosetta"` text.
 
+## Sister statement IR: `.ddd` operation bodies
+
+The Rune body above is the sigil-lowered shape; `.ddd` service/repository
+operations are the first **hand-authored** consumer of the shared statement
+layer, `rex_expr::stmt` (issue rexlang#178):
+
+- `StmtBody { stmts }` is a sequential statement IR beside `RuneBody`:
+  `let`, `let … else error …`, assignment, `guard … else error …`,
+  `if`/`else`, and `return`, with the closed raise vocabulary `NotFound`
+  (two arguments) / `Conflict` (one argument).
+- Expression slots are **source text**, exactly like the Rune body's: the
+  `.ddd` parser captures each slot's byte span, the driver re-parses and
+  type-checks it with `rex_expr::check_stmt_body`, and the artifact carries
+  the checked body as the canonical JSON of `StmtBody` under the operation's
+  `bodies["stmt"]` target (a service body also records `bodyReceiver`).
+  Consumers never re-parse the raw source for meaning.
+- The typing index is `rex_expr::DomainTypes`: the driver registers
+  synthetic repository classes (empty features, the repository's operations
+  plus synthesized `findById`/`findAll`/`save`/`delete` signatures) and
+  binds `self`/injected-repository names as class-typed receivers.
+- Unlike the sigil path's generate-time deferral, `.ddd` bodies are
+  **always** checked: every parse/type/flow failure is a hard compile error
+  (E0360; an unresolved `=>` receiver is E0359), and an unchecked body is
+  never attached.
+
+The wire shapes and rules live in `docs/DDD.md`; the IR module docs
+(`crates/rex-ir/src/ddd.rs`) pin the additive `bodies`/`bodyReceiver`
+fields.
+
 ## Implementation stages
 
 1. Statement IR + parser over the retained Rune statement grammar (the

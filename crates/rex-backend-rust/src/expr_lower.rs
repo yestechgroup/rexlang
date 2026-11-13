@@ -925,6 +925,13 @@ impl Lowerer<'_, '_> {
                 let pred = self.with_closure_param(param, &element, body, 1)?;
                 format!("{recv_code}.iter().any(|{param}| {pred})")
             }
+            rex_expr::AlgebraKind::All => {
+                let (param, body) =
+                    lambda.ok_or_else(|| LowerError::new("algebra `all` requires a lambda"))?;
+                // `all` consumes the iterator's item (`&T`), like `any`.
+                let pred = self.with_closure_param(param, &element, body, 1)?;
+                format!("{recv_code}.iter().all(|{param}| {pred})")
+            }
             rex_expr::AlgebraKind::Size => format!("{recv_code}.len() as i32"),
             rex_expr::AlgebraKind::Sum => {
                 format!("{recv_code}.iter().sum::<{}>()", rust_type(&element)?)

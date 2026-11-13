@@ -503,6 +503,7 @@ fn collection_algebra_shapes() {
         ("books.filter(f => f)", AlgebraKind::Filter),
         ("books.map(f => f)", AlgebraKind::Map),
         ("books.any(f => f)", AlgebraKind::Any),
+        ("books.all(f => f)", AlgebraKind::All),
         ("books.sum()", AlgebraKind::Sum),
     ] {
         match kind(&ok(source)) {
@@ -560,8 +561,13 @@ fn collection_algebra_shapes() {
 
 #[test]
 fn algebra_argument_shapes_are_enforced() {
-    // filter/map/any require exactly one lambda
-    for source in ["books.filter(1)", "books.map()", "books.any(1, 2)"] {
+    // filter/map/any/all require exactly one lambda
+    for source in [
+        "books.filter(1)",
+        "books.map()",
+        "books.any(1, 2)",
+        "books.all()",
+    ] {
         let result = parse(source);
         assert!(
             result.errors.iter().any(|e| e.message.contains("lambda")),

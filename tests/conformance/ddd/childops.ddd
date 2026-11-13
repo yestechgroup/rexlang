@@ -1,0 +1,26 @@
+import "childops.mox";
+
+application Payroll {
+    base nz.example.payroll
+    module payroll {
+        service PayRunService {
+            inject PayRunRepository;
+            boolean approve() capability ApprovePayRun;
+            persist => PayRunRepository.save;
+        }
+        entity PayRun repository PayRunRepository {
+            findById;
+            findAll;
+            save;
+            delete;
+        }
+        dto PayRunLineDraft
+        extend PayRun {
+            boolean addLine(PayRunLineDraft line) => lines.add;
+            boolean removeLine(String lineId) => lines.remove;
+            boolean recalculateLine(PayRunLineDraft line) => lines.save when (line.quantity > 0 && line.unitCost > 0);
+            boolean describeLine(PayRunLineDraft line) => lines.save when (description != "");
+            boolean annotate(String text) => note.save;
+        }
+    }
+}

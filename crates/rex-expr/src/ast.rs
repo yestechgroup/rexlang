@@ -172,6 +172,8 @@ pub enum AlgebraKind {
     Map,
     /// `any` — whether any element's lambda is `true`.
     Any,
+    /// `all` — whether every element's lambda is `true`.
+    All,
     /// `size` — the element count.
     Size,
     /// `sum` — the numeric sum of the elements.
@@ -186,6 +188,7 @@ impl AlgebraKind {
             "filter" => Some(AlgebraKind::Filter),
             "map" => Some(AlgebraKind::Map),
             "any" => Some(AlgebraKind::Any),
+            "all" => Some(AlgebraKind::All),
             "size" => Some(AlgebraKind::Size),
             "sum" => Some(AlgebraKind::Sum),
             _ => None,
@@ -200,6 +203,7 @@ impl fmt::Display for AlgebraKind {
             AlgebraKind::Filter => "filter",
             AlgebraKind::Map => "map",
             AlgebraKind::Any => "any",
+            AlgebraKind::All => "all",
             AlgebraKind::Size => "size",
             AlgebraKind::Sum => "sum",
         })

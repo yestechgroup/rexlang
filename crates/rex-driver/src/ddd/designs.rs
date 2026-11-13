@@ -32,6 +32,10 @@ pub(crate) fn lower_module_designs(
 ) -> (Vec<Design>, Vec<Diagnostic>) {
     let mut local: Vec<Diagnostic> = Vec::new();
     let mut designs_out = Vec::new();
+    // Every resolved design class paired with its artifact position: the
+    // child-operation stage (5b, issue rexlang#179) attaches `extend`
+    // blocks to their target design by class.
+    let mut design_index: Vec<((String, String), usize)> = Vec::new();
     for design in &module.designs {
         // Rule 3 — the design target must resolve to a domain class.
         let design_help = format!(
@@ -118,7 +122,7 @@ pub(crate) fn lower_module_designs(
         }
 
         if design.stereotype == dsl::DddStereotype::Entity {
-            if let Some((package, class)) = resolved {
+            if let Some((package, class)) = resolved.as_ref() {
                 // Every stereotyped entity is a potential container; those
                 // with a repository are additionally candidates for the
                 // non-root verdict.
@@ -131,15 +135,32 @@ pub(crate) fn lower_module_designs(
                     registries.root_candidates.push(RootCandidate {
                         repository_span: design.repository.as_ref().expect("checked above").span,
                         authored: design.class.text.clone(),
-                        package,
-                        class,
+                        package: package.clone(),
+                        class: class.clone(),
                     });
                 }
             }
         }
 
+        if let Some(key) = resolved {
+            design_index.push((key, designs_out.len()));
+        }
         designs_out.push(design_out);
     }
+    // Stage 5b — the module's `extend` blocks (issue rexlang#179), attached
+    // to their target designs after every design lowered (a block may
+    // precede its target in source order). Diagnostics ride the design
+    // stage's emission slot.
+    local.extend(lower_module_child_operations(
+        module,
+        design_source,
+        packages,
+        base,
+        union,
+        expr_context,
+        &design_index,
+        &mut designs_out,
+    ));
     (designs_out, local)
 }
 /// Rule 12 — the value contract: a value design is an immutable value
@@ -574,6 +595,7 @@ fn lower_repository_ops(
                         dependencies: &[],
                         union: None,
                         context,
+                        params: &[],
                     },
                     local,
                 );
