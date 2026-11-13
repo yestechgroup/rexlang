@@ -53,9 +53,19 @@ docs):
   stay byte-identical, `DDD_MODEL_FORMAT_VERSION` stays 1. The rexlang#179
   additions follow the same discipline: a design's `childOperations`
   (ordinary `ServiceOperation` rows declared by `extend` blocks) and an
-  operation's `childScope` (`ChildRef { feature, class }` — the root's child
-  feature and the child class's full name, the `Delegation.target`
-  convention) appear only when authored.
+  operation's `childScope` (`ChildRef { feature, class, action }` — the
+  root's child feature, the child class's full name, the `Delegation.target`
+  convention, and the validated action `"add" | "remove" | "save"`) appear
+  only when authored.
+- Executable operation bodies (issue [#178](https://github.com/yestechgroup/rexlang/issues/178))
+  ride the same additive fields: a service or repository operation's
+  `bodies` map holds the checked body under the `"stmt"` target — the
+  canonical JSON of `rex_expr::stmt::StmtBody` (an opaque string: rex-ir
+  never depends on rex-expr, the `Operation.bodies`/`"rune"` discipline) —
+  and a service body written `name(...) => <Repository> { ... }` also
+  carries `bodyReceiver` (the primary repository bound as `self`). A
+  repository body binds its own design's repository, so it records no
+  receiver. Body-less operations omit both keys.
 - A repository operation carries **exactly one** of a built-in op
   (`"builtin"`) or a declared signature (`returnType`/`params`).
 
@@ -192,8 +202,42 @@ Lexical and structural rules:
   must be unique per extend target. `extend` is a contextual word like the
   rest, and the block stays in the module holding the root's design (the
   same-module coupling rule searches follow).
+- **Executable operation bodies** (issue
+  [#178](https://github.com/yestechgroup/rexlang/issues/178)) — a service
+  operation may replace its signature-only body with a closed procedural
+  statement block, naming its primary repository after `=>`:
+
+  ```
+  submit(PayRunLineDraft draft) capability SubmitPayRun => PayRunRepository {
+      let run = self.findById("current") else error NotFound("PayRun", "current");
+      guard run.total >= 0 else error Conflict("total");
+      let units = run.lines.map(line => line.quantity).sum();
+      run.total = units;
+      let saved = self.save(run);
+      let audit = PayRunAuditRepository.record("submit");
+  }
+  ```
+
+  The optional leading return type makes the operation value-returning
+  (absent is void); the `capability`/`invokes`/`emits`/`transition`/`when`
+  clauses keep their canonical order **before** the `=>`. The `=>` name is
+  one repository designed in the same module and injected by the service —
+  it binds as `self`, and every other injected repository binds by its bare
+  dependency name. A declared repository operation takes the same block
+  after its optional `when` guard (`Type? name(params) when? { ... }`) and
+  binds its own design's repository as `self`; a built-in repository
+  operation takes no body (a named syntax error). The statement subset is
+  closed — `let`, `let … else error …`, assignment to a local's feature
+  path, `guard … else error …`, `if`/`else`, and `return` — and every other
+  statement is a parse error naming the construct. The raise vocabulary is
+  `NotFound` (two arguments) and `Conflict` (one argument); a value-returning
+  body must return on every successful path.
 - The repository built-ins are `findById`, `findAll`, `findByExample`,
   `findByKeys`, `save`, and `delete` — the consumer knows their signatures.
+  A body's receiver-call surface synthesizes only `findById` (an
+  `Option<E>`), `findAll` (a `List<E>`), `save` (`E`), and `delete`
+  (`boolean`); `findByExample`/`findByKeys` are outside the closed subset
+  and are refused as unknown operations.
 - Multiplicity annotations on return types and parameters (`String[]`,
   `Book[0,3]`) lower into the artifact's cardinality slots
   (`returnMultiplicity` / parameter `multiplicity`).
@@ -351,6 +395,24 @@ consumers resolve against the domain model.
     `condition` and carries no `conditionPaths` (the resolved-path lowering
     belongs to service operations). The lowered operation rides the target
     design's `childOperations` with its `childScope`.
+19. **Executable operation bodies** — a body is typed against the
+    operation's declared parameters and output (absent for a void
+    operation) and the repository receivers described above. The statement
+    subset is closed; every expression slot is rex-expr source checked under
+    the same typing rules as a `when` guard. The failure contract is hard:
+    an unknown feature or operation, a type mismatch, a non-boolean `guard`
+    or `if` condition, an unknown raise variant or arity, and a
+    value-returning path that does not `return` are all `E0360`
+    (`invalid service body in operation '<op>': <slot>: <detail>`,
+    repository bodies worded the same way). An unresolved `=>` receiver is
+    `E0359` (`unknown body receiver '<name>' on operation '<op>' of service
+    '<s>'`) — the name must be a repository designed in the operation's
+    module that the service injects, written as a single (unqualified)
+    repository name. The checked body lowers to `bodies["stmt"]`; nothing is
+    attached when any diagnostic fired. Unlike the sigil-lowered Rune
+    bodies' generate-time deferral, the `.ddd` compiler never attaches an
+    unchecked body. `NotFound` and `Conflict` are the reserved raise
+    variants.
 
 ## State machines
 
@@ -566,7 +628,14 @@ issues [#176](https://github.com/yestechgroup/rexlang/issues/176) and
   contract for the guard: injected-scope reads go through the injected
   repository on the handler's already-loaded context, own-record reads
   through the bound entity — a closed subset the refusal of which names
-  the construct.
+  the construct;
+- the checked statement body (`bodies["stmt"]`, issue
+  [#178](https://github.com/yestechgroup/rexlang/issues/178)) is the
+  lowering contract for the operation's behavior: the consumer decodes the
+  `StmtBody`, maps `self`/bare-name receivers through `bodyReceiver` and the
+  service's injections, and lowers the typed expressions with the shared
+  R1–R9 semantics. No in-tree backend emits `.ddd` bodies yet; the artifact
+  is the contract, and the compiler never attaches an unchecked one.
 
 Until an in-tree `.ddd` lowering exists, compiles therefore add **no
 "lowers to nothing" diagnostics**: the artifact is the contract, and the
@@ -940,6 +1009,17 @@ is the rexlang#179 fixture: a `PayRun` aggregate root with a contained
 one by a child feature). Its committed golden `childops.ddd.json` carries
 the design's `childOperations` with each operation's `childScope`; the
 acceptance rules are pinned by `crates/rex-driver/tests/ddd_child_ops.rs`.
+
+The executable-body pair `bodies.mox`/`bodies.ddd` (formatter-canonical)
+is the rexlang#178 fixture: a void service body over the full statement
+subset (let-else, guard, assignment, `sum`/`size`/`any`/`all` reductions,
+`self.findById`/`self.save`, and a bare-name injected-repository call), a
+value-returning `if`/`else` body with `capability`/`when` clauses, a
+repository-operation body guarded by `when`, and an injected secondary
+repository. Its committed golden `bodies.ddd.json` carries each operation's
+`bodies` `"stmt"` target and the service bodies' `bodyReceiver`; the
+acceptance and failure rules are pinned by
+`crates/rex-driver/tests/ddd_bodies.rs`.
 
 The `examples/` side ships `support.ddd` (entity/value/dto designs,
 searches, capabilities validated against `support.actor` through

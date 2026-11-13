@@ -43,6 +43,14 @@ const CHILDOPS_DESIGN_PATH: &str = "tests/conformance/ddd/childops.ddd";
 const CHILDOPS_DOMAIN_PATH: &str = "tests/conformance/ddd/childops.mox";
 const CHILDOPS_ARTIFACT_PATH: &str = "tests/conformance/ddd/childops.ddd.json";
 
+/// The rexlang#178 fixture: executable service/repository statement bodies
+/// (`let`/let-else, guard, assignment, reductions, `if`/`else`, `return`)
+/// alongside `capability`/`when` clauses; its golden carries the `bodies`
+/// `"stmt"` targets and each service body's `bodyReceiver`.
+const BODIES_DESIGN_PATH: &str = "tests/conformance/ddd/bodies.ddd";
+const BODIES_DOMAIN_PATH: &str = "tests/conformance/ddd/bodies.mox";
+const BODIES_ARTIFACT_PATH: &str = "tests/conformance/ddd/bodies.ddd.json";
+
 /// Compiles one `(design, domain)` fixture pair the way the CLI resolves
 /// the import (paths relative to the design file) and returns the lowered
 /// artifact, failing on any diagnostic.
@@ -168,6 +176,49 @@ fn conformance_childops_matches_golden_artifact() {
         Some(("lines", "nz.example.payroll.PayRunLine")),
     );
     assert_golden_artifact(model, CHILDOPS_ARTIFACT_PATH, CHILDOPS_DESIGN_PATH);
+}
+
+/// The rexlang#178 body fixture: every service body records its primary
+/// repository (`bodyReceiver`) and lowers a `"stmt"` body target; the
+/// repository operation's body carries no receiver.
+#[test]
+fn conformance_bodies_matches_golden_artifact() {
+    let model = compile_fixture(BODIES_DESIGN_PATH, BODIES_DOMAIN_PATH);
+    let service = &model.modules[0].services[0];
+    let submit = service
+        .operations
+        .iter()
+        .find(|operation| operation.name == "submit")
+        .expect("the submit body operation");
+    assert_eq!(submit.body_receiver.as_deref(), Some("PayRunRepository"));
+    assert!(submit.bodies.contains_key("stmt"));
+    let approve = service
+        .operations
+        .iter()
+        .find(|operation| operation.name == "approve")
+        .expect("the approve body operation");
+    assert_eq!(approve.condition.as_deref(), Some("status == Draft"));
+    assert_eq!(approve.capabilities, ["ApprovePayRun"]);
+    assert_eq!(approve.body_receiver.as_deref(), Some("PayRunRepository"));
+
+    let run = model.modules[0]
+        .designs
+        .iter()
+        .find(|design| design.class == "PayRun")
+        .expect("the PayRun design");
+    let total = run
+        .repository
+        .as_ref()
+        .and_then(|repository| {
+            repository
+                .operations
+                .iter()
+                .find(|operation| operation.name == "totalQuantity")
+        })
+        .expect("the repository body operation");
+    assert!(total.bodies.contains_key("stmt"));
+
+    assert_golden_artifact(model, BODIES_ARTIFACT_PATH, BODIES_DESIGN_PATH);
 }
 
 #[test]

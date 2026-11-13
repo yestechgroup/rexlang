@@ -84,7 +84,8 @@
               ],
               "childScope": {
                 "feature": "lines",
-                "class": "nz.example.payroll.PayRunLine"
+                "class": "nz.example.payroll.PayRunLine",
+                "action": "add"
               }
             },
             {
@@ -104,7 +105,8 @@
               ],
               "childScope": {
                 "feature": "lines",
-                "class": "nz.example.payroll.PayRunLine"
+                "class": "nz.example.payroll.PayRunLine",
+                "action": "remove"
               }
             },
             {
@@ -128,7 +130,8 @@
               "condition": "line.quantity > 0 && line.unitCost > 0",
               "childScope": {
                 "feature": "lines",
-                "class": "nz.example.payroll.PayRunLine"
+                "class": "nz.example.payroll.PayRunLine",
+                "action": "save"
               }
             },
             {
@@ -152,7 +155,8 @@
               "condition": "description != \"\"",
               "childScope": {
                 "feature": "lines",
-                "class": "nz.example.payroll.PayRunLine"
+                "class": "nz.example.payroll.PayRunLine",
+                "action": "save"
               }
             },
             {
@@ -172,7 +176,8 @@
               ],
               "childScope": {
                 "feature": "note",
-                "class": "nz.example.payroll.PayRunNote"
+                "class": "nz.example.payroll.PayRunNote",
+                "action": "save"
               }
             }
           ]

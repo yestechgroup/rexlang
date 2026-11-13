@@ -237,6 +237,19 @@ impl<'src> Formatter<'src> {
                 if self.take_if(|token| matches!(token, Token::When)) {
                     self.scan_raw_parens();
                 }
+                if self.take_if(|token| matches!(token, Token::FatArrow)) {
+                    // A statement body's primary receiver (issue rexlang#178):
+                    // one repository name, then the block.
+                    self.scan_qname();
+                    if matches!(self.peek_tok(), Some(Token::LBrace)) {
+                        self.scan_ddd_body();
+                        return;
+                    }
+                }
+                if matches!(self.peek_tok(), Some(Token::LBrace)) {
+                    self.scan_ddd_body();
+                    return;
+                }
                 self.take_if(|token| matches!(token, Token::Other(';')));
             }
             _ => {
@@ -348,13 +361,16 @@ impl<'src> Formatter<'src> {
             Some(Token::Ident(ddd::PROTECTED))
                 if self.peek_tok_nth(1).is_some_and(|token| {
                     matches!(&token, Token::Ident(text) if ddd::builtin_from_keyword(text).is_some())
-                }) =>
+                }) && !matches!(self.peek_tok_nth(2), Some(Token::LParen)) =>
             {
                 self.advance();
                 self.advance();
                 self.take_if(|token| matches!(token, Token::Other(';')));
             }
-            Some(Token::Ident(text)) if ddd::builtin_from_keyword(text).is_some() => {
+            Some(Token::Ident(text))
+                if ddd::builtin_from_keyword(text).is_some()
+                    && !matches!(self.peek_tok_nth(1), Some(Token::LParen)) =>
+            {
                 self.advance();
                 self.take_if(|token| matches!(token, Token::Other(';')));
             }
@@ -371,6 +387,10 @@ impl<'src> Formatter<'src> {
                 self.scan_ddd_params();
                 if self.take_if(|token| matches!(token, Token::When)) {
                     self.scan_raw_parens();
+                }
+                if matches!(self.peek_tok(), Some(Token::LBrace)) {
+                    self.scan_ddd_body();
+                    return;
                 }
                 self.take_if(|token| matches!(token, Token::Other(';')));
             }
@@ -390,6 +410,177 @@ impl<'src> Formatter<'src> {
                     });
                 }
             }
+        }
+    }
+
+    /// Consumes and emits one executable statement body (issue rexlang#178),
+    /// positioned at its `{`: the opening brace stays on the operation's
+    /// header line, statements render one per line at the next indent, and
+    /// the closing `}` sits alone on its line. Interior blank lines are
+    /// collapsed (the `.ddd` body rule).
+    pub(crate) fn scan_ddd_body(&mut self) {
+        if !self.take_if(|token| matches!(token, Token::LBrace)) {
+            self.flush_line();
+            return;
+        }
+        self.flush_line();
+        self.indent += 1;
+        self.scan_ddd_body_statements();
+        self.indent -= 1;
+        self.take_if(|token| matches!(token, Token::RBrace));
+        self.flush_line();
+    }
+
+    fn scan_ddd_body_statements(&mut self) {
+        loop {
+            match self.peek_tok() {
+                Some(Token::RBrace) | None => break,
+                _ => {}
+            }
+            self.flush_pending(self.indent);
+            self.scan_ddd_body_statement();
+        }
+    }
+
+    fn scan_ddd_body_statement(&mut self) {
+        if matches!(self.peek_tok(), Some(Token::Ident(ddd::IF))) {
+            self.scan_ddd_body_if();
+        } else {
+            self.scan_ddd_body_simple_statement();
+        }
+    }
+
+    /// One non-`if` statement: tokens through the depth-0 `;` (or up to the
+    /// closing body brace), emitted on one line at canonical spacing.
+    fn scan_ddd_body_simple_statement(&mut self) {
+        let mut depth = 0usize;
+        loop {
+            match self.peek_tok() {
+                None => break,
+                Some(Token::Other(';')) if depth == 0 => {
+                    self.advance_body_token();
+                    break;
+                }
+                Some(Token::RBrace) if depth == 0 => break,
+                Some(token) => {
+                    match token {
+                        Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
+                        Token::RParen | Token::RBracket | Token::RBrace => {
+                            depth = depth.saturating_sub(1);
+                        }
+                        _ => {}
+                    }
+                    self.advance_body_token();
+                }
+            }
+        }
+        self.flush_line();
+    }
+
+    /// One `if` statement: `if <cond> {` / nested statements / `}` and an
+    /// optional `else { ... }` on the closing line (`} else {`).
+    fn scan_ddd_body_if(&mut self) {
+        self.advance_body_token(); // `if`
+                                   // `if (cond)` keeps its space: the generic token rules glue `(` to
+                                   // the preceding name (`f(x)`), but a statement keyword reads as a
+                                   // keyword followed by the parenthesized condition.
+        if matches!(self.peek_tok(), Some(Token::LParen)) {
+            self.bump_token();
+            self.push_text("(", false);
+            self.glue_next = true;
+        }
+        self.scan_ddd_body_condition();
+        self.advance_body_token(); // `{`
+        self.flush_line();
+        self.indent += 1;
+        self.scan_ddd_body_statements();
+        self.indent -= 1;
+        self.advance_body_token(); // `}`
+        if matches!(self.peek_tok(), Some(Token::Ident(ddd::ELSE))) {
+            self.advance_body_token(); // `else`
+            self.advance_body_token(); // `{`
+            self.flush_line();
+            self.indent += 1;
+            self.scan_ddd_body_statements();
+            self.indent -= 1;
+            self.advance_body_token(); // `}`
+        }
+        self.flush_line();
+    }
+
+    /// An `if` statement's condition: tokens up to the block's depth-0 `{`,
+    /// consuming an expression-level `if cond { ... } else { ... }` atom
+    /// whole so its braces are not mistaken for the statement block.
+    fn scan_ddd_body_condition(&mut self) {
+        let mut depth = 0usize;
+        loop {
+            match self.peek_tok() {
+                None => break,
+                Some(Token::LBrace) if depth == 0 => break,
+                Some(Token::Ident(ddd::IF)) if depth == 0 => {
+                    self.scan_ddd_body_if_expression();
+                }
+                Some(token) => {
+                    match token {
+                        Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
+                        Token::RParen | Token::RBracket | Token::RBrace => {
+                            depth = depth.saturating_sub(1);
+                        }
+                        _ => {}
+                    }
+                    self.advance_body_token();
+                }
+            }
+        }
+    }
+
+    /// One expression-level `if cond { then } else { else }` atom, emitted
+    /// inline (it is part of a statement expression, not a block).
+    fn scan_ddd_body_if_expression(&mut self) {
+        self.advance_body_token(); // `if`
+        self.scan_ddd_body_condition();
+        self.scan_ddd_body_braced_group();
+        if matches!(self.peek_tok(), Some(Token::Ident(ddd::ELSE))) {
+            self.advance_body_token();
+            self.scan_ddd_body_braced_group();
+        }
+    }
+
+    fn scan_ddd_body_braced_group(&mut self) {
+        if !self.take_if(|token| matches!(token, Token::LBrace)) {
+            return;
+        }
+        let mut depth = 1usize;
+        while self.peek_tok().is_some() {
+            let token = self.peek_tok();
+            match token {
+                Some(Token::LBrace) => depth += 1,
+                Some(Token::RBrace) => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            self.advance_body_token();
+            if depth == 0 {
+                break;
+            }
+        }
+    }
+
+    /// Advances one body-expression token at canonical spacing, gluing the
+    /// two halves of the multi-character operators the lexer splits
+    /// (`!`/`=`, `=`/`=`, `<`/`=`, `>`/`=`, `&`/`&`, `|`/`|`, `?`/`.`,
+    /// `?`/`:`) and unary `!` to its operand, so the emitted text re-lexes
+    /// to the same expression.
+    fn advance_body_token(&mut self) {
+        let token = self.peek_tok();
+        self.advance();
+        let glue = match token {
+            Some(Token::Other('!' | '&' | '|' | '?')) => true,
+            Some(Token::Other('<' | '>')) => matches!(self.peek_tok(), Some(Token::Eq)),
+            Some(Token::Eq) => matches!(self.peek_tok(), Some(Token::Eq)),
+            _ => false,
+        };
+        if glue {
+            self.glue_next = true;
         }
     }
 

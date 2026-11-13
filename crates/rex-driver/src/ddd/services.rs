@@ -555,6 +555,8 @@ pub(crate) fn lower_module_services<'a>(
                     condition_paths,
                     transition,
                     child_scope: None,
+                    bodies: Default::default(),
+                    body_receiver: None,
                 });
                 registries.delegation_checks.push(DelegationCheck {
                     module: module.name.text.clone(),
@@ -655,6 +657,8 @@ pub(crate) fn lower_module_services<'a>(
                     condition_paths,
                     transition: None,
                     child_scope: None,
+                    bodies: Default::default(),
+                    body_receiver: None,
                 });
             }
         }

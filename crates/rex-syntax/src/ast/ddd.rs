@@ -122,7 +122,82 @@ pub struct DddServiceOp {
     /// included, expression inside deliberately unparsed — slicing and
     /// type-checking it is the driver's job).
     pub condition: Option<Span>,
-    /// Span of the whole operation, `;` included.
+    /// The executable statement body, when the operation is written as a
+    /// body form (issue rexlang#178): `Type? name(params) clauses? =>
+    /// <Repository> { ... }`.
+    pub body: Option<DddBody>,
+    /// The `=> <Repository>` receiver bound as `self` in a service body
+    /// (issue rexlang#178). `None` for declared/delegated operations and for
+    /// repository bodies (which bind their own design's repository).
+    pub body_receiver: Option<Name>,
+    /// Span of the whole operation, `;` included (or the closing body `}`).
+    pub span: Span,
+}
+
+/// The executable statement body of a `.ddd` service or repository operation
+/// (issue rexlang#178). The subset is closed: `let`, `let … else error …`,
+/// assignment, `guard … else error …`, `if`/`else`, and `return`. Every
+/// expression slot is a raw span parsed and typed by the driver against the
+/// operation's scope.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DddBody {
+    /// The statements in execution order.
+    pub stmts: Vec<DddStmt>,
+}
+
+/// One statement of a [`DddBody`] (issue rexlang#178).
+#[derive(Debug, Clone, PartialEq)]
+pub enum DddStmt {
+    /// `let <name> = <expr>;` or `let <name> = <expr> else error
+    /// <Variant>(<args>);`.
+    Let {
+        /// The bound name.
+        name: Name,
+        /// The initializer's raw expression span.
+        expr: Span,
+        /// The `else error <Variant>(...)` raise, when written.
+        raise: Option<DddRaise>,
+    },
+    /// `<path> = <expr>;` — an assignment to a local root's feature path.
+    Assign {
+        /// The target path; the first segment is a local binding.
+        path: Vec<Name>,
+        /// The assigned expression's raw span.
+        expr: Span,
+    },
+    /// `guard <expr> else error <Variant>(<args>);`.
+    Guard {
+        /// The guard condition's raw span.
+        expr: Span,
+        /// The raise taken when the condition is false.
+        raise: DddRaise,
+    },
+    /// `if <cond> { <statements> } else { <statements> }`.
+    If {
+        /// The condition's raw span.
+        cond: Span,
+        /// The then-branch statements.
+        then: Vec<DddStmt>,
+        /// The else-branch statements (empty when the source omitted it).
+        else_: Vec<DddStmt>,
+    },
+    /// `return <expr>?;`.
+    Return {
+        /// The returned expression's raw span; `None` for a void return.
+        expr: Option<Span>,
+    },
+}
+
+/// One `error <Variant>(<args>)` raise of a [`DddBody`]: the closed v1
+/// variant set (`NotFound` with two arguments, `Conflict` with one) is a
+/// driver concern; the syntax keeps the written name and raw argument spans.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DddRaise {
+    /// The error variant name as written.
+    pub variant: Name,
+    /// The argument expressions' raw spans, in written order.
+    pub args: Vec<Span>,
+    /// Span covering `error <Variant>(<args>)`.
     pub span: Span,
 }
 
@@ -409,7 +484,11 @@ pub struct DddRepositoryOp {
     /// unparsed — slicing and type-checking it is the driver's job).
     /// Built-ins take no condition.
     pub condition: Option<Span>,
-    /// Span of the whole operation, `;` included.
+    /// The executable statement body of a declared operation (issue
+    /// rexlang#178): `Type? name(params) when (...)? { ... }`. Built-ins
+    /// never carry one.
+    pub body: Option<DddBody>,
+    /// Span of the whole operation, `;` included (or the closing body `}`).
     pub span: Span,
 }
 

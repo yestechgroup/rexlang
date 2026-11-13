@@ -246,9 +246,13 @@ and no literal adaptation. The `if` expression's type is that type.
 - `contains`/`refers`: to-many → `List(Named)`; single-valued → `Named`
   (never `Option` — a single containment/reference is always present).
 - `container`: always `Option(Named)`, whatever the declared multiplicity.
-- `op` call: the declared return type, after argument checking (arity and
-  per-parameter types; a class-typed parameter expects that `Named` type).
-  L1 applies to arguments.
+- `op` call: the declared return type lifted by the operation's
+  `return_multiplicity` (`0..*` → `List(T)`, `0..1` → `Option(T)`, unset →
+  the plain type — the same mapping as a bare function call), after argument
+  checking (arity and per-parameter types; a class-typed parameter expects
+  that `Named` type). L1 applies to arguments. Domain operations are
+  single-valued and never set the multiplicity; the `.ddd` body checker's
+  synthetic repository operations use it for `findById`/`findAll`.
 
 **Function calls.** The bare form `name(args)` (no receiver) resolves
 against the sigil-lowered package functions of the domain union

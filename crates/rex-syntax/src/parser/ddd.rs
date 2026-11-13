@@ -120,14 +120,11 @@ pub(crate) fn ddd_invokes<'src>(
         })
 }
 
-/// A `type_ref multiplicity? name "(" params? ")"` operation signature,
-/// shared verbatim by service and repository operations.
-pub(crate) fn ddd_signature<'src>() -> impl Parser<
-    'src,
-    Tokens<'src>,
-    (TypeRef, Option<Multiplicity>, Name, Vec<DddParam>),
-    MoxExtra<'src>,
-> + Clone {
+/// One `"(" (param ("," param)*)? ")"` parameter list of a `.ddd` operation
+/// signature, shared by declared service and repository operations and the
+/// body forms' optional-return signatures.
+pub(crate) fn ddd_params<'src>(
+) -> impl Parser<'src, Tokens<'src>, Vec<DddParam>, MoxExtra<'src>> + Clone {
     let param = tref().then(multiplicity().or_not()).then(name()).map_with(
         |((type_ref, multiplicity), name), e| DddParam {
             type_ref,
@@ -145,15 +142,50 @@ pub(crate) fn ddd_signature<'src>() -> impl Parser<
                 .collect::<Vec<_>>(),
         )
         .map(|(first, rest)| once(first).chain(rest).collect::<Vec<_>>());
-    let params = kw(Token::LParen)
+    kw(Token::LParen)
         .ignore_then(list.or_not())
         .then_ignore(kw(Token::RParen))
-        .map(|list| list.unwrap_or_default());
+        .map(|list| list.unwrap_or_default())
+}
+
+/// A `type_ref multiplicity? name "(" params? ")"` operation signature,
+/// shared verbatim by service and repository operations.
+pub(crate) fn ddd_signature<'src>() -> impl Parser<
+    'src,
+    Tokens<'src>,
+    (TypeRef, Option<Multiplicity>, Name, Vec<DddParam>),
+    MoxExtra<'src>,
+> + Clone {
     tref()
         .then(multiplicity().or_not())
         .then(name())
-        .then(params)
+        .then(ddd_params())
         .map(|(((type_ref, multiplicity), name), params)| (type_ref, multiplicity, name, params))
+}
+
+/// The optional-return signature of a body operation (issue rexlang#178):
+/// `(type_ref multiplicity?)? name "(" params? ")"`. A body operation may be
+/// void (`submit(Draft draft) => Repository { ... }`) or value-returning
+/// (`boolean approve() => Repository { ... }`); the no-type alternative is
+/// unambiguous because the operation name is the name immediately before the
+/// parameter list.
+pub(crate) fn ddd_body_signature<'src>() -> impl Parser<
+    'src,
+    Tokens<'src>,
+    (Option<TypeRef>, Option<Multiplicity>, Name, Vec<DddParam>),
+    MoxExtra<'src>,
+> + Clone {
+    let typed = tref()
+        .then(multiplicity().or_not())
+        .then(name())
+        .then(ddd_params())
+        .map(|(((type_ref, multiplicity), name), params)| {
+            (Some(type_ref), multiplicity, name, params)
+        });
+    let untyped = name()
+        .then(ddd_params())
+        .map(|(name, params)| (None, None, name, params));
+    typed.or(untyped)
 }
 
 /// The `<target>.<operation>` delegation target of a delegated service
@@ -240,6 +272,513 @@ pub(crate) fn ddd_transition_clause<'src>(
         })
 }
 
+/// Which body form a `/`-statement block belongs to: the diagnostic noun
+/// (`"service"`/`"repository"`) the statement-subset refusal embeds.
+#[derive(Clone, Copy)]
+pub(crate) enum DddBodyKind {
+    Service,
+    Repository,
+}
+
+impl DddBodyKind {
+    fn label(self) -> &'static str {
+        match self {
+            DddBodyKind::Service => "service",
+            DddBodyKind::Repository => "repository",
+        }
+    }
+}
+
+/// Captures the token stream of one `{ ... }` statement body, outer braces
+/// excluded, with each token's file-absolute span. Only brace nesting is
+/// tracked here; the statement parser walks parentheses, brackets, and
+/// braces itself (the body's contents are not a `.mox` expression).
+pub(crate) fn ddd_body_tokens<'src>(
+) -> impl Parser<'src, Tokens<'src>, Vec<(Token<'src>, Span)>, MoxExtra<'src>> + Clone {
+    let balanced = recursive(|balanced| {
+        let atom = select! {
+            t if !matches!(t, Token::LBrace | Token::RBrace) => t
+        }
+        .map_with(|token, e| vec![(token, e.span())]);
+        let group = select! { Token::LBrace = e => (Token::LBrace, e.span()) }
+            .map(|pair| vec![pair])
+            .then(balanced.clone())
+            .then(select! { Token::RBrace = e => (Token::RBrace, e.span()) }.map(|pair| vec![pair]))
+            .map(|((mut open, mut inner), mut close)| {
+                open.append(&mut inner);
+                open.append(&mut close);
+                open
+            });
+        atom.or(group)
+            .repeated()
+            .collect::<Vec<_>>()
+            .map(|parts| parts.into_iter().flatten().collect::<Vec<_>>())
+    });
+    kw(Token::LBrace)
+        .ignore_then(balanced)
+        .then_ignore(kw(Token::RBrace))
+}
+
+/// The executable statement body of a service/repository operation (issue
+/// rexlang#178): `{ <statements> }`. The closed subset is parsed by
+/// [`parse_ddd_body`]; every refusal is emitted as a `Rich` parser error
+/// naming the construct, so a `while` in a body is a syntax error, never a
+/// silent drop.
+pub(crate) fn ddd_body<'src>(
+    kind: DddBodyKind,
+) -> impl Parser<'src, Tokens<'src>, DddBody, MoxExtra<'src>> + Clone {
+    ddd_body_tokens()
+        .map_with(|tokens, e| (tokens, e.span()))
+        .validate(move |(tokens, span), _e, emitter| {
+            let (body, errors) = parse_ddd_body(&tokens, kind, span);
+            for (span, message) in errors {
+                emitter.emit(Rich::custom(span, message));
+            }
+            body
+        })
+}
+
+/// Which token terminates a raw expression slot: the depth-0 statement `;`
+/// (also stopping before the body's closing `}`), the lambda-like `else` of
+/// a let/guard, the `{` opening an `if` statement's block, or the `,`/`)` of
+/// a raise argument.
+#[derive(Clone, Copy)]
+enum ExprStop {
+    Semi,
+    SemiOrElse,
+    Brace,
+    Arg,
+}
+
+/// The manual statement parser over a captured body token slice. The outer
+/// `.ddd` parser captures the balanced brace body as tokens (spans are
+/// already file-absolute), so this walker needs no chumsky nesting: it can
+/// stop expression slots at the right depth-0 token, recognize an
+/// `if`-expression atom (whose braces are not a statement block), and emit
+/// named subset refusals.
+struct BodyParser<'t, 'src> {
+    tokens: &'t [(Token<'src>, Span)],
+    pos: usize,
+    kind: DddBodyKind,
+    fallback: Span,
+    errors: Vec<(Span, String)>,
+}
+
+fn parse_ddd_body(
+    tokens: &[(Token<'_>, Span)],
+    kind: DddBodyKind,
+    fallback: Span,
+) -> (DddBody, Vec<(Span, String)>) {
+    let mut parser = BodyParser {
+        tokens,
+        pos: 0,
+        kind,
+        fallback,
+        errors: Vec::new(),
+    };
+    let stmts = parser.parse_block_contents();
+    (DddBody { stmts }, parser.errors)
+}
+
+impl<'src> BodyParser<'_, 'src> {
+    fn peek(&self) -> Option<&(Token<'src>, Span)> {
+        self.tokens.get(self.pos)
+    }
+
+    fn at(&self, pred: impl Fn(&Token<'src>) -> bool) -> bool {
+        self.peek().is_some_and(|(token, _)| pred(token))
+    }
+
+    fn at_ident(&self, word: &str) -> bool {
+        self.at(|token| matches!(token, Token::Ident(text) if *text == word))
+    }
+
+    fn take(&mut self, pred: impl Fn(&Token<'src>) -> bool) -> bool {
+        if self.at(pred) {
+            self.pos += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn take_ident(&mut self, word: &str) -> bool {
+        self.take(|token| matches!(token, Token::Ident(text) if *text == word))
+    }
+
+    fn error_here(&mut self, message: impl Into<String>) {
+        let span = self.peek().map(|(_, span)| *span).unwrap_or(self.fallback);
+        self.errors.push((span, message.into()));
+    }
+
+    fn span_from(&self, start: usize) -> Span {
+        if self.pos > start {
+            (self.tokens[start].1.start..self.tokens[self.pos - 1].1.end).into()
+        } else {
+            self.fallback
+        }
+    }
+
+    fn name_at(&self, index: usize) -> Option<Name> {
+        match self.tokens.get(index)? {
+            (Token::Ident(text), span) => Some(Name {
+                text: (*text).to_string(),
+                span: *span,
+                escaped: false,
+            }),
+            (Token::IdentEscaped(text), span) => Some(Name {
+                text: (*text).to_string(),
+                span: *span,
+                escaped: true,
+            }),
+            _ => None,
+        }
+    }
+
+    fn parse_name(&mut self) -> Option<Name> {
+        let name = self.name_at(self.pos)?;
+        self.pos += 1;
+        Some(name)
+    }
+
+    fn parse_block_contents(&mut self) -> Vec<DddStmt> {
+        let mut stmts = Vec::new();
+        while let Some((token, _)) = self.peek() {
+            if matches!(token, Token::RBrace) {
+                break;
+            }
+            let before = self.pos;
+            if let Some(stmt) = self.parse_statement() {
+                stmts.push(stmt);
+            }
+            // Guarantee forward progress even after a refusable construct.
+            if self.pos == before {
+                self.pos += 1;
+            }
+        }
+        stmts
+    }
+
+    /// The statement dispatch. `None` means the statement was refused (the
+    /// named error is recorded and the cursor resynchronized).
+    fn parse_statement(&mut self) -> Option<DddStmt> {
+        if self.at_ident(ddd::LET) {
+            return self.parse_let();
+        }
+        if self.at_ident(ddd::GUARD) {
+            return self.parse_guard();
+        }
+        if self.at_ident(ddd::IF) {
+            return self.parse_if();
+        }
+        if self.at_ident(ddd::RETURN) {
+            return self.parse_return();
+        }
+        if let Some(path) = self.assignment_path() {
+            self.pos += 1; // the `=`
+            let Some(expr) = self.scan_expr(ExprStop::Semi) else {
+                self.error_here("expected an expression after `=`");
+                self.resync();
+                return None;
+            };
+            if !self.take(|token| matches!(token, Token::Other(';'))) {
+                self.error_here("expected `;` to end the assignment");
+                self.resync();
+            }
+            return Some(DddStmt::Assign { path, expr });
+        }
+
+        // Anything else is outside the closed subset: name the construct and
+        // resynchronize at the next depth-0 `;` (or the closing `}`).
+        let construct = match self.peek() {
+            Some((Token::Ident(text), _)) => format!("'{text}'"),
+            Some((Token::IdentEscaped(text), _)) => format!("'^{text}'"),
+            Some((token, _)) => format!("{token}"),
+            None => "end of body".to_string(),
+        };
+        self.error_here(format!(
+            "unsupported statement {construct} in a {} body; supported: let, \
+             assignment, guard, if, return",
+            self.kind.label()
+        ));
+        self.resync();
+        None
+    }
+
+    /// Looks ahead for `name ("." name)* "="`; on success consumes the path
+    /// and leaves the cursor on the `=`.
+    fn assignment_path(&mut self) -> Option<Vec<Name>> {
+        let mut index = self.pos;
+        let mut path = Vec::new();
+        loop {
+            path.push(self.name_at(index)?);
+            index += 1;
+            if matches!(self.tokens.get(index), Some((Token::Dot, _))) {
+                index += 1;
+                continue;
+            }
+            break;
+        }
+        if matches!(self.tokens.get(index), Some((Token::Eq, _))) {
+            self.pos = index;
+            Some(path)
+        } else {
+            None
+        }
+    }
+
+    fn parse_let(&mut self) -> Option<DddStmt> {
+        self.pos += 1; // `let`
+        let Some(name) = self.parse_name() else {
+            self.error_here("expected a name after `let`");
+            self.resync();
+            return None;
+        };
+        if !self.take(|token| matches!(token, Token::Eq)) {
+            self.error_here("expected `=` after the let name");
+            self.resync();
+            return None;
+        }
+        let Some(expr) = self.scan_expr(ExprStop::SemiOrElse) else {
+            self.error_here("expected an expression after `=` in `let`");
+            self.resync();
+            return None;
+        };
+        let raise = if self.at_ident(ddd::ELSE) {
+            self.pos += 1;
+            Some(self.parse_raise())
+        } else {
+            None
+        };
+        self.expect_semi();
+        Some(DddStmt::Let { name, expr, raise })
+    }
+
+    fn parse_guard(&mut self) -> Option<DddStmt> {
+        self.pos += 1; // `guard`
+        let Some(expr) = self.scan_expr(ExprStop::SemiOrElse) else {
+            self.error_here("expected a guard condition");
+            self.resync();
+            return None;
+        };
+        if !self.take_ident(ddd::ELSE) {
+            self.error_here("expected `else error ...` after the guard condition");
+            self.resync();
+            return None;
+        }
+        let raise = self.parse_raise();
+        self.expect_semi();
+        Some(DddStmt::Guard { expr, raise })
+    }
+
+    fn parse_if(&mut self) -> Option<DddStmt> {
+        self.pos += 1; // `if`
+        let Some(cond) = self.scan_expr(ExprStop::Brace) else {
+            self.error_here("expected an if condition");
+            self.resync();
+            return None;
+        };
+        if !self.take(|token| matches!(token, Token::LBrace)) {
+            self.error_here("expected `{` after the if condition");
+            self.resync();
+            return None;
+        }
+        let then = self.parse_block_contents();
+        if !self.take(|token| matches!(token, Token::RBrace)) {
+            self.error_here("expected `}` to close the if branch");
+        }
+        let else_ = if self.at_ident(ddd::ELSE) {
+            self.pos += 1;
+            if !self.take(|token| matches!(token, Token::LBrace)) {
+                self.error_here("expected `{` after `else`");
+                Vec::new()
+            } else {
+                let statements = self.parse_block_contents();
+                if !self.take(|token| matches!(token, Token::RBrace)) {
+                    self.error_here("expected `}` to close the else branch");
+                }
+                statements
+            }
+        } else {
+            Vec::new()
+        };
+        Some(DddStmt::If { cond, then, else_ })
+    }
+
+    fn parse_return(&mut self) -> Option<DddStmt> {
+        self.pos += 1; // `return`
+        if self.take(|token| matches!(token, Token::Other(';'))) {
+            return Some(DddStmt::Return { expr: None });
+        }
+        let Some(expr) = self.scan_expr(ExprStop::Semi) else {
+            self.error_here("expected an expression or `;` after `return`");
+            self.resync();
+            return None;
+        };
+        self.expect_semi();
+        Some(DddStmt::Return { expr: Some(expr) })
+    }
+
+    fn parse_raise(&mut self) -> DddRaise {
+        let start = self.pos;
+        if !self.take_ident(ddd::ERROR) {
+            self.error_here("expected `error` before the raise variant");
+        }
+        let variant = self.parse_name().unwrap_or_else(|| Name {
+            text: String::new(),
+            span: self.fallback,
+            escaped: false,
+        });
+        if !self.take(|token| matches!(token, Token::LParen)) {
+            self.error_here("expected `(` after the error variant");
+        }
+        let mut args = Vec::new();
+        if !self.at(|token| matches!(token, Token::RParen)) {
+            loop {
+                let Some(arg) = self.scan_expr(ExprStop::Arg) else {
+                    self.error_here("expected an error argument");
+                    break;
+                };
+                args.push(arg);
+                if self.take(|token| matches!(token, Token::Comma)) {
+                    continue;
+                }
+                break;
+            }
+        }
+        if !self.take(|token| matches!(token, Token::RParen)) {
+            self.error_here("expected `)` to close the error raise");
+        }
+        DddRaise {
+            variant,
+            args,
+            span: self.span_from(start),
+        }
+    }
+
+    fn expect_semi(&mut self) {
+        if self.take(|token| matches!(token, Token::Other(';'))) {
+            return;
+        }
+        if self.at(|token| matches!(token, Token::RBrace)) {
+            // Missing terminator before the block close: recover at the
+            // brace, the way the member junk parsers do.
+            self.error_here("expected `;` to end the statement");
+            return;
+        }
+        self.error_here("expected `;` to end the statement");
+        self.resync();
+    }
+
+    /// Skips the rest of a malformed statement: to the next depth-0 `;`
+    /// (consumed) or the enclosing `}` (left for the block loop).
+    fn resync(&mut self) {
+        let mut depth = 0usize;
+        while let Some((token, _)) = self.peek() {
+            match token {
+                Token::LParen | Token::LBracket | Token::LBrace => {
+                    depth += 1;
+                    self.pos += 1;
+                }
+                Token::RParen | Token::RBracket | Token::RBrace => {
+                    if depth == 0 {
+                        return;
+                    }
+                    depth -= 1;
+                    self.pos += 1;
+                }
+                Token::Other(';') if depth == 0 => {
+                    self.pos += 1;
+                    return;
+                }
+                _ => self.pos += 1,
+            }
+        }
+    }
+
+    /// Captures one raw expression slot: tokens up to the depth-0 terminator
+    /// `stop`, balancing `()`, `[]`, and `{}`. At depth 0 an `if` *atom*
+    /// (`if cond { ... } else { ... }`) is consumed whole, so its braces and
+    /// its `else` never terminate the enclosing slot.
+    fn scan_expr(&mut self, stop: ExprStop) -> Option<Span> {
+        let start = self.pos;
+        let mut depth = 0usize;
+        while let Some((token, _)) = self.peek() {
+            if depth == 0 {
+                let terminates = match (stop, token) {
+                    (_, Token::RBrace) => true,
+                    (ExprStop::Semi | ExprStop::SemiOrElse, Token::Other(';')) => true,
+                    (ExprStop::SemiOrElse, Token::Ident(text)) => *text == ddd::ELSE,
+                    (ExprStop::Brace, Token::LBrace) => true,
+                    (ExprStop::Arg, Token::Comma | Token::RParen) => true,
+                    _ => false,
+                };
+                if terminates {
+                    break;
+                }
+                if matches!(token, Token::Ident(text) if *text == ddd::IF) {
+                    self.skip_if_expression();
+                    continue;
+                }
+            }
+            match token {
+                Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
+                Token::RParen | Token::RBracket | Token::RBrace => {
+                    if depth == 0 {
+                        break;
+                    }
+                    depth -= 1;
+                }
+                _ => {}
+            }
+            self.pos += 1;
+        }
+        if self.pos == start {
+            None
+        } else {
+            Some(self.span_from(start))
+        }
+    }
+
+    /// Consumes one expression-level `if cond { then } else { else }` atom
+    /// starting at the `if` token. The inner condition and branches are raw
+    /// (balanced braces); a malformed atom leaves the cursor after whatever
+    /// matched, and the expression slot still ends at its own terminator.
+    fn skip_if_expression(&mut self) {
+        self.pos += 1; // `if`
+        self.scan_expr(ExprStop::Brace);
+        if self.at(|token| matches!(token, Token::LBrace)) {
+            self.skip_braced_group();
+        }
+        if self.at_ident(ddd::ELSE) {
+            self.pos += 1;
+            if self.at(|token| matches!(token, Token::LBrace)) {
+                self.skip_braced_group();
+            }
+        }
+    }
+
+    fn skip_braced_group(&mut self) {
+        let mut depth = 0usize;
+        while let Some((token, _)) = self.peek() {
+            match token {
+                Token::LBrace => {
+                    depth += 1;
+                    self.pos += 1;
+                }
+                Token::RBrace => {
+                    depth = depth.saturating_sub(1);
+                    self.pos += 1;
+                    if depth == 0 {
+                        return;
+                    }
+                }
+                _ => self.pos += 1,
+            }
+        }
+    }
+}
+
 /// One operation of a `service` body: an optional `protected` modifier, then
 /// a declared signature
 /// (`type_ref multiplicity? name "(" params? ")" capability*? invokes? emits?
@@ -285,6 +824,8 @@ pub(crate) fn ddd_service_op<'src>(
                     emits: emits.unwrap_or_default(),
                     transition,
                     condition,
+                    body: None,
+                    body_receiver: None,
                     span: e.span(),
                 }
             },
@@ -313,13 +854,73 @@ pub(crate) fn ddd_service_op<'src>(
                     emits: emits.unwrap_or_default(),
                     transition,
                     condition,
+                    body: None,
+                    body_receiver: None,
                     span: e.span(),
                 }
             },
         );
+    // The body form (issue rexlang#178): `Type? name(params) clauses? =>
+    // <Repository> { statements }`. The receiver is one name (the primary
+    // repository bound as `self`); the following `{` is what distinguishes
+    // the form from a delegation, which continues with `.operation`.
+    let body = ddd_body_signature()
+        .then(ddd_capabilities().or_not())
+        .then(ddd_invokes().or_not())
+        .then(ddd_emits().or_not())
+        .then(ddd_transition_clause().or_not())
+        .then(ddd_guard_clause().or_not())
+        .then_ignore(kw(Token::FatArrow))
+        .then(qname())
+        .then(ddd_body(DddBodyKind::Service))
+        .map_with(
+            |(
+                (
+                    (((((signature, capabilities), invokes), emits), transition), condition),
+                    receiver,
+                ),
+                body,
+            ),
+             e| {
+                let (return_type, multiplicity, name, params) = signature;
+                let segments = receiver.segments.len();
+                let receiver_span = receiver.span;
+                let body_receiver = receiver.segments.last().cloned();
+                (
+                    DddServiceOp {
+                        name,
+                        return_type,
+                        multiplicity,
+                        params,
+                        delegation: None,
+                        is_protected: false,
+                        capabilities: capabilities.unwrap_or_default(),
+                        invokes: invokes.unwrap_or_default(),
+                        emits: emits.unwrap_or_default(),
+                        transition,
+                        condition,
+                        body: Some(body),
+                        body_receiver,
+                        span: e.span(),
+                    },
+                    receiver_span,
+                    segments,
+                )
+            },
+        )
+        .validate(|(operation, receiver_span, segments), _e, emitter| {
+            if segments != 1 {
+                emitter.emit(Rich::custom(
+                    receiver_span,
+                    "the body receiver must be a single repository name; the body \
+                     binds one repository as `self`",
+                ));
+            }
+            operation
+        });
     ddd_keyword(ddd::PROTECTED)
         .or_not()
-        .then(delegated.or(declared))
+        .then(body.or(delegated).or(declared))
         .map_with(|(protected, mut op), e| {
             op.is_protected = protected.is_some();
             // The span covers the whole operation, modifier included.
@@ -502,28 +1103,65 @@ pub(crate) fn ddd_design_decl<'src>(
 /// so accepting one would silently drop data.
 pub(crate) fn ddd_repository_op<'src>(
 ) -> impl Parser<'src, Tokens<'src>, Option<DddRepositoryOp>, MoxExtra<'src>> + Clone {
-    let builtin = select! {
+    let builtin_keyword = select! {
         // chumsky's `select!` takes a boolean guard expression, so the
         // lookup runs twice; the `unwrap` is the guard's `Some`.
         Token::Ident(text) = e if ddd::builtin_from_keyword(text).is_some() => {
             (e.span(), ddd::builtin_from_keyword(text).unwrap())
         }
-    }
-    .then_ignore(kw(Token::Other(';')))
-    .map_with(|(keyword_span, builtin), e| DddRepositoryOp {
-        name: Name {
-            text: builtin.keyword().to_string(),
-            span: keyword_span,
-            escaped: false,
+    };
+    // A builtin has no signature to attach a body to (issue rexlang#178):
+    // `save { ... }` is refused explicitly rather than falling into the
+    // generic member junk. The balanced body is consumed so recovery lands
+    // on the next member.
+    let builtin_body_refusal = builtin_keyword.then(raw_body()).validate(
+        |((keyword_span, builtin), body_span), _e, emitter| {
+            emitter.emit(Rich::custom(
+                (keyword_span.start..body_span.end).into(),
+                format!(
+                    "built-in repository operation '{}' takes no body; declare a \
+                     signature (`<Type> name(params) {{ ... }}`) to give it one",
+                    builtin.keyword()
+                ),
+            ));
         },
-        builtin: Some(builtin),
-        return_type: None,
-        multiplicity: None,
-        params: Vec::new(),
-        is_protected: false,
-        condition: None,
-        span: e.span(),
-    });
+    );
+    let builtin = builtin_keyword.then_ignore(kw(Token::Other(';'))).map_with(
+        |(keyword_span, builtin), e| DddRepositoryOp {
+            name: Name {
+                text: builtin.keyword().to_string(),
+                span: keyword_span,
+                escaped: false,
+            },
+            builtin: Some(builtin),
+            return_type: None,
+            multiplicity: None,
+            params: Vec::new(),
+            is_protected: false,
+            condition: None,
+            body: None,
+            span: e.span(),
+        },
+    );
+    // The body form (issue rexlang#178): `Type? name(params) when (...)? {
+    // statements }`. Declared operations only — a builtin has no signature.
+    let body = ddd_body_signature()
+        .then(ddd_guard_clause().or_not())
+        .then(ddd_body(DddBodyKind::Repository))
+        .map_with(|((signature, condition), body), e| {
+            let (return_type, multiplicity, name, params) = signature;
+            DddRepositoryOp {
+                name,
+                builtin: None,
+                return_type,
+                multiplicity,
+                params,
+                is_protected: false,
+                condition,
+                body: Some(body),
+                span: e.span(),
+            }
+        });
     let declared = ddd_signature()
         .then(ddd_guard_clause().or_not())
         .then_ignore(kw(Token::Other(';')))
@@ -536,14 +1174,17 @@ pub(crate) fn ddd_repository_op<'src>(
                 params,
                 is_protected: false,
                 condition,
+                body: None,
                 span: e.span(),
             },
         );
     ddd_keyword(ddd::PROTECTED)
         .or_not()
         .then(
-            builtin
-                .map(Some)
+            builtin_body_refusal
+                .to(None)
+                .or(builtin.map(Some))
+                .or(body.map(Some))
                 .or(declared.map(Some))
                 .or(junk_ddd_repository_op().to(None)),
         )

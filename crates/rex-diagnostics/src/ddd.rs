@@ -6,7 +6,8 @@
 //! diagnostic message (`E0350 unknown transition trigger …`), the
 //! `dmn.check` band's E0250/E0251 precedent. E0350–E0352 are the
 //! transition-binding checks; E0353–E0354 are the condition-scope checks;
-//! E0355–E0358 are the `extend` child-operation checks.
+//! E0355–E0358 are the `extend` child-operation checks; E0359–E0360 are the
+//! executable operation-body checks (issue rexlang#178).
 //! Claim a new code by adding a documented constant plus an `Entry` to
 //! `ENTRIES`.
 
@@ -61,6 +62,19 @@ pub const E_UNKNOWN_CHILD_ACTION: &str = "E0357";
 /// entity design that is an aggregate root (a class declared in the
 /// imported domains, designed in the same module, with a repository).
 pub const E_UNKNOWN_EXTEND_TARGET: &str = "E0358";
+/// `unknown body receiver '<name>' on operation '<op>' of service
+/// '<service>'` — a statement-body operation's `=> <Repository>` receiver
+/// names no repository designed in the operation's module that the service
+/// injects (the primary repository bound as `self`), or the receiver is not
+/// a single repository name.
+pub const E_UNKNOWN_BODY_RECEIVER: &str = "E0359";
+/// `invalid service body in operation '<op>': <slot>: <detail>` (or the
+/// repository-body wording) — the closed statement subset's typing and flow
+/// contract: an unknown feature/operation, a type mismatch, a non-boolean
+/// guard, an unknown raise variant/arity, or a value-returning path that
+/// does not return. Unlike the sigil statement bodies, every failure here is
+/// a hard compile error.
+pub const E_INVALID_OPERATION_BODY: &str = "E0360";
 
 pub(crate) const ENTRIES: &[Entry] = &[
     Entry {
@@ -134,5 +148,21 @@ pub(crate) const ENTRIES: &[Entry] = &[
         title: "Unknown extend target",
         meaning: "`unknown extend target '<class>'` — the `extend` block's class must be a domain class with an entity design in the same module that is an aggregate root (a repository-bearing entity, validation rule 6). The message names which part failed: the class resolves against the imported domains, the design must live in the extending module, and the design must carry a repository (a contained, repository-less child is not a root).",
         fix: "Extend an aggregate root designed in the same module (add its `repository` block if it is missing), or move the `extend` block next to the root's design.",
+    },
+    Entry {
+        code: E_UNKNOWN_BODY_RECEIVER,
+        band: DDD_BAND,
+        severity: Severity::Error,
+        title: "Unknown body receiver",
+        meaning: "`unknown body receiver '<name>' on operation '<op>' of service '<service>'` — a statement-body operation written `name(...) => <Repository> { ... }` binds the named repository as `self`; the name must match a repository designed in the operation's module that the service `inject`s. A qualified receiver is refused at the syntax layer (the body binds one repository as `self`), and a repository another module designs is not addressable from this service (the module-coupling rule).",
+        fix: "Name a repository the service injects (`inject <Repository>;`), or add the missing `inject` line.",
+    },
+    Entry {
+        code: E_INVALID_OPERATION_BODY,
+        band: DDD_BAND,
+        severity: Severity::Error,
+        title: "Invalid operation body",
+        meaning: "`invalid service body in operation '<op>': <slot>: <detail>` (repository bodies use the same shape) — the `.ddd` statement body is a closed procedural subset (`let`, `let … else error …`, assignment, `guard … else error …`, `if`/`else`, `return`), typed against the operation's parameters, the designed aggregate, and the synthetic repository classes. Unknown features/operations, type mismatches, non-boolean guards, unknown raise variants or arities, and value-returning paths that do not return (`missing return`) are all hard compile errors — unlike the sigil Rune bodies' generate-time deferral, the `.ddd` compiler never attaches an unchecked body.",
+        fix: "Fix the named slot: use a declared feature or operation, match the target type exactly, make guards boolean, raise `NotFound` (2 arguments) or `Conflict` (1 argument), and return on every successful path of a value-returning operation.",
     },
 ];

@@ -200,12 +200,17 @@
 //! service_op        := "protected"? signature capability_clause?
 //!                      invokes_clause? emits_clause? transition_clause?
 //!                      guard_clause? ";"
+//!                    | "protected"? body_signature capability_clause?
+//!                      invokes_clause? emits_clause? transition_clause?
+//!                      guard_clause? "=>" name statement_body
 //!                    | "protected"? name "=>" qualified_name
 //!                      capability_clause? invokes_clause? emits_clause?
 //!                      transition_clause? guard_clause? ";"
 //! inject_decl       := "inject" name ";"
 //!                    | "inject" "decision" qualified_name ";"
 //! signature         := type_ref multiplicity? name
+//!                      "(" (param ("," param)*)? ")"
+//! body_signature    := (type_ref multiplicity?)? name
 //!                      "(" (param ("," param)*)? ")"
 //! param             := type_ref multiplicity? name
 //! capability_clause := "capability" name ("," name)*
@@ -218,10 +223,23 @@
 //! design_flag       := "!"? ("scaffold" | "auditable" | "optimisticLocking"
 //!                               | "nonPersistent" | "cache")
 //! repository_decl   := "repository" name "{" repository_op* "}"
-//! repository_op     := "protected"? (repository_builtin | signature)
-//!                      guard_clause? ";"
+//! repository_op     := "protected"? (repository_builtin ";"
+//!                    | body_signature guard_clause? statement_body
+//!                    | signature guard_clause? ";")
 //! repository_builtin := "findById" | "findAll" | "findByExample"
 //!                    | "findByKeys" | "save" | "delete"
+//! statement_body    := "{" statement* "}"
+//! statement         := let_stmt | let_else_stmt | assign_stmt
+//!                    | guard_stmt | if_stmt | return_stmt
+//! let_stmt          := "let" name "=" raw_expr ";"
+//! let_else_stmt     := "let" name "=" raw_expr "else" raise ";"
+//! assign_stmt       := path "=" raw_expr ";"
+//! guard_stmt        := "guard" raw_expr "else" raise ";"
+//! if_stmt           := "if" raw_expr "{" statement* "}"
+//!                      ("else" "{" statement* "}")?
+//! return_stmt       := "return" raw_expr? ";"
+//! raise             := "error" name "(" (raw_expr ("," raw_expr)*)? ")"
+//! path              := name ("." name)*
 //! machine_decl      := "machine" name ":" type_ref "{" machine_member* "}"
 //! machine_member    := "initial" name ";" | "terminal" name ";"
 //!                    | transition ";"
@@ -306,6 +324,19 @@
 //!   must be an aggregate root designed in the same module (the driver's
 //!   `E0358`). A `child_op`'s `when` guard types against the operation's
 //!   parameters and the child feature's target class as `self`.
+//! * Executable operation bodies (issue rexlang#178) are the `statement_body`
+//!   forms: a service operation writes `Type? name(params) clauses? =>
+//!   <Repository> { ... }` (the `=>` name is the primary repository bound as
+//!   `self`), a declared repository operation writes `Type? name(params)
+//!   when? { ... }`. A builtin repository operation takes no body (the
+//!   parser refuses it by name), and a qualified body receiver is a syntax
+//!   error. The subset is closed — `let`, `let … else error …`, assignment,
+//!   `guard … else error …`, `if`/`else`, `return`; any other statement is a
+//!   named parse error. Each `raw_expr` is a token run ending at the
+//!   depth-0 terminator (`;`, an `else`, an `if` block's `{`, or a raise
+//!   argument's `,`/`)`), tracking `()`/`[]`/`{}` nesting and consuming a
+//!   whole expression-level `if cond { … } else { … }` atom; `let`, `guard`,
+//!   `else`, `error`, `if`, `return`, and `self` are contextual words.
 //!
 //! ## `.evt` event-contract sources ([`parse_evt`])
 //!
@@ -1039,6 +1070,12 @@ mod grammar_doc_tests {
             ddd::MAX,
             ddd::CURSOR,
             ddd::EXTEND,
+            ddd::LET,
+            ddd::GUARD,
+            ddd::ELSE,
+            ddd::ERROR,
+            ddd::IF,
+            ddd::RETURN,
         ]);
         for (keyword, _) in ddd::STEREOTYPES {
             words.push(keyword);

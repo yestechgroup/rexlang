@@ -157,7 +157,11 @@ fn extend_lowers_child_scope_signatures_and_condition() {
     let add = &operations[0];
     assert_eq!(
         add.child_scope,
-        Some(ChildRef::new("lines", "nz.example.payroll.PayRunLine")),
+        Some(ChildRef::new(
+            "lines",
+            "nz.example.payroll.PayRunLine",
+            "add",
+        )),
     );
     assert_eq!(
         add.return_type,
@@ -182,13 +186,28 @@ fn extend_lowers_child_scope_signatures_and_condition() {
     assert!(save.condition_paths.is_empty());
     assert_eq!(
         save.child_scope,
-        Some(ChildRef::new("lines", "nz.example.payroll.PayRunLine")),
+        Some(ChildRef::new(
+            "lines",
+            "nz.example.payroll.PayRunLine",
+            "save",
+        )),
+    );
+    assert_eq!(
+        operations[1]
+            .child_scope
+            .as_ref()
+            .map(|scope| scope.action.as_str()),
+        Some("remove"),
     );
 
     // `save` is legal on a scalar containment too.
     assert_eq!(
         operations[3].child_scope,
-        Some(ChildRef::new("note", "nz.example.payroll.PayRunNote")),
+        Some(ChildRef::new(
+            "note",
+            "nz.example.payroll.PayRunNote",
+            "save"
+        )),
     );
 }
 

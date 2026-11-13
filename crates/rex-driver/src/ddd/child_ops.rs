@@ -357,6 +357,7 @@ pub(crate) fn lower_module_child_operations(
                 .with_child_scope(Some(ChildRef::new(
                     op.feature.text.clone(),
                     format!("{}.{}", child_class.0, child_class.1),
+                    op.action.text.clone(),
                 )));
             operation.return_type = Some(return_type);
             operation.params = params;

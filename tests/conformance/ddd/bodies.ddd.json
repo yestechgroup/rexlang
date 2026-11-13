@@ -1,0 +1,217 @@
+{
+  "formatVersion": 1,
+  "application": {
+    "name": "Payroll",
+    "base": "nz.example.payroll"
+  },
+  "modules": [
+    {
+      "name": "payroll",
+      "services": [
+        {
+          "name": "PayRunService",
+          "operations": [
+            {
+              "name": "submit",
+              "params": [
+                {
+                  "name": "draft",
+                  "type": {
+                    "type": "class",
+                    "value": {
+                      "package": "nz.example.payroll",
+                      "name": "PayRunLineDraft"
+                    }
+                  }
+                }
+              ],
+              "capabilities": [
+                "ApprovePayRun"
+              ],
+              "bodies": {
+                "stmt": "{\"stmts\":[{\"kind\":\"letElse\",\"name\":\"run\",\"expr\":\"self.findById(\\\"current\\\")\",\"error\":{\"variant\":\"NotFound\",\"args\":[\"\\\"PayRun\\\"\",\"\\\"current\\\"\"]}},{\"kind\":\"guard\",\"expr\":\"run.total >= 0\",\"error\":{\"variant\":\"Conflict\",\"args\":[\"\\\"total\\\"\"]}},{\"kind\":\"let\",\"name\":\"units\",\"expr\":\"run.lines.map(line => line.quantity).sum()\"},{\"kind\":\"let\",\"name\":\"anyPositive\",\"expr\":\"run.lines.any(line => line.quantity > 0)\"},{\"kind\":\"let\",\"name\":\"allCosted\",\"expr\":\"run.lines.all(line => line.unitCost >= 0)\"},{\"kind\":\"let\",\"name\":\"lineCount\",\"expr\":\"run.lines.size()\"},{\"kind\":\"assign\",\"path\":[\"run\",\"total\"],\"expr\":\"units\"},{\"kind\":\"let\",\"name\":\"saved\",\"expr\":\"self.save(run)\"},{\"kind\":\"let\",\"name\":\"audit\",\"expr\":\"PayRunAuditRepository.record(\\\"submit\\\")\"}]}"
+              },
+              "bodyReceiver": "PayRunRepository"
+            },
+            {
+              "name": "approve",
+              "returnType": {
+                "type": "primitive",
+                "value": "boolean"
+              },
+              "capabilities": [
+                "ApprovePayRun"
+              ],
+              "condition": "status == Draft",
+              "bodies": {
+                "stmt": "{\"stmts\":[{\"kind\":\"letElse\",\"name\":\"run\",\"expr\":\"self.findById(\\\"current\\\")\",\"error\":{\"variant\":\"NotFound\",\"args\":[\"\\\"PayRun\\\"\",\"\\\"current\\\"\"]}},{\"kind\":\"if\",\"cond\":\"(run.total > 0)\",\"then\":[{\"kind\":\"return\",\"expr\":\"true\"}],\"else\":[{\"kind\":\"return\",\"expr\":\"false\"}]}]}"
+              },
+              "bodyReceiver": "PayRunRepository"
+            },
+            {
+              "name": "audit",
+              "returnType": {
+                "type": "primitive",
+                "value": "boolean"
+              },
+              "params": [
+                {
+                  "name": "note",
+                  "type": {
+                    "type": "primitive",
+                    "value": "string"
+                  }
+                }
+              ],
+              "bodies": {
+                "stmt": "{\"stmts\":[{\"kind\":\"let\",\"name\":\"entry\",\"expr\":\"self.record(note)\"},{\"kind\":\"return\",\"expr\":\"entry.accepted\"}]}"
+              },
+              "bodyReceiver": "PayRunAuditRepository"
+            },
+            {
+              "name": "totalFor",
+              "returnType": {
+                "type": "primitive",
+                "value": "int"
+              },
+              "params": [
+                {
+                  "name": "runId",
+                  "type": {
+                    "type": "primitive",
+                    "value": "string"
+                  }
+                }
+              ],
+              "bodies": {
+                "stmt": "{\"stmts\":[{\"kind\":\"letElse\",\"name\":\"run\",\"expr\":\"self.findById(runId)\",\"error\":{\"variant\":\"NotFound\",\"args\":[\"\\\"PayRun\\\"\",\"runId\"]}},{\"kind\":\"return\",\"expr\":\"run.lines.map(line => line.quantity * line.unitCost).sum()\"}]}"
+              },
+              "bodyReceiver": "PayRunRepository"
+            }
+          ],
+          "dependencies": [
+            "PayRunRepository",
+            "PayRunAuditRepository"
+          ]
+        }
+      ],
+      "designs": [
+        {
+          "class": "PayRun",
+          "stereotype": "entity",
+          "flags": {
+            "auditable": true,
+            "optimisticLocking": true
+          },
+          "repository": {
+            "name": "PayRunRepository",
+            "operations": [
+              {
+                "name": "findById",
+                "builtin": "findById"
+              },
+              {
+                "name": "findAll",
+                "builtin": "findAll"
+              },
+              {
+                "name": "save",
+                "builtin": "save"
+              },
+              {
+                "name": "delete",
+                "builtin": "delete"
+              },
+              {
+                "name": "totalQuantity",
+                "returnType": {
+                  "type": "primitive",
+                  "value": "int"
+                },
+                "params": [
+                  {
+                    "name": "runId",
+                    "type": {
+                      "type": "primitive",
+                      "value": "string"
+                    }
+                  }
+                ],
+                "condition": "status == Draft",
+                "bodies": {
+                  "stmt": "{\"stmts\":[{\"kind\":\"letElse\",\"name\":\"run\",\"expr\":\"self.findById(runId)\",\"error\":{\"variant\":\"NotFound\",\"args\":[\"\\\"PayRun\\\"\",\"runId\"]}},{\"kind\":\"return\",\"expr\":\"run.lines.map(line => line.quantity).sum()\"}]}"
+                }
+              }
+            ]
+          },
+          "machine": {
+            "field": "status",
+            "enumType": {
+              "type": "enum",
+              "value": {
+                "package": "nz.example.payroll",
+                "name": "PayRunStatus"
+              }
+            },
+            "initial": "Draft",
+            "terminals": [
+              "Posted"
+            ],
+            "transitions": [
+              {
+                "from": "Draft",
+                "to": "Approved",
+                "trigger": "Approve"
+              },
+              {
+                "from": "Approved",
+                "to": "Posted",
+                "trigger": "Post"
+              }
+            ]
+          }
+        },
+        {
+          "class": "PayRunAudit",
+          "stereotype": "entity",
+          "flags": {
+            "auditable": true,
+            "optimisticLocking": true
+          },
+          "repository": {
+            "name": "PayRunAuditRepository",
+            "operations": [
+              {
+                "name": "findById",
+                "builtin": "findById"
+              },
+              {
+                "name": "save",
+                "builtin": "save"
+              },
+              {
+                "name": "record",
+                "returnType": {
+                  "type": "class",
+                  "value": {
+                    "package": "nz.example.payroll",
+                    "name": "AuditEntry"
+                  }
+                },
+                "params": [
+                  {
+                    "name": "note",
+                    "type": {
+                      "type": "primitive",
+                      "value": "string"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

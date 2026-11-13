@@ -266,7 +266,17 @@ impl TypeChecker {
             }
         }
 
-        self.wrap_optional(Ty::from_type_ref(&operation.return_type), optional_safe)
+        // The declared return cardinality lifts the call's type, exactly as
+        // the bare-function call does (`return_result_ty`). Domain
+        // operations never set it; sigil functions and the `.ddd` synthetic
+        // repository classes do (`0..1` → `Option`, `0..*` → `List`).
+        self.wrap_optional(
+            result_ty(
+                &operation.return_type,
+                operation.return_multiplicity.as_ref(),
+            ),
+            optional_safe,
+        )
     }
 
     /// The bare free-function call (issue #63): resolves against the

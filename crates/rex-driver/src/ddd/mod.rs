@@ -25,6 +25,7 @@ use crate::diagnostic::{Diagnostic, DiagnosticCode};
 use crate::lower::{self, DomainPackage, DomainUnit};
 use crate::pipeline;
 
+mod bodies;
 mod child_ops;
 mod conditions;
 mod designs;
@@ -33,6 +34,7 @@ mod machines;
 mod searches;
 mod services;
 
+use bodies::lower_module_bodies;
 use child_ops::lower_module_child_operations;
 use conditions::{resolve_condition_paths, PathScan};
 use designs::lower_module_designs;
@@ -153,7 +155,8 @@ struct Registries<'a> {
 /// ([`rule_1_base_package`], [`union_model`]), the per-module lowering
 /// stages ([`collect_machine_scopes`], [`lower_module_services`],
 /// [`lower_module_designs`] — including the `extend` child-operation blocks
-/// (issue rexlang#179) — [`lower_module_searches`]), and the deferred
+/// (issue rexlang#179) and [`lower_module_bodies`] (issue rexlang#178) —
+/// [`lower_module_searches`]), and the deferred
 /// validations ([`rule_11_bind_searches`], [`rule_6_aggregate_boundary`],
 /// [`rule_13_aggregate_references`], [`rule_9_resolve_injects`],
 /// [`rule_8_resolve_delegations`], [`rule_10_validate_capabilities`],
@@ -285,6 +288,21 @@ pub(crate) fn compile_ddd_file(
         );
         local.extend(stage_diags);
         module_out.designs = designs;
+
+        // Stage 5c — the module's executable operation bodies (issue
+        // rexlang#178), after services and designs lowered (their signatures
+        // and repositories are the body scope) and before the deferred
+        // passes.
+        local.extend(lower_module_bodies(
+            module,
+            design_source,
+            &packages,
+            base.as_deref(),
+            union.as_ref(),
+            expr_context.as_ref(),
+            &mut module_out.services,
+            &mut module_out.designs,
+        ));
 
         // Stage 6 — the module's search projections (rule 11).
         let (searches, stage_diags) = lower_module_searches(

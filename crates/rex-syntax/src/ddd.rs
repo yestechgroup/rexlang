@@ -128,6 +128,24 @@ pub(crate) const MAX: &str = "max";
 /// The `cursor` member of a `pagination` block.
 pub(crate) const CURSOR: &str = "cursor";
 
+// The executable statement-body words (issue rexlang#178). They are
+// contextual like every `.ddd` word: `let`/`guard`/`if`/`return` lead a
+// statement, `else` follows a `let` initializer or `guard` condition (or an
+// `if` branch), `error` introduces a raise, and `self` is the primary
+// repository receiver — everywhere else they are ordinary names.
+/// The `let <name> = <expr>;` statement word.
+pub(crate) const LET: &str = "let";
+/// The `guard <expr> else error ...;` statement word.
+pub(crate) const GUARD: &str = "guard";
+/// The `else` word of a let-else, a guard, or an `if` branch.
+pub(crate) const ELSE: &str = "else";
+/// The `error <Variant>(<args>)` raise word.
+pub(crate) const ERROR: &str = "error";
+/// The `if <cond> { ... } else { ... }` statement word.
+pub(crate) const IF: &str = "if";
+/// The `return <expr>?;` statement word.
+pub(crate) const RETURN: &str = "return";
+
 /// The stereotype keywords, in grammar order: the parser's `choice`
 /// alternatives are built from this table in order, and the canonical
 /// order is the table order.
