@@ -158,6 +158,18 @@
 //!     contract). rex-ir never depends on rex-expr: the target's value is
 //!     an opaque string to this crate; backends that do not lower Rune
 //!     statements skip it like any target they do not own.
+//! 16. **Register classes (additive).** [`ClassDef::kind`] carries the
+//!     register-class marker (issue rexlang#181): a `register` declaration
+//!     lowers onto the standard model as a plain [`ClassDef`] — its
+//!     attributes as attribute features — with the kind set to
+//!     [`ClassKind::Register`], so downstream consumers can tell the
+//!     register noun space apart. Serialized as the bare camelCase tag
+//!     `"register"` and **omitted entirely** for [`ClassKind::Entity`] (the
+//!     default), so artifacts for models without register declarations are
+//!     byte-identical to earlier output. Register classes differ from
+//!     entity classes in the marker alone: the same stable-ID contract,
+//!     the same class-level rules, and every backend treats them as
+//!     ordinary classes.
 //!
 //! # Version markers
 //!
@@ -212,8 +224,8 @@ pub use actors::{
     GrantEffect, GrantEntry, NeverBothDef, ACTOR_MODEL_FORMAT_VERSION,
 };
 pub use class::{
-    ClassDef, DatatypeDef, EnumDef, EnumLiteral, Feature, FeatureConstraints, FeatureKind,
-    InterfaceDef, Operation, OperationParam,
+    ClassDef, ClassKind, DatatypeDef, EnumDef, EnumLiteral, Feature, FeatureConstraints,
+    FeatureKind, InterfaceDef, Operation, OperationParam,
 };
 pub use error::IrError;
 pub use model::{Annotation, Model, Package};

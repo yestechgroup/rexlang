@@ -870,3 +870,60 @@ fn every_artifact_root_derives_eq() {
     assert_ord_type::<ddd::Boost>();
     assert_ord_type::<ifml::Float>();
 }
+
+#[test]
+fn register_class_kind_round_trips_through_the_wire_format() {
+    // Wire contract rule 16 (issue rexlang#181): a register class carries
+    // the additive `kind` marker (`"register"`); entity classes serialize
+    // without the field at all, so every pre-register artifact stays
+    // byte-identical.
+    let mut package = Package::new("nz.example.org");
+    package.classes.push(
+        ClassDef::new(
+            "Role",
+            vec![],
+            vec![Feature::new(
+                "display_name",
+                FeatureKind::Attribute,
+                TypeRef::Primitive(PrimitiveType::String),
+                Multiplicity::REQUIRED,
+            )],
+        )
+        .with_kind(ClassKind::Register),
+    );
+    let mut model = Model::new();
+    model.packages.push(package);
+
+    let json = model.to_json_pretty().expect("serialize");
+    assert!(
+        json.contains("\"kind\": \"register\""),
+        "the register marker must serialize:\n{json}"
+    );
+    let parsed = Model::from_json(&json).expect("deserialize");
+    assert_eq!(parsed.packages[0].classes[0].kind, ClassKind::Register);
+    assert_eq!(parsed, model, "serialize → deserialize → equal");
+
+    // The converse: an entity class omits the field entirely, and an
+    // artifact written without the marker (an older emitter) loads as an
+    // entity class.
+    let mut entity = model.clone();
+    entity.packages[0].classes[0].kind = ClassKind::Entity;
+    let entity_json = entity.to_json_pretty().expect("serialize");
+    assert!(
+        !entity_json.contains("\"kind\": \"entity\""),
+        "entity classes must omit the field:\n{entity_json}"
+    );
+    let reparsed = Model::from_json(&entity_json).expect("deserialize");
+    assert_eq!(reparsed.packages[0].classes[0].kind, ClassKind::Entity);
+    assert_eq!(reparsed, entity, "serialize → deserialize → equal");
+
+    // The kind serializes as the camelCase bare tag (wire contract rule 1).
+    assert_eq!(
+        serde_json::to_value(ClassKind::Register).unwrap(),
+        serde_json::json!("register")
+    );
+    assert_eq!(
+        serde_json::to_value(ClassKind::Entity).unwrap(),
+        serde_json::json!("entity")
+    );
+}
