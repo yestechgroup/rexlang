@@ -18,7 +18,13 @@ application SupportDesk {
             Ticket getTicket(String ticketNo);
             boolean claimTicket(String ticketNo, User helper);
             boolean refundTicket(String ticketNo, int cents);
-            boolean updateTicket(String ticketNo) capability UpdateTicket;
+            boolean updateTicket(String ticketNo) capability UpdateTicket => TicketRepository {
+                let ticket = self.findById(ticketNo) else error NotFound("Ticket", ticketNo);
+                guard ticket.state != TicketState.Resolved else error Conflict("already resolved");
+                ticket.internal = false;
+                let saved = self.save(ticket);
+                return true;
+            }
             boolean resolveTicket(String ticketNo) capability ResolveTicket;
             protected close => TicketRepository.delete;
             findTickets => TicketSearch.search;

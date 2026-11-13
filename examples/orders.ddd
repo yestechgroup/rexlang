@@ -26,8 +26,14 @@ application Orders {
             protected Order findByNumber(String orderNo);
         }
         // Contained by Order (`contains lines`): a non-root aggregate
-        // member, so it may declare no repository.
+        // member, so it may declare no repository. Aggregate-internal
+        // mutation is declared on the root, naming the child feature.
         entity OrderLine
+        extend Order {
+            OrderLine addLine(OrderLine line) => lines.add;
+            boolean removeLine(String sku) => lines.remove;
+            boolean saveLine(OrderLine line) => lines.save when (line.quantity > 0);
+        }
         entity Product repository ProductRepository {
             findById;
             findAll;
