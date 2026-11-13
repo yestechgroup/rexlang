@@ -416,3 +416,52 @@ fn feature_definitions_carry_their_modifiers() {
     assert!(find("handle").modifiers.is_read_only());
     assert!(find("plain").modifiers.is_empty(), "plain stays empty");
 }
+
+#[test]
+fn register_declarations_index_as_classes_with_their_attributes() {
+    // A `register` declaration navigates like a class (issue rexlang#181):
+    // the declaration is a Class symbol carrying its doc, its attributes are
+    // owned feature definitions, and references to the register class name
+    // resolve onto the declaration.
+    let source = r#"
+package demo
+
+/// A role in the organisation.
+register Role {
+    /// The role's display name.
+    String display_name
+    refers does not parse here
+}
+
+class Person {
+    refers Role[0..*] roles
+}
+"#;
+    let source = source.replace("    refers does not parse here\n", "    int level\n");
+    let index = index_of(&source);
+
+    let (role, definition) = find_def(&index, "Role");
+    assert_eq!(definition.kind, SymbolKind::Class, "a register is a class");
+    assert_eq!(
+        definition.doc.as_deref(),
+        Some("A role in the organisation.")
+    );
+
+    let (_, display_name) = find_def(&index, "display_name");
+    assert_eq!(
+        display_name.kind,
+        SymbolKind::Feature(FeatureSymbolKind::Attribute)
+    );
+    assert_eq!(display_name.owner, Some(role));
+    assert_eq!(
+        display_name.doc.as_deref(),
+        Some("The role's display name.")
+    );
+    let (_, level) = find_def(&index, "level");
+    assert_eq!(level.owner, Some(role));
+
+    // `refers Role[0..*] roles` — the type reference targets the register
+    // declaration (occurrence 1; occurrence 0 is the declaration's name).
+    let reference = find_ref(&index, span_of(&source, "Role", 1));
+    assert_eq!(reference.target, Some(role));
+}

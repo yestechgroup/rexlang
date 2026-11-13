@@ -476,7 +476,9 @@ pub(crate) fn lower_interface(decl: &mox::InterfaceDecl) -> ir::InterfaceDef {
 /// class pipeline: the grammar admits attributes only, so the declaration
 /// lowers like a class with no `extends` and no table override, joining
 /// every class-level rule (namespace, duplicate checks, stripped-name and
-/// table uniqueness, feature ids) unchanged.
+/// table uniqueness, feature ids) unchanged. The one difference is the
+/// additive wire marker: the lowered `ClassDef` carries
+/// `kind: ClassKind::Register` (rex-ir wire-contract rule 16).
 pub(crate) fn lower_register(
     decl: &mox::RegisterDecl,
     source: &str,
@@ -494,7 +496,9 @@ pub(crate) fn lower_register(
         features: decl.attributes.clone(),
         span: decl.span,
     };
-    lower_class(&class_decl, source, path, package, scope, prep, diags)
+    let mut record = lower_class(&class_decl, source, path, package, scope, prep, diags);
+    record.def.kind = ir::ClassKind::Register;
+    record
 }
 
 pub(crate) fn lower_class(
