@@ -12,4 +12,5 @@ pub(crate) mod ir;
 pub(crate) mod lsp;
 pub(crate) mod manifest;
 pub(crate) mod pipeline;
+pub(crate) mod verify;
 pub(crate) mod vocab;

@@ -4,6 +4,57 @@ All notable changes to rexlang are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); versioning policy
 in [docs/VERSIONING.md](docs/VERSIONING.md).
 
+## [Unreleased]
+
+"Proof-carrying models" (epic #202, phases P0 and P1's receipts core): the
+evidence chain becomes mechanical. No grammar, IR, artifact, or wire-format
+change — the receipts are a new document kind, and every existing golden is
+untouched.
+
+### Added
+
+- **`rex-evidence`**, the evidence-spine crate (issue #203): the
+  machine-readable proof-obligation register's data model, canonical parse,
+  semantic validation, and markdown rendering. Pure — serde/serde_json only,
+  no filesystem or compiler access.
+- **`docs/verification/register.json`** (issue #203): the register's source
+  of truth — 17 obligation rows with closed statuses
+  (`proved`/`tested`/`argued`/`assumed`), resolvable evidence pointers,
+  triggers and review dates on every open or assumed row, the four #173
+  Tier-3 holds, and the bidirectional `#[trusted]` inventory. The tables in
+  `docs/VERIFICATION.md` are now **generated** from it.
+- **`docs/SEMANTICS.md`** (issue #205): the claim ladder (C1–C5), the
+  `WF`/`WT`/`Secure`/`Consistent` judgment forms, theorem **S** with its
+  named assumptions, the explicit non-goals with reversal triggers, and the
+  complete #189 section mapping. Supersedes #189.
+- **`rexlang verify`** (issue #197) and the versioned **verification
+  receipt** (`formatVersion` 1): one canonical, deterministic JSON document
+  per model set — the source closure hashed, every artifact hashed (pinned
+  against its committed golden), the generator version, and the register's
+  rows exactly as the register states them. `--check` validates a receipt
+  standalone (issue #206: no register, models, toolchain, or network);
+  `--check-fresh` regenerates and byte-compares (issue #207). Receipts
+  **never** say "verified": the four-word register vocabulary is closed and
+  `verified` is rejected by name; `mutantKilled: null` +
+  `limits: ["mutants-unrecorded"]` records the #208 gap out loud.
+- **`examples/artifacts/support.receipt.json`**: the flagship receipt for
+  the `support` example — nine surfaces, the pattern-library closure, and
+  the external decision table.
+- **`docs/RECEIPTS.md`**: what a receipt is and is not, its schema and
+  closed vocabularies, the commands, and the staleness classes.
+
+### Changed
+
+- The `#[trusted]` register gate (issue #89) is now the full **register
+  drift gate** (#203): a dead evidence pointer, a status outside the closed
+  vocabulary (`"verified"` is rejected by name), an `argued`/`assumed`/
+  mirrored row without a trigger and review date, or a `#[trusted]` that is
+  not bidirectionally registered all fail `cargo test`.
+- `scripts/ci-local.sh` gains the `receipt` step (CI 5/6) and
+  `.github/workflows/ci.yml` invokes it: a stale flagship receipt — a source,
+  artifact, or register change without regeneration — is CI-red with the
+  exact command to run (issue #207).
+
 ## [0.2.0] — 2026-11-14
 
 "Foundation & trust": the security/dependency foundation, the release

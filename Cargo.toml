@@ -18,6 +18,7 @@ members = [
     "crates/rex-cli",
     "crates/rex-verify",
     "crates/rex-diagnostics",
+    "crates/rex-evidence",
     "crates/rex-strings",
     "crates/rex-dates",
 ]
@@ -51,6 +52,7 @@ rex-lsp = { path = "crates/rex-lsp" }
 rex-runtime = { path = "crates/rex-runtime" }
 rex-verify = { path = "crates/rex-verify" }
 rex-diagnostics = { path = "crates/rex-diagnostics" }
+rex-evidence = { path = "crates/rex-evidence" }
 rex-strings = { path = "crates/rex-strings" }
 rex-dates = { path = "crates/rex-dates" }
 

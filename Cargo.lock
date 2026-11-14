@@ -2789,6 +2789,7 @@ dependencies = [
  "rex-backend-rust",
  "rex-diagnostics",
  "rex-driver",
+ "rex-evidence",
  "rex-ifml",
  "rex-ir",
  "rex-lsp",
@@ -2832,6 +2833,15 @@ dependencies = [
  "sigil-syntax",
  "thiserror",
  "xstate-ir",
+]
+
+[[package]]
+name = "rex-evidence"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -2924,6 +2934,7 @@ version = "0.2.0"
 dependencies = [
  "creusot-std",
  "proptest",
+ "rex-evidence",
 ]
 
 [[package]]

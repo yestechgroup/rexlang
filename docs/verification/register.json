@@ -1,0 +1,531 @@
+{
+  "formatVersion": 1,
+  "reviewedAt": "2026-11-14",
+  "obligations": [
+    {
+      "id": "V1",
+      "claim": "Nodes always have unique identities",
+      "statement": "`add_node` `ensures`: fresh id = old count, count + 1, id ∉ old ids",
+      "implementation": "`Graph::add_node` (`rex-verify`); ids are arena indices, never reused",
+      "status": "proved",
+      "evidence": [
+        {
+          "kind": "proof",
+          "pointer": "crates/rex-verify/src/lib.rs:add_node"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-verify/tests/invariants.rs:p1_fresh_ids_are_unique_and_resolvable"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-verify/tests/invariants.rs:p1_earlier_ids_survive_later_growth"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-verify/tests/invariants.rs:p1_ids_are_never_reused"
+        }
+      ]
+    },
+    {
+      "id": "V2",
+      "claim": "Relationships always reference existing nodes",
+      "statement": "`well_formed` endpoint clauses; `link`/`reference` `requires`",
+      "implementation": "`Graph` API (only constructor of ids); driver `resolve*` for the real IR",
+      "status": "proved",
+      "evidence": [
+        {
+          "kind": "proof",
+          "pointer": "crates/rex-verify/src/lib.rs:well_formed"
+        },
+        {
+          "kind": "proof",
+          "pointer": "crates/rex-verify/src/lib.rs:link"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-verify/tests/invariants.rs:p2_no_dangling_relationships_ever"
+        }
+      ]
+    },
+    {
+      "id": "V3",
+      "claim": "Containment graphs cannot contain cycles",
+      "statement": "reachability machinery defined and partly proved: `anc_k`/`anc_strict_k` (bounded-`k` reflexive/strict closure), `anc`/`anc_strict` (budgeted witness ≤ node count), `acyclic` (no strict cycle within the budget); **`lemma_anc_shift` proved** — bounded reachability (reflexive + strict, both directions) transfers across any mutation keeping old parent lists and appending parentless slots (induction on the bound)",
+      "implementation": "`link` ancestor guard (`is_ancestor`: proved safe + terminating); `tests/invariants.rs` `p3_*` + proptest `p3_containment_stays_acyclic`; **`rex-driver` inheritance/actor cycle passes now detect cycles via rejected `link` calls** (`detect_inheritance_cycles` / `detect_actor_cycles` on `rex_verify::Graph`); use-case `check_graph` still DFS-based",
+      "status": "argued",
+      "evidence": [
+        {
+          "kind": "proof",
+          "pointer": "crates/rex-verify/src/lib.rs:lemma_anc_shift"
+        },
+        {
+          "kind": "code",
+          "pointer": "crates/rex-verify/src/lib.rs:link"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-verify/tests/invariants.rs:p3_containment_stays_acyclic"
+        },
+        {
+          "kind": "code",
+          "pointer": "crates/rex-driver/src/lower/classes.rs:detect_inheritance_cycles"
+        },
+        {
+          "kind": "code",
+          "pointer": "crates/rex-driver/src/lower/actors.rs:detect_actor_cycles"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-driver/tests/cycle_detection.rs"
+        }
+      ],
+      "statusNote": "spec machinery proved (shift lemma); `is_ancestor` functional spec and acyclicity preservation under `link` open — they need a path-shortening (loop-cutting) lemma plus a DFS-completeness invariant, deliberately budgeted as #93's hard residue; driver detection kernel-backed",
+      "trigger": "a time-boxed formal attempt under epic #202's T1 — one focused session; if the box is exceeded, downgrade the row with a written rationale, never leave it silently open",
+      "review": "2027-02-13"
+    },
+    {
+      "id": "V4",
+      "claim": "Type references always resolve",
+      "statement": "`rex_ir::TypeRef` \"never an unresolved name\" (crate docs, wire rule set)",
+      "implementation": "`rex-driver` resolution + error-severity block in `compile_file`; `rex-expr::DomainTypes` for expressions",
+      "status": "tested",
+      "evidence": [
+        {
+          "kind": "code",
+          "pointer": "crates/rex-driver/src/lower/resolve.rs:resolve_single"
+        },
+        {
+          "kind": "code",
+          "pointer": "crates/rex-driver/src/entry/mox.rs:compile_file"
+        },
+        {
+          "kind": "code",
+          "pointer": "crates/rex-expr/src/checker/context.rs:DomainTypes"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-driver/tests/compile.rs"
+        }
+      ]
+    },
+    {
+      "id": "V5",
+      "claim": "Mutations preserve all established invariants",
+      "statement": "`well_formed(*self)` → `well_formed(^self)` on every mutator",
+      "implementation": "every `rex-verify` mutator; bridged against the trusted mutation primitives; proptest sequences with `check_invariants` oracle",
+      "status": "proved",
+      "evidence": [
+        {
+          "kind": "proof",
+          "pointer": "crates/rex-verify/src/lib.rs:link"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-verify/tests/invariants.rs:p5_reparenting_keeps_invariants"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-verify/tests/invariants.rs:p5_invariants_hold_after_random_mutation_sequences"
+        }
+      ],
+      "statusNote": "the children-agreement clause for the *whole* edge set is carried per-edge by `link`'s ensures + tests; consolidated `children_ok` forall documented open"
+    },
+    {
+      "id": "V6",
+      "claim": "Reference edges are recorded and deduplicated",
+      "statement": "`reference` `ensures` (`has_ref` persists), `requires` endpoints",
+      "implementation": "`Graph::reference`; `p2_*` tests",
+      "status": "proved",
+      "evidence": [
+        {
+          "kind": "proof",
+          "pointer": "crates/rex-verify/src/lib.rs:reference"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-verify/tests/invariants.rs:p2_reference_edges_deduplicate"
+        }
+      ]
+    },
+    {
+      "id": "V7",
+      "claim": "`is_ancestor` is a safe, terminating guard",
+      "statement": "`requires(well_formed)`, loop variant `budget`",
+      "implementation": "bounded parent walk in `is_ancestor`",
+      "status": "proved",
+      "evidence": [
+        {
+          "kind": "proof",
+          "pointer": "crates/rex-verify/src/lib.rs:is_ancestor"
+        }
+      ],
+      "statusNote": "safety/termination; functional spec = V3, open"
+    },
+    {
+      "id": "V8",
+      "claim": "`check_invariants` (executable oracle) mirrors the invariant",
+      "statement": "`contains_edge`: full functional spec (`ensures result == has_contains(parent, child)`); `has_containment_cycle`: safety + termination (bounded mark-on-push walk; `requires` the kernel's `u32` length bound and a valid `start`)",
+      "implementation": "`Graph::check_invariants` (`#[trusted]` — it must inspect *arbitrary*, possibly malformed graphs, states the invariant excludes) + `contains_edge` / `has_containment_cycle` (proved against the logical `has_contains` / `is_ancestor`-shaped loop discipline)",
+      "status": "assumed",
+      "evidence": [
+        {
+          "kind": "code",
+          "pointer": "crates/rex-verify/src/lib.rs:check_invariants"
+        },
+        {
+          "kind": "proof",
+          "pointer": "crates/rex-verify/src/lib.rs:contains_edge"
+        },
+        {
+          "kind": "proof",
+          "pointer": "crates/rex-verify/src/lib.rs:has_containment_cycle"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-verify/tests/invariants.rs:p5_invariants_hold_after_random_mutation_sequences"
+        }
+      ],
+      "statusNote": "deliberate assumption, not an oversight — the dispatcher is test-side (validated by the property suites, never relied on by proofs) and must inspect arbitrary, possibly malformed graphs, the very states the invariant excludes; the prover cannot re-establish the consolidated invariant across that raw `Vec`-borrow boundary (quantifier instantiation across the borrow). Both walk helpers are proved. Shrinking path (#90's spirit): shrinking the trusted set is always a welcome PR",
+      "trigger": "shrinking the trusted set is always a welcome PR (#90's spirit): prove the dispatcher's cycle walk against the kernel's loop discipline, or retire it with a creusot-std bump that closes the borrow-boundary gap",
+      "review": "2027-05-14"
+    },
+    {
+      "id": "V9",
+      "claim": "Mutation primitives do exactly what their contracts state",
+      "statement": "full model-effect contracts (snoc + changed fields)",
+      "implementation": "`push_default_node`, `add_parent`, `push_containment`, `push_reference` (all `#[trusted]`, one-statement bodies)",
+      "status": "assumed",
+      "evidence": [
+        {
+          "kind": "code",
+          "pointer": "crates/rex-verify/src/lib.rs:push_default_node"
+        },
+        {
+          "kind": "code",
+          "pointer": "crates/rex-verify/src/lib.rs:add_parent"
+        },
+        {
+          "kind": "code",
+          "pointer": "crates/rex-verify/src/lib.rs:push_containment"
+        },
+        {
+          "kind": "code",
+          "pointer": "crates/rex-verify/src/lib.rs:push_reference"
+        }
+      ],
+      "statusNote": "deliberate assumption, not an oversight — the one-statement bodies exist because the prover cannot re-establish the consolidated invariant directly after a raw `Vec`-indexing borrow (quantifier instantiation across the borrow boundary); bodies assumed, full model-effect contracts proved (see the `#[trusted]` policy). Shrinking path (#90's spirit): shrinking the trusted set is always a welcome PR",
+      "trigger": "shrinking the trusted set is always a welcome PR (#90's spirit); a creusot-std bump that re-establishes the consolidated invariant across a raw `Vec` borrow (release notes) retires the primitives",
+      "review": "2027-05-14"
+    },
+    {
+      "id": "V10",
+      "claim": "Wire rule 3: a feature's stable id equals its 0-based declaration index; `assign_feature_ids` establishes it and changes nothing else",
+      "statement": "`rex_verify::feature_ids::assign_ids` `ensures` (length unchanged, `id(i) == i` for all slots, within the `u32` bound)",
+      "implementation": "proved over the spec mirror `rex_verify::feature_ids` (identical loop shape + trusted one-statement primitive `set_id`); `rex-ir`'s `ClassDef::assign_feature_ids` pinned executably by `crates/rex-ir/tests/feature_ids.rs`",
+      "status": "proved",
+      "evidence": [
+        {
+          "kind": "mirror",
+          "pointer": "crates/rex-verify/src/feature_ids.rs:assign_ids"
+        },
+        {
+          "kind": "code",
+          "pointer": "crates/rex-ir/src/class.rs:assign_feature_ids"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-ir/tests/feature_ids.rs:ids_equal_declaration_indices"
+        }
+      ],
+      "statusNote": "in-crate `rex-ir` translation blocked upstream (see avoidances)",
+      "trigger": "the next creusot-std/Creusot toolchain bump — its release notes are the trigger: watch them for the derive-gap family closing, then move the mirror in-crate",
+      "review": "2027-05-14",
+      "mirror": {
+        "of": "rex-ir `ClassDef::assign_feature_ids`",
+        "blockedBy": "creusot-std 0.14.0 gaps"
+      }
+    },
+    {
+      "id": "V11",
+      "claim": "Interaction references always resolve to declarations ([issue #112](https://github.com/yestechgroup/rexlang/issues/112)): every interaction reference edge — `action(\"X\")`, `navigate(\"X\")`, `refresh(\"X\")` — terminates at a **declaration-backed** node, never a synthesized one",
+      "statement": "every invocation edge's endpoint ∈ the declared set (`InvocationGraph::check_invariants` in `crates/rex-verify/tests/invariants.rs`, `p11_*`)",
+      "implementation": "`rex-ifml`'s `check_references` cross-reference pass (`E0104`–`E0106`, entry file plus **instantiated-module** sites, union-wide declarations; container targets included) flowing into `rexlang check`'s error block and the LSP's published diagnostics — and, as the artifact boundary, `rexlang manifest`: the control/route manifest ([issue #118](https://github.com/yestechgroup/rexlang/issues/118), `rex_ir::ifml_manifest`) is derived post-check, so every manifest edge's target resolved by construction and consumers cannot re-derive resolution or synthesize endpoints; the proptest validates the oracle against an independent recomputation over random histories",
+      "status": "tested",
+      "evidence": [
+        {
+          "kind": "code",
+          "pointer": "crates/rex-ifml/src/check/references.rs:check_references"
+        },
+        {
+          "kind": "code",
+          "pointer": "crates/rex-ifml/src/manifest.rs:manifest_ifml"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-verify/tests/invariants.rs:p11_dangling_invocation_edge_trips_the_oracle"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-verify/tests/invariants.rs:p11_declared_invocation_edge_passes_the_oracle"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-verify/tests/invariants.rs:p11_invocation_edges_terminate_at_declaration_backed_nodes"
+        }
+      ],
+      "statusNote": "honest staging per V4's precedent — the kernel tracks no node metadata yet; the graph-level `proved` form belongs in `rex-verify` once the ingest stops synthesizing endpoints from invocations, the codegraph companion — which the manifest boundary now makes structurally impossible on the artifact path"
+    },
+    {
+      "id": "V12",
+      "claim": "Lifecycle wiring always resolves across the artifact union ([issue #114](https://github.com/yestechgroup/rexlang/issues/114)): a capability clause names a declared capability; a granted or delegated capability is carried by an operation or search; an `.ifml` action declaration binds to a service operation (case-insensitive verb equality); a subscription consumer names a declared deploy component; flow `requires:`/`roles:` resolve into the actor layer; an operation's `emits` event name is declared in some `.evt` contract; a declared event is emitted by at least one service operation (channel `publishes`/subscription lists are consumption-side and never satisfy production). Since rexlang#128 the two capability joins resolve at **compile time** (rule 10 pooling every provided actor model, with the `unknownCapability` did-you-mean code; grant coverage in the actor engine, code `grantedCapabilityUncarried`) — the union pass keeps them as its lint channel (warning severity). Every union-pass diagnostic carries its stable registry code prefixed on the message (`X0001`–`X0008`, the `driver.integrity` band of [the diagnostic-code registry](DIAGNOSTICS.md)), and an action whose case-insensitive mirror matches **several** service operations binds to no unique backend — an error (`X0006`), the mirror naming exactly one `(service, operation)` carrier",
+      "statement": "`rex_driver::check_integrity` over the gathered artifact buckets — a pure function, pinned at the artifact level with exact diagnostic text plus its silent gates in `crates/rex-driver/tests/integrity.rs`; the promoted capability joins are pinned in `crates/rex-driver/tests/ddd.rs` (rule 10, did-you-mean), `crates/rex-driver/tests/actors_file.rs` (coverage), `crates/rex-cli/tests/cli.rs` (directory mode, phase 1 owns the errors), and `crates/rex-lsp/src/server/tests.rs` (diagnostics + the rename quick-fix)",
+      "implementation": "the CLI's directory batch mode: per-file artifacts cluster into import-connected applications (the house import graph) and the pass runs per application, error diagnostics failing the batch; the compile-time capability joins run in the CLI project pipeline and the LSP per document against the sibling artifacts, with the union-pass lint suppressed for files phase 1 already failed; per-surface single-file compiles are unchanged",
+      "status": "tested",
+      "evidence": [
+        {
+          "kind": "code",
+          "pointer": "crates/rex-driver/src/integrity.rs:check_integrity"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-driver/tests/integrity.rs"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-driver/tests/ddd/rule_10_capabilities.rs"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-driver/tests/actors_file.rs"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-cli/tests/cli/integrity.rs"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-lsp/src/server/tests/capability_joins.rs"
+        }
+      ],
+      "statusNote": "enforcement landed; the kernel/proptest staging follows V11's precedent once the graph ingest stops synthesizing endpoints — the same codegraph companion"
+    },
+    {
+      "id": "V13",
+      "claim": "State machines are closed over their enum, and lifecycle guards are predicates: every machine state (initial, terminal, transition endpoint) is a literal of the machine's enum type, and every `when` condition — transition guard, service operation, repository operation — types as `boolean`",
+      "statement": "state-set membership ⊆ the enum's literal list; `check_condition`'s result type = `boolean`",
+      "implementation": "`lower_design_machine` + `check_condition` in `crates/rex-driver/src/ddd.rs`, pinned by `crates/rex-driver/tests/ddd_machines.rs` (six tests: three boolean sites, typo'd endpoint, non-literal initial/terminal, all-literals clean)",
+      "status": "tested",
+      "evidence": [
+        {
+          "kind": "code",
+          "pointer": "crates/rex-driver/src/ddd/machines.rs:lower_design_machine"
+        },
+        {
+          "kind": "code",
+          "pointer": "crates/rex-driver/src/conditions.rs:check_condition"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-driver/tests/ddd_machines.rs"
+        }
+      ]
+    },
+    {
+      "id": "V14",
+      "claim": "Obligations are a declared vocabulary: every grant or delegation entry's obligation names resolve against the union of the actors blocks' `obligation` declarations",
+      "statement": "references ⊆ the union declared set",
+      "implementation": "`validate_actor_obligations` in `crates/rex-driver/src/lower/actors.rs` over the `ActorsRecord` obligation refs, pinned by `crates/rex-driver/tests/actors.rs` (IR shape, grant/delegation errors with spans, duplicates, union pooling)",
+      "status": "tested",
+      "evidence": [
+        {
+          "kind": "code",
+          "pointer": "crates/rex-driver/src/lower/actors.rs:validate_actor_obligations"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-driver/tests/actors/obligations.rs"
+        }
+      ]
+    },
+    {
+      "id": "V15",
+      "claim": "Domain-type lookup agreement (issue #94, the first verified statement for expression typing): a domain-type index is **total** over what was registered — every key resolves to its registration, last registration winning — and **merge preserves per-source lookups** (the merged-in index wins on collision, the surviving index resolves everywhere else)",
+      "statement": "`TypeIndex::lookup` full functional spec (`result == lookup_spec(entries, key)`), `insert` replace semantics, `merge` right-wins concat semantics (all proved; helper `lemma_bound_at_prefix`, induction on the prefix length)",
+      "implementation": "spec mirror `rex_verify::domain_types` — insert-replaces + linear-scan lookup standing in for `rex_expr::DomainTypes`' `BTreeMap` (whose std specs creusot-std 0.14.0 cannot translate — the V10 upstream-gap family), executably pinned by `crates/rex-verify/tests/domain_types.rs` and shape-pinned on the real API by `crates/rex-expr/tests/typecheck.rs` (`domain_types_is_assembled_incrementally_and_merges`); moves in-crate on a toolchain bump",
+      "status": "proved",
+      "evidence": [
+        {
+          "kind": "mirror",
+          "pointer": "crates/rex-verify/src/domain_types.rs:lookup_spec"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-verify/tests/domain_types.rs:lookup_matches_the_logical_spec"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-expr/tests/typecheck.rs:domain_types_is_assembled_incrementally_and_merges"
+        }
+      ],
+      "trigger": "the next creusot-std/Creusot toolchain bump — its release notes are the trigger: watch them for the std-spec translation gap closing, then move the mirror in-crate",
+      "review": "2027-05-14",
+      "mirror": {
+        "of": "rex-expr `DomainTypes` (`BTreeMap`-backed)",
+        "blockedBy": "creusot-std 0.14.0 gaps"
+      }
+    },
+    {
+      "id": "V16",
+      "claim": "Class→artifact correspondence at the IR → JSON Schema boundary (issue #95, the first proved transformation statement): the collector admits exactly the declarations with distinct class names (duplicates rejected — `Context::collect`'s `bail!`), and the emitted `$defs` are in correspondence with the declared classes — **one def per class, in declaration order, none dropped, none synthesized**",
+      "statement": "`correspondence::collect` two-directional contract (`Some` ⇒ keys unchanged + `distinct`; `None` ⇒ a witnessed `has_duplicate`), `def_keys` identity emit (`result@ == classes@`)",
+      "implementation": "spec mirror `rex_verify::correspondence` — interned keys standing in for class names, identity emit standing in for `wire_defs`' per-class loop (the `rex-ir` wire types cannot translate under creusot-std 0.14.0 — the V10 upstream-gap family); executably pinned by `crates/rex-verify/tests/correspondence.rs` and on the real emitter by `crates/rex-backend-jsonschema`'s `wire_defs_map_every_declared_class` / `collect_rejects_duplicate_class_names`; moves in-crate on a toolchain bump",
+      "status": "proved",
+      "evidence": [
+        {
+          "kind": "mirror",
+          "pointer": "crates/rex-verify/src/correspondence.rs:collect"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-verify/tests/correspondence.rs:collect_admits_distinct_keys_and_emits_one_def_per_class"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-backend-jsonschema/src/lib.rs:wire_defs_map_every_declared_class"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-backend-jsonschema/src/lib.rs:collect_rejects_duplicate_class_names"
+        }
+      ],
+      "trigger": "the next creusot-std/Creusot toolchain bump — its release notes are the trigger: watch them for the `rex-ir` wire types translating, then move the mirror in-crate",
+      "review": "2027-05-14",
+      "mirror": {
+        "of": "rex-backend-jsonschema `wire_defs`",
+        "blockedBy": "creusot-std 0.14.0 gaps"
+      }
+    },
+    {
+      "id": "V17",
+      "claim": "Stripped-name uniqueness within a package (issue #177): two declarations — classes or enums, in any combination — whose names strip to the same module identifier (one trailing `Type` suffix, then snake_case; `PayRun` and `PayRunType` both strip to `pay_run`), or two classes mapping to the same effective table name (declared `table \"…\"` override, else the derived default), are rejected; a pair where either class is a containment target is exempt (a contained value object shares its owner's module downstream by design), and a pair already diagnosed as E0300 is not re-diagnosed as E0301 (one rename resolves both)",
+      "statement": "both keys are pure functions of the declarations (`stripped_module_name`, the effective table) plus the containment set; the table key's derivation matches `rex_backend_common::snake_case` exactly, so the check's keys equal what consumers derive",
+      "implementation": "`check_name_uniqueness` in `crates/rex-driver/src/lower/names.rs` over per-package records, wired into all three lowering pipelines and skipped when the model already failed to lower (no cascade); the diagnostics carry the `driver.domain` codes (E0300/E0301) prefixed on the message and span the later declaration; the derivation vectors, both codes, the exemption, the override's IR flow, and the no-cascade discipline are pinned by `crates/rex-driver/tests/domain_names.rs`, the `lower::names` unit tests, `crates/rex-ir/tests/class_table_name.rs` (wire byte-identity), and the `name_uniqueness` conformance fixture's IR golden",
+      "status": "tested",
+      "evidence": [
+        {
+          "kind": "code",
+          "pointer": "crates/rex-driver/src/lower/names.rs:check_name_uniqueness"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-driver/tests/domain_names.rs"
+        },
+        {
+          "kind": "test",
+          "pointer": "crates/rex-ir/tests/class_table_name.rs"
+        },
+        {
+          "kind": "test",
+          "pointer": "tests/conformance/artifacts/name_uniqueness.rex.json"
+        }
+      ]
+    }
+  ],
+  "pipeline": [
+    {
+      "name": "Parsing",
+      "want": "parsed structures satisfy AST invariants",
+      "enforcement": "logos+chumsky parser tests; `rexlang fmt` byte-identical round-trip goldens",
+      "status": "tested"
+    },
+    {
+      "name": "Semantic analysis",
+      "want": "invalid models cannot pass validation",
+      "enforcement": "driver validators: duplicate names, reference resolution, opposite pairing, inheritance/actor cycles, `never_both`; error ⇒ no model",
+      "status": "tested"
+    },
+    {
+      "name": "Intermediate representation",
+      "want": "IR satisfies structural/semantic invariants",
+      "enforcement": "`rex-ir` wire contract (version gate, frozen feature ids, deterministic equality) + golden/byte-identity suites; `rex-verify` kernel as the future verified core",
+      "status": "tested (kernel subset: proved)"
+    },
+    {
+      "name": "Transformations",
+      "want": "transformations preserve meaning",
+      "enforcement": "golden artifacts per surface + examples harness; **V16: the IR → JSON Schema class correspondence is proved over its spec mirror** (`rex_verify::correspondence`)",
+      "status": "tested (mirror proved; full preservation = issue phase 8, open)"
+    },
+    {
+      "name": "Code generation",
+      "want": "generated artefacts satisfy contracts",
+      "enforcement": "backends consume only `rex_ir::Model`; scratch-crate `cargo test` e2e; schema conformance proptests",
+      "status": "tested"
+    }
+  ],
+  "hold": [
+    {
+      "item": "nightly-CI proof job (#88)",
+      "reason": "closed as a **documented non-goal**, not delivered: no proof workflow exists in `.github/workflows/` (only `ci.yml`), and prover availability and cost keep proofs local and per-release. The sanctioned form of proof automation is epic P6/T3's per-release proof-log artifact (`verif/` manifest + why3find summary) referenced by the release receipt — a nightly prover job would need its own go/no-go",
+      "trigger": "the next release tag — where the P6/T3 per-release proof-log artifact would be produced",
+      "review": "2027-02-13"
+    },
+    {
+      "item": "`creusot-std` 0.14.0 → 0.15.0",
+      "reason": "proofs are toolchain-coupled: a stdlib bump needs the matching Creusot upgrade, a full `cargo creusot -p rex-verify` re-run, and a register review; held through v0.2 per the #173 plan",
+      "trigger": "the Creusot toolchain upgrade lands (#220)",
+      "review": "2027-02-13"
+    },
+    {
+      "item": "`rowan` / `cstree` / `ungrammar` (lossless CST)",
+      "reason": "would fix `.ifml` comment loss and enable structural navigation, but demands a full parser rewrite and rowan is alpha (#173 Tier-3)",
+      "trigger": "a concrete need for lossless comments or structural navigation, or rowan leaves alpha",
+      "review": "2027-05-14"
+    },
+    {
+      "item": "`comemo` / `async-lsp`",
+      "reason": "architectural alternatives to salsa / tower-lsp-server; held unless there is a concrete limitation (#173 Tier-3)",
+      "trigger": "a concrete salsa or tower-lsp-server limitation surfaces",
+      "review": "2027-05-14"
+    },
+    {
+      "item": "`serde_jcs` (RFC 8785 canonical JSON)",
+      "reason": "canonical JSON for signed/hashed artifacts; the current key sorting is not full JCS and signing is not on the roadmap (#173 Tier-3)",
+      "trigger": "artifact signing joins the roadmap",
+      "review": "2027-05-14"
+    }
+  ],
+  "trusted": [
+    {
+      "item": "check_invariants",
+      "row": "V8",
+      "reason": "test-side oracle dispatcher: it must inspect arbitrary, possibly malformed graphs — the very states the invariant excludes"
+    },
+    {
+      "item": "push_default_node",
+      "row": "V9",
+      "reason": "one-statement snoc body; the contract states the exact model effect"
+    },
+    {
+      "item": "add_parent",
+      "row": "V9",
+      "reason": "one-statement parent-list push; the contract states the exact model effect"
+    },
+    {
+      "item": "push_containment",
+      "row": "V9",
+      "reason": "one-statement containment push; the contract states the exact model effect"
+    },
+    {
+      "item": "push_reference",
+      "row": "V9",
+      "reason": "one-statement reference push; the contract states the exact model effect"
+    },
+    {
+      "item": "set_id",
+      "row": "V10",
+      "reason": "one-statement slot write behind the feature-id spec mirror; the contract states the exact model effect"
+    }
+  ]
+}
