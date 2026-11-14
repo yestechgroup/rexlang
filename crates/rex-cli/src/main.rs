@@ -37,6 +37,19 @@
 //!   artifacts (Core IR, standalone actor policy, DDD design, canonical
 //!   instance) without the originating model; exits `1` on any violation.
 //!   The portable test kit for out-of-tree backends (see docs/BACKENDS.md).
+//! * `rexlang verify <files>... -o <receipt.json>` — compile the surfaces
+//!   and emit a **verification receipt**: one canonical, versioned JSON
+//!   document recording the hash of every source file the compile read
+//!   (inputs, imports, pattern modules, decision tables), the hash and
+//!   `formatVersion` of every artifact it emitted (pinned byte-identical
+//!   to the committed golden where one exists), the generator version, and
+//!   the proof-obligation register's rows with their statuses as the
+//!   register states them. `--check <receipt.json>` validates a receipt
+//!   standalone (no register, models, toolchain, or network — artifacts are
+//!   re-hashed from the files next to it); `--check-fresh <receipt.json>`
+//!   regenerates from the receipt's own inputs and byte-compares, exiting
+//!   `1` with the command to run when the receipt is stale. See
+//!   docs/RECEIPTS.md.
 //! * `rexlang vocab fetch <file> [--provider file:<DIR>|http]` — fetch and
 //!   vendor vocabulary snapshots, updating `model.lock`.
 //! * `rexlang explain <code>` — print one diagnostic code's registry entry
@@ -136,6 +149,37 @@ enum Command {
         /// Write the JSON to this path instead of stdout.
         #[arg(short, long, value_name = "FILE")]
         out: Option<PathBuf>,
+    },
+    /// Emit a verification receipt for the given model surfaces: one
+    /// canonical, versioned JSON document recording every source file the
+    /// compile read (hashed, repo-relative), every artifact it emitted
+    /// (hashed, pinned against its committed golden where one exists), the
+    /// generator version, and the proof-obligation register's rows with
+    /// their statuses exactly as the register states them. `--check`
+    /// validates a receipt standalone — no register, models, or toolchain —
+    /// and `--check-fresh` regenerates from the receipt's own inputs and
+    /// byte-compares (the CI freshness gate).
+    Verify {
+        /// Model surfaces to compile into the receipt (files or directories).
+        files: Vec<PathBuf>,
+        /// Write the receipt to this path. Artifact paths are recorded
+        /// relative to it, so it belongs next to the artifacts it names.
+        #[arg(short, long, value_name = "RECEIPT")]
+        out: Option<PathBuf>,
+        /// The receipt's subject name; defaults to the inputs' common file
+        /// stem, else the receipt file's stem.
+        #[arg(long, value_name = "NAME")]
+        subject: Option<String>,
+        /// Validate the given receipt instead of generating one: the
+        /// schema, the closed vocabularies, the canonical byte form, and
+        /// every artifact hash (against the files next to it). Needs no
+        /// register, models, or network.
+        #[arg(long, value_name = "RECEIPT")]
+        check: Option<PathBuf>,
+        /// Regenerate the receipt from the inputs it names and compare
+        /// byte-for-byte with the committed file; exits `1` when stale.
+        #[arg(long, value_name = "RECEIPT")]
+        check_fresh: Option<PathBuf>,
     },
     /// Code generation from compiled `.mox` files.
     Gen {
@@ -294,6 +338,13 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Ir { files, out, expand } => commands::ir::run(files, out, expand),
         Command::Build { files, out } => commands::build::run(files, out),
         Command::Manifest { file, out } => commands::manifest::run(vec![file], out),
+        Command::Verify {
+            files,
+            out,
+            subject,
+            check,
+            check_fresh,
+        } => commands::verify::run(files, out, subject, check, check_fresh),
         Command::Gen { target } => commands::gen::run(target),
         Command::Fmt { check, files } => commands::fmt::run(check, files),
         Command::Artifact {

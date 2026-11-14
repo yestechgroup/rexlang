@@ -28,4 +28,5 @@ mod manifest;
 mod multi;
 mod project;
 mod uc;
+mod verify;
 mod vocab;

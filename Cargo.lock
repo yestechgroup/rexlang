@@ -2789,6 +2789,7 @@ dependencies = [
  "rex-backend-rust",
  "rex-diagnostics",
  "rex-driver",
+ "rex-evidence",
  "rex-ifml",
  "rex-ir",
  "rex-lsp",
@@ -2840,6 +2841,7 @@ version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

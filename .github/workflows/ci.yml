@@ -85,6 +85,11 @@ jobs:
         run: scripts/ci-local.sh clippy
       - name: Format check
         run: scripts/ci-local.sh fmt
+      # The verification receipt is a golden (issue #207): regenerate it from
+      # the sources it names and byte-compare with the committed file, so a
+      # source, artifact, or register change without regeneration is red.
+      - name: Receipt freshness
+        run: scripts/ci-local.sh receipt
       # Broken intra-doc links are warnings by default; -D warnings makes
       # them errors so the gate stays visible (issue #175). cargo doc runs
       # no doctests, so it needs no TMPDIR dance.

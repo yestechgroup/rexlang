@@ -1,0 +1,588 @@
+{
+  "artifacts": [
+    {
+      "formatVersion": 1,
+      "kind": "actorModel",
+      "path": null,
+      "sha256": "d8285fb6407631a6d35838a52764dca3b628e303427e8a09cac8c3cbeb59187f"
+    },
+    {
+      "formatVersion": 1,
+      "kind": "cmmnModel",
+      "path": "support.cmmn.json",
+      "sha256": "bb03b46a304ce873dd6f3dcb4874d0dc18d3b031a8af7a58aa9569a650364d61"
+    },
+    {
+      "formatVersion": 1,
+      "kind": "dddDesign",
+      "path": "support.ddd.json",
+      "sha256": "5733d5632a35082c4d3b6569c6827015b521352eef6aecc9d10085a040d07ab8"
+    },
+    {
+      "formatVersion": 1,
+      "kind": "decisionModel",
+      "path": "support.dmn.json",
+      "sha256": "959a1850905d97e24640b652f4d022ff35a35caf93c16c42c4fc59fa99df872a"
+    },
+    {
+      "formatVersion": 1,
+      "kind": "deployModel",
+      "path": "support.deploy.json",
+      "sha256": "cae9a28cf06bce27a50f7317fb6eecb31de39c4d4d663adb2ada41392ebacde5"
+    },
+    {
+      "formatVersion": 1,
+      "kind": "eventContract",
+      "path": "support.evt.json",
+      "sha256": "0950716c2c03a03dda05283088b6456d8f650dddcc03505fa6e5766c6d5c92a2"
+    },
+    {
+      "formatVersion": 1,
+      "kind": "ifmlManifest",
+      "path": "support.manifest.json",
+      "sha256": "0e5843b790ab56e3e576be2959630550d5102c8212a52f704c5bba95e5609d41"
+    },
+    {
+      "formatVersion": 1,
+      "kind": "irModel",
+      "path": null,
+      "sha256": "6d29c0b7193a2189c2e485a78b9b69a51344701ef2ef2bd3bd8cc5345a491682"
+    },
+    {
+      "formatVersion": 1,
+      "kind": "useCaseModel",
+      "path": "support.uc.json",
+      "sha256": "3d36aa72210a8b1d94d4584c47d314339836d21b106eae5d0ab26225d8269e4c"
+    }
+  ],
+  "formatVersion": 1,
+  "generator": {
+    "name": "rexlang",
+    "version": "0.2.0"
+  },
+  "inputs": [
+    "examples/support.actor",
+    "examples/support.cmmn",
+    "examples/support.ddd",
+    "examples/support.deploy",
+    "examples/support.dmn",
+    "examples/support.evt",
+    "examples/support.ifml",
+    "examples/support.mox",
+    "examples/support.uc"
+  ],
+  "kind": "verificationReceipt",
+  "limits": [
+    "mutants-unrecorded"
+  ],
+  "register": {
+    "reviewedAt": "2026-11-14",
+    "rows": [
+      {
+        "claim": "Nodes always have unique identities",
+        "evidence": [
+          {
+            "kind": "proof",
+            "pointer": "crates/rex-verify/src/lib.rs:add_node"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-verify/tests/invariants.rs:p1_fresh_ids_are_unique_and_resolvable"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-verify/tests/invariants.rs:p1_earlier_ids_survive_later_growth"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-verify/tests/invariants.rs:p1_ids_are_never_reused"
+          }
+        ],
+        "id": "V1",
+        "mutantKilled": null,
+        "review": null,
+        "status": "proved",
+        "trigger": null
+      },
+      {
+        "claim": "Relationships always reference existing nodes",
+        "evidence": [
+          {
+            "kind": "proof",
+            "pointer": "crates/rex-verify/src/lib.rs:well_formed"
+          },
+          {
+            "kind": "proof",
+            "pointer": "crates/rex-verify/src/lib.rs:link"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-verify/tests/invariants.rs:p2_no_dangling_relationships_ever"
+          }
+        ],
+        "id": "V2",
+        "mutantKilled": null,
+        "review": null,
+        "status": "proved",
+        "trigger": null
+      },
+      {
+        "claim": "Containment graphs cannot contain cycles",
+        "evidence": [
+          {
+            "kind": "proof",
+            "pointer": "crates/rex-verify/src/lib.rs:lemma_anc_shift"
+          },
+          {
+            "kind": "code",
+            "pointer": "crates/rex-verify/src/lib.rs:link"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-verify/tests/invariants.rs:p3_containment_stays_acyclic"
+          },
+          {
+            "kind": "code",
+            "pointer": "crates/rex-driver/src/lower/classes.rs:detect_inheritance_cycles"
+          },
+          {
+            "kind": "code",
+            "pointer": "crates/rex-driver/src/lower/actors.rs:detect_actor_cycles"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-driver/tests/cycle_detection.rs"
+          }
+        ],
+        "id": "V3",
+        "mutantKilled": null,
+        "review": "2027-02-13",
+        "status": "argued",
+        "trigger": "a time-boxed formal attempt lands under epic #202 (T1)"
+      },
+      {
+        "claim": "Type references always resolve",
+        "evidence": [
+          {
+            "kind": "code",
+            "pointer": "crates/rex-driver/src/lower/resolve.rs:resolve_single"
+          },
+          {
+            "kind": "code",
+            "pointer": "crates/rex-driver/src/entry/mox.rs:compile_file"
+          },
+          {
+            "kind": "code",
+            "pointer": "crates/rex-expr/src/checker/context.rs:DomainTypes"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-driver/tests/compile.rs"
+          }
+        ],
+        "id": "V4",
+        "mutantKilled": null,
+        "review": null,
+        "status": "tested",
+        "trigger": null
+      },
+      {
+        "claim": "Mutations preserve all established invariants",
+        "evidence": [
+          {
+            "kind": "proof",
+            "pointer": "crates/rex-verify/src/lib.rs:link"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-verify/tests/invariants.rs:p5_reparenting_keeps_invariants"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-verify/tests/invariants.rs:p5_invariants_hold_after_random_mutation_sequences"
+          }
+        ],
+        "id": "V5",
+        "mutantKilled": null,
+        "review": null,
+        "status": "proved",
+        "trigger": null
+      },
+      {
+        "claim": "Reference edges are recorded and deduplicated",
+        "evidence": [
+          {
+            "kind": "proof",
+            "pointer": "crates/rex-verify/src/lib.rs:reference"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-verify/tests/invariants.rs:p2_reference_edges_deduplicate"
+          }
+        ],
+        "id": "V6",
+        "mutantKilled": null,
+        "review": null,
+        "status": "proved",
+        "trigger": null
+      },
+      {
+        "claim": "`is_ancestor` is a safe, terminating guard",
+        "evidence": [
+          {
+            "kind": "proof",
+            "pointer": "crates/rex-verify/src/lib.rs:is_ancestor"
+          }
+        ],
+        "id": "V7",
+        "mutantKilled": null,
+        "review": null,
+        "status": "proved",
+        "trigger": null
+      },
+      {
+        "claim": "`check_invariants` (executable oracle) mirrors the invariant",
+        "evidence": [
+          {
+            "kind": "code",
+            "pointer": "crates/rex-verify/src/lib.rs:check_invariants"
+          },
+          {
+            "kind": "proof",
+            "pointer": "crates/rex-verify/src/lib.rs:contains_edge"
+          },
+          {
+            "kind": "proof",
+            "pointer": "crates/rex-verify/src/lib.rs:has_containment_cycle"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-verify/tests/invariants.rs:p5_invariants_hold_after_random_mutation_sequences"
+          }
+        ],
+        "id": "V8",
+        "mutantKilled": null,
+        "review": "2027-05-14",
+        "status": "assumed",
+        "trigger": "shrinking the trusted set is always a welcome PR (#90's spirit): prove the dispatcher's cycle walk against the kernel's loop discipline"
+      },
+      {
+        "claim": "Mutation primitives do exactly what their contracts state",
+        "evidence": [
+          {
+            "kind": "code",
+            "pointer": "crates/rex-verify/src/lib.rs:push_default_node"
+          },
+          {
+            "kind": "code",
+            "pointer": "crates/rex-verify/src/lib.rs:add_parent"
+          },
+          {
+            "kind": "code",
+            "pointer": "crates/rex-verify/src/lib.rs:push_containment"
+          },
+          {
+            "kind": "code",
+            "pointer": "crates/rex-verify/src/lib.rs:push_reference"
+          }
+        ],
+        "id": "V9",
+        "mutantKilled": null,
+        "review": "2027-05-14",
+        "status": "assumed",
+        "trigger": "shrinking the trusted set is always a welcome PR (#90's spirit); a creusot-std bump that re-establishes the consolidated invariant across a raw `Vec` borrow retires the primitives"
+      },
+      {
+        "claim": "Wire rule 3: a feature's stable id equals its 0-based declaration index; `assign_feature_ids` establishes it and changes nothing else",
+        "evidence": [
+          {
+            "kind": "mirror",
+            "pointer": "crates/rex-verify/src/feature_ids.rs:assign_ids"
+          },
+          {
+            "kind": "code",
+            "pointer": "crates/rex-ir/src/class.rs:assign_feature_ids"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-ir/tests/feature_ids.rs:ids_equal_declaration_indices"
+          }
+        ],
+        "id": "V10",
+        "mutantKilled": null,
+        "review": "2027-05-14",
+        "status": "proved",
+        "trigger": "the next creusot-std/Creusot toolchain bump — its release notes are the trigger; move the mirror in-crate when the derive-gap family closes"
+      },
+      {
+        "claim": "Interaction references always resolve to declarations ([issue #112](https://github.com/yestechgroup/rexlang/issues/112)): every interaction reference edge — `action(\"X\")`, `navigate(\"X\")`, `refresh(\"X\")` — terminates at a **declaration-backed** node, never a synthesized one",
+        "evidence": [
+          {
+            "kind": "code",
+            "pointer": "crates/rex-ifml/src/check/references.rs:check_references"
+          },
+          {
+            "kind": "code",
+            "pointer": "crates/rex-ifml/src/manifest.rs:manifest_ifml"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-verify/tests/invariants.rs:p11_dangling_invocation_edge_trips_the_oracle"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-verify/tests/invariants.rs:p11_declared_invocation_edge_passes_the_oracle"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-verify/tests/invariants.rs:p11_invocation_edges_terminate_at_declaration_backed_nodes"
+          }
+        ],
+        "id": "V11",
+        "mutantKilled": null,
+        "review": null,
+        "status": "tested",
+        "trigger": null
+      },
+      {
+        "claim": "Lifecycle wiring always resolves across the artifact union ([issue #114](https://github.com/yestechgroup/rexlang/issues/114)): a capability clause names a declared capability; a granted or delegated capability is carried by an operation or search; an `.ifml` action declaration binds to a service operation (case-insensitive verb equality); a subscription consumer names a declared deploy component; flow `requires:`/`roles:` resolve into the actor layer; an operation's `emits` event name is declared in some `.evt` contract; a declared event is emitted by at least one service operation (channel `publishes`/subscription lists are consumption-side and never satisfy production). Since rexlang#128 the two capability joins resolve at **compile time** (rule 10 pooling every provided actor model, with the `unknownCapability` did-you-mean code; grant coverage in the actor engine, code `grantedCapabilityUncarried`) — the union pass keeps them as its lint channel (warning severity). Every union-pass diagnostic carries its stable registry code prefixed on the message (`X0001`–`X0008`, the `driver.integrity` band of [the diagnostic-code registry](DIAGNOSTICS.md)), and an action whose case-insensitive mirror matches **several** service operations binds to no unique backend — an error (`X0006`), the mirror naming exactly one `(service, operation)` carrier",
+        "evidence": [
+          {
+            "kind": "code",
+            "pointer": "crates/rex-driver/src/integrity.rs:check_integrity"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-driver/tests/integrity.rs"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-driver/tests/ddd/rule_10_capabilities.rs"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-driver/tests/actors_file.rs"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-cli/tests/cli/integrity.rs"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-lsp/src/server/tests/capability_joins.rs"
+          }
+        ],
+        "id": "V12",
+        "mutantKilled": null,
+        "review": null,
+        "status": "tested",
+        "trigger": null
+      },
+      {
+        "claim": "State machines are closed over their enum, and lifecycle guards are predicates: every machine state (initial, terminal, transition endpoint) is a literal of the machine's enum type, and every `when` condition — transition guard, service operation, repository operation — types as `boolean`",
+        "evidence": [
+          {
+            "kind": "code",
+            "pointer": "crates/rex-driver/src/ddd/machines.rs:lower_design_machine"
+          },
+          {
+            "kind": "code",
+            "pointer": "crates/rex-driver/src/conditions.rs:check_condition"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-driver/tests/ddd_machines.rs"
+          }
+        ],
+        "id": "V13",
+        "mutantKilled": null,
+        "review": null,
+        "status": "tested",
+        "trigger": null
+      },
+      {
+        "claim": "Obligations are a declared vocabulary: every grant or delegation entry's obligation names resolve against the union of the actors blocks' `obligation` declarations",
+        "evidence": [
+          {
+            "kind": "code",
+            "pointer": "crates/rex-driver/src/lower/actors.rs:validate_actor_obligations"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-driver/tests/actors/obligations.rs"
+          }
+        ],
+        "id": "V14",
+        "mutantKilled": null,
+        "review": null,
+        "status": "tested",
+        "trigger": null
+      },
+      {
+        "claim": "Domain-type lookup agreement (issue #94, the first verified statement for expression typing): a domain-type index is **total** over what was registered — every key resolves to its registration, last registration winning — and **merge preserves per-source lookups** (the merged-in index wins on collision, the surviving index resolves everywhere else)",
+        "evidence": [
+          {
+            "kind": "mirror",
+            "pointer": "crates/rex-verify/src/domain_types.rs:lookup_spec"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-verify/tests/domain_types.rs:lookup_matches_the_logical_spec"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-expr/tests/typecheck.rs:domain_types_is_assembled_incrementally_and_merges"
+          }
+        ],
+        "id": "V15",
+        "mutantKilled": null,
+        "review": "2027-05-14",
+        "status": "proved",
+        "trigger": "the next creusot-std/Creusot toolchain bump — its release notes are the trigger; move the mirror in-crate when the std-spec translation gap closes"
+      },
+      {
+        "claim": "Class→artifact correspondence at the IR → JSON Schema boundary (issue #95, the first proved transformation statement): the collector admits exactly the declarations with distinct class names (duplicates rejected — `Context::collect`'s `bail!`), and the emitted `$defs` are in correspondence with the declared classes — **one def per class, in declaration order, none dropped, none synthesized**",
+        "evidence": [
+          {
+            "kind": "mirror",
+            "pointer": "crates/rex-verify/src/correspondence.rs:collect"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-verify/tests/correspondence.rs:collect_admits_distinct_keys_and_emits_one_def_per_class"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-backend-jsonschema/src/lib.rs:wire_defs_map_every_declared_class"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-backend-jsonschema/src/lib.rs:collect_rejects_duplicate_class_names"
+          }
+        ],
+        "id": "V16",
+        "mutantKilled": null,
+        "review": "2027-05-14",
+        "status": "proved",
+        "trigger": "the next creusot-std/Creusot toolchain bump — its release notes are the trigger; move the mirror in-crate when the wire types translate"
+      },
+      {
+        "claim": "Stripped-name uniqueness within a package (issue #177): two declarations — classes or enums, in any combination — whose names strip to the same module identifier (one trailing `Type` suffix, then snake_case; `PayRun` and `PayRunType` both strip to `pay_run`), or two classes mapping to the same effective table name (declared `table \"…\"` override, else the derived default), are rejected; a pair where either class is a containment target is exempt (a contained value object shares its owner's module downstream by design), and a pair already diagnosed as E0300 is not re-diagnosed as E0301 (one rename resolves both)",
+        "evidence": [
+          {
+            "kind": "code",
+            "pointer": "crates/rex-driver/src/lower/names.rs:check_name_uniqueness"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-driver/tests/domain_names.rs"
+          },
+          {
+            "kind": "test",
+            "pointer": "crates/rex-ir/tests/class_table_name.rs"
+          },
+          {
+            "kind": "test",
+            "pointer": "tests/conformance/artifacts/name_uniqueness.rex.json"
+          }
+        ],
+        "id": "V17",
+        "mutantKilled": null,
+        "review": null,
+        "status": "tested",
+        "trigger": null
+      }
+    ],
+    "sha256": "b34cf89879f72b701da38c21141d38f82330730e2219622775f03bf04b24efd6",
+    "source": "docs/verification/register.json"
+  },
+  "sources": [
+    {
+      "path": "examples/support.actor",
+      "sha256": "b7ecc5dfbbbf59f6efa9c92fb41a2da29e3d6d9802a644e0afe73f8135a11dc4"
+    },
+    {
+      "path": "examples/support.cmmn",
+      "sha256": "db59aa68d119df84db9adaba9c3f42cc3bc011b80700b30391726a8f40e92670"
+    },
+    {
+      "path": "examples/support.ddd",
+      "sha256": "2dde61cabdfbd0c12737f5a8c12c7686f2559679eb694a2ca3c9b31bb30c1f9b"
+    },
+    {
+      "path": "examples/support.deploy",
+      "sha256": "9998af4f6e0a990d7534a9a419cdc63a0d3525e2bfa9e070c70e483906178445"
+    },
+    {
+      "path": "examples/support.dmn",
+      "sha256": "b8eb20738838450ad90ee39cdecca2bb87b87efcc04b65374bd7ce8172ac529c"
+    },
+    {
+      "path": "examples/support.evt",
+      "sha256": "772d0c8be24e835e7e9680b4fd8c4a2d84cb9ff1cd41275c9b6301e2142d3dd4"
+    },
+    {
+      "path": "examples/support.ifml",
+      "sha256": "b46b791fd8adf404bd96338c7f60238cd37e30ca73a907956b860d6734adea72"
+    },
+    {
+      "path": "examples/support.mox",
+      "sha256": "9eb97b8933b1e6bf5bfdf77a930af12fcb0e0ea8a726c233cc97d6698c28f446"
+    },
+    {
+      "path": "examples/support.uc",
+      "sha256": "ac34a7e927e0248073d7d04bc163f1a158f97b0b6e0a2f8df40353f15c9b7fcf"
+    },
+    {
+      "path": "examples/tables/refund-authority.md",
+      "sha256": "149c52782b8017c65256235c5735fe8f8289777b0615d2cbb56cc9e035ff2b8a"
+    },
+    {
+      "path": "patterns/ifml/collections.ifml",
+      "sha256": "5bebb71005eab85a1fa0ca6868b48e2f860e19cec71fc1d4fef6b6453f529904"
+    },
+    {
+      "path": "patterns/ifml/communication.ifml",
+      "sha256": "eb11d920af37ec5cd5716294cc188bace193fccabb0e2548b986e1960f1113e9"
+    },
+    {
+      "path": "patterns/ifml/data.ifml",
+      "sha256": "6123825024b8d409c950bfdb034c9c615676ba38c2a4784222da86ae24f338e2"
+    },
+    {
+      "path": "patterns/ifml/navigation.ifml",
+      "sha256": "083948d397197165c5cf939d42dcee5855a2af3b8ed359680d1df4f17c12fa4c"
+    },
+    {
+      "path": "patterns/ifml/workflow.ifml",
+      "sha256": "4e88da26fb40453988f934187dbed67c18c3b94d4946ed29374ce2ad8ae10db2"
+    }
+  ],
+  "subject": "support",
+  "trusted": [
+    {
+      "item": "add_parent",
+      "row": "V9"
+    },
+    {
+      "item": "check_invariants",
+      "row": "V8"
+    },
+    {
+      "item": "push_containment",
+      "row": "V9"
+    },
+    {
+      "item": "push_default_node",
+      "row": "V9"
+    },
+    {
+      "item": "push_reference",
+      "row": "V9"
+    },
+    {
+      "item": "set_id",
+      "row": "V10"
+    }
+  ]
+}

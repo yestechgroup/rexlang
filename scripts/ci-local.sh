@@ -15,7 +15,7 @@
 # nice, orphaned rustc/lld killed between steps. On a beefier machine you
 # can drop the nice and the job cap.
 #
-# Usage: scripts/ci-local.sh [all|build|test|clippy|fmt|docs|audit]
+# Usage: scripts/ci-local.sh [all|build|test|clippy|fmt|receipt|docs|audit]
 #        (default: all — the full sequence; ~30-60 min cold)
 set -u
 cd "$(dirname "$0")/.." || exit 1
@@ -66,13 +66,13 @@ FIXTURE_FORMAT_GLOBS=(
 )
 
 step_build() {
-  step "CI 1/5: cargo build --workspace --all-targets"
+  step "CI 1/6: cargo build --workspace --all-targets"
   nice -n 19 cargo build --workspace --all-targets && echo "BUILD-OK" || echo "BUILD-FAIL"
   kill_orphans
 }
 
 step_test() {
-  step "CI 2/5: TMPDIR=\$PWD/target/tmp cargo test --workspace --jobs 2"
+  step "CI 2/6: TMPDIR=\$PWD/target/tmp cargo test --workspace --jobs 2"
   test_log=target/tmp/ci-local-tests.log
   if nice -n 19 cargo test --workspace --jobs 2 > "$test_log" 2>&1; then
     grep "test result:" "$test_log" | tail -20
@@ -85,16 +85,38 @@ step_test() {
 }
 
 step_clippy() {
-  step "CI 3/5: clippy -D warnings"
+  step "CI 3/6: clippy -D warnings"
   nice -n 19 cargo clippy --workspace --all-targets -- -D warnings && echo "CLIPPY-OK" || echo "CLIPPY-FAIL"
   kill_orphans
 }
 
 step_fmt() {
-  step "CI 4/5: format check"
+  step "CI 4/6: format check"
   nice -n 19 cargo fmt --all -- --check && echo "RUSTFMT-OK" || echo "RUSTFMT-FAIL"
   nice -n 19 cargo run -q -p rex-cli -- fmt --check "${FIXTURE_FORMAT_GLOBS[@]}" \
     && echo "REXFMT-OK" || echo "REXFMT-FAIL"
+  kill_orphans
+}
+
+# The receipt freshness gate (issue #207): regenerate the flagship receipt
+# from the sources it names and byte-compare with the committed file. The
+# receipt is a golden — a source, artifact, or register change without
+# regeneration is red here, with the exact command to run (the same
+# regenerate-and-compare discipline as the fmt fixture gate).
+step_receipt() {
+  step "CI 5/6: receipt freshness (rexlang verify --check-fresh)"
+  if nice -n 19 cargo run -q -p rex-cli -- verify --check-fresh \
+      examples/artifacts/support.receipt.json; then
+    echo "RECEIPT-OK"
+  else
+    echo "RECEIPT-FAIL"
+    echo "Regenerate the flagship receipt (and read the diff — it is the spec):"
+    echo "  cargo run -q -p rex-cli -- verify \\"
+    echo "    examples/support.actor examples/support.cmmn examples/support.ddd \\"
+    echo "    examples/support.deploy examples/support.dmn examples/support.evt \\"
+    echo "    examples/support.ifml examples/support.mox examples/support.uc \\"
+    echo "    -o examples/artifacts/support.receipt.json"
+  fi
   kill_orphans
 }
 
@@ -102,7 +124,7 @@ step_docs() {
   # The strict rustdoc gate: broken intra-doc links are warnings by
   # default; -D warnings makes them errors (issue #175). cargo doc runs no
   # doctests, but it inherits the script's TMPDIR export like every step.
-  step "CI 5/5: RUSTDOCFLAGS=-D warnings cargo doc --workspace --no-deps"
+  step "CI 6/6: RUSTDOCFLAGS=-D warnings cargo doc --workspace --no-deps"
   nice -n 19 env RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps \
     && echo "DOC-OK" || echo "DOC-FAIL"
   kill_orphans
@@ -122,18 +144,20 @@ case "${1:-all}" in
   test)   step_test ;;
   clippy) step_clippy ;;
   fmt)    step_fmt ;;
+  receipt) step_receipt ;;
   docs)   step_docs ;;
   all)
     step_build
     step_test
     step_clippy
     step_fmt
+    step_receipt
     step_docs
     echo
-    echo "ALL FIVE STEPS MUST END IN *-OK BEFORE PUSHING."
+    echo "ALL SIX STEPS MUST END IN *-OK BEFORE PUSHING."
     ;;
   *)
-    echo "usage: scripts/ci-local.sh [all|build|test|clippy|fmt|docs|audit]" >&2
+    echo "usage: scripts/ci-local.sh [all|build|test|clippy|fmt|receipt|docs|audit]" >&2
     exit 2
     ;;
 esac

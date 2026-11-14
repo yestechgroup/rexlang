@@ -3,7 +3,7 @@ name = "rex-evidence"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "The proof-obligation register's data model: parse, validate, and render docs/verification/register.json"
+description = "The proof-obligation register's data model and the verification receipts that report it: parse, validate, and render docs/verification/register.json"
 repository.workspace = true
 
 [lints]
@@ -12,3 +12,4 @@ workspace = true
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
