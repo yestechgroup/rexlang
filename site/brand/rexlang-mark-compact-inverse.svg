@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Rexlang">
+  <title>Rexlang</title>
+  <g stroke="#F5F4F0" stroke-width="7" stroke-linecap="butt">
+    <line x1="6" y1="6" x2="58" y2="58"/>
+    <line x1="58" y1="6" x2="6" y2="58"/>
+  </g>
+  <path d="M32 19 L45 32 L32 45 L19 32 Z" fill="#C4F56A"/>
+</svg>
