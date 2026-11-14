@@ -8,14 +8,15 @@
 use super::*;
 
 use serde_json::json;
+use std::str::FromStr;
 use tower::{Service, ServiceExt};
-use tower_lsp::jsonrpc;
-use tower_lsp::LspService;
+use tower_lsp_server::jsonrpc;
+use tower_lsp_server::LspService;
 
 // --- `.ifml` surface -------------------------------------------------------
 
-fn ifml_uri(name: &str) -> Url {
-    Url::parse(&format!("file:///workspace/{name}")).unwrap()
+fn ifml_uri(name: &str) -> Uri {
+    Uri::from_str(&format!("file:///workspace/{name}")).unwrap()
 }
 
 const SHOP_MOX: &str = r#"package shop
@@ -184,7 +185,7 @@ const UNKNOWN_ACTION_IFML: &str = r#"view "Home" {
 /// `code_actions_at` for an arbitrary (`.ifml`) document URI.
 async fn ifml_code_actions_at(
     service: &mut LspService<RexBackend>,
-    uri: &Url,
+    uri: &Uri,
     diagnostics: Vec<Diagnostic>,
     range: Range,
 ) -> Vec<CodeAction> {
@@ -578,7 +579,7 @@ module "Pager" {
     let names: Vec<&str> = symbols.iter().map(|symbol| symbol.name.as_str()).collect();
     assert_eq!(names, vec!["Catalogue", "Pager"], "roots in source order");
     let view = &symbols[0];
-    assert_eq!(view.kind, tower_lsp::lsp_types::SymbolKind::CLASS);
+    assert_eq!(view.kind, tower_lsp_server::ls_types::SymbolKind::CLASS);
     let children = view
         .children
         .as_ref()
@@ -586,7 +587,10 @@ module "Pager" {
     assert_eq!(children.len(), 1);
     assert_eq!(children[0].name, "pager");
     assert_eq!(children[0].detail.as_deref(), Some("use \"Pager\""));
-    assert_eq!(symbols[1].kind, tower_lsp::lsp_types::SymbolKind::MODULE);
+    assert_eq!(
+        symbols[1].kind,
+        tower_lsp_server::ls_types::SymbolKind::MODULE
+    );
 }
 
 #[tokio::test]
@@ -636,7 +640,7 @@ module "Pager" {
     let names: Vec<&str> = symbols.iter().map(|symbol| symbol.name.as_str()).collect();
     assert_eq!(names, vec!["customers", "Pager"], "roots in source order");
     let command = &symbols[0];
-    assert_eq!(command.kind, tower_lsp::lsp_types::SymbolKind::METHOD);
+    assert_eq!(command.kind, tower_lsp_server::ls_types::SymbolKind::METHOD);
     assert_eq!(command.detail.as_deref(), Some("command"));
     let children = command
         .children
@@ -658,7 +662,10 @@ module "Pager" {
         "the nested subcommand carries no uses"
     );
     assert_eq!(symbols[1].name, "Pager");
-    assert_eq!(symbols[1].kind, tower_lsp::lsp_types::SymbolKind::MODULE);
+    assert_eq!(
+        symbols[1].kind,
+        tower_lsp_server::ls_types::SymbolKind::MODULE
+    );
 }
 
 #[tokio::test]
@@ -911,7 +918,7 @@ async fn mox_with_import_schema_compiles_clean_against_disk() {
 }"#,
     )
     .expect("write schema");
-    let model_uri = Url::from_file_path(dir.join("model.mox")).expect("file uri");
+    let model_uri = Uri::from_file_path(dir.join("model.mox")).expect("file uri");
     let (mut service, mut socket) = initialized_service().await;
     open_at(
         &mut service,
@@ -1034,7 +1041,7 @@ view "Catalogue" {
 /// Runs completion and returns the item labels.
 async fn ifml_completion_labels(
     service: &mut LspService<RexBackend>,
-    uri: &Url,
+    uri: &Uri,
     line: u32,
     character: u32,
 ) -> Vec<String> {

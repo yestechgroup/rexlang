@@ -5,7 +5,7 @@
 use crate::position::PositionMap;
 use rex_driver::navigation::{DefId, FeatureSymbolKind, SymbolKind};
 use rex_driver::NavigationIndex;
-use tower_lsp::lsp_types::*;
+use tower_lsp_server::ls_types::*;
 
 /// `true` for valid rexlang identifiers: letters, digits, underscores, with
 /// a non-digit start.
@@ -19,19 +19,19 @@ pub(super) fn is_identifier(name: &str) -> bool {
 /// datatypes to OBJECT, vocabularies to PACKAGE, plain features to FIELD,
 /// operations to METHOD, derived features to PROPERTY, literals to
 /// ENUM_MEMBER.
-pub(super) fn lsp_symbol_kind(kind: SymbolKind) -> tower_lsp::lsp_types::SymbolKind {
+pub(super) fn lsp_symbol_kind(kind: SymbolKind) -> tower_lsp_server::ls_types::SymbolKind {
     match kind {
-        SymbolKind::Class => tower_lsp::lsp_types::SymbolKind::CLASS,
-        SymbolKind::Interface => tower_lsp::lsp_types::SymbolKind::INTERFACE,
-        SymbolKind::Enum => tower_lsp::lsp_types::SymbolKind::ENUM,
-        SymbolKind::Datatype => tower_lsp::lsp_types::SymbolKind::OBJECT,
-        SymbolKind::Vocabulary => tower_lsp::lsp_types::SymbolKind::PACKAGE,
-        SymbolKind::Actors => tower_lsp::lsp_types::SymbolKind::NAMESPACE,
-        SymbolKind::EnumLiteral => tower_lsp::lsp_types::SymbolKind::ENUM_MEMBER,
+        SymbolKind::Class => tower_lsp_server::ls_types::SymbolKind::CLASS,
+        SymbolKind::Interface => tower_lsp_server::ls_types::SymbolKind::INTERFACE,
+        SymbolKind::Enum => tower_lsp_server::ls_types::SymbolKind::ENUM,
+        SymbolKind::Datatype => tower_lsp_server::ls_types::SymbolKind::OBJECT,
+        SymbolKind::Vocabulary => tower_lsp_server::ls_types::SymbolKind::PACKAGE,
+        SymbolKind::Actors => tower_lsp_server::ls_types::SymbolKind::NAMESPACE,
+        SymbolKind::EnumLiteral => tower_lsp_server::ls_types::SymbolKind::ENUM_MEMBER,
         SymbolKind::Feature(feature_kind) => match feature_kind {
-            FeatureSymbolKind::Operation => tower_lsp::lsp_types::SymbolKind::METHOD,
-            FeatureSymbolKind::Derived => tower_lsp::lsp_types::SymbolKind::PROPERTY,
-            _ => tower_lsp::lsp_types::SymbolKind::FIELD,
+            FeatureSymbolKind::Operation => tower_lsp_server::ls_types::SymbolKind::METHOD,
+            FeatureSymbolKind::Derived => tower_lsp_server::ls_types::SymbolKind::PROPERTY,
+            _ => tower_lsp_server::ls_types::SymbolKind::FIELD,
         },
     }
 }
@@ -89,7 +89,7 @@ struct UnknownCapabilityPayload {
 /// the `contains`/`refers` rewrites; `unknownCapability` (rexlang#128)
 /// offers the rename to the suggested declared capability when one exists.
 pub(super) fn quick_fix_actions(
-    uri: &Url,
+    uri: &Uri,
     map: &PositionMap,
     diagnostic: &Diagnostic,
 ) -> Vec<CodeAction> {
@@ -106,7 +106,7 @@ pub(super) fn quick_fix_actions(
 /// The `attributeWithClassType` fixes: change the class-typed attribute
 /// into a `contains` or a `refers`. The edit lands at the byte offset
 /// carried in the diagnostic's `data.typeSpan`, mapped through `map`.
-fn contains_refers_fixes(uri: &Url, map: &PositionMap, diagnostic: &Diagnostic) -> Vec<CodeAction> {
+fn contains_refers_fixes(uri: &Uri, map: &PositionMap, diagnostic: &Diagnostic) -> Vec<CodeAction> {
     let Some(data) = &diagnostic.data else {
         return vec![];
     };
@@ -153,7 +153,7 @@ fn contains_refers_fixes(uri: &Url, map: &PositionMap, diagnostic: &Diagnostic) 
 /// The `unknownCapability` fix: rename the reference to the suggested
 /// declared capability (rexlang#128). No suggestion — no fix; the edit
 /// covers exactly the span the diagnostic carries.
-fn rename_fix(uri: &Url, map: &PositionMap, diagnostic: &Diagnostic) -> Vec<CodeAction> {
+fn rename_fix(uri: &Uri, map: &PositionMap, diagnostic: &Diagnostic) -> Vec<CodeAction> {
     let Some(data) = &diagnostic.data else {
         return vec![];
     };

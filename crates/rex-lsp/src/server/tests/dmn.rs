@@ -8,8 +8,9 @@
 use super::*;
 
 use serde_json::json;
+use std::str::FromStr;
 use tower::{Service, ServiceExt};
-use tower_lsp::jsonrpc;
+use tower_lsp_server::jsonrpc;
 
 // --- the `.dmn` publish + formatting arm (rexlang#151) -----------------------
 //
@@ -27,8 +28,8 @@ fn scratch_dir(tag: &str) -> std::path::PathBuf {
     dir
 }
 
-fn url_for(path: &std::path::Path) -> Url {
-    Url::from_file_path(path).unwrap()
+fn url_for(path: &std::path::Path) -> Uri {
+    Uri::from_file_path(path).unwrap()
 }
 
 /// A standalone decision model whose one decision carries an external
@@ -155,7 +156,7 @@ async fn dmn_open_publishes_unknown_types_from_the_imported_domain() {
 #[tokio::test]
 async fn dmn_formatting_returns_the_canonical_text() {
     let (mut service, mut socket) = initialized_service().await;
-    let uri = Url::parse("file:///workspace/draft.dmn").unwrap();
+    let uri = Uri::from_str("file:///workspace/draft.dmn").unwrap();
     open_at(&mut service, &uri, SCRAMBLED_DMN).await;
     let _ = next_publish(&mut socket, &uri).await;
 
@@ -188,7 +189,7 @@ async fn dmn_formatting_returns_the_canonical_text() {
 #[tokio::test]
 async fn dmn_formatting_a_canonical_document_is_a_no_op() {
     let (mut service, mut socket) = initialized_service().await;
-    let uri = Url::parse("file:///workspace/draft.dmn").unwrap();
+    let uri = Uri::from_str("file:///workspace/draft.dmn").unwrap();
     open_at(&mut service, &uri, CANONICAL_DMN).await;
     let _ = next_publish(&mut socket, &uri).await;
 

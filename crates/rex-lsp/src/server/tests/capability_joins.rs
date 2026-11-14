@@ -9,7 +9,7 @@ use super::*;
 
 use serde_json::json;
 use tower::{Service, ServiceExt};
-use tower_lsp::jsonrpc;
+use tower_lsp_server::jsonrpc;
 
 // --- compile-time capability joins (rexlang#128) -----------------------------
 
@@ -23,8 +23,8 @@ fn scratch_dir(tag: &str) -> std::path::PathBuf {
     dir
 }
 
-fn url_for(path: &std::path::Path) -> Url {
-    Url::from_file_path(path).unwrap()
+fn url_for(path: &std::path::Path) -> Uri {
+    Uri::from_file_path(path).unwrap()
 }
 
 /// The design surface: one operation carrying a capability.

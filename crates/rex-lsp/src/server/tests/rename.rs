@@ -9,8 +9,8 @@ use super::*;
 
 use serde_json::json;
 use tower::Service;
-use tower_lsp::jsonrpc;
-use tower_lsp::LspService;
+use tower_lsp_server::jsonrpc;
+use tower_lsp_server::LspService;
 
 // --- rename ----------------------------------------------------------------
 

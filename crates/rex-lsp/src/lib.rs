@@ -6,7 +6,7 @@ pub mod server;
 
 pub use server::RexBackend;
 
-use tower_lsp::{LspService, Server};
+use tower_lsp_server::{LspService, Server};
 
 /// Serves the rexlang language server over stdin/stdout, using the
 /// `Content-Length` framing required by the LSP. Blocks until the client

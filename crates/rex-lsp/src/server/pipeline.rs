@@ -6,7 +6,7 @@
 //! through.
 
 use rex_driver::NavigationIndex;
-use tower_lsp::lsp_types::*;
+use tower_lsp_server::ls_types::*;
 
 use super::{RexBackend, Surface, SOURCE_NAME};
 use crate::position::PositionMap;
@@ -62,7 +62,7 @@ impl RexBackend {
     /// re-publishes every open `.ifml` document that imports it — an edit
     /// to an imported file must refresh its consumers or their diagnostics
     /// go stale.
-    pub(super) async fn publish(&self, uri: &Url, version: Option<i32>) {
+    pub(super) async fn publish(&self, uri: &Uri, version: Option<i32>) {
         self.publish_document(uri, version).await;
         for dependent in self.dependents_of(uri) {
             self.publish_document(&dependent, None).await;
@@ -70,7 +70,7 @@ impl RexBackend {
     }
 
     /// Recompiles one document and publishes its diagnostics.
-    pub(super) async fn publish_document(&self, uri: &Url, version: Option<i32>) {
+    pub(super) async fn publish_document(&self, uri: &Uri, version: Option<i32>) {
         let snapshot = {
             let documents = self.documents.lock().unwrap();
             documents
@@ -92,7 +92,6 @@ impl RexBackend {
                 // key by URI; imports resolve relative to the file on disk.
                 let imports = uri
                     .to_file_path()
-                    .ok()
                     .and_then(|path| {
                         rex_driver::workspace_imports::collect_for_source(
                             uri.as_str(),
@@ -128,7 +127,7 @@ impl RexBackend {
                 let driver_path = uri
                     .to_file_path()
                     .map(|path| path.display().to_string())
-                    .unwrap_or_else(|_| uri.as_str().to_string());
+                    .unwrap_or_else(|| uri.as_str().to_string());
                 let (domains, imports) = self.domain_sources_for_ddd(uri, &text);
                 // rexlang#128 (J3 at compile time): the capability clauses
                 // resolve against every `.actor` artifact of the open
@@ -156,7 +155,7 @@ impl RexBackend {
                 let driver_path = uri
                     .to_file_path()
                     .map(|path| path.display().to_string())
-                    .unwrap_or_else(|_| uri.as_str().to_string());
+                    .unwrap_or_else(|| uri.as_str().to_string());
                 let (domains, imports) = self.actor_sources_for(uri, &text);
                 // rexlang#128 (J4 at compile time): grant coverage resolves
                 // against every `.ddd` artifact of the open policy's
@@ -186,7 +185,7 @@ impl RexBackend {
                 let driver_path = uri
                     .to_file_path()
                     .map(|path| path.display().to_string())
-                    .unwrap_or_else(|_| uri.as_str().to_string());
+                    .unwrap_or_else(|| uri.as_str().to_string());
                 let sources = self.dmn_sources_for(uri, &text);
                 rex_driver::compile_dmn_str(
                     &driver_path,
@@ -219,7 +218,7 @@ impl RexBackend {
     /// file is opened).
     pub(super) fn compile_ifml(
         &self,
-        uri: &Url,
+        uri: &Uri,
         text: &str,
     ) -> (Option<IfmlSnapshot>, Vec<rex_ifml::IfmlDiagnostic>) {
         let closure = self.import_closure(uri, text);
@@ -239,14 +238,14 @@ impl RexBackend {
         diagnostics.extend(binding);
         // Resolved URI per indexed file (same order as `index.files`), so
         // cross-file navigation can produce `Location`s. Unresolved
-        // identities fall back to their as-written path, which `Url::join`
+        // identities fall back to their as-written path, which `Uri::join`
         // can still resolve relative to the importer.
         let mut file_urls = Vec::with_capacity(compilation.index.files.len());
         for file in &compilation.index.files {
             let url = closure
                 .disk_paths
                 .get(&file.path)
-                .and_then(|path| Url::from_file_path(path).ok())
+                .and_then(Uri::from_file_path)
                 .map(|url| url.to_string())
                 .unwrap_or_else(|| file.path.clone());
             file_urls.push(url);
@@ -272,11 +271,11 @@ impl RexBackend {
     /// import as a diagnostic.
     pub(super) fn domain_sources_for_ddd(
         &self,
-        uri: &Url,
+        uri: &Uri,
         text: &str,
     ) -> (Vec<(String, String)>, rex_driver::DomainImports) {
         let mut domains: Vec<(String, String)> = Vec::new();
-        if let Ok(path) = uri.to_file_path() {
+        if let Some(path) = uri.to_file_path() {
             let path_key = path.display().to_string();
             let mut fetch =
                 |resolved: &str| -> Option<String> { self.fetch_open_or_disk(resolved) };
@@ -300,11 +299,11 @@ impl RexBackend {
     /// win over disk), plus the import bundle its compile resolves against.
     pub(super) fn actor_sources_for(
         &self,
-        uri: &Url,
+        uri: &Uri,
         text: &str,
     ) -> (Vec<(String, String)>, rex_driver::DomainImports) {
         let mut domains: Vec<(String, String)> = Vec::new();
-        if let Ok(path) = uri.to_file_path() {
+        if let Some(path) = uri.to_file_path() {
             let path_key = path.display().to_string();
             let mut fetch =
                 |resolved: &str| -> Option<String> { self.fetch_open_or_disk(resolved) };
@@ -335,11 +334,11 @@ impl RexBackend {
     /// names the written path. A contract that cannot be read or compile
     /// contributes nothing: the driver's unprovided-import diagnostic
     /// (rule 1) names it — the editor degrades gracefully.
-    pub(super) fn dmn_sources_for(&self, uri: &Url, text: &str) -> DmnSources {
+    pub(super) fn dmn_sources_for(&self, uri: &Uri, text: &str) -> DmnSources {
         let mut domains: Vec<(String, String)> = Vec::new();
         let mut tables: Vec<(String, String)> = Vec::new();
         let mut events: Vec<(String, rex_ir::events::EventModel)> = Vec::new();
-        if let Ok(path) = uri.to_file_path() {
+        if let Some(path) = uri.to_file_path() {
             let path_key = path.display().to_string();
             let mut fetch =
                 |resolved: &str| -> Option<String> { self.fetch_open_or_disk(resolved) };
@@ -378,7 +377,7 @@ impl RexBackend {
                 if document.surface != Surface::Mox {
                     return None;
                 }
-                let open_path = open_uri.to_file_path().ok()?;
+                let open_path = open_uri.to_file_path()?;
                 (open_path == resolved).then(|| document.text.clone())
             })
         };
@@ -416,7 +415,7 @@ impl RexBackend {
                 let open = {
                     let documents = self.documents.lock().unwrap();
                     documents.iter().find_map(|(open_uri, document)| {
-                        let open_path = open_uri.to_file_path().ok()?;
+                        let open_path = open_uri.to_file_path()?;
                         (open_path == path).then(|| document.text.clone())
                     })
                 };
@@ -431,8 +430,8 @@ impl RexBackend {
     /// against at compile time (rexlang#128's J3). A sibling that fails to
     /// compile contributes nothing — its own open editor shows its
     /// diagnostics.
-    fn sibling_actor_models(&self, except: &Url) -> Vec<rex_ir::ActorModel> {
-        let Ok(path) = except.to_file_path() else {
+    fn sibling_actor_models(&self, except: &Uri) -> Vec<rex_ir::ActorModel> {
+        let Some(path) = except.to_file_path() else {
             return Vec::new();
         };
         let mut models = Vec::new();
@@ -470,8 +469,8 @@ impl RexBackend {
     /// against at compile time (rexlang#128's J4). Gathered exactly like
     /// [`RexBackend::sibling_actor_models`]; a sibling that fails to
     /// compile contributes nothing.
-    fn sibling_design_models(&self, except: &Url) -> Vec<rex_ir::ddd::DddModel> {
-        let Ok(path) = except.to_file_path() else {
+    fn sibling_design_models(&self, except: &Uri) -> Vec<rex_ir::ddd::DddModel> {
+        let Some(path) = except.to_file_path() else {
             return Vec::new();
         };
         let mut models = Vec::new();
@@ -509,8 +508,8 @@ impl RexBackend {
     /// and the sibling drops out. The sibling's imported `.evt` contracts
     /// gather the same way (rule 14's bucket), so a model with `emits`
     /// still compiles into the pool.
-    fn sibling_decision_models(&self, except: &Url) -> Vec<(String, rex_ir::dmn::DmnModel)> {
-        let Ok(path) = except.to_file_path() else {
+    fn sibling_decision_models(&self, except: &Uri) -> Vec<(String, rex_ir::dmn::DmnModel)> {
+        let Some(path) = except.to_file_path() else {
             return Vec::new();
         };
         let mut models = Vec::new();
@@ -565,11 +564,13 @@ impl RexBackend {
     /// decision dimensions (an empty actors or decisions slice skips the
     /// pass) — the editor must stay usable in incomplete workspaces; the
     /// CLI's hard error is the authoring gate.
-    pub(super) fn import_closure(&self, uri: &Url, text: &str) -> IfmlImportClosure {
+    pub(super) fn import_closure(&self, uri: &Uri, text: &str) -> IfmlImportClosure {
         let main_path = uri.to_string();
         let mut closure = IfmlImportClosure::default();
-        if let Ok(path) = uri.to_file_path() {
-            closure.disk_paths.insert(main_path.clone(), path);
+        if let Some(path) = uri.to_file_path() {
+            closure
+                .disk_paths
+                .insert(main_path.clone(), path.into_owned());
         }
         let dir_of = |path: &std::path::Path| -> std::path::PathBuf {
             path.parent()
@@ -582,16 +583,16 @@ impl RexBackend {
             let importer_disk = closure.disk_paths.get(importer)?;
             let resolved = dir_of(importer_disk).join(import);
             let fetched = (|| {
-                if let Ok(url) = Url::from_file_path(&resolved) {
+                if let Some(url) = Uri::from_file_path(&resolved) {
                     if let Some(document) = documents.get(&url) {
                         return Some(document.text.clone());
                     }
                 }
                 std::fs::read_to_string(&resolved).ok()
             })()?;
-            let url = Url::from_file_path(&resolved)
+            let url = Uri::from_file_path(&resolved)
                 .map(|url| url.to_string())
-                .unwrap_or_else(|_| resolved.display().to_string());
+                .unwrap_or_else(|| resolved.display().to_string());
             closure.import_urls.push(url);
             let key = resolved.display().to_string();
             // Both identities must resolve (the walker contract's host
@@ -627,11 +628,11 @@ impl RexBackend {
     /// Open `.ifml` documents whose import closure contains `changed` —
     /// the reverse-dependency set that must be re-published when `changed`
     /// moves, or their diagnostics go stale.
-    pub(super) fn dependents_of(&self, changed: &Url) -> Vec<Url> {
+    pub(super) fn dependents_of(&self, changed: &Uri) -> Vec<Uri> {
         let changed_key = changed.to_string();
         // Snapshot the open `.ifml` documents and drop the lock before
         // walking: `import_closure` takes the same lock.
-        let candidates: Vec<(Url, String)> = {
+        let candidates: Vec<(Uri, String)> = {
             let documents = self.documents.lock().unwrap();
             documents
                 .iter()
@@ -650,7 +651,7 @@ impl RexBackend {
     }
 
     /// Whether `uri` is an open `.ifml` document.
-    pub(super) fn open_ifml_document(&self, uri: &Url) -> bool {
+    pub(super) fn open_ifml_document(&self, uri: &Uri) -> bool {
         self.documents
             .lock()
             .unwrap()
@@ -663,7 +664,7 @@ impl RexBackend {
     /// its dependents, which the focused document's import closure never
     /// sees.
     pub(super) fn open_ifml_snapshots(&self) -> Vec<IfmlSnapshot> {
-        let docs: Vec<(Url, String)> = {
+        let docs: Vec<(Uri, String)> = {
             let documents = self.documents.lock().unwrap();
             documents
                 .iter()
@@ -681,7 +682,7 @@ impl RexBackend {
     /// request, consistent with [`Self::with_navigation`].
     pub(super) fn with_ifml<T>(
         &self,
-        uri: &Url,
+        uri: &Uri,
         f: impl FnOnce(&IfmlSnapshot) -> Option<T>,
     ) -> Option<T> {
         let snapshot = {
@@ -703,7 +704,7 @@ impl RexBackend {
     /// offset/position conversion) and the index.
     pub(super) fn with_navigation<T>(
         &self,
-        uri: &Url,
+        uri: &Uri,
         f: impl FnOnce(&PositionMap, &NavigationIndex) -> Option<T>,
     ) -> Option<T> {
         let documents = self.documents.lock().unwrap();

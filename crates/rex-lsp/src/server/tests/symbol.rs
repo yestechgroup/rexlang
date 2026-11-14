@@ -9,9 +9,9 @@ use super::*;
 
 use serde_json::json;
 use tower::Service;
-use tower_lsp::jsonrpc;
-use tower_lsp::lsp_types::SymbolKind as LspSymbolKind;
-use tower_lsp::LspService;
+use tower_lsp_server::jsonrpc;
+use tower_lsp_server::ls_types::SymbolKind as LspSymbolKind;
+use tower_lsp_server::LspService;
 
 // --- document symbol ------------------------------------------------------
 

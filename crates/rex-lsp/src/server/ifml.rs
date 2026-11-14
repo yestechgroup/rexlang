@@ -4,7 +4,9 @@
 //! resolved imports), with references/rename matching by name across
 //! every open snapshot.
 
-use tower_lsp::lsp_types::*;
+use std::str::FromStr;
+
+use tower_lsp_server::ls_types::*;
 
 use super::pipeline::IfmlSnapshot;
 use crate::position::PositionMap;
@@ -29,7 +31,7 @@ pub(super) fn ifml_document_symbols(snapshot: &IfmlSnapshot) -> Option<DocumentS
                     None => use_site.target.clone(),
                 },
                 detail: Some(format!("use \"{}\"", use_site.target)),
-                kind: tower_lsp::lsp_types::SymbolKind::PACKAGE,
+                kind: tower_lsp_server::ls_types::SymbolKind::PACKAGE,
                 tags: None,
                 deprecated: None,
                 range: map_range(map.clone(), use_site.span),
@@ -47,15 +49,15 @@ pub(super) fn ifml_document_symbols(snapshot: &IfmlSnapshot) -> Option<DocumentS
         .filter(|site| site.file == 0)
     {
         let (kind, detail) = if index.views.iter().any(|view| std::ptr::eq(view, site)) {
-            (tower_lsp::lsp_types::SymbolKind::CLASS, None)
+            (tower_lsp_server::ls_types::SymbolKind::CLASS, None)
         } else if index
             .actions
             .iter()
             .any(|action| std::ptr::eq(action, site))
         {
-            (tower_lsp::lsp_types::SymbolKind::FUNCTION, None)
+            (tower_lsp_server::ls_types::SymbolKind::FUNCTION, None)
         } else {
-            (tower_lsp::lsp_types::SymbolKind::OBJECT, None)
+            (tower_lsp_server::ls_types::SymbolKind::OBJECT, None)
         };
         roots.push(DocumentSymbol {
             name: site.name.clone(),
@@ -90,7 +92,7 @@ pub(super) fn ifml_document_symbols(snapshot: &IfmlSnapshot) -> Option<DocumentS
         roots.push(DocumentSymbol {
             name: site.name.clone(),
             detail: Some("module".to_string()),
-            kind: tower_lsp::lsp_types::SymbolKind::MODULE,
+            kind: tower_lsp_server::ls_types::SymbolKind::MODULE,
             tags: None,
             deprecated: None,
             range: map_range(map.clone(), site.span),
@@ -136,7 +138,7 @@ pub(super) fn command_outline_symbol(
     DocumentSymbol {
         name: site.name.clone(),
         detail: Some("command".to_string()),
-        kind: tower_lsp::lsp_types::SymbolKind::METHOD,
+        kind: tower_lsp_server::ls_types::SymbolKind::METHOD,
         tags: None,
         deprecated: None,
         range: map_range(map.clone(), site.span),
@@ -370,7 +372,7 @@ pub(super) fn contains(span: (usize, usize), offset: usize) -> bool {
 /// bare reference would have nothing to bind).
 pub(super) fn ifml_quick_fix_actions(
     snapshot: &IfmlSnapshot,
-    uri: &Url,
+    uri: &Uri,
     diagnostic: &Diagnostic,
 ) -> Vec<CodeAction> {
     let Some(NumberOrString::String(code)) = &diagnostic.code else {
@@ -647,8 +649,8 @@ pub(super) fn location_of(snapshot: &IfmlSnapshot, file: usize, span: (usize, us
     let uri = snapshot
         .file_urls
         .get(file)
-        .and_then(|url| url.parse::<Url>().ok())
-        .unwrap_or_else(|| Url::parse("file:///unknown.ifml").expect("static uri"));
+        .and_then(|url| url.parse::<Uri>().ok())
+        .unwrap_or_else(|| Uri::from_str("file:///unknown.ifml").expect("static uri"));
     Location {
         uri,
         range: map_range(PositionMap::new(text), span),
@@ -683,7 +685,7 @@ pub(super) fn ifml_prepare_rename(
 pub(super) fn ifml_rename(
     focused: &IfmlSnapshot,
     snapshots: &[IfmlSnapshot],
-    uri: Url,
+    uri: Uri,
     position: Position,
     new_name: &str,
 ) -> Option<WorkspaceEdit> {
@@ -691,7 +693,7 @@ pub(super) fn ifml_rename(
         return None;
     }
     let (kind, name, decl) = ifml_target_at(focused, position)?;
-    let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
+    let mut changes: std::collections::HashMap<Uri, Vec<TextEdit>> =
         std::collections::HashMap::new();
     let mut push_edit = |snapshot: &IfmlSnapshot, file: usize, span: (usize, usize)| {
         let text = &snapshot.compilation.index.files[file].text;
@@ -699,7 +701,7 @@ pub(super) fn ifml_rename(
         let target_uri = snapshot
             .file_urls
             .get(file)
-            .and_then(|url| url.parse::<Url>().ok())
+            .and_then(|url| url.parse::<Uri>().ok())
             .unwrap_or_else(|| uri.clone());
         changes.entry(target_uri).or_default().push(TextEdit {
             range: map_range(map, span),
@@ -726,7 +728,7 @@ pub(super) fn ifml_rename(
 /// open documents.
 pub(super) fn focused_snapshot<'a>(
     snapshots: &'a [IfmlSnapshot],
-    uri: &Url,
+    uri: &Uri,
 ) -> Option<&'a IfmlSnapshot> {
     snapshots.iter().find(|snapshot| {
         snapshot
@@ -736,7 +738,7 @@ pub(super) fn focused_snapshot<'a>(
             .first()
             .is_some_and(|file| {
                 file.path == uri.as_str()
-                    || Url::from_file_path(&file.path)
+                    || Uri::from_file_path(&file.path)
                         .map(|parsed| parsed == *uri)
                         .unwrap_or(false)
             })
@@ -772,7 +774,7 @@ pub(super) fn module_markdown(site: &rex_ifml::ModuleDeclSite) -> String {
 /// URIs.
 pub(super) fn ifml_goto_definition(
     snapshot: &IfmlSnapshot,
-    uri: Url,
+    uri: Uri,
     position: Position,
 ) -> Option<GotoDefinitionResponse> {
     let index = &snapshot.compilation.index;
@@ -785,7 +787,7 @@ pub(super) fn ifml_goto_definition(
     let target_url = snapshot
         .file_urls
         .get(decl.file)
-        .and_then(|url| url.parse::<Url>().ok())
+        .and_then(|url| url.parse::<Uri>().ok())
         .unwrap_or(uri);
     Some(GotoDefinitionResponse::Scalar(Location {
         uri: target_url,
