@@ -459,9 +459,10 @@ fn validate_obligation(
 
 /// `true` when `s` is a real calendar date in ISO `YYYY-MM-DD` form.
 /// Hand-rolled (this crate is dependency-light): real month lengths, real
-/// leap years.
+/// leap years. Shared with [`crate::receipt`], whose rows carry the same
+/// review-schedule dates.
 #[must_use]
-fn is_iso_date(s: &str) -> bool {
+pub(crate) fn is_iso_date(s: &str) -> bool {
     let bytes = s.as_bytes();
     if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
         return false;
@@ -495,9 +496,10 @@ fn is_iso_date(s: &str) -> bool {
 
 /// Splits a pointer into `(path, Option<symbol>)` per the grammar
 /// `path(:symbol)?` — path characters `A-Za-z0-9_./\-`, symbol characters
-/// `A-Za-z0-9_`. `None` when the pointer is malformed.
+/// `A-Za-z0-9_`. `None` when the pointer is malformed. Shared with
+/// [`crate::receipt`], which carries the pointers verbatim.
 #[must_use]
-fn split_pointer(pointer: &str) -> Option<(&str, Option<&str>)> {
+pub(crate) fn split_pointer(pointer: &str) -> Option<(&str, Option<&str>)> {
     let valid_path = |p: &str| {
         !p.is_empty()
             && p.chars()
