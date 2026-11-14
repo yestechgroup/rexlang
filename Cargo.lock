@@ -2835,6 +2835,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rex-evidence"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rex-expr"
 version = "0.2.0"
 dependencies = [
@@ -2924,6 +2932,7 @@ version = "0.2.0"
 dependencies = [
  "creusot-std",
  "proptest",
+ "rex-evidence",
 ]
 
 [[package]]
