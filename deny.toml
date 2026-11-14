@@ -1,0 +1,60 @@
+# cargo-deny configuration — CI gate (WI-5 of v0.2, issue #173).
+# Local check: `cargo deny check` (or `scripts/ci-local.sh audit` once CI
+# parity lands in #121).
+
+[advisories]
+version = 2
+# The advisory DB is fetched fresh in CI; this gate must stay at zero.
+yanked = "deny"
+
+[licenses]
+version = 2
+allow = [
+    # The workspace license.
+    "Apache-2.0",
+    # The usual permissive set.
+    "MIT",
+    "MIT-0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "BSL-1.0",
+    "CC0-1.0",
+    "MPL-2.0",
+    "OpenSSL",
+    "CDLA-Permissive-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Apache-2.0 WITH LLVM-exception",
+]
+
+# The Creusot proof stdlib behind rex-verify (AGENTS.md: contracts compile
+# away on stable). Weak copyleft, but it annotates proofs for an
+# Apache-2.0 workspace and never ships in consumers' links of rexlang —
+# scoped to these two crates rather than blanket-allowing LGPL.
+[[licenses.exceptions]]
+allow = ["LGPL-2.1-or-later"]
+name = "creusot-std"
+[[licenses.exceptions]]
+allow = ["LGPL-2.1-or-later"]
+name = "creusot-std-proc"
+
+[bans]
+# The chumsky/logos duplicate-stack dedup is a separate spike (#173 Phase 1);
+# do not fail CI over it.
+multiple-versions = "warn"
+# The workspace's own crates depend on each other via `{ workspace = true }`
+# (and the rev-pinned git toolchains carry no version req) — no version
+# string is the intended shape, not a hygiene problem.
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = [
+    "https://github.com/yestechgroup/sigil.git",
+    "https://github.com/yestechgroup/restingstate.git",
+    "https://github.com/yestechgroup/dsntk-rs.git",
+]
