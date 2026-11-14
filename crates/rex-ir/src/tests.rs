@@ -4,6 +4,12 @@ use super::*;
 
 const PKG: &str = "nz.example.library";
 
+/// The provenance version `Model::new()` stamps — derived, not pinned, so
+/// a workspace version bump edits the manifest, not these expected
+/// serializations. The `rexVersion` literals below carry a `0.1.0`
+/// placeholder that every site replaces with this.
+const REX_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 fn class_ref(name: &str) -> TypeRef {
     TypeRef::Class {
         package: PKG.to_string(),
@@ -147,7 +153,9 @@ fn library_model() -> Model {
 #[test]
 fn model_wire_contract_holds_through_the_shared_helper() {
     crate::wire::tests::assert_wire_contract(
-        r#"{"formatVersion":1,"rexVersion":"0.1.0","packages":[]}"#,
+        r#"{"formatVersion":1,"rexVersion":"0.1.0","packages":[]}"#
+            .replace("0.1.0", REX_VERSION)
+            .as_str(),
         &library_model(),
     );
 }
@@ -243,10 +251,11 @@ fn golden_json_matches_expected_wire_format() {
       ]
     }
   ]
-}"#;
+}"#
+    .replace("0.1.0", REX_VERSION);
 
     assert_eq!(model.to_json_pretty().expect("serialize"), expected);
-    let parsed = Model::from_json(expected).expect("deserialize golden");
+    let parsed = Model::from_json(&expected).expect("deserialize golden");
     assert_eq!(model, parsed);
 }
 
@@ -339,10 +348,11 @@ fn golden_json_with_bodies_pins_the_tier_1_wire_format() {
       ]
     }
   ]
-}"#;
+}"#
+    .replace("0.1.0", REX_VERSION);
 
     assert_eq!(model.to_json_pretty().expect("serialize"), expected);
-    let parsed = Model::from_json(expected).expect("deserialize golden");
+    let parsed = Model::from_json(&expected).expect("deserialize golden");
     assert_eq!(model, parsed);
 }
 
@@ -402,10 +412,10 @@ fn golden_json_with_functions_pins_the_wire_format() {
       ]
     }
   ]
-}"#;
+}"#.replace("0.1.0", REX_VERSION);
 
     assert_eq!(model.to_json_pretty().expect("serialize"), expected);
-    let parsed = Model::from_json(expected).expect("deserialize golden");
+    let parsed = Model::from_json(&expected).expect("deserialize golden");
     assert_eq!(model, parsed);
     // The empty case: a function-less package never carries the key —
     // byte-identical to pre-rule-15 output.
@@ -413,7 +423,7 @@ fn golden_json_with_functions_pins_the_wire_format() {
     plain.packages.push(Package::new("p"));
     assert_eq!(
         plain.to_json().expect("serialize"),
-        r#"{"formatVersion":1,"rexVersion":"0.1.0","packages":[{"name":"p","annotations":[],"enums":[],"datatypes":[],"interfaces":[],"classes":[]}]}"#
+        r#"{"formatVersion":1,"rexVersion":"0.1.0","packages":[{"name":"p","annotations":[],"enums":[],"datatypes":[],"interfaces":[],"classes":[]}]}"#.replace("0.1.0", REX_VERSION).as_str()
     );
 }
 
@@ -474,10 +484,11 @@ fn golden_json_with_function_return_multiplicity_pins_the_wire_format() {
       ]
     }
   ]
-}"#;
+}"#
+    .replace("0.1.0", REX_VERSION);
 
     assert_eq!(model.to_json_pretty().expect("serialize"), expected);
-    let parsed = Model::from_json(expected).expect("deserialize golden");
+    let parsed = Model::from_json(&expected).expect("deserialize golden");
     assert_eq!(model, parsed);
 }
 
@@ -496,7 +507,7 @@ fn an_operation_without_return_multiplicity_stays_byte_identical() {
     model.packages.push(package);
     assert_eq!(
         model.to_json().expect("serialize"),
-        r#"{"formatVersion":1,"rexVersion":"0.1.0","packages":[{"name":"p","annotations":[],"enums":[],"datatypes":[],"interfaces":[],"classes":[],"functions":[{"name":"calcRate","returnType":{"type":"primitive","value":"double"},"params":[]}]}]}"#
+        r#"{"formatVersion":1,"rexVersion":"0.1.0","packages":[{"name":"p","annotations":[],"enums":[],"datatypes":[],"interfaces":[],"classes":[],"functions":[{"name":"calcRate","returnType":{"type":"primitive","value":"double"},"params":[]}]}]}"#.replace("0.1.0", REX_VERSION).as_str()
     );
     let parsed = Model::from_json(&model.to_json().expect("serialize")).expect("deserialize");
     assert_eq!(model, parsed);
@@ -592,10 +603,11 @@ fn golden_json_with_descriptions_and_constraints_pins_the_wire_format() {
       ]
     }
   ]
-}"#;
+}"#
+    .replace("0.1.0", REX_VERSION);
 
     assert_eq!(model.to_json_pretty().expect("serialize"), expected);
-    let parsed = Model::from_json(expected).expect("deserialize golden");
+    let parsed = Model::from_json(&expected).expect("deserialize golden");
     assert_eq!(model, parsed);
 }
 
@@ -637,10 +649,11 @@ fn golden_json_with_datatype_format_pins_the_wire_format() {
       "classes": []
     }
   ]
-}"#;
+}"#
+    .replace("0.1.0", REX_VERSION);
 
     assert_eq!(model.to_json_pretty().expect("serialize"), expected);
-    let parsed = Model::from_json(expected).expect("deserialize golden");
+    let parsed = Model::from_json(&expected).expect("deserialize golden");
     assert_eq!(model, parsed);
 }
 
@@ -705,10 +718,11 @@ fn golden_json_with_unique_constraint_pins_the_wire_format() {
       ]
     }
   ]
-}"#;
+}"#
+    .replace("0.1.0", REX_VERSION);
 
     assert_eq!(model.to_json_pretty().expect("serialize"), expected);
-    let parsed = Model::from_json(expected).expect("deserialize golden");
+    let parsed = Model::from_json(&expected).expect("deserialize golden");
     assert_eq!(model, parsed);
 }
 

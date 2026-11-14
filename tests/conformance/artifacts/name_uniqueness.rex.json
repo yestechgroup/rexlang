@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "rexVersion": "0.1.0",
+  "rexVersion": "0.2.0",
   "packages": [
     {
       "name": "nz.example.payroll",

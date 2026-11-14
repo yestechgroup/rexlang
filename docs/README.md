@@ -17,6 +17,7 @@ artifact. This index routes to the right document.
 | [CMMN.md](CMMN.md) | `.cmmn` | CMMN 1.1 case management: cases, case files, plans, sentry criteria — and the cmmn-rs seam |
 | [DMN.md](DMN.md) | `.dmn` | DMN 1.6-style decision models: the decision-requirements graph, external markdown decision tables, decision services — and the `.ddd` decision link |
 | [IFML.md](IFML.md) | `.ifml` | Interaction flows: views, components, events, the reference pattern library |
+| [VERSIONING.md](VERSIONING.md) | all | The versioning/release policy: what 0.x promises, what 1.0 freezes, what a release consists of |
 
 ## For consumers and contributors
 

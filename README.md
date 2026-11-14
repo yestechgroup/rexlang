@@ -9,7 +9,9 @@ serialized as a stable artifact. Code generators for multiple target languages
 backend. The language reference lives in
 [docs/LANGUAGE.md](docs/LANGUAGE.md); if you are writing a backend that
 consumes the IR — in or out of tree — start with
-[docs/BACKENDS.md](docs/BACKENDS.md).
+[docs/BACKENDS.md](docs/BACKENDS.md). Releases and compatibility promises
+are documented in [docs/VERSIONING.md](docs/VERSIONING.md) and
+[CHANGELOG.md](CHANGELOG.md).
 
 ```
 .mox source  -> lexer/parser -> AST -> resolve & validate -> Core IR (.rex.json)
