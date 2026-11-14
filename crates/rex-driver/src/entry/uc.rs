@@ -23,7 +23,7 @@ use crate::usecases;
 /// [`compile_usecase_str`], so under this query every bare participant,
 /// `requires` capability, event payload, and `realizes` binding errors.
 /// Use it for parse/domain editing feedback, not for full validation.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn compile_usecase(
     db: &dyn Db,
     file: SourceFile,

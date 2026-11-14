@@ -20,7 +20,7 @@ use crate::union::{domain_files, lower_domains};
 /// Extra provided domains no import names are ignored; a domain with
 /// errors contributes its diagnostics and no blocks, but the remaining
 /// domains keep resolving.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn compile_actors(
     db: &dyn Db,
     actor: SourceFile,

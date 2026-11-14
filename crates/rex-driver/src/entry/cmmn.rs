@@ -17,7 +17,7 @@ use crate::union::{domain_files, lower_domains};
 /// precedent). Designs, actor models, event contracts, and decision models
 /// enter only through the one-shot [`compile_cmmn_str`]. Use it for
 /// parse/domain editing feedback, not for full validation.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn compile_cmmn(db: &dyn Db, file: SourceFile, domains: Vec<SourceFile>) -> CmmnCompilation {
     compile_cmmn_with(
         db,

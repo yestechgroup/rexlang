@@ -18,7 +18,7 @@ use crate::union::{domain_files, lower_domains};
 /// and validate the design against the resolved domain model.
 ///
 /// See [`compile_ddd_str`] for the normative contract.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn compile_ddd(db: &dyn Db, design: SourceFile, domains: Vec<SourceFile>) -> DddCompilation {
     compile_ddd_with(db, design, domains, None, &DomainImports::default(), &[])
 }
