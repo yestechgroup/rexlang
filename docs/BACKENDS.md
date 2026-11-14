@@ -46,6 +46,7 @@ Root shapes, as actually serialized:
 | Deployment (`deploy::DeployModel`) | `{"formatVersion": N, "applications"?: […], "profiles"?: […], "deployments"?: […]}` (all omitted when empty) |
 | Use case (`usecases::UseCaseModel`) | `{"formatVersion": N, "useCases"?: […]}` (omitted when empty) |
 | Case management (`cmmn::CmmnModel`) | `{"formatVersion": N, "cases"?: […]}` (omitted when empty) |
+| Semantic graph (`graph::GraphModel`) | `{"formatVersion": N, "applications"?: […], "nodes"?: […], "edges"?: […]}` (all omitted when empty; built by `rexlang graph`) |
 | Canonical instance | `{"$type": "rex.instance", "formatVersion": N, "model": "…", "objects": […]}` |
 
 Every standalone root carries its own `*_FORMAT_VERSION` marker (all `1`

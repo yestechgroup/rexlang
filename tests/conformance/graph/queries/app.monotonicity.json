@@ -1,0 +1,33 @@
+{
+  "formatVersion": 1,
+  "query": "monotonicity",
+  "results": [
+    {
+      "application": "app.actor",
+      "child": "actor:app.actor#App.Agent",
+      "parent": "actor:app.actor#App.Customer",
+      "dominates": true,
+      "strict": true,
+      "unknown": false
+    },
+    {
+      "application": "app.actor",
+      "child": "actor:app.actor#App.Manager",
+      "parent": "actor:app.actor#App.Agent",
+      "missing": [
+        "capability:app.actor#App.UpdateTicket"
+      ],
+      "dominates": false,
+      "strict": false,
+      "unknown": false
+    },
+    {
+      "application": "other.actor",
+      "child": "actor:other.actor#Audit.AuditorAgent",
+      "parent": "actor:other.actor#Audit.Auditor",
+      "dominates": true,
+      "strict": false,
+      "unknown": true
+    }
+  ]
+}

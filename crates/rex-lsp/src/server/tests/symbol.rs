@@ -8,6 +8,7 @@
 use super::*;
 
 use serde_json::json;
+use std::str::FromStr;
 use tower::Service;
 use tower_lsp_server::jsonrpc;
 use tower_lsp_server::ls_types::SymbolKind as LspSymbolKind;
@@ -163,4 +164,29 @@ async fn document_symbol_ranges_cover_declarations_with_name_selection() {
 async fn document_symbol_for_a_closed_document_is_empty() {
     let (mut service, _socket) = initialized_service().await;
     assert!(document_symbols(&mut service).await.is_empty());
+}
+
+#[tokio::test]
+async fn document_symbols_for_an_unlisted_extension_are_empty() {
+    let (mut service, mut socket) = initialized_service().await;
+    let other =
+        tower_lsp_server::ls_types::Uri::from_str("file:///workspace/data.json").expect("a uri");
+    open_at(&mut service, &other, "{\"name\": \"shelf\"}\n").await;
+    drain_socket(&mut socket).await;
+
+    let response = service
+        .call(
+            jsonrpc::Request::build("textDocument/documentSymbol")
+                .params(json!({"textDocument": {"uri": other.as_str()}}))
+                .id(301)
+                .finish(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let (_, body) = response.into_parts();
+    assert!(
+        body.expect("documentSymbol must not error").is_null(),
+        "an unlisted extension has no outline"
+    );
 }

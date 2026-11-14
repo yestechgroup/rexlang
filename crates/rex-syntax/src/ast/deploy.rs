@@ -102,6 +102,9 @@ pub struct DeployBindingDecl {
     pub reference: String,
     /// `true` for a `design` binding, `false` for a `flow` binding.
     pub is_design: bool,
+    /// Span of the quoted reference string itself (the navigation index's
+    /// mention site; the keywords and quotes are excluded).
+    pub reference_span: Span,
     /// Span of the whole entry, `design`/`flow` keyword included.
     pub span: Span,
 }

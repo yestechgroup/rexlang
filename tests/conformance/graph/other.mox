@@ -1,0 +1,9 @@
+// The second application's domain: an audit entry with no relation to the
+// support ticket graph. It shares no import with app.mox, so the two
+// applications in this directory never cross-check.
+package nz.example.audit
+
+class AuditEntry {
+    id readonly String entryId
+    String note
+}

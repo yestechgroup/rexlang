@@ -1,0 +1,4234 @@
+{
+  "formatVersion": 1,
+  "applications": [
+    {
+      "id": "cli.ifml",
+      "files": [
+        "cli.ifml",
+        "support.actor",
+        "support.cmmn",
+        "support.ddd",
+        "support.deploy",
+        "support.dmn",
+        "support.evt",
+        "support.ifml",
+        "support.mox",
+        "support.uc"
+      ],
+      "packages": [
+        "nz.example.support"
+      ]
+    },
+    {
+      "id": "ecommerce.evt",
+      "files": [
+        "ecommerce.evt",
+        "ecommerce.ifml",
+        "ecommerce.mox"
+      ],
+      "packages": [
+        "nz.example.shop"
+      ]
+    },
+    {
+      "id": "iot.mox",
+      "files": [
+        "iot.mox"
+      ],
+      "packages": [
+        "nz.example.iot"
+      ]
+    },
+    {
+      "id": "lending.dmn",
+      "files": [
+        "lending.dmn"
+      ]
+    },
+    {
+      "id": "library.mox",
+      "files": [
+        "library.mox"
+      ],
+      "packages": [
+        "nz.example.library"
+      ]
+    },
+    {
+      "id": "org.mox",
+      "files": [
+        "org.mox"
+      ],
+      "packages": [
+        "nz.example.org"
+      ]
+    },
+    {
+      "id": "pricing.mox",
+      "files": [
+        "pricing.mox"
+      ],
+      "packages": [
+        "com.rosetta.model",
+        "nz.example.pricing",
+        "pricing.model"
+      ]
+    },
+    {
+      "id": "shapes.mox",
+      "files": [
+        "shapes.mox"
+      ],
+      "packages": [
+        "nz.example.shapes"
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "id": "action:cli.ifml#ClaimTicket",
+      "kind": "action",
+      "name": "ClaimTicket",
+      "file": "cli.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "action:cli.ifml#GetTicket",
+      "kind": "action",
+      "name": "GetTicket",
+      "file": "cli.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "action:cli.ifml#ListTickets",
+      "kind": "action",
+      "name": "ListTickets",
+      "file": "cli.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "action:cli.ifml#RefundTicket",
+      "kind": "action",
+      "name": "RefundTicket",
+      "file": "cli.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "command:cli.ifml#tickets",
+      "kind": "command",
+      "name": "tickets",
+      "file": "cli.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "command:cli.ifml#tickets.claim",
+      "kind": "command",
+      "name": "tickets.claim",
+      "file": "cli.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "command:cli.ifml#tickets.refund",
+      "kind": "command",
+      "name": "tickets.refund",
+      "file": "cli.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "command:cli.ifml#tickets.show",
+      "kind": "command",
+      "name": "tickets.show",
+      "file": "cli.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "file:cli.ifml#cli.ifml",
+      "kind": "file",
+      "name": "cli.ifml",
+      "file": "cli.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "flow:cli.ifml#cli",
+      "kind": "flow",
+      "name": "cli",
+      "file": "cli.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "actor:support.actor#Support.Agent",
+      "kind": "actor",
+      "name": "Support.Agent",
+      "file": "support.actor",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "actor:support.actor#Support.Customer",
+      "kind": "actor",
+      "name": "Support.Customer",
+      "file": "support.actor",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "actor:support.actor#Support.Finance",
+      "kind": "actor",
+      "name": "Support.Finance",
+      "file": "support.actor",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "actor:support.actor#Support.Manager",
+      "kind": "actor",
+      "name": "Support.Manager",
+      "file": "support.actor",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "capability:support.actor#Support.ApproveRefund",
+      "kind": "capability",
+      "name": "Support.ApproveRefund",
+      "file": "support.actor",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "capability:support.actor#Support.RaiseRefund",
+      "kind": "capability",
+      "name": "Support.RaiseRefund",
+      "file": "support.actor",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "capability:support.actor#Support.ReadTicket",
+      "kind": "capability",
+      "name": "Support.ReadTicket",
+      "file": "support.actor",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "capability:support.actor#Support.ResolveTicket",
+      "kind": "capability",
+      "name": "Support.ResolveTicket",
+      "file": "support.actor",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "capability:support.actor#Support.UpdateTicket",
+      "kind": "capability",
+      "name": "Support.UpdateTicket",
+      "file": "support.actor",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "file:support.actor#support.actor",
+      "kind": "file",
+      "name": "support.actor",
+      "file": "support.actor",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "case:support.cmmn#RefundDesk",
+      "kind": "case",
+      "name": "RefundDesk",
+      "file": "support.cmmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "caseFileItem:support.cmmn#RefundDesk.decision",
+      "kind": "caseFileItem",
+      "name": "RefundDesk.decision",
+      "file": "support.cmmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "caseFileItem:support.cmmn#RefundDesk.ticket",
+      "kind": "caseFileItem",
+      "name": "RefundDesk.ticket",
+      "file": "support.cmmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "caseRole:support.cmmn#RefundDesk.escalation",
+      "kind": "caseRole",
+      "name": "RefundDesk.escalation",
+      "file": "support.cmmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "caseRole:support.cmmn#RefundDesk.finance",
+      "kind": "caseRole",
+      "name": "RefundDesk.finance",
+      "file": "support.cmmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "caseRole:support.cmmn#RefundDesk.triage",
+      "kind": "caseRole",
+      "name": "RefundDesk.triage",
+      "file": "support.cmmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "file:support.cmmn#support.cmmn",
+      "kind": "file",
+      "name": "support.cmmn",
+      "file": "support.cmmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "planItem:support.cmmn#RefundDesk.ApproveRefund",
+      "kind": "planItem",
+      "name": "RefundDesk.ApproveRefund",
+      "file": "support.cmmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "planItem:support.cmmn#RefundDesk.AssessAuthority",
+      "kind": "planItem",
+      "name": "RefundDesk.AssessAuthority",
+      "file": "support.cmmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "planItem:support.cmmn#RefundDesk.AssessRefund",
+      "kind": "planItem",
+      "name": "RefundDesk.AssessRefund",
+      "file": "support.cmmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "planItem:support.cmmn#RefundDesk.Assessment",
+      "kind": "planItem",
+      "name": "RefundDesk.Assessment",
+      "file": "support.cmmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "planItem:support.cmmn#RefundDesk.CloseTicket",
+      "kind": "planItem",
+      "name": "RefundDesk.CloseTicket",
+      "file": "support.cmmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "planItem:support.cmmn#RefundDesk.Escalate",
+      "kind": "planItem",
+      "name": "RefundDesk.Escalate",
+      "file": "support.cmmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "planItem:support.cmmn#RefundDesk.RefundSettled",
+      "kind": "planItem",
+      "name": "RefundDesk.RefundSettled",
+      "file": "support.cmmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "planItem:support.cmmn#RefundDesk.ReviewTicket",
+      "kind": "planItem",
+      "name": "RefundDesk.ReviewTicket",
+      "file": "support.cmmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "designApplication:support.ddd#SupportDesk",
+      "kind": "designApplication",
+      "name": "SupportDesk",
+      "file": "support.ddd",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "file:support.ddd#support.ddd",
+      "kind": "file",
+      "name": "support.ddd",
+      "file": "support.ddd",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "module:support.ddd#SupportDesk.desk",
+      "kind": "module",
+      "name": "SupportDesk.desk",
+      "file": "support.ddd",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "module:support.ddd#SupportDesk.people",
+      "kind": "module",
+      "name": "SupportDesk.people",
+      "file": "support.ddd",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "repository:support.ddd#SupportDesk.desk.TicketRepository",
+      "kind": "repository",
+      "name": "SupportDesk.desk.TicketRepository",
+      "file": "support.ddd",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "repositoryOperation:support.ddd#SupportDesk.desk.TicketRepository.delete",
+      "kind": "repositoryOperation",
+      "name": "SupportDesk.desk.TicketRepository.delete",
+      "file": "support.ddd",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "repositoryOperation:support.ddd#SupportDesk.desk.TicketRepository.findAll",
+      "kind": "repositoryOperation",
+      "name": "SupportDesk.desk.TicketRepository.findAll",
+      "file": "support.ddd",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "repositoryOperation:support.ddd#SupportDesk.desk.TicketRepository.findByExample",
+      "kind": "repositoryOperation",
+      "name": "SupportDesk.desk.TicketRepository.findByExample",
+      "file": "support.ddd",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "repositoryOperation:support.ddd#SupportDesk.desk.TicketRepository.findById",
+      "kind": "repositoryOperation",
+      "name": "SupportDesk.desk.TicketRepository.findById",
+      "file": "support.ddd",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "repositoryOperation:support.ddd#SupportDesk.desk.TicketRepository.findByKeys",
+      "kind": "repositoryOperation",
+      "name": "SupportDesk.desk.TicketRepository.findByKeys",
+      "file": "support.ddd",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "repositoryOperation:support.ddd#SupportDesk.desk.TicketRepository.findByTitle",
+      "kind": "repositoryOperation",
+      "name": "SupportDesk.desk.TicketRepository.findByTitle",
+      "file": "support.ddd",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "repositoryOperation:support.ddd#SupportDesk.desk.TicketRepository.save",
+      "kind": "repositoryOperation",
+      "name": "SupportDesk.desk.TicketRepository.save",
+      "file": "support.ddd",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "search:support.ddd#SupportDesk.desk.TicketSearch",
+      "kind": "search",
+      "name": "SupportDesk.desk.TicketSearch",
+      "file": "support.ddd",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "service:support.ddd#SupportDesk.desk.TicketService",
+      "kind": "service",
+      "name": "SupportDesk.desk.TicketService",
+      "file": "support.ddd",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.approveRefund",
+      "kind": "serviceOperation",
+      "name": "SupportDesk.desk.TicketService.approveRefund",
+      "file": "support.ddd",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.claimTicket",
+      "kind": "serviceOperation",
+      "name": "SupportDesk.desk.TicketService.claimTicket",
+      "file": "support.ddd",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.close",
+      "kind": "serviceOperation",
+      "name": "SupportDesk.desk.TicketService.close",
+      "file": "support.ddd",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.findTickets",
+      "kind": "serviceOperation",
+      "name": "SupportDesk.desk.TicketService.findTickets",
+      "file": "support.ddd",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.getTicket",
+      "kind": "serviceOperation",
+      "name": "SupportDesk.desk.TicketService.getTicket",
+      "file": "support.ddd",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.listTickets",
+      "kind": "serviceOperation",
+      "name": "SupportDesk.desk.TicketService.listTickets",
+      "file": "support.ddd",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.raiseRefund",
+      "kind": "serviceOperation",
+      "name": "SupportDesk.desk.TicketService.raiseRefund",
+      "file": "support.ddd",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.refundTicket",
+      "kind": "serviceOperation",
+      "name": "SupportDesk.desk.TicketService.refundTicket",
+      "file": "support.ddd",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.resolveTicket",
+      "kind": "serviceOperation",
+      "name": "SupportDesk.desk.TicketService.resolveTicket",
+      "file": "support.ddd",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.updateTicket",
+      "kind": "serviceOperation",
+      "name": "SupportDesk.desk.TicketService.updateTicket",
+      "file": "support.ddd",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "deployApplication:support.deploy#SupportDesk",
+      "kind": "deployApplication",
+      "name": "SupportDesk",
+      "file": "support.deploy",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "deployComponent:support.deploy#SupportDesk.analytics_service",
+      "kind": "deployComponent",
+      "name": "SupportDesk.analytics_service",
+      "file": "support.deploy",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "deployComponent:support.deploy#SupportDesk.api",
+      "kind": "deployComponent",
+      "name": "SupportDesk.api",
+      "file": "support.deploy",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "deployComponent:support.deploy#SupportDesk.db",
+      "kind": "deployComponent",
+      "name": "SupportDesk.db",
+      "file": "support.deploy",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "deployComponent:support.deploy#SupportDesk.refund_approval_service",
+      "kind": "deployComponent",
+      "name": "SupportDesk.refund_approval_service",
+      "file": "support.deploy",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "deployComponent:support.deploy#SupportDesk.web",
+      "kind": "deployComponent",
+      "name": "SupportDesk.web",
+      "file": "support.deploy",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "deployProfile:support.deploy#edge",
+      "kind": "deployProfile",
+      "name": "edge",
+      "file": "support.deploy",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "deployProfile:support.deploy#production_k8s",
+      "kind": "deployProfile",
+      "name": "production_k8s",
+      "file": "support.deploy",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "deployment:support.deploy#SupportDesk.edgeLive",
+      "kind": "deployment",
+      "name": "SupportDesk.edgeLive",
+      "file": "support.deploy",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "deployment:support.deploy#SupportDesk.production",
+      "kind": "deployment",
+      "name": "SupportDesk.production",
+      "file": "support.deploy",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "file:support.deploy#support.deploy",
+      "kind": "file",
+      "name": "support.deploy",
+      "file": "support.deploy",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "bkm:support.dmn#RefundDecisions.assess_refund",
+      "kind": "bkm",
+      "name": "RefundDecisions.assess_refund",
+      "file": "support.dmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "decision:support.dmn#RefundDecisions.RefundAssessment",
+      "kind": "decision",
+      "name": "RefundDecisions.RefundAssessment",
+      "file": "support.dmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "decision:support.dmn#RefundDecisions.RefundAuthority",
+      "kind": "decision",
+      "name": "RefundDecisions.RefundAuthority",
+      "file": "support.dmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "decision:support.dmn#RefundDecisions.RefundEligibility",
+      "kind": "decision",
+      "name": "RefundDecisions.RefundEligibility",
+      "file": "support.dmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "decisionModel:support.dmn#RefundDecisions",
+      "kind": "decisionModel",
+      "name": "RefundDecisions",
+      "file": "support.dmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "decisionService:support.dmn#RefundDecisions.AssessRefund",
+      "kind": "decisionService",
+      "name": "RefundDecisions.AssessRefund",
+      "file": "support.dmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "file:support.dmn#support.dmn",
+      "kind": "file",
+      "name": "support.dmn",
+      "file": "support.dmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "inputData:support.dmn#RefundDecisions.helper",
+      "kind": "inputData",
+      "name": "RefundDecisions.helper",
+      "file": "support.dmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "inputData:support.dmn#RefundDecisions.requested_cents",
+      "kind": "inputData",
+      "name": "RefundDecisions.requested_cents",
+      "file": "support.dmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "inputData:support.dmn#RefundDecisions.ticket",
+      "kind": "inputData",
+      "name": "RefundDecisions.ticket",
+      "file": "support.dmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "knowledgeSource:support.dmn#RefundDecisions.ConsumerGuaranteesAct",
+      "kind": "knowledgeSource",
+      "name": "RefundDecisions.ConsumerGuaranteesAct",
+      "file": "support.dmn",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "channel:support.evt#support.refunds",
+      "kind": "channel",
+      "name": "support.refunds",
+      "file": "support.evt",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "channel:support.evt#support.tickets",
+      "kind": "channel",
+      "name": "support.tickets",
+      "file": "support.evt",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "event:support.evt#support.RefundApproved",
+      "kind": "event",
+      "name": "support.RefundApproved",
+      "file": "support.evt",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "event:support.evt#support.RefundRequested",
+      "kind": "event",
+      "name": "support.RefundRequested",
+      "file": "support.evt",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "event:support.evt#support.TicketRaised",
+      "kind": "event",
+      "name": "support.TicketRaised",
+      "file": "support.evt",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "event:support.evt#support.TicketResolved",
+      "kind": "event",
+      "name": "support.TicketResolved",
+      "file": "support.evt",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "file:support.evt#support.evt",
+      "kind": "file",
+      "name": "support.evt",
+      "file": "support.evt",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "subscription:support.evt#support.analytics",
+      "kind": "subscription",
+      "name": "support.analytics",
+      "file": "support.evt",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "subscription:support.evt#support.refundDesk",
+      "kind": "subscription",
+      "name": "support.refundDesk",
+      "file": "support.evt",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "action:support.ifml#Approve",
+      "kind": "action",
+      "name": "Approve",
+      "file": "support.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "action:support.ifml#ApproveRefund",
+      "kind": "action",
+      "name": "ApproveRefund",
+      "file": "support.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "action:support.ifml#Assign",
+      "kind": "action",
+      "name": "Assign",
+      "file": "support.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "action:support.ifml#MarkRead",
+      "kind": "action",
+      "name": "MarkRead",
+      "file": "support.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "action:support.ifml#RaiseRefund",
+      "kind": "action",
+      "name": "RaiseRefund",
+      "file": "support.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "action:support.ifml#Reject",
+      "kind": "action",
+      "name": "Reject",
+      "file": "support.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "component:support.ifml#Inbox.escalations",
+      "kind": "component",
+      "name": "Inbox.escalations",
+      "file": "support.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "component:support.ifml#Queue.assessment",
+      "kind": "component",
+      "name": "Queue.assessment",
+      "file": "support.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "component:support.ifml#Queue.intake",
+      "kind": "component",
+      "name": "Queue.intake",
+      "file": "support.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "component:support.ifml#Queue.refunds",
+      "kind": "component",
+      "name": "Queue.refunds",
+      "file": "support.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "file:support.ifml#support.ifml",
+      "kind": "file",
+      "name": "support.ifml",
+      "file": "support.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "flow:support.ifml#support",
+      "kind": "flow",
+      "name": "support",
+      "file": "support.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "view:support.ifml#Folder",
+      "kind": "view",
+      "name": "Folder",
+      "file": "support.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "view:support.ifml#Inbox",
+      "kind": "view",
+      "name": "Inbox",
+      "file": "support.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "view:support.ifml#ItemDetail",
+      "kind": "view",
+      "name": "ItemDetail",
+      "file": "support.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "view:support.ifml#Queue",
+      "kind": "view",
+      "name": "Queue",
+      "file": "support.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "view:support.ifml#WorkItem",
+      "kind": "view",
+      "name": "WorkItem",
+      "file": "support.ifml",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "class:support.mox#nz.example.support.RefundDecision",
+      "kind": "class",
+      "name": "nz.example.support.RefundDecision",
+      "file": "support.mox",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "class:support.mox#nz.example.support.Ticket",
+      "kind": "class",
+      "name": "nz.example.support.Ticket",
+      "file": "support.mox",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "class:support.mox#nz.example.support.User",
+      "kind": "class",
+      "name": "nz.example.support.User",
+      "file": "support.mox",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "enum:support.mox#nz.example.support.TicketState",
+      "kind": "enum",
+      "name": "nz.example.support.TicketState",
+      "file": "support.mox",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "feature:support.mox#nz.example.support.RefundDecision.approved",
+      "kind": "feature",
+      "name": "nz.example.support.RefundDecision.approved",
+      "file": "support.mox",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "feature:support.mox#nz.example.support.RefundDecision.cents",
+      "kind": "feature",
+      "name": "nz.example.support.RefundDecision.cents",
+      "file": "support.mox",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "feature:support.mox#nz.example.support.RefundDecision.decisionId",
+      "kind": "feature",
+      "name": "nz.example.support.RefundDecision.decisionId",
+      "file": "support.mox",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "feature:support.mox#nz.example.support.Ticket.assignee",
+      "kind": "feature",
+      "name": "nz.example.support.Ticket.assignee",
+      "file": "support.mox",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "feature:support.mox#nz.example.support.Ticket.internal",
+      "kind": "feature",
+      "name": "nz.example.support.Ticket.internal",
+      "file": "support.mox",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "feature:support.mox#nz.example.support.Ticket.needsRefund",
+      "kind": "feature",
+      "name": "nz.example.support.Ticket.needsRefund",
+      "file": "support.mox",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "feature:support.mox#nz.example.support.Ticket.refundCents",
+      "kind": "feature",
+      "name": "nz.example.support.Ticket.refundCents",
+      "file": "support.mox",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "feature:support.mox#nz.example.support.Ticket.state",
+      "kind": "feature",
+      "name": "nz.example.support.Ticket.state",
+      "file": "support.mox",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "feature:support.mox#nz.example.support.Ticket.ticketNo",
+      "kind": "feature",
+      "name": "nz.example.support.Ticket.ticketNo",
+      "file": "support.mox",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "feature:support.mox#nz.example.support.Ticket.title",
+      "kind": "feature",
+      "name": "nz.example.support.Ticket.title",
+      "file": "support.mox",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "feature:support.mox#nz.example.support.User.active",
+      "kind": "feature",
+      "name": "nz.example.support.User.active",
+      "file": "support.mox",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "feature:support.mox#nz.example.support.User.assignedTickets",
+      "kind": "feature",
+      "name": "nz.example.support.User.assignedTickets",
+      "file": "support.mox",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "feature:support.mox#nz.example.support.User.name",
+      "kind": "feature",
+      "name": "nz.example.support.User.name",
+      "file": "support.mox",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "feature:support.mox#nz.example.support.User.userId",
+      "kind": "feature",
+      "name": "nz.example.support.User.userId",
+      "file": "support.mox",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "file:support.mox#support.mox",
+      "kind": "file",
+      "name": "support.mox",
+      "file": "support.mox",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "operation:support.mox#nz.example.support.Ticket.approveRefund",
+      "kind": "operation",
+      "name": "nz.example.support.Ticket.approveRefund",
+      "file": "support.mox",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "operation:support.mox#nz.example.support.Ticket.raiseRefund",
+      "kind": "operation",
+      "name": "nz.example.support.Ticket.raiseRefund",
+      "file": "support.mox",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "file:support.uc#support.uc",
+      "kind": "file",
+      "name": "support.uc",
+      "file": "support.uc",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "useCase:support.uc#ApproveRefund",
+      "kind": "useCase",
+      "name": "ApproveRefund",
+      "file": "support.uc",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "useCase:support.uc#ClarifyTicket",
+      "kind": "useCase",
+      "name": "ClarifyTicket",
+      "file": "support.uc",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "useCase:support.uc#EscalateInternal",
+      "kind": "useCase",
+      "name": "EscalateInternal",
+      "file": "support.uc",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "useCase:support.uc#MonitorQueue",
+      "kind": "useCase",
+      "name": "MonitorQueue",
+      "file": "support.uc",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "useCase:support.uc#RaiseRefund",
+      "kind": "useCase",
+      "name": "RaiseRefund",
+      "file": "support.uc",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "useCase:support.uc#TrackRefund",
+      "kind": "useCase",
+      "name": "TrackRefund",
+      "file": "support.uc",
+      "application": "cli.ifml"
+    },
+    {
+      "id": "channel:ecommerce.evt#ecommerce.fulfilment",
+      "kind": "channel",
+      "name": "ecommerce.fulfilment",
+      "file": "ecommerce.evt",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "channel:ecommerce.evt#ecommerce.orders",
+      "kind": "channel",
+      "name": "ecommerce.orders",
+      "file": "ecommerce.evt",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "event:ecommerce.evt#ecommerce.OrderCancelled",
+      "kind": "event",
+      "name": "ecommerce.OrderCancelled",
+      "file": "ecommerce.evt",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "event:ecommerce.evt#ecommerce.OrderLineShipped",
+      "kind": "event",
+      "name": "ecommerce.OrderLineShipped",
+      "file": "ecommerce.evt",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "event:ecommerce.evt#ecommerce.OrderPlaced",
+      "kind": "event",
+      "name": "ecommerce.OrderPlaced",
+      "file": "ecommerce.evt",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "file:ecommerce.evt#ecommerce.evt",
+      "kind": "file",
+      "name": "ecommerce.evt",
+      "file": "ecommerce.evt",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "subscription:ecommerce.evt#ecommerce.billing",
+      "kind": "subscription",
+      "name": "ecommerce.billing",
+      "file": "ecommerce.evt",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "subscription:ecommerce.evt#ecommerce.warehouse",
+      "kind": "subscription",
+      "name": "ecommerce.warehouse",
+      "file": "ecommerce.evt",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "action:ecommerce.ifml#AddToCart",
+      "kind": "action",
+      "name": "AddToCart",
+      "file": "ecommerce.ifml",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "action:ecommerce.ifml#CompleteWizard",
+      "kind": "action",
+      "name": "CompleteWizard",
+      "file": "ecommerce.ifml",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "action:ecommerce.ifml#PlaceOrder",
+      "kind": "action",
+      "name": "PlaceOrder",
+      "file": "ecommerce.ifml",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "action:ecommerce.ifml#Save",
+      "kind": "action",
+      "name": "Save",
+      "file": "ecommerce.ifml",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "component:ecommerce.ifml#CartPage.items",
+      "kind": "component",
+      "name": "CartPage.items",
+      "file": "ecommerce.ifml",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "component:ecommerce.ifml#ProductPage.buy",
+      "kind": "component",
+      "name": "ProductPage.buy",
+      "file": "ecommerce.ifml",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "component:ecommerce.ifml#Storefront.deals",
+      "kind": "component",
+      "name": "Storefront.deals",
+      "file": "ecommerce.ifml",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "file:ecommerce.ifml#ecommerce.ifml",
+      "kind": "file",
+      "name": "ecommerce.ifml",
+      "file": "ecommerce.ifml",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "flow:ecommerce.ifml#ecommerce",
+      "kind": "flow",
+      "name": "ecommerce",
+      "file": "ecommerce.ifml",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "view:ecommerce.ifml#CartPage",
+      "kind": "view",
+      "name": "CartPage",
+      "file": "ecommerce.ifml",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "view:ecommerce.ifml#Category",
+      "kind": "view",
+      "name": "Category",
+      "file": "ecommerce.ifml",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "view:ecommerce.ifml#Checkout",
+      "kind": "view",
+      "name": "Checkout",
+      "file": "ecommerce.ifml",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "view:ecommerce.ifml#ItemDetail",
+      "kind": "view",
+      "name": "ItemDetail",
+      "file": "ecommerce.ifml",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "view:ecommerce.ifml#ProductPage",
+      "kind": "view",
+      "name": "ProductPage",
+      "file": "ecommerce.ifml",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "view:ecommerce.ifml#Storefront",
+      "kind": "view",
+      "name": "Storefront",
+      "file": "ecommerce.ifml",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "class:ecommerce.mox#nz.example.shop.Customer",
+      "kind": "class",
+      "name": "nz.example.shop.Customer",
+      "file": "ecommerce.mox",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "class:ecommerce.mox#nz.example.shop.Order",
+      "kind": "class",
+      "name": "nz.example.shop.Order",
+      "file": "ecommerce.mox",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "class:ecommerce.mox#nz.example.shop.OrderLine",
+      "kind": "class",
+      "name": "nz.example.shop.OrderLine",
+      "file": "ecommerce.mox",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "class:ecommerce.mox#nz.example.shop.Product",
+      "kind": "class",
+      "name": "nz.example.shop.Product",
+      "file": "ecommerce.mox",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "feature:ecommerce.mox#nz.example.shop.Customer.name",
+      "kind": "feature",
+      "name": "nz.example.shop.Customer.name",
+      "file": "ecommerce.mox",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "feature:ecommerce.mox#nz.example.shop.Customer.orders",
+      "kind": "feature",
+      "name": "nz.example.shop.Customer.orders",
+      "file": "ecommerce.mox",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "feature:ecommerce.mox#nz.example.shop.Order.currency",
+      "kind": "feature",
+      "name": "nz.example.shop.Order.currency",
+      "file": "ecommerce.mox",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "feature:ecommerce.mox#nz.example.shop.Order.customer",
+      "kind": "feature",
+      "name": "nz.example.shop.Order.customer",
+      "file": "ecommerce.mox",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "feature:ecommerce.mox#nz.example.shop.Order.lines",
+      "kind": "feature",
+      "name": "nz.example.shop.Order.lines",
+      "file": "ecommerce.mox",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "feature:ecommerce.mox#nz.example.shop.Order.orderNo",
+      "kind": "feature",
+      "name": "nz.example.shop.Order.orderNo",
+      "file": "ecommerce.mox",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "feature:ecommerce.mox#nz.example.shop.Order.total",
+      "kind": "feature",
+      "name": "nz.example.shop.Order.total",
+      "file": "ecommerce.mox",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "feature:ecommerce.mox#nz.example.shop.OrderLine.order",
+      "kind": "feature",
+      "name": "nz.example.shop.OrderLine.order",
+      "file": "ecommerce.mox",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "feature:ecommerce.mox#nz.example.shop.OrderLine.quantity",
+      "kind": "feature",
+      "name": "nz.example.shop.OrderLine.quantity",
+      "file": "ecommerce.mox",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "feature:ecommerce.mox#nz.example.shop.OrderLine.sku",
+      "kind": "feature",
+      "name": "nz.example.shop.OrderLine.sku",
+      "file": "ecommerce.mox",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "feature:ecommerce.mox#nz.example.shop.OrderLine.unitPrice",
+      "kind": "feature",
+      "name": "nz.example.shop.OrderLine.unitPrice",
+      "file": "ecommerce.mox",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "feature:ecommerce.mox#nz.example.shop.Product.listPrice",
+      "kind": "feature",
+      "name": "nz.example.shop.Product.listPrice",
+      "file": "ecommerce.mox",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "feature:ecommerce.mox#nz.example.shop.Product.sku",
+      "kind": "feature",
+      "name": "nz.example.shop.Product.sku",
+      "file": "ecommerce.mox",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "file:ecommerce.mox#ecommerce.mox",
+      "kind": "file",
+      "name": "ecommerce.mox",
+      "file": "ecommerce.mox",
+      "application": "ecommerce.evt"
+    },
+    {
+      "id": "class:iot.mox#nz.example.iot.Device",
+      "kind": "class",
+      "name": "nz.example.iot.Device",
+      "file": "iot.mox",
+      "application": "iot.mox"
+    },
+    {
+      "id": "class:iot.mox#nz.example.iot.Sensor",
+      "kind": "class",
+      "name": "nz.example.iot.Sensor",
+      "file": "iot.mox",
+      "application": "iot.mox"
+    },
+    {
+      "id": "datatype:iot.mox#nz.example.iot.Mac",
+      "kind": "datatype",
+      "name": "nz.example.iot.Mac",
+      "file": "iot.mox",
+      "application": "iot.mox"
+    },
+    {
+      "id": "enum:iot.mox#nz.example.iot.DeviceState",
+      "kind": "enum",
+      "name": "nz.example.iot.DeviceState",
+      "file": "iot.mox",
+      "application": "iot.mox"
+    },
+    {
+      "id": "feature:iot.mox#nz.example.iot.Device.displayName",
+      "kind": "feature",
+      "name": "nz.example.iot.Device.displayName",
+      "file": "iot.mox",
+      "application": "iot.mox"
+    },
+    {
+      "id": "feature:iot.mox#nz.example.iot.Device.name",
+      "kind": "feature",
+      "name": "nz.example.iot.Device.name",
+      "file": "iot.mox",
+      "application": "iot.mox"
+    },
+    {
+      "id": "feature:iot.mox#nz.example.iot.Device.sensors",
+      "kind": "feature",
+      "name": "nz.example.iot.Device.sensors",
+      "file": "iot.mox",
+      "application": "iot.mox"
+    },
+    {
+      "id": "feature:iot.mox#nz.example.iot.Device.state",
+      "kind": "feature",
+      "name": "nz.example.iot.Device.state",
+      "file": "iot.mox",
+      "application": "iot.mox"
+    },
+    {
+      "id": "feature:iot.mox#nz.example.iot.Sensor.address",
+      "kind": "feature",
+      "name": "nz.example.iot.Sensor.address",
+      "file": "iot.mox",
+      "application": "iot.mox"
+    },
+    {
+      "id": "feature:iot.mox#nz.example.iot.Sensor.device",
+      "kind": "feature",
+      "name": "nz.example.iot.Sensor.device",
+      "file": "iot.mox",
+      "application": "iot.mox"
+    },
+    {
+      "id": "feature:iot.mox#nz.example.iot.Sensor.sensorId",
+      "kind": "feature",
+      "name": "nz.example.iot.Sensor.sensorId",
+      "file": "iot.mox",
+      "application": "iot.mox"
+    },
+    {
+      "id": "file:iot.mox#iot.mox",
+      "kind": "file",
+      "name": "iot.mox",
+      "file": "iot.mox",
+      "application": "iot.mox"
+    },
+    {
+      "id": "bkm:lending.dmn#Lending.calculate_lvr",
+      "kind": "bkm",
+      "name": "Lending.calculate_lvr",
+      "file": "lending.dmn",
+      "application": "lending.dmn"
+    },
+    {
+      "id": "bkm:lending.dmn#Lending.calculate_serviceability",
+      "kind": "bkm",
+      "name": "Lending.calculate_serviceability",
+      "file": "lending.dmn",
+      "application": "lending.dmn"
+    },
+    {
+      "id": "decision:lending.dmn#Lending.lending_capacity",
+      "kind": "decision",
+      "name": "Lending.lending_capacity",
+      "file": "lending.dmn",
+      "application": "lending.dmn"
+    },
+    {
+      "id": "decision:lending.dmn#Lending.loan_approval",
+      "kind": "decision",
+      "name": "Lending.loan_approval",
+      "file": "lending.dmn",
+      "application": "lending.dmn"
+    },
+    {
+      "id": "decision:lending.dmn#Lending.pricing",
+      "kind": "decision",
+      "name": "Lending.pricing",
+      "file": "lending.dmn",
+      "application": "lending.dmn"
+    },
+    {
+      "id": "decision:lending.dmn#Lending.risk_assessment",
+      "kind": "decision",
+      "name": "Lending.risk_assessment",
+      "file": "lending.dmn",
+      "application": "lending.dmn"
+    },
+    {
+      "id": "decision:lending.dmn#Lending.security_assessment",
+      "kind": "decision",
+      "name": "Lending.security_assessment",
+      "file": "lending.dmn",
+      "application": "lending.dmn"
+    },
+    {
+      "id": "decisionModel:lending.dmn#Lending",
+      "kind": "decisionModel",
+      "name": "Lending",
+      "file": "lending.dmn",
+      "application": "lending.dmn"
+    },
+    {
+      "id": "decisionService:lending.dmn#Lending.loan_assessment",
+      "kind": "decisionService",
+      "name": "Lending.loan_assessment",
+      "file": "lending.dmn",
+      "application": "lending.dmn"
+    },
+    {
+      "id": "file:lending.dmn#lending.dmn",
+      "kind": "file",
+      "name": "lending.dmn",
+      "file": "lending.dmn",
+      "application": "lending.dmn"
+    },
+    {
+      "id": "inputData:lending.dmn#Lending.banker_authority_level",
+      "kind": "inputData",
+      "name": "Lending.banker_authority_level",
+      "file": "lending.dmn",
+      "application": "lending.dmn"
+    },
+    {
+      "id": "inputData:lending.dmn#Lending.credit_score",
+      "kind": "inputData",
+      "name": "Lending.credit_score",
+      "file": "lending.dmn",
+      "application": "lending.dmn"
+    },
+    {
+      "id": "inputData:lending.dmn#Lending.debt_repayments",
+      "kind": "inputData",
+      "name": "Lending.debt_repayments",
+      "file": "lending.dmn",
+      "application": "lending.dmn"
+    },
+    {
+      "id": "inputData:lending.dmn#Lending.expenses",
+      "kind": "inputData",
+      "name": "Lending.expenses",
+      "file": "lending.dmn",
+      "application": "lending.dmn"
+    },
+    {
+      "id": "inputData:lending.dmn#Lending.income",
+      "kind": "inputData",
+      "name": "Lending.income",
+      "file": "lending.dmn",
+      "application": "lending.dmn"
+    },
+    {
+      "id": "inputData:lending.dmn#Lending.loan_amount",
+      "kind": "inputData",
+      "name": "Lending.loan_amount",
+      "file": "lending.dmn",
+      "application": "lending.dmn"
+    },
+    {
+      "id": "inputData:lending.dmn#Lending.payment_history",
+      "kind": "inputData",
+      "name": "Lending.payment_history",
+      "file": "lending.dmn",
+      "application": "lending.dmn"
+    },
+    {
+      "id": "inputData:lending.dmn#Lending.property_value",
+      "kind": "inputData",
+      "name": "Lending.property_value",
+      "file": "lending.dmn",
+      "application": "lending.dmn"
+    },
+    {
+      "id": "knowledgeSource:lending.dmn#Lending.CreditPolicy",
+      "kind": "knowledgeSource",
+      "name": "Lending.CreditPolicy",
+      "file": "lending.dmn",
+      "application": "lending.dmn"
+    },
+    {
+      "id": "knowledgeSource:lending.dmn#Lending.ResponsibleLendingCode",
+      "kind": "knowledgeSource",
+      "name": "Lending.ResponsibleLendingCode",
+      "file": "lending.dmn",
+      "application": "lending.dmn"
+    },
+    {
+      "id": "knowledgeSource:lending.dmn#Lending.RiskFramework",
+      "kind": "knowledgeSource",
+      "name": "Lending.RiskFramework",
+      "file": "lending.dmn",
+      "application": "lending.dmn"
+    },
+    {
+      "id": "class:library.mox#nz.example.library.Book",
+      "kind": "class",
+      "name": "nz.example.library.Book",
+      "file": "library.mox",
+      "application": "library.mox"
+    },
+    {
+      "id": "class:library.mox#nz.example.library.Library",
+      "kind": "class",
+      "name": "nz.example.library.Library",
+      "file": "library.mox",
+      "application": "library.mox"
+    },
+    {
+      "id": "class:library.mox#nz.example.library.Writer",
+      "kind": "class",
+      "name": "nz.example.library.Writer",
+      "file": "library.mox",
+      "application": "library.mox"
+    },
+    {
+      "id": "datatype:library.mox#nz.example.library.Date",
+      "kind": "datatype",
+      "name": "nz.example.library.Date",
+      "file": "library.mox",
+      "application": "library.mox"
+    },
+    {
+      "id": "enum:library.mox#nz.example.library.BookCategory",
+      "kind": "enum",
+      "name": "nz.example.library.BookCategory",
+      "file": "library.mox",
+      "application": "library.mox"
+    },
+    {
+      "id": "feature:library.mox#nz.example.library.Book.authors",
+      "kind": "feature",
+      "name": "nz.example.library.Book.authors",
+      "file": "library.mox",
+      "application": "library.mox"
+    },
+    {
+      "id": "feature:library.mox#nz.example.library.Book.category",
+      "kind": "feature",
+      "name": "nz.example.library.Book.category",
+      "file": "library.mox",
+      "application": "library.mox"
+    },
+    {
+      "id": "feature:library.mox#nz.example.library.Book.citation",
+      "kind": "feature",
+      "name": "nz.example.library.Book.citation",
+      "file": "library.mox",
+      "application": "library.mox"
+    },
+    {
+      "id": "feature:library.mox#nz.example.library.Book.copyright",
+      "kind": "feature",
+      "name": "nz.example.library.Book.copyright",
+      "file": "library.mox",
+      "application": "library.mox"
+    },
+    {
+      "id": "feature:library.mox#nz.example.library.Book.library",
+      "kind": "feature",
+      "name": "nz.example.library.Book.library",
+      "file": "library.mox",
+      "application": "library.mox"
+    },
+    {
+      "id": "feature:library.mox#nz.example.library.Book.pages",
+      "kind": "feature",
+      "name": "nz.example.library.Book.pages",
+      "file": "library.mox",
+      "application": "library.mox"
+    },
+    {
+      "id": "feature:library.mox#nz.example.library.Book.title",
+      "kind": "feature",
+      "name": "nz.example.library.Book.title",
+      "file": "library.mox",
+      "application": "library.mox"
+    },
+    {
+      "id": "feature:library.mox#nz.example.library.Library.books",
+      "kind": "feature",
+      "name": "nz.example.library.Library.books",
+      "file": "library.mox",
+      "application": "library.mox"
+    },
+    {
+      "id": "feature:library.mox#nz.example.library.Library.name",
+      "kind": "feature",
+      "name": "nz.example.library.Library.name",
+      "file": "library.mox",
+      "application": "library.mox"
+    },
+    {
+      "id": "feature:library.mox#nz.example.library.Writer.books",
+      "kind": "feature",
+      "name": "nz.example.library.Writer.books",
+      "file": "library.mox",
+      "application": "library.mox"
+    },
+    {
+      "id": "feature:library.mox#nz.example.library.Writer.name",
+      "kind": "feature",
+      "name": "nz.example.library.Writer.name",
+      "file": "library.mox",
+      "application": "library.mox"
+    },
+    {
+      "id": "file:library.mox#library.mox",
+      "kind": "file",
+      "name": "library.mox",
+      "file": "library.mox",
+      "application": "library.mox"
+    },
+    {
+      "id": "operation:library.mox#nz.example.library.Library.getBook",
+      "kind": "operation",
+      "name": "nz.example.library.Library.getBook",
+      "file": "library.mox",
+      "application": "library.mox"
+    },
+    {
+      "id": "class:org.mox#nz.example.org.Department",
+      "kind": "class",
+      "name": "nz.example.org.Department",
+      "file": "org.mox",
+      "application": "org.mox"
+    },
+    {
+      "id": "class:org.mox#nz.example.org.Employee",
+      "kind": "class",
+      "name": "nz.example.org.Employee",
+      "file": "org.mox",
+      "application": "org.mox"
+    },
+    {
+      "id": "class:org.mox#nz.example.org.Team",
+      "kind": "class",
+      "name": "nz.example.org.Team",
+      "file": "org.mox",
+      "application": "org.mox"
+    },
+    {
+      "id": "feature:org.mox#nz.example.org.Department.name",
+      "kind": "feature",
+      "name": "nz.example.org.Department.name",
+      "file": "org.mox",
+      "application": "org.mox"
+    },
+    {
+      "id": "feature:org.mox#nz.example.org.Department.staff",
+      "kind": "feature",
+      "name": "nz.example.org.Department.staff",
+      "file": "org.mox",
+      "application": "org.mox"
+    },
+    {
+      "id": "feature:org.mox#nz.example.org.Department.teams",
+      "kind": "feature",
+      "name": "nz.example.org.Department.teams",
+      "file": "org.mox",
+      "application": "org.mox"
+    },
+    {
+      "id": "feature:org.mox#nz.example.org.Employee.department",
+      "kind": "feature",
+      "name": "nz.example.org.Employee.department",
+      "file": "org.mox",
+      "application": "org.mox"
+    },
+    {
+      "id": "feature:org.mox#nz.example.org.Employee.leadsTeams",
+      "kind": "feature",
+      "name": "nz.example.org.Employee.leadsTeams",
+      "file": "org.mox",
+      "application": "org.mox"
+    },
+    {
+      "id": "feature:org.mox#nz.example.org.Employee.manager",
+      "kind": "feature",
+      "name": "nz.example.org.Employee.manager",
+      "file": "org.mox",
+      "application": "org.mox"
+    },
+    {
+      "id": "feature:org.mox#nz.example.org.Employee.memberOf",
+      "kind": "feature",
+      "name": "nz.example.org.Employee.memberOf",
+      "file": "org.mox",
+      "application": "org.mox"
+    },
+    {
+      "id": "feature:org.mox#nz.example.org.Employee.name",
+      "kind": "feature",
+      "name": "nz.example.org.Employee.name",
+      "file": "org.mox",
+      "application": "org.mox"
+    },
+    {
+      "id": "feature:org.mox#nz.example.org.Employee.reports",
+      "kind": "feature",
+      "name": "nz.example.org.Employee.reports",
+      "file": "org.mox",
+      "application": "org.mox"
+    },
+    {
+      "id": "feature:org.mox#nz.example.org.Employee.salary",
+      "kind": "feature",
+      "name": "nz.example.org.Employee.salary",
+      "file": "org.mox",
+      "application": "org.mox"
+    },
+    {
+      "id": "feature:org.mox#nz.example.org.Team.department",
+      "kind": "feature",
+      "name": "nz.example.org.Team.department",
+      "file": "org.mox",
+      "application": "org.mox"
+    },
+    {
+      "id": "feature:org.mox#nz.example.org.Team.lead",
+      "kind": "feature",
+      "name": "nz.example.org.Team.lead",
+      "file": "org.mox",
+      "application": "org.mox"
+    },
+    {
+      "id": "feature:org.mox#nz.example.org.Team.members",
+      "kind": "feature",
+      "name": "nz.example.org.Team.members",
+      "file": "org.mox",
+      "application": "org.mox"
+    },
+    {
+      "id": "feature:org.mox#nz.example.org.Team.name",
+      "kind": "feature",
+      "name": "nz.example.org.Team.name",
+      "file": "org.mox",
+      "application": "org.mox"
+    },
+    {
+      "id": "file:org.mox#org.mox",
+      "kind": "file",
+      "name": "org.mox",
+      "file": "org.mox",
+      "application": "org.mox"
+    },
+    {
+      "id": "operation:org.mox#nz.example.org.Team.any_member_earns_over",
+      "kind": "operation",
+      "name": "nz.example.org.Team.any_member_earns_over",
+      "file": "org.mox",
+      "application": "org.mox"
+    },
+    {
+      "id": "operation:org.mox#nz.example.org.Team.payroll",
+      "kind": "operation",
+      "name": "nz.example.org.Team.payroll",
+      "file": "org.mox",
+      "application": "org.mox"
+    },
+    {
+      "id": "class:pricing.mox#nz.example.pricing.Quote",
+      "kind": "class",
+      "name": "nz.example.pricing.Quote",
+      "file": "pricing.mox",
+      "application": "pricing.mox"
+    },
+    {
+      "id": "class:pricing.mox#pricing.model.Instrument",
+      "kind": "class",
+      "name": "pricing.model.Instrument",
+      "file": "pricing.mox",
+      "application": "pricing.mox"
+    },
+    {
+      "id": "datatype:pricing.mox#com.rosetta.model.zonedDateTime",
+      "kind": "datatype",
+      "name": "com.rosetta.model.zonedDateTime",
+      "file": "pricing.mox",
+      "application": "pricing.mox"
+    },
+    {
+      "id": "feature:pricing.mox#nz.example.pricing.Quote.notional",
+      "kind": "feature",
+      "name": "nz.example.pricing.Quote.notional",
+      "file": "pricing.mox",
+      "application": "pricing.mox"
+    },
+    {
+      "id": "feature:pricing.mox#nz.example.pricing.Quote.symbol",
+      "kind": "feature",
+      "name": "nz.example.pricing.Quote.symbol",
+      "file": "pricing.mox",
+      "application": "pricing.mox"
+    },
+    {
+      "id": "feature:pricing.mox#pricing.model.Instrument.symbol",
+      "kind": "feature",
+      "name": "pricing.model.Instrument.symbol",
+      "file": "pricing.mox",
+      "application": "pricing.mox"
+    },
+    {
+      "id": "file:pricing.mox#pricing.mox",
+      "kind": "file",
+      "name": "pricing.mox",
+      "file": "pricing.mox",
+      "application": "pricing.mox"
+    },
+    {
+      "id": "operation:pricing.mox#nz.example.pricing.Quote.withSpread",
+      "kind": "operation",
+      "name": "nz.example.pricing.Quote.withSpread",
+      "file": "pricing.mox",
+      "application": "pricing.mox"
+    },
+    {
+      "id": "class:shapes.mox#nz.example.shapes.Animal",
+      "kind": "class",
+      "name": "nz.example.shapes.Animal",
+      "file": "shapes.mox",
+      "application": "shapes.mox"
+    },
+    {
+      "id": "class:shapes.mox#nz.example.shapes.Cat",
+      "kind": "class",
+      "name": "nz.example.shapes.Cat",
+      "file": "shapes.mox",
+      "application": "shapes.mox"
+    },
+    {
+      "id": "class:shapes.mox#nz.example.shapes.Dog",
+      "kind": "class",
+      "name": "nz.example.shapes.Dog",
+      "file": "shapes.mox",
+      "application": "shapes.mox"
+    },
+    {
+      "id": "feature:shapes.mox#nz.example.shapes.Animal.name",
+      "kind": "feature",
+      "name": "nz.example.shapes.Animal.name",
+      "file": "shapes.mox",
+      "application": "shapes.mox"
+    },
+    {
+      "id": "feature:shapes.mox#nz.example.shapes.Cat.indoor",
+      "kind": "feature",
+      "name": "nz.example.shapes.Cat.indoor",
+      "file": "shapes.mox",
+      "application": "shapes.mox"
+    },
+    {
+      "id": "feature:shapes.mox#nz.example.shapes.Dog.breed",
+      "kind": "feature",
+      "name": "nz.example.shapes.Dog.breed",
+      "file": "shapes.mox",
+      "application": "shapes.mox"
+    },
+    {
+      "id": "file:shapes.mox#shapes.mox",
+      "kind": "file",
+      "name": "shapes.mox",
+      "file": "shapes.mox",
+      "application": "shapes.mox"
+    }
+  ],
+  "edges": [
+    {
+      "from": "action:cli.ifml#ClaimTicket",
+      "to": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.claimTicket",
+      "kind": "binds"
+    },
+    {
+      "from": "action:cli.ifml#ClaimTicket",
+      "to": "flow:cli.ifml#cli",
+      "kind": "memberOf"
+    },
+    {
+      "from": "action:cli.ifml#GetTicket",
+      "to": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.getTicket",
+      "kind": "binds"
+    },
+    {
+      "from": "action:cli.ifml#GetTicket",
+      "to": "flow:cli.ifml#cli",
+      "kind": "memberOf"
+    },
+    {
+      "from": "action:cli.ifml#ListTickets",
+      "to": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.listTickets",
+      "kind": "binds"
+    },
+    {
+      "from": "action:cli.ifml#ListTickets",
+      "to": "flow:cli.ifml#cli",
+      "kind": "memberOf"
+    },
+    {
+      "from": "action:cli.ifml#RefundTicket",
+      "to": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.refundTicket",
+      "kind": "binds"
+    },
+    {
+      "from": "action:cli.ifml#RefundTicket",
+      "to": "flow:cli.ifml#cli",
+      "kind": "memberOf"
+    },
+    {
+      "from": "action:ecommerce.ifml#AddToCart",
+      "to": "flow:ecommerce.ifml#ecommerce",
+      "kind": "memberOf"
+    },
+    {
+      "from": "action:ecommerce.ifml#CompleteWizard",
+      "to": "flow:ecommerce.ifml#ecommerce",
+      "kind": "memberOf"
+    },
+    {
+      "from": "action:ecommerce.ifml#PlaceOrder",
+      "to": "flow:ecommerce.ifml#ecommerce",
+      "kind": "memberOf"
+    },
+    {
+      "from": "action:ecommerce.ifml#Save",
+      "to": "flow:ecommerce.ifml#ecommerce",
+      "kind": "memberOf"
+    },
+    {
+      "from": "action:support.ifml#Approve",
+      "to": "flow:support.ifml#support",
+      "kind": "memberOf"
+    },
+    {
+      "from": "action:support.ifml#ApproveRefund",
+      "to": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.approveRefund",
+      "kind": "binds"
+    },
+    {
+      "from": "action:support.ifml#ApproveRefund",
+      "to": "flow:support.ifml#support",
+      "kind": "memberOf"
+    },
+    {
+      "from": "action:support.ifml#Assign",
+      "to": "flow:support.ifml#support",
+      "kind": "memberOf"
+    },
+    {
+      "from": "action:support.ifml#MarkRead",
+      "to": "flow:support.ifml#support",
+      "kind": "memberOf"
+    },
+    {
+      "from": "action:support.ifml#RaiseRefund",
+      "to": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.raiseRefund",
+      "kind": "binds"
+    },
+    {
+      "from": "action:support.ifml#RaiseRefund",
+      "to": "flow:support.ifml#support",
+      "kind": "memberOf"
+    },
+    {
+      "from": "action:support.ifml#Reject",
+      "to": "flow:support.ifml#support",
+      "kind": "memberOf"
+    },
+    {
+      "from": "actor:support.actor#Support.Agent",
+      "to": "actor:support.actor#Support.Customer",
+      "kind": "extends"
+    },
+    {
+      "from": "actor:support.actor#Support.Agent",
+      "to": "capability:support.actor#Support.RaiseRefund",
+      "kind": "permits",
+      "effect": "permit",
+      "when": "refundCents > 0 && refundCents <= 5000",
+      "obligations": [
+        "audit",
+        "notifyCustomer"
+      ]
+    },
+    {
+      "from": "actor:support.actor#Support.Agent",
+      "to": "capability:support.actor#Support.ReadTicket",
+      "kind": "permits",
+      "effect": "permit"
+    },
+    {
+      "from": "actor:support.actor#Support.Agent",
+      "to": "capability:support.actor#Support.UpdateTicket",
+      "kind": "permits",
+      "effect": "permit",
+      "when": "!internal",
+      "obligations": [
+        "audit"
+      ]
+    },
+    {
+      "from": "actor:support.actor#Support.Customer",
+      "to": "capability:support.actor#Support.ReadTicket",
+      "kind": "permits",
+      "effect": "permit",
+      "when": "!internal"
+    },
+    {
+      "from": "actor:support.actor#Support.Finance",
+      "to": "capability:support.actor#Support.ResolveTicket",
+      "kind": "forbids",
+      "effect": "forbid"
+    },
+    {
+      "from": "actor:support.actor#Support.Finance",
+      "to": "capability:support.actor#Support.ApproveRefund",
+      "kind": "permits",
+      "effect": "permit",
+      "when": "refundCents <= 100000"
+    },
+    {
+      "from": "actor:support.actor#Support.Manager",
+      "to": "actor:support.actor#Support.Agent",
+      "kind": "extends"
+    },
+    {
+      "from": "actor:support.actor#Support.Manager",
+      "to": "file:support.actor#support.actor",
+      "kind": "opaqueGrant",
+      "effect": "permit"
+    },
+    {
+      "from": "actor:support.actor#Support.Manager",
+      "to": "capability:support.actor#Support.ReadTicket",
+      "kind": "permits",
+      "effect": "permit"
+    },
+    {
+      "from": "actor:support.actor#Support.Manager",
+      "to": "capability:support.actor#Support.ResolveTicket",
+      "kind": "permits",
+      "effect": "permit"
+    },
+    {
+      "from": "actor:support.actor#Support.Manager",
+      "to": "capability:support.actor#Support.UpdateTicket",
+      "kind": "permits",
+      "effect": "permit"
+    },
+    {
+      "from": "bkm:lending.dmn#Lending.calculate_lvr",
+      "to": "decisionModel:lending.dmn#Lending",
+      "kind": "memberOf"
+    },
+    {
+      "from": "bkm:lending.dmn#Lending.calculate_serviceability",
+      "to": "decisionModel:lending.dmn#Lending",
+      "kind": "memberOf"
+    },
+    {
+      "from": "bkm:support.dmn#RefundDecisions.assess_refund",
+      "to": "decisionModel:support.dmn#RefundDecisions",
+      "kind": "memberOf"
+    },
+    {
+      "from": "capability:support.actor#Support.ApproveRefund",
+      "to": "capability:support.actor#Support.RaiseRefund",
+      "kind": "excludes"
+    },
+    {
+      "from": "capability:support.actor#Support.ApproveRefund",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "on"
+    },
+    {
+      "from": "capability:support.actor#Support.RaiseRefund",
+      "to": "capability:support.actor#Support.ApproveRefund",
+      "kind": "excludes"
+    },
+    {
+      "from": "capability:support.actor#Support.RaiseRefund",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "on"
+    },
+    {
+      "from": "capability:support.actor#Support.ReadTicket",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "on"
+    },
+    {
+      "from": "capability:support.actor#Support.ResolveTicket",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "on"
+    },
+    {
+      "from": "capability:support.actor#Support.UpdateTicket",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "on"
+    },
+    {
+      "from": "caseFileItem:support.cmmn#RefundDesk.decision",
+      "to": "case:support.cmmn#RefundDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "caseFileItem:support.cmmn#RefundDesk.decision",
+      "to": "class:support.mox#nz.example.support.RefundDecision",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "decision"
+      }
+    },
+    {
+      "from": "caseFileItem:support.cmmn#RefundDesk.ticket",
+      "to": "case:support.cmmn#RefundDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "caseFileItem:support.cmmn#RefundDesk.ticket",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "ticket"
+      }
+    },
+    {
+      "from": "caseRole:support.cmmn#RefundDesk.escalation",
+      "to": "case:support.cmmn#RefundDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "caseRole:support.cmmn#RefundDesk.escalation",
+      "to": "actor:support.actor#Support.Manager",
+      "kind": "requires",
+      "attributes": {
+        "via": "roles"
+      }
+    },
+    {
+      "from": "caseRole:support.cmmn#RefundDesk.finance",
+      "to": "case:support.cmmn#RefundDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "caseRole:support.cmmn#RefundDesk.finance",
+      "to": "actor:support.actor#Support.Finance",
+      "kind": "requires",
+      "attributes": {
+        "via": "roles"
+      }
+    },
+    {
+      "from": "caseRole:support.cmmn#RefundDesk.triage",
+      "to": "case:support.cmmn#RefundDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "caseRole:support.cmmn#RefundDesk.triage",
+      "to": "actor:support.actor#Support.Agent",
+      "kind": "requires",
+      "attributes": {
+        "via": "roles"
+      }
+    },
+    {
+      "from": "channel:ecommerce.evt#ecommerce.fulfilment",
+      "to": "event:ecommerce.evt#ecommerce.OrderLineShipped",
+      "kind": "publishes"
+    },
+    {
+      "from": "channel:ecommerce.evt#ecommerce.orders",
+      "to": "event:ecommerce.evt#ecommerce.OrderCancelled",
+      "kind": "publishes"
+    },
+    {
+      "from": "channel:ecommerce.evt#ecommerce.orders",
+      "to": "event:ecommerce.evt#ecommerce.OrderLineShipped",
+      "kind": "publishes"
+    },
+    {
+      "from": "channel:ecommerce.evt#ecommerce.orders",
+      "to": "event:ecommerce.evt#ecommerce.OrderPlaced",
+      "kind": "publishes"
+    },
+    {
+      "from": "channel:support.evt#support.refunds",
+      "to": "event:support.evt#support.RefundApproved",
+      "kind": "publishes"
+    },
+    {
+      "from": "channel:support.evt#support.refunds",
+      "to": "event:support.evt#support.RefundRequested",
+      "kind": "publishes"
+    },
+    {
+      "from": "channel:support.evt#support.tickets",
+      "to": "event:support.evt#support.TicketRaised",
+      "kind": "publishes"
+    },
+    {
+      "from": "channel:support.evt#support.tickets",
+      "to": "event:support.evt#support.TicketResolved",
+      "kind": "publishes"
+    },
+    {
+      "from": "class:ecommerce.mox#nz.example.shop.Customer",
+      "to": "class:ecommerce.mox#nz.example.shop.Order",
+      "kind": "refers",
+      "attributes": {
+        "feature": "orders"
+      }
+    },
+    {
+      "from": "class:ecommerce.mox#nz.example.shop.Order",
+      "to": "class:ecommerce.mox#nz.example.shop.OrderLine",
+      "kind": "contains",
+      "attributes": {
+        "feature": "lines"
+      }
+    },
+    {
+      "from": "class:ecommerce.mox#nz.example.shop.Order",
+      "to": "class:ecommerce.mox#nz.example.shop.Customer",
+      "kind": "refers",
+      "attributes": {
+        "feature": "customer"
+      }
+    },
+    {
+      "from": "class:iot.mox#nz.example.iot.Device",
+      "to": "class:iot.mox#nz.example.iot.Sensor",
+      "kind": "contains",
+      "attributes": {
+        "feature": "sensors"
+      }
+    },
+    {
+      "from": "class:library.mox#nz.example.library.Book",
+      "to": "class:library.mox#nz.example.library.Writer",
+      "kind": "refers",
+      "attributes": {
+        "feature": "authors"
+      }
+    },
+    {
+      "from": "class:library.mox#nz.example.library.Library",
+      "to": "class:library.mox#nz.example.library.Book",
+      "kind": "contains",
+      "attributes": {
+        "feature": "books"
+      }
+    },
+    {
+      "from": "class:library.mox#nz.example.library.Writer",
+      "to": "class:library.mox#nz.example.library.Book",
+      "kind": "refers",
+      "attributes": {
+        "feature": "books"
+      }
+    },
+    {
+      "from": "class:org.mox#nz.example.org.Department",
+      "to": "class:org.mox#nz.example.org.Employee",
+      "kind": "contains",
+      "attributes": {
+        "feature": "staff"
+      }
+    },
+    {
+      "from": "class:org.mox#nz.example.org.Department",
+      "to": "class:org.mox#nz.example.org.Team",
+      "kind": "contains",
+      "attributes": {
+        "feature": "teams"
+      }
+    },
+    {
+      "from": "class:org.mox#nz.example.org.Employee",
+      "to": "class:org.mox#nz.example.org.Employee",
+      "kind": "refers",
+      "attributes": {
+        "feature": "manager"
+      }
+    },
+    {
+      "from": "class:org.mox#nz.example.org.Employee",
+      "to": "class:org.mox#nz.example.org.Employee",
+      "kind": "refers",
+      "attributes": {
+        "feature": "reports"
+      }
+    },
+    {
+      "from": "class:org.mox#nz.example.org.Employee",
+      "to": "class:org.mox#nz.example.org.Team",
+      "kind": "refers",
+      "attributes": {
+        "feature": "leadsTeams"
+      }
+    },
+    {
+      "from": "class:org.mox#nz.example.org.Team",
+      "to": "class:org.mox#nz.example.org.Employee",
+      "kind": "contains",
+      "attributes": {
+        "feature": "members"
+      }
+    },
+    {
+      "from": "class:org.mox#nz.example.org.Team",
+      "to": "class:org.mox#nz.example.org.Employee",
+      "kind": "refers",
+      "attributes": {
+        "feature": "lead"
+      }
+    },
+    {
+      "from": "class:shapes.mox#nz.example.shapes.Cat",
+      "to": "class:shapes.mox#nz.example.shapes.Animal",
+      "kind": "extends"
+    },
+    {
+      "from": "class:shapes.mox#nz.example.shapes.Dog",
+      "to": "class:shapes.mox#nz.example.shapes.Animal",
+      "kind": "extends"
+    },
+    {
+      "from": "class:support.mox#nz.example.support.Ticket",
+      "to": "class:support.mox#nz.example.support.User",
+      "kind": "refers",
+      "attributes": {
+        "feature": "assignee"
+      }
+    },
+    {
+      "from": "class:support.mox#nz.example.support.User",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "refers",
+      "attributes": {
+        "feature": "assignedTickets"
+      }
+    },
+    {
+      "from": "command:cli.ifml#tickets",
+      "to": "action:cli.ifml#ListTickets",
+      "kind": "invokesAction",
+      "attributes": {
+        "source": "tickets",
+        "trigger": "run"
+      }
+    },
+    {
+      "from": "command:cli.ifml#tickets",
+      "to": "flow:cli.ifml#cli",
+      "kind": "memberOf"
+    },
+    {
+      "from": "command:cli.ifml#tickets",
+      "to": "actor:support.actor#Support.Agent",
+      "kind": "requires",
+      "attributes": {
+        "via": "requires"
+      }
+    },
+    {
+      "from": "command:cli.ifml#tickets.claim",
+      "to": "action:cli.ifml#ClaimTicket",
+      "kind": "invokesAction",
+      "attributes": {
+        "source": "tickets.claim",
+        "trigger": "run"
+      }
+    },
+    {
+      "from": "command:cli.ifml#tickets.refund",
+      "to": "action:cli.ifml#RefundTicket",
+      "kind": "invokesAction",
+      "attributes": {
+        "source": "tickets.refund",
+        "trigger": "run"
+      }
+    },
+    {
+      "from": "command:cli.ifml#tickets.show",
+      "to": "action:cli.ifml#GetTicket",
+      "kind": "invokesAction",
+      "attributes": {
+        "source": "tickets.show",
+        "trigger": "run"
+      }
+    },
+    {
+      "from": "component:ecommerce.ifml#CartPage.items",
+      "to": "class:ecommerce.mox#nz.example.shop.OrderLine",
+      "kind": "data",
+      "attributes": {
+        "asWritten": "OrderLine"
+      }
+    },
+    {
+      "from": "component:ecommerce.ifml#CartPage.items",
+      "to": "view:ecommerce.ifml#Checkout",
+      "kind": "navigates",
+      "attributes": {
+        "source": "CartPage.items",
+        "trigger": "checkout"
+      }
+    },
+    {
+      "from": "component:ecommerce.ifml#CartPage.items",
+      "to": "feature:ecommerce.mox#nz.example.shop.OrderLine.quantity",
+      "kind": "readsFeature",
+      "attributes": {
+        "via": "column"
+      }
+    },
+    {
+      "from": "component:ecommerce.ifml#CartPage.items",
+      "to": "feature:ecommerce.mox#nz.example.shop.OrderLine.sku",
+      "kind": "readsFeature",
+      "attributes": {
+        "via": "column"
+      }
+    },
+    {
+      "from": "component:ecommerce.ifml#CartPage.items",
+      "to": "feature:ecommerce.mox#nz.example.shop.OrderLine.unitPrice",
+      "kind": "readsFeature",
+      "attributes": {
+        "via": "column"
+      }
+    },
+    {
+      "from": "component:ecommerce.ifml#ProductPage.buy",
+      "to": "class:ecommerce.mox#nz.example.shop.Product",
+      "kind": "data",
+      "attributes": {
+        "asWritten": "Product"
+      }
+    },
+    {
+      "from": "component:ecommerce.ifml#ProductPage.buy",
+      "to": "view:ecommerce.ifml#CartPage",
+      "kind": "navigates",
+      "attributes": {
+        "source": "ProductPage.buy",
+        "trigger": "addToCart"
+      }
+    },
+    {
+      "from": "component:ecommerce.ifml#Storefront.deals",
+      "to": "class:ecommerce.mox#nz.example.shop.Product",
+      "kind": "data",
+      "attributes": {
+        "asWritten": "Product"
+      }
+    },
+    {
+      "from": "component:ecommerce.ifml#Storefront.deals",
+      "to": "view:ecommerce.ifml#ProductPage",
+      "kind": "navigates",
+      "attributes": {
+        "source": "Storefront.deals",
+        "trigger": "select"
+      }
+    },
+    {
+      "from": "component:ecommerce.ifml#Storefront.deals",
+      "to": "feature:ecommerce.mox#nz.example.shop.Product.listPrice",
+      "kind": "readsFeature",
+      "attributes": {
+        "via": "column"
+      }
+    },
+    {
+      "from": "component:ecommerce.ifml#Storefront.deals",
+      "to": "feature:ecommerce.mox#nz.example.shop.Product.sku",
+      "kind": "readsFeature",
+      "attributes": {
+        "via": "column"
+      }
+    },
+    {
+      "from": "component:support.ifml#Inbox.escalations",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "data",
+      "attributes": {
+        "asWritten": "Ticket"
+      }
+    },
+    {
+      "from": "component:support.ifml#Inbox.escalations",
+      "to": "view:support.ifml#Queue",
+      "kind": "navigates",
+      "attributes": {
+        "source": "Inbox.escalations",
+        "trigger": "select"
+      }
+    },
+    {
+      "from": "component:support.ifml#Inbox.escalations",
+      "to": "feature:support.mox#nz.example.support.Ticket.refundCents",
+      "kind": "readsFeature",
+      "attributes": {
+        "via": "column"
+      }
+    },
+    {
+      "from": "component:support.ifml#Inbox.escalations",
+      "to": "feature:support.mox#nz.example.support.Ticket.ticketNo",
+      "kind": "readsFeature",
+      "attributes": {
+        "via": "column"
+      }
+    },
+    {
+      "from": "component:support.ifml#Inbox.escalations",
+      "to": "feature:support.mox#nz.example.support.Ticket.title",
+      "kind": "readsFeature",
+      "attributes": {
+        "via": "column"
+      }
+    },
+    {
+      "from": "component:support.ifml#Queue.intake",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "data",
+      "attributes": {
+        "asWritten": "Ticket"
+      }
+    },
+    {
+      "from": "component:support.ifml#Queue.intake",
+      "to": "action:support.ifml#RaiseRefund",
+      "kind": "invokesAction",
+      "attributes": {
+        "source": "Queue.intake",
+        "trigger": "raise"
+      }
+    },
+    {
+      "from": "component:support.ifml#Queue.refunds",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "data",
+      "attributes": {
+        "asWritten": "Ticket"
+      }
+    },
+    {
+      "from": "component:support.ifml#Queue.refunds",
+      "to": "action:support.ifml#ApproveRefund",
+      "kind": "invokesAction",
+      "attributes": {
+        "source": "Queue.refunds",
+        "trigger": "approve"
+      }
+    },
+    {
+      "from": "component:support.ifml#Queue.refunds",
+      "to": "feature:support.mox#nz.example.support.Ticket.refundCents",
+      "kind": "readsFeature",
+      "attributes": {
+        "via": "column"
+      }
+    },
+    {
+      "from": "component:support.ifml#Queue.refunds",
+      "to": "feature:support.mox#nz.example.support.Ticket.ticketNo",
+      "kind": "readsFeature",
+      "attributes": {
+        "via": "column"
+      }
+    },
+    {
+      "from": "component:support.ifml#Queue.refunds",
+      "to": "feature:support.mox#nz.example.support.Ticket.title",
+      "kind": "readsFeature",
+      "attributes": {
+        "via": "column"
+      }
+    },
+    {
+      "from": "decision:lending.dmn#Lending.lending_capacity",
+      "to": "decisionModel:lending.dmn#Lending",
+      "kind": "memberOf"
+    },
+    {
+      "from": "decision:lending.dmn#Lending.loan_approval",
+      "to": "decisionModel:lending.dmn#Lending",
+      "kind": "memberOf"
+    },
+    {
+      "from": "decision:lending.dmn#Lending.pricing",
+      "to": "decisionModel:lending.dmn#Lending",
+      "kind": "memberOf"
+    },
+    {
+      "from": "decision:lending.dmn#Lending.risk_assessment",
+      "to": "decisionModel:lending.dmn#Lending",
+      "kind": "memberOf"
+    },
+    {
+      "from": "decision:lending.dmn#Lending.security_assessment",
+      "to": "decisionModel:lending.dmn#Lending",
+      "kind": "memberOf"
+    },
+    {
+      "from": "decision:support.dmn#RefundDecisions.RefundAssessment",
+      "to": "event:support.evt#support.RefundApproved",
+      "kind": "emits",
+      "when": "eligible"
+    },
+    {
+      "from": "decision:support.dmn#RefundDecisions.RefundAssessment",
+      "to": "decisionModel:support.dmn#RefundDecisions",
+      "kind": "memberOf"
+    },
+    {
+      "from": "decision:support.dmn#RefundDecisions.RefundAuthority",
+      "to": "decisionModel:support.dmn#RefundDecisions",
+      "kind": "memberOf"
+    },
+    {
+      "from": "decision:support.dmn#RefundDecisions.RefundEligibility",
+      "to": "decisionModel:support.dmn#RefundDecisions",
+      "kind": "memberOf"
+    },
+    {
+      "from": "decisionService:lending.dmn#Lending.loan_assessment",
+      "to": "decisionModel:lending.dmn#Lending",
+      "kind": "memberOf"
+    },
+    {
+      "from": "decisionService:lending.dmn#Lending.loan_assessment",
+      "to": "decision:lending.dmn#Lending.loan_approval",
+      "kind": "provides"
+    },
+    {
+      "from": "decisionService:lending.dmn#Lending.loan_assessment",
+      "to": "decision:lending.dmn#Lending.pricing",
+      "kind": "provides"
+    },
+    {
+      "from": "decisionService:support.dmn#RefundDecisions.AssessRefund",
+      "to": "decisionModel:support.dmn#RefundDecisions",
+      "kind": "memberOf"
+    },
+    {
+      "from": "decisionService:support.dmn#RefundDecisions.AssessRefund",
+      "to": "decision:support.dmn#RefundDecisions.RefundAssessment",
+      "kind": "provides"
+    },
+    {
+      "from": "deployComponent:support.deploy#SupportDesk.analytics_service",
+      "to": "deployApplication:support.deploy#SupportDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "deployComponent:support.deploy#SupportDesk.api",
+      "to": "module:support.ddd#SupportDesk.desk",
+      "kind": "bindsDesign",
+      "attributes": {
+        "module": "desk"
+      }
+    },
+    {
+      "from": "deployComponent:support.deploy#SupportDesk.api",
+      "to": "deployComponent:support.deploy#SupportDesk.db",
+      "kind": "connects"
+    },
+    {
+      "from": "deployComponent:support.deploy#SupportDesk.api",
+      "to": "deployApplication:support.deploy#SupportDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "deployComponent:support.deploy#SupportDesk.db",
+      "to": "deployApplication:support.deploy#SupportDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "deployComponent:support.deploy#SupportDesk.refund_approval_service",
+      "to": "deployApplication:support.deploy#SupportDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "deployComponent:support.deploy#SupportDesk.web",
+      "to": "flow:support.ifml#support",
+      "kind": "bindsFlow"
+    },
+    {
+      "from": "deployComponent:support.deploy#SupportDesk.web",
+      "to": "deployComponent:support.deploy#SupportDesk.api",
+      "kind": "connects"
+    },
+    {
+      "from": "deployComponent:support.deploy#SupportDesk.web",
+      "to": "deployApplication:support.deploy#SupportDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "deployment:support.deploy#SupportDesk.edgeLive",
+      "to": "deployApplication:support.deploy#SupportDesk",
+      "kind": "deploys"
+    },
+    {
+      "from": "deployment:support.deploy#SupportDesk.edgeLive",
+      "to": "deployProfile:support.deploy#edge",
+      "kind": "usesProfile"
+    },
+    {
+      "from": "deployment:support.deploy#SupportDesk.production",
+      "to": "deployApplication:support.deploy#SupportDesk",
+      "kind": "deploys"
+    },
+    {
+      "from": "deployment:support.deploy#SupportDesk.production",
+      "to": "deployProfile:support.deploy#production_k8s",
+      "kind": "usesProfile"
+    },
+    {
+      "from": "event:support.evt#support.TicketRaised",
+      "to": "enum:support.mox#nz.example.support.TicketState",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "state"
+      }
+    },
+    {
+      "from": "event:support.evt#support.TicketResolved",
+      "to": "enum:support.mox#nz.example.support.TicketState",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "state"
+      }
+    },
+    {
+      "from": "feature:ecommerce.mox#nz.example.shop.Customer.name",
+      "to": "class:ecommerce.mox#nz.example.shop.Customer",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:ecommerce.mox#nz.example.shop.Customer.orders",
+      "to": "class:ecommerce.mox#nz.example.shop.Customer",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:ecommerce.mox#nz.example.shop.Customer.orders",
+      "to": "feature:ecommerce.mox#nz.example.shop.Order.customer",
+      "kind": "opposite",
+      "attributes": {
+        "field": "orders"
+      }
+    },
+    {
+      "from": "feature:ecommerce.mox#nz.example.shop.Customer.orders",
+      "to": "class:ecommerce.mox#nz.example.shop.Order",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "orders"
+      }
+    },
+    {
+      "from": "feature:ecommerce.mox#nz.example.shop.Order.currency",
+      "to": "class:ecommerce.mox#nz.example.shop.Order",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:ecommerce.mox#nz.example.shop.Order.customer",
+      "to": "class:ecommerce.mox#nz.example.shop.Order",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:ecommerce.mox#nz.example.shop.Order.customer",
+      "to": "feature:ecommerce.mox#nz.example.shop.Customer.orders",
+      "kind": "opposite",
+      "attributes": {
+        "field": "customer"
+      }
+    },
+    {
+      "from": "feature:ecommerce.mox#nz.example.shop.Order.customer",
+      "to": "class:ecommerce.mox#nz.example.shop.Customer",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "customer"
+      }
+    },
+    {
+      "from": "feature:ecommerce.mox#nz.example.shop.Order.lines",
+      "to": "class:ecommerce.mox#nz.example.shop.Order",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:ecommerce.mox#nz.example.shop.Order.lines",
+      "to": "feature:ecommerce.mox#nz.example.shop.OrderLine.order",
+      "kind": "opposite",
+      "attributes": {
+        "field": "lines"
+      }
+    },
+    {
+      "from": "feature:ecommerce.mox#nz.example.shop.Order.lines",
+      "to": "class:ecommerce.mox#nz.example.shop.OrderLine",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "lines"
+      }
+    },
+    {
+      "from": "feature:ecommerce.mox#nz.example.shop.Order.orderNo",
+      "to": "class:ecommerce.mox#nz.example.shop.Order",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:ecommerce.mox#nz.example.shop.Order.total",
+      "to": "class:ecommerce.mox#nz.example.shop.Order",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:ecommerce.mox#nz.example.shop.OrderLine.order",
+      "to": "class:ecommerce.mox#nz.example.shop.OrderLine",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:ecommerce.mox#nz.example.shop.OrderLine.order",
+      "to": "feature:ecommerce.mox#nz.example.shop.Order.lines",
+      "kind": "opposite",
+      "attributes": {
+        "field": "order"
+      }
+    },
+    {
+      "from": "feature:ecommerce.mox#nz.example.shop.OrderLine.order",
+      "to": "class:ecommerce.mox#nz.example.shop.Order",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "order"
+      }
+    },
+    {
+      "from": "feature:ecommerce.mox#nz.example.shop.OrderLine.quantity",
+      "to": "class:ecommerce.mox#nz.example.shop.OrderLine",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:ecommerce.mox#nz.example.shop.OrderLine.sku",
+      "to": "class:ecommerce.mox#nz.example.shop.OrderLine",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:ecommerce.mox#nz.example.shop.OrderLine.unitPrice",
+      "to": "class:ecommerce.mox#nz.example.shop.OrderLine",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:ecommerce.mox#nz.example.shop.Product.listPrice",
+      "to": "class:ecommerce.mox#nz.example.shop.Product",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:ecommerce.mox#nz.example.shop.Product.sku",
+      "to": "class:ecommerce.mox#nz.example.shop.Product",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:iot.mox#nz.example.iot.Device.displayName",
+      "to": "class:iot.mox#nz.example.iot.Device",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:iot.mox#nz.example.iot.Device.name",
+      "to": "class:iot.mox#nz.example.iot.Device",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:iot.mox#nz.example.iot.Device.sensors",
+      "to": "class:iot.mox#nz.example.iot.Device",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:iot.mox#nz.example.iot.Device.sensors",
+      "to": "feature:iot.mox#nz.example.iot.Sensor.device",
+      "kind": "opposite",
+      "attributes": {
+        "field": "sensors"
+      }
+    },
+    {
+      "from": "feature:iot.mox#nz.example.iot.Device.sensors",
+      "to": "class:iot.mox#nz.example.iot.Sensor",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "sensors"
+      }
+    },
+    {
+      "from": "feature:iot.mox#nz.example.iot.Device.state",
+      "to": "class:iot.mox#nz.example.iot.Device",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:iot.mox#nz.example.iot.Device.state",
+      "to": "enum:iot.mox#nz.example.iot.DeviceState",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "state"
+      }
+    },
+    {
+      "from": "feature:iot.mox#nz.example.iot.Sensor.address",
+      "to": "class:iot.mox#nz.example.iot.Sensor",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:iot.mox#nz.example.iot.Sensor.address",
+      "to": "datatype:iot.mox#nz.example.iot.Mac",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "address"
+      }
+    },
+    {
+      "from": "feature:iot.mox#nz.example.iot.Sensor.device",
+      "to": "class:iot.mox#nz.example.iot.Sensor",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:iot.mox#nz.example.iot.Sensor.device",
+      "to": "feature:iot.mox#nz.example.iot.Device.sensors",
+      "kind": "opposite",
+      "attributes": {
+        "field": "device"
+      }
+    },
+    {
+      "from": "feature:iot.mox#nz.example.iot.Sensor.device",
+      "to": "class:iot.mox#nz.example.iot.Device",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "device"
+      }
+    },
+    {
+      "from": "feature:iot.mox#nz.example.iot.Sensor.sensorId",
+      "to": "class:iot.mox#nz.example.iot.Sensor",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:library.mox#nz.example.library.Book.authors",
+      "to": "class:library.mox#nz.example.library.Book",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:library.mox#nz.example.library.Book.authors",
+      "to": "feature:library.mox#nz.example.library.Writer.books",
+      "kind": "opposite",
+      "attributes": {
+        "field": "authors"
+      }
+    },
+    {
+      "from": "feature:library.mox#nz.example.library.Book.authors",
+      "to": "class:library.mox#nz.example.library.Writer",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "authors"
+      }
+    },
+    {
+      "from": "feature:library.mox#nz.example.library.Book.category",
+      "to": "class:library.mox#nz.example.library.Book",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:library.mox#nz.example.library.Book.category",
+      "to": "enum:library.mox#nz.example.library.BookCategory",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "category"
+      }
+    },
+    {
+      "from": "feature:library.mox#nz.example.library.Book.citation",
+      "to": "class:library.mox#nz.example.library.Book",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:library.mox#nz.example.library.Book.copyright",
+      "to": "class:library.mox#nz.example.library.Book",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:library.mox#nz.example.library.Book.copyright",
+      "to": "datatype:library.mox#nz.example.library.Date",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "copyright"
+      }
+    },
+    {
+      "from": "feature:library.mox#nz.example.library.Book.library",
+      "to": "class:library.mox#nz.example.library.Book",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:library.mox#nz.example.library.Book.library",
+      "to": "feature:library.mox#nz.example.library.Library.books",
+      "kind": "opposite",
+      "attributes": {
+        "field": "library"
+      }
+    },
+    {
+      "from": "feature:library.mox#nz.example.library.Book.library",
+      "to": "class:library.mox#nz.example.library.Library",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "library"
+      }
+    },
+    {
+      "from": "feature:library.mox#nz.example.library.Book.pages",
+      "to": "class:library.mox#nz.example.library.Book",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:library.mox#nz.example.library.Book.title",
+      "to": "class:library.mox#nz.example.library.Book",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:library.mox#nz.example.library.Library.books",
+      "to": "class:library.mox#nz.example.library.Library",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:library.mox#nz.example.library.Library.books",
+      "to": "feature:library.mox#nz.example.library.Book.library",
+      "kind": "opposite",
+      "attributes": {
+        "field": "books"
+      }
+    },
+    {
+      "from": "feature:library.mox#nz.example.library.Library.books",
+      "to": "class:library.mox#nz.example.library.Book",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "books"
+      }
+    },
+    {
+      "from": "feature:library.mox#nz.example.library.Library.name",
+      "to": "class:library.mox#nz.example.library.Library",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:library.mox#nz.example.library.Writer.books",
+      "to": "class:library.mox#nz.example.library.Writer",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:library.mox#nz.example.library.Writer.books",
+      "to": "feature:library.mox#nz.example.library.Book.authors",
+      "kind": "opposite",
+      "attributes": {
+        "field": "books"
+      }
+    },
+    {
+      "from": "feature:library.mox#nz.example.library.Writer.books",
+      "to": "class:library.mox#nz.example.library.Book",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "books"
+      }
+    },
+    {
+      "from": "feature:library.mox#nz.example.library.Writer.name",
+      "to": "class:library.mox#nz.example.library.Writer",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Department.name",
+      "to": "class:org.mox#nz.example.org.Department",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Department.staff",
+      "to": "class:org.mox#nz.example.org.Department",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Department.staff",
+      "to": "feature:org.mox#nz.example.org.Employee.department",
+      "kind": "opposite",
+      "attributes": {
+        "field": "staff"
+      }
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Department.staff",
+      "to": "class:org.mox#nz.example.org.Employee",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "staff"
+      }
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Department.teams",
+      "to": "class:org.mox#nz.example.org.Department",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Department.teams",
+      "to": "feature:org.mox#nz.example.org.Team.department",
+      "kind": "opposite",
+      "attributes": {
+        "field": "teams"
+      }
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Department.teams",
+      "to": "class:org.mox#nz.example.org.Team",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "teams"
+      }
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Employee.department",
+      "to": "class:org.mox#nz.example.org.Employee",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Employee.department",
+      "to": "feature:org.mox#nz.example.org.Department.staff",
+      "kind": "opposite",
+      "attributes": {
+        "field": "department"
+      }
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Employee.department",
+      "to": "class:org.mox#nz.example.org.Department",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "department"
+      }
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Employee.leadsTeams",
+      "to": "class:org.mox#nz.example.org.Employee",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Employee.leadsTeams",
+      "to": "feature:org.mox#nz.example.org.Team.lead",
+      "kind": "opposite",
+      "attributes": {
+        "field": "leadsTeams"
+      }
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Employee.leadsTeams",
+      "to": "class:org.mox#nz.example.org.Team",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "leadsTeams"
+      }
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Employee.manager",
+      "to": "class:org.mox#nz.example.org.Employee",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Employee.manager",
+      "to": "feature:org.mox#nz.example.org.Employee.reports",
+      "kind": "opposite",
+      "attributes": {
+        "field": "manager"
+      }
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Employee.manager",
+      "to": "class:org.mox#nz.example.org.Employee",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "manager"
+      }
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Employee.memberOf",
+      "to": "class:org.mox#nz.example.org.Employee",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Employee.memberOf",
+      "to": "feature:org.mox#nz.example.org.Team.members",
+      "kind": "opposite",
+      "attributes": {
+        "field": "memberOf"
+      }
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Employee.memberOf",
+      "to": "class:org.mox#nz.example.org.Team",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "memberOf"
+      }
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Employee.name",
+      "to": "class:org.mox#nz.example.org.Employee",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Employee.reports",
+      "to": "class:org.mox#nz.example.org.Employee",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Employee.reports",
+      "to": "feature:org.mox#nz.example.org.Employee.manager",
+      "kind": "opposite",
+      "attributes": {
+        "field": "reports"
+      }
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Employee.reports",
+      "to": "class:org.mox#nz.example.org.Employee",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "reports"
+      }
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Employee.salary",
+      "to": "class:org.mox#nz.example.org.Employee",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Team.department",
+      "to": "class:org.mox#nz.example.org.Team",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Team.department",
+      "to": "feature:org.mox#nz.example.org.Department.teams",
+      "kind": "opposite",
+      "attributes": {
+        "field": "department"
+      }
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Team.department",
+      "to": "class:org.mox#nz.example.org.Department",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "department"
+      }
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Team.lead",
+      "to": "class:org.mox#nz.example.org.Team",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Team.lead",
+      "to": "feature:org.mox#nz.example.org.Employee.leadsTeams",
+      "kind": "opposite",
+      "attributes": {
+        "field": "lead"
+      }
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Team.lead",
+      "to": "class:org.mox#nz.example.org.Employee",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "lead"
+      }
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Team.members",
+      "to": "class:org.mox#nz.example.org.Team",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Team.members",
+      "to": "feature:org.mox#nz.example.org.Employee.memberOf",
+      "kind": "opposite",
+      "attributes": {
+        "field": "members"
+      }
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Team.members",
+      "to": "class:org.mox#nz.example.org.Employee",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "members"
+      }
+    },
+    {
+      "from": "feature:org.mox#nz.example.org.Team.name",
+      "to": "class:org.mox#nz.example.org.Team",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:pricing.mox#nz.example.pricing.Quote.notional",
+      "to": "class:pricing.mox#nz.example.pricing.Quote",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:pricing.mox#nz.example.pricing.Quote.symbol",
+      "to": "class:pricing.mox#nz.example.pricing.Quote",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:pricing.mox#pricing.model.Instrument.symbol",
+      "to": "class:pricing.mox#pricing.model.Instrument",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:shapes.mox#nz.example.shapes.Animal.name",
+      "to": "class:shapes.mox#nz.example.shapes.Animal",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:shapes.mox#nz.example.shapes.Cat.indoor",
+      "to": "class:shapes.mox#nz.example.shapes.Cat",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:shapes.mox#nz.example.shapes.Dog.breed",
+      "to": "class:shapes.mox#nz.example.shapes.Dog",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:support.mox#nz.example.support.RefundDecision.approved",
+      "to": "class:support.mox#nz.example.support.RefundDecision",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:support.mox#nz.example.support.RefundDecision.cents",
+      "to": "class:support.mox#nz.example.support.RefundDecision",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:support.mox#nz.example.support.RefundDecision.decisionId",
+      "to": "class:support.mox#nz.example.support.RefundDecision",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:support.mox#nz.example.support.Ticket.assignee",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:support.mox#nz.example.support.Ticket.assignee",
+      "to": "feature:support.mox#nz.example.support.User.assignedTickets",
+      "kind": "opposite",
+      "attributes": {
+        "field": "assignee"
+      }
+    },
+    {
+      "from": "feature:support.mox#nz.example.support.Ticket.assignee",
+      "to": "class:support.mox#nz.example.support.User",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "assignee"
+      }
+    },
+    {
+      "from": "feature:support.mox#nz.example.support.Ticket.internal",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:support.mox#nz.example.support.Ticket.needsRefund",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:support.mox#nz.example.support.Ticket.refundCents",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:support.mox#nz.example.support.Ticket.state",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:support.mox#nz.example.support.Ticket.state",
+      "to": "enum:support.mox#nz.example.support.TicketState",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "state"
+      }
+    },
+    {
+      "from": "feature:support.mox#nz.example.support.Ticket.ticketNo",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:support.mox#nz.example.support.Ticket.title",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:support.mox#nz.example.support.User.active",
+      "to": "class:support.mox#nz.example.support.User",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:support.mox#nz.example.support.User.assignedTickets",
+      "to": "class:support.mox#nz.example.support.User",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:support.mox#nz.example.support.User.assignedTickets",
+      "to": "feature:support.mox#nz.example.support.Ticket.assignee",
+      "kind": "opposite",
+      "attributes": {
+        "field": "assignedTickets"
+      }
+    },
+    {
+      "from": "feature:support.mox#nz.example.support.User.assignedTickets",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "assignedTickets"
+      }
+    },
+    {
+      "from": "feature:support.mox#nz.example.support.User.name",
+      "to": "class:support.mox#nz.example.support.User",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:support.mox#nz.example.support.User.userId",
+      "to": "class:support.mox#nz.example.support.User",
+      "kind": "memberOf"
+    },
+    {
+      "from": "file:cli.ifml#cli.ifml",
+      "to": "file:support.mox#support.mox",
+      "kind": "imports"
+    },
+    {
+      "from": "file:ecommerce.evt#ecommerce.evt",
+      "to": "file:ecommerce.mox#ecommerce.mox",
+      "kind": "imports"
+    },
+    {
+      "from": "file:ecommerce.ifml#ecommerce.ifml",
+      "to": "file:ecommerce.mox#ecommerce.mox",
+      "kind": "imports"
+    },
+    {
+      "from": "file:support.actor#support.actor",
+      "to": "file:support.mox#support.mox",
+      "kind": "imports"
+    },
+    {
+      "from": "file:support.cmmn#support.cmmn",
+      "to": "file:support.actor#support.actor",
+      "kind": "imports"
+    },
+    {
+      "from": "file:support.cmmn#support.cmmn",
+      "to": "file:support.ddd#support.ddd",
+      "kind": "imports"
+    },
+    {
+      "from": "file:support.cmmn#support.cmmn",
+      "to": "file:support.dmn#support.dmn",
+      "kind": "imports"
+    },
+    {
+      "from": "file:support.cmmn#support.cmmn",
+      "to": "file:support.evt#support.evt",
+      "kind": "imports"
+    },
+    {
+      "from": "file:support.cmmn#support.cmmn",
+      "to": "file:support.mox#support.mox",
+      "kind": "imports"
+    },
+    {
+      "from": "file:support.ddd#support.ddd",
+      "to": "file:support.mox#support.mox",
+      "kind": "imports"
+    },
+    {
+      "from": "file:support.deploy#support.deploy",
+      "to": "file:support.ddd#support.ddd",
+      "kind": "imports"
+    },
+    {
+      "from": "file:support.deploy#support.deploy",
+      "to": "file:support.ifml#support.ifml",
+      "kind": "imports"
+    },
+    {
+      "from": "file:support.dmn#support.dmn",
+      "to": "file:support.evt#support.evt",
+      "kind": "imports"
+    },
+    {
+      "from": "file:support.dmn#support.dmn",
+      "to": "file:support.mox#support.mox",
+      "kind": "imports"
+    },
+    {
+      "from": "file:support.evt#support.evt",
+      "to": "file:support.mox#support.mox",
+      "kind": "imports"
+    },
+    {
+      "from": "file:support.ifml#support.ifml",
+      "to": "file:support.dmn#support.dmn",
+      "kind": "imports"
+    },
+    {
+      "from": "file:support.ifml#support.ifml",
+      "to": "file:support.mox#support.mox",
+      "kind": "imports"
+    },
+    {
+      "from": "file:support.uc#support.uc",
+      "to": "file:support.actor#support.actor",
+      "kind": "imports"
+    },
+    {
+      "from": "file:support.uc#support.uc",
+      "to": "file:support.ddd#support.ddd",
+      "kind": "imports"
+    },
+    {
+      "from": "file:support.uc#support.uc",
+      "to": "file:support.evt#support.evt",
+      "kind": "imports"
+    },
+    {
+      "from": "file:support.uc#support.uc",
+      "to": "file:support.mox#support.mox",
+      "kind": "imports"
+    },
+    {
+      "from": "inputData:lending.dmn#Lending.banker_authority_level",
+      "to": "decisionModel:lending.dmn#Lending",
+      "kind": "memberOf"
+    },
+    {
+      "from": "inputData:lending.dmn#Lending.credit_score",
+      "to": "decisionModel:lending.dmn#Lending",
+      "kind": "memberOf"
+    },
+    {
+      "from": "inputData:lending.dmn#Lending.debt_repayments",
+      "to": "decisionModel:lending.dmn#Lending",
+      "kind": "memberOf"
+    },
+    {
+      "from": "inputData:lending.dmn#Lending.expenses",
+      "to": "decisionModel:lending.dmn#Lending",
+      "kind": "memberOf"
+    },
+    {
+      "from": "inputData:lending.dmn#Lending.income",
+      "to": "decisionModel:lending.dmn#Lending",
+      "kind": "memberOf"
+    },
+    {
+      "from": "inputData:lending.dmn#Lending.loan_amount",
+      "to": "decisionModel:lending.dmn#Lending",
+      "kind": "memberOf"
+    },
+    {
+      "from": "inputData:lending.dmn#Lending.payment_history",
+      "to": "decisionModel:lending.dmn#Lending",
+      "kind": "memberOf"
+    },
+    {
+      "from": "inputData:lending.dmn#Lending.property_value",
+      "to": "decisionModel:lending.dmn#Lending",
+      "kind": "memberOf"
+    },
+    {
+      "from": "inputData:support.dmn#RefundDecisions.helper",
+      "to": "decisionModel:support.dmn#RefundDecisions",
+      "kind": "memberOf"
+    },
+    {
+      "from": "inputData:support.dmn#RefundDecisions.helper",
+      "to": "class:support.mox#nz.example.support.User",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "helper"
+      }
+    },
+    {
+      "from": "inputData:support.dmn#RefundDecisions.requested_cents",
+      "to": "decisionModel:support.dmn#RefundDecisions",
+      "kind": "memberOf"
+    },
+    {
+      "from": "inputData:support.dmn#RefundDecisions.ticket",
+      "to": "decisionModel:support.dmn#RefundDecisions",
+      "kind": "memberOf"
+    },
+    {
+      "from": "inputData:support.dmn#RefundDecisions.ticket",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "ticket"
+      }
+    },
+    {
+      "from": "knowledgeSource:lending.dmn#Lending.CreditPolicy",
+      "to": "decisionModel:lending.dmn#Lending",
+      "kind": "memberOf"
+    },
+    {
+      "from": "knowledgeSource:lending.dmn#Lending.ResponsibleLendingCode",
+      "to": "decisionModel:lending.dmn#Lending",
+      "kind": "memberOf"
+    },
+    {
+      "from": "knowledgeSource:lending.dmn#Lending.RiskFramework",
+      "to": "decisionModel:lending.dmn#Lending",
+      "kind": "memberOf"
+    },
+    {
+      "from": "knowledgeSource:support.dmn#RefundDecisions.ConsumerGuaranteesAct",
+      "to": "decisionModel:support.dmn#RefundDecisions",
+      "kind": "memberOf"
+    },
+    {
+      "from": "module:support.ddd#SupportDesk.desk",
+      "to": "designApplication:support.ddd#SupportDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "module:support.ddd#SupportDesk.people",
+      "to": "designApplication:support.ddd#SupportDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "operation:library.mox#nz.example.library.Library.getBook",
+      "to": "class:library.mox#nz.example.library.Library",
+      "kind": "memberOf"
+    },
+    {
+      "from": "operation:library.mox#nz.example.library.Library.getBook",
+      "to": "class:library.mox#nz.example.library.Book",
+      "kind": "typeOf",
+      "attributes": {
+        "role": "return"
+      }
+    },
+    {
+      "from": "operation:org.mox#nz.example.org.Team.any_member_earns_over",
+      "to": "class:org.mox#nz.example.org.Team",
+      "kind": "memberOf"
+    },
+    {
+      "from": "operation:org.mox#nz.example.org.Team.payroll",
+      "to": "class:org.mox#nz.example.org.Team",
+      "kind": "memberOf"
+    },
+    {
+      "from": "operation:pricing.mox#nz.example.pricing.Quote.withSpread",
+      "to": "class:pricing.mox#nz.example.pricing.Quote",
+      "kind": "memberOf"
+    },
+    {
+      "from": "operation:support.mox#nz.example.support.Ticket.approveRefund",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "memberOf"
+    },
+    {
+      "from": "operation:support.mox#nz.example.support.Ticket.raiseRefund",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "memberOf"
+    },
+    {
+      "from": "planItem:support.cmmn#RefundDesk.ApproveRefund",
+      "to": "caseRole:support.cmmn#RefundDesk.finance",
+      "kind": "assignedTo"
+    },
+    {
+      "from": "planItem:support.cmmn#RefundDesk.ApproveRefund",
+      "to": "case:support.cmmn#RefundDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "planItem:support.cmmn#RefundDesk.AssessAuthority",
+      "to": "decisionService:support.dmn#RefundDecisions.AssessRefund",
+      "kind": "invokesDecision",
+      "attributes": {
+        "via": "decision"
+      }
+    },
+    {
+      "from": "planItem:support.cmmn#RefundDesk.AssessAuthority",
+      "to": "case:support.cmmn#RefundDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "planItem:support.cmmn#RefundDesk.AssessRefund",
+      "to": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.raiseRefund",
+      "kind": "executes"
+    },
+    {
+      "from": "planItem:support.cmmn#RefundDesk.AssessRefund",
+      "to": "case:support.cmmn#RefundDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "planItem:support.cmmn#RefundDesk.Assessment",
+      "to": "case:support.cmmn#RefundDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "planItem:support.cmmn#RefundDesk.CloseTicket",
+      "to": "caseRole:support.cmmn#RefundDesk.triage",
+      "kind": "assignedTo"
+    },
+    {
+      "from": "planItem:support.cmmn#RefundDesk.CloseTicket",
+      "to": "case:support.cmmn#RefundDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "planItem:support.cmmn#RefundDesk.Escalate",
+      "to": "caseRole:support.cmmn#RefundDesk.escalation",
+      "kind": "assignedTo"
+    },
+    {
+      "from": "planItem:support.cmmn#RefundDesk.Escalate",
+      "to": "case:support.cmmn#RefundDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "planItem:support.cmmn#RefundDesk.RefundSettled",
+      "to": "case:support.cmmn#RefundDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "planItem:support.cmmn#RefundDesk.ReviewTicket",
+      "to": "caseRole:support.cmmn#RefundDesk.triage",
+      "kind": "assignedTo"
+    },
+    {
+      "from": "planItem:support.cmmn#RefundDesk.ReviewTicket",
+      "to": "case:support.cmmn#RefundDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "repository:support.ddd#SupportDesk.desk.TicketRepository",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "designs",
+      "attributes": {
+        "via": "repository"
+      }
+    },
+    {
+      "from": "repository:support.ddd#SupportDesk.desk.TicketRepository",
+      "to": "module:support.ddd#SupportDesk.desk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "repositoryOperation:support.ddd#SupportDesk.desk.TicketRepository.delete",
+      "to": "repository:support.ddd#SupportDesk.desk.TicketRepository",
+      "kind": "memberOf"
+    },
+    {
+      "from": "repositoryOperation:support.ddd#SupportDesk.desk.TicketRepository.findAll",
+      "to": "repository:support.ddd#SupportDesk.desk.TicketRepository",
+      "kind": "memberOf"
+    },
+    {
+      "from": "repositoryOperation:support.ddd#SupportDesk.desk.TicketRepository.findByExample",
+      "to": "repository:support.ddd#SupportDesk.desk.TicketRepository",
+      "kind": "memberOf"
+    },
+    {
+      "from": "repositoryOperation:support.ddd#SupportDesk.desk.TicketRepository.findById",
+      "to": "repository:support.ddd#SupportDesk.desk.TicketRepository",
+      "kind": "memberOf"
+    },
+    {
+      "from": "repositoryOperation:support.ddd#SupportDesk.desk.TicketRepository.findByKeys",
+      "to": "repository:support.ddd#SupportDesk.desk.TicketRepository",
+      "kind": "memberOf"
+    },
+    {
+      "from": "repositoryOperation:support.ddd#SupportDesk.desk.TicketRepository.findByTitle",
+      "to": "repository:support.ddd#SupportDesk.desk.TicketRepository",
+      "kind": "memberOf"
+    },
+    {
+      "from": "repositoryOperation:support.ddd#SupportDesk.desk.TicketRepository.findByTitle",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "typeOf",
+      "attributes": {
+        "role": "return"
+      }
+    },
+    {
+      "from": "repositoryOperation:support.ddd#SupportDesk.desk.TicketRepository.save",
+      "to": "repository:support.ddd#SupportDesk.desk.TicketRepository",
+      "kind": "memberOf"
+    },
+    {
+      "from": "search:support.ddd#SupportDesk.desk.TicketSearch",
+      "to": "capability:support.actor#Support.ReadTicket",
+      "kind": "carries"
+    },
+    {
+      "from": "search:support.ddd#SupportDesk.desk.TicketSearch",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "designs",
+      "attributes": {
+        "via": "search"
+      }
+    },
+    {
+      "from": "search:support.ddd#SupportDesk.desk.TicketSearch",
+      "to": "module:support.ddd#SupportDesk.desk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "search:support.ddd#SupportDesk.desk.TicketSearch",
+      "to": "feature:support.mox#nz.example.support.Ticket.internal",
+      "kind": "readsFeature",
+      "attributes": {
+        "via": "filter"
+      }
+    },
+    {
+      "from": "search:support.ddd#SupportDesk.desk.TicketSearch",
+      "to": "feature:support.mox#nz.example.support.Ticket.state",
+      "kind": "readsFeature",
+      "attributes": {
+        "via": "filter"
+      }
+    },
+    {
+      "from": "search:support.ddd#SupportDesk.desk.TicketSearch",
+      "to": "feature:support.mox#nz.example.support.Ticket.title",
+      "kind": "readsFeature",
+      "attributes": {
+        "via": "sort"
+      }
+    },
+    {
+      "from": "search:support.ddd#SupportDesk.desk.TicketSearch",
+      "to": "feature:support.mox#nz.example.support.Ticket.title",
+      "kind": "readsFeature",
+      "attributes": {
+        "via": "text"
+      }
+    },
+    {
+      "from": "service:support.ddd#SupportDesk.desk.TicketService",
+      "to": "repository:support.ddd#SupportDesk.desk.TicketRepository",
+      "kind": "injects"
+    },
+    {
+      "from": "service:support.ddd#SupportDesk.desk.TicketService",
+      "to": "module:support.ddd#SupportDesk.desk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.approveRefund",
+      "to": "capability:support.actor#Support.ApproveRefund",
+      "kind": "carries"
+    },
+    {
+      "from": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.approveRefund",
+      "to": "service:support.ddd#SupportDesk.desk.TicketService",
+      "kind": "memberOf"
+    },
+    {
+      "from": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.approveRefund",
+      "to": "class:support.mox#nz.example.support.User",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "approver",
+        "role": "param"
+      }
+    },
+    {
+      "from": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.claimTicket",
+      "to": "service:support.ddd#SupportDesk.desk.TicketService",
+      "kind": "memberOf"
+    },
+    {
+      "from": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.claimTicket",
+      "to": "class:support.mox#nz.example.support.User",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "helper",
+        "role": "param"
+      }
+    },
+    {
+      "from": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.close",
+      "to": "repositoryOperation:support.ddd#SupportDesk.desk.TicketRepository.delete",
+      "kind": "forwardsTo",
+      "attributes": {
+        "operation": "delete"
+      }
+    },
+    {
+      "from": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.close",
+      "to": "service:support.ddd#SupportDesk.desk.TicketService",
+      "kind": "memberOf"
+    },
+    {
+      "from": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.findTickets",
+      "to": "service:support.ddd#SupportDesk.desk.TicketService",
+      "kind": "memberOf"
+    },
+    {
+      "from": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.getTicket",
+      "to": "service:support.ddd#SupportDesk.desk.TicketService",
+      "kind": "memberOf"
+    },
+    {
+      "from": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.getTicket",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "typeOf",
+      "attributes": {
+        "role": "return"
+      }
+    },
+    {
+      "from": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.listTickets",
+      "to": "service:support.ddd#SupportDesk.desk.TicketService",
+      "kind": "memberOf"
+    },
+    {
+      "from": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.listTickets",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "typeOf",
+      "attributes": {
+        "role": "return"
+      }
+    },
+    {
+      "from": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.raiseRefund",
+      "to": "capability:support.actor#Support.RaiseRefund",
+      "kind": "carries"
+    },
+    {
+      "from": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.raiseRefund",
+      "to": "service:support.ddd#SupportDesk.desk.TicketService",
+      "kind": "memberOf"
+    },
+    {
+      "from": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.refundTicket",
+      "to": "service:support.ddd#SupportDesk.desk.TicketService",
+      "kind": "memberOf"
+    },
+    {
+      "from": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.resolveTicket",
+      "to": "capability:support.actor#Support.ResolveTicket",
+      "kind": "carries"
+    },
+    {
+      "from": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.resolveTicket",
+      "to": "service:support.ddd#SupportDesk.desk.TicketService",
+      "kind": "memberOf"
+    },
+    {
+      "from": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.updateTicket",
+      "to": "capability:support.actor#Support.UpdateTicket",
+      "kind": "carries"
+    },
+    {
+      "from": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.updateTicket",
+      "to": "service:support.ddd#SupportDesk.desk.TicketService",
+      "kind": "memberOf"
+    },
+    {
+      "from": "subscription:ecommerce.evt#ecommerce.billing",
+      "to": "event:ecommerce.evt#ecommerce.OrderCancelled",
+      "kind": "subscribes"
+    },
+    {
+      "from": "subscription:ecommerce.evt#ecommerce.billing",
+      "to": "event:ecommerce.evt#ecommerce.OrderPlaced",
+      "kind": "subscribes"
+    },
+    {
+      "from": "subscription:ecommerce.evt#ecommerce.warehouse",
+      "to": "event:ecommerce.evt#ecommerce.OrderLineShipped",
+      "kind": "subscribes"
+    },
+    {
+      "from": "subscription:support.evt#support.analytics",
+      "to": "deployComponent:support.deploy#SupportDesk.analytics_service",
+      "kind": "delivers"
+    },
+    {
+      "from": "subscription:support.evt#support.analytics",
+      "to": "event:support.evt#support.RefundRequested",
+      "kind": "subscribes"
+    },
+    {
+      "from": "subscription:support.evt#support.analytics",
+      "to": "event:support.evt#support.TicketRaised",
+      "kind": "subscribes"
+    },
+    {
+      "from": "subscription:support.evt#support.analytics",
+      "to": "event:support.evt#support.TicketResolved",
+      "kind": "subscribes"
+    },
+    {
+      "from": "subscription:support.evt#support.refundDesk",
+      "to": "deployComponent:support.deploy#SupportDesk.refund_approval_service",
+      "kind": "delivers"
+    },
+    {
+      "from": "subscription:support.evt#support.refundDesk",
+      "to": "event:support.evt#support.RefundApproved",
+      "kind": "subscribes"
+    },
+    {
+      "from": "subscription:support.evt#support.refundDesk",
+      "to": "event:support.evt#support.RefundRequested",
+      "kind": "subscribes"
+    },
+    {
+      "from": "useCase:support.uc#ApproveRefund",
+      "to": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.approveRefund",
+      "kind": "realizes"
+    },
+    {
+      "from": "useCase:support.uc#ApproveRefund",
+      "to": "capability:support.actor#Support.ApproveRefund",
+      "kind": "requires",
+      "attributes": {
+        "via": "ucStep"
+      }
+    },
+    {
+      "from": "useCase:support.uc#ApproveRefund",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "Ticket"
+      }
+    },
+    {
+      "from": "useCase:support.uc#ClarifyTicket",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "Ticket"
+      }
+    },
+    {
+      "from": "useCase:support.uc#ClarifyTicket",
+      "to": "class:support.mox#nz.example.support.User",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "Reporter"
+      }
+    },
+    {
+      "from": "useCase:support.uc#EscalateInternal",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "Ticket"
+      }
+    },
+    {
+      "from": "useCase:support.uc#RaiseRefund",
+      "to": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.raiseRefund",
+      "kind": "realizes"
+    },
+    {
+      "from": "useCase:support.uc#RaiseRefund",
+      "to": "capability:support.actor#Support.RaiseRefund",
+      "kind": "requires",
+      "attributes": {
+        "via": "ucStep"
+      }
+    },
+    {
+      "from": "useCase:support.uc#RaiseRefund",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "Ticket"
+      }
+    },
+    {
+      "from": "useCase:support.uc#TrackRefund",
+      "to": "class:support.mox#nz.example.support.Ticket",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "Ticket"
+      }
+    },
+    {
+      "from": "view:ecommerce.ifml#CartPage",
+      "to": "flow:ecommerce.ifml#ecommerce",
+      "kind": "memberOf"
+    },
+    {
+      "from": "view:ecommerce.ifml#Category",
+      "to": "flow:ecommerce.ifml#ecommerce",
+      "kind": "memberOf"
+    },
+    {
+      "from": "view:ecommerce.ifml#Checkout",
+      "to": "flow:ecommerce.ifml#ecommerce",
+      "kind": "memberOf"
+    },
+    {
+      "from": "view:ecommerce.ifml#ItemDetail",
+      "to": "flow:ecommerce.ifml#ecommerce",
+      "kind": "memberOf"
+    },
+    {
+      "from": "view:ecommerce.ifml#ProductPage",
+      "to": "flow:ecommerce.ifml#ecommerce",
+      "kind": "memberOf"
+    },
+    {
+      "from": "view:ecommerce.ifml#Storefront",
+      "to": "flow:ecommerce.ifml#ecommerce",
+      "kind": "memberOf"
+    },
+    {
+      "from": "view:support.ifml#Folder",
+      "to": "flow:support.ifml#support",
+      "kind": "memberOf"
+    },
+    {
+      "from": "view:support.ifml#Inbox",
+      "to": "flow:support.ifml#support",
+      "kind": "memberOf"
+    },
+    {
+      "from": "view:support.ifml#ItemDetail",
+      "to": "flow:support.ifml#support",
+      "kind": "memberOf"
+    },
+    {
+      "from": "view:support.ifml#Queue",
+      "to": "flow:support.ifml#support",
+      "kind": "memberOf"
+    },
+    {
+      "from": "view:support.ifml#WorkItem",
+      "to": "flow:support.ifml#support",
+      "kind": "memberOf"
+    }
+  ]
+}

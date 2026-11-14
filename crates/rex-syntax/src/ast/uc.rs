@@ -25,6 +25,9 @@ pub struct UcFile {
 pub struct UcDecl {
     /// The usecase name.
     pub name: String,
+    /// Span of the declared usecase name itself (the navigation index's
+    /// definition site).
+    pub name_span: Span,
     /// Description from the doc comment directly above the declaration
     /// (contiguous `///` lines, joined).
     pub description: Option<String>,
@@ -52,9 +55,15 @@ pub struct UcDecl {
 pub struct UcParticipant {
     /// The participant name.
     pub name: String,
+    /// Span of the declared participant name itself. A bare (untyped) actor
+    /// is a *policy* actor mention, so this is the reference site the
+    /// navigation index records for it.
+    pub name_span: Span,
     /// The participant's type reference; `None` for a bare policy actor
     /// (and a recovered subject whose `: <type>` clause was missing).
     pub type_name: Option<String>,
+    /// Span of the `: <type>` reference as written, when one was declared.
+    pub type_span: Option<Span>,
     /// Declared occurrences in source order.
     pub occurrences: Vec<UcOccurrence>,
     /// Declared perform steps in source order.
@@ -88,11 +97,16 @@ pub enum UcOccurrence {
 pub struct UcStep {
     /// The step name.
     pub name: String,
+    /// Span of the declared step name itself.
+    pub name_span: Span,
     /// The performed operation: the `: <op>` clause when written, otherwise
     /// the step's own name (the bare `perform <x>` form).
     pub operation: String,
+    /// Span of the operation mention as written (the `: <op>` name, or the
+    /// step name for the bare form).
+    pub operation_span: Span,
     /// Capability names from the `requires [...]` clause, in source order.
-    pub requires: Vec<String>,
+    pub requires: Vec<Name>,
     /// Span of the `when (...)` guard clause's raw parens, both parens
     /// inclusive (the driver slices strictly inside), when written.
     pub when: Option<Span>,
@@ -169,6 +183,9 @@ pub struct UcRealizes {
     pub service: String,
     /// The realizing operation's name.
     pub operation: String,
+    /// Span of the `Service.operation` mention (the alias is a file-scope
+    /// qualifier, not part of the resolved name).
+    pub reference_span: Span,
     /// Span of the whole binding, `;` included.
     pub span: Span,
 }

@@ -119,8 +119,8 @@
 //! 14. **Equality policy.** Every artifact root — [`Model`],
 //!     [`ActorModel`], [`ddd::DddModel`], [`events::EventModel`],
 //!     [`deploy::DeployModel`], [`ifml::IfmlModel`],
-//!     [`usecases::UseCaseModel`], [`cmmn::CmmnModel`], and
-//!     [`dmn::DmnModel`] — and every type
+//!     [`usecases::UseCaseModel`], [`cmmn::CmmnModel`],
+//!     [`graph::GraphModel`], and [`dmn::DmnModel`] — and every type
 //!     nested inside them derives
 //!     [`Eq`] (structural value equality). The artifacts' only floating-point
 //!     values are wrapped in ordered newtypes: [`ddd::Boost`] (the
@@ -191,6 +191,7 @@
 //! | [`ifml_manifest::IFML_MANIFEST_FORMAT_VERSION`] | [`ifml_manifest::IfmlManifest`] | `.ifml` control/route manifest |
 //! | [`cmmn::CMMN_MODEL_FORMAT_VERSION`] | [`cmmn::CmmnModel`] | `.cmmn` case management |
 //! | [`dmn::DMN_MODEL_FORMAT_VERSION`] | [`dmn::DmnModel`] | `.dmn` decision model |
+//! | [`graph::GRAPH_MODEL_FORMAT_VERSION`] | [`graph::GraphModel`] | unified semantic graph (derived) |
 //!
 //! [rexlang]: https://github.com/anton-makes/rexlang
 
@@ -206,6 +207,7 @@ pub mod ddd;
 pub mod deploy;
 pub mod dmn;
 pub mod events;
+pub mod graph;
 pub mod ifml;
 pub mod ifml_manifest;
 pub mod usecases;
@@ -228,6 +230,7 @@ pub use class::{
     FeatureKind, InterfaceDef, Operation, OperationParam,
 };
 pub use error::IrError;
+pub use graph::{GraphApplication, GraphEdge, GraphModel, GraphNode};
 pub use model::{Annotation, Model, Package};
 pub use types::{DefaultValue, Multiplicity, OppositeRef, PrimitiveType, TypeRef, Upper};
 pub use vocabulary::{VocabularyDef, VocabularyEntry, VocabularyFacet};

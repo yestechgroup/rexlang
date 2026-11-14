@@ -262,6 +262,12 @@ pub(crate) struct IfmlInputs {
     /// names against. Empty when the file imports no decision models
     /// (decision checking is then skipped).
     pub(crate) decisions: Vec<rex_ir::dmn::DmnModel>,
+    /// The resolved disk paths of every surface import the walk fetched
+    /// (`.ifml`, `.mox`, `.actor`, `.dmn`), deduplicated and sorted. These
+    /// are the host-normalized import keys the semantic graph's `imports`
+    /// edges are drawn from (`rexlang graph`); decision-table references are
+    /// not surface imports and stay out.
+    pub(crate) imports: Vec<String>,
 }
 
 /// Reads an `.ifml` file plus every `.ifml`, `.mox`, `.actor`, and `.dmn`
@@ -301,6 +307,9 @@ pub(crate) fn read_ifml_inputs(
     // gathered `.dmn` model, whose decision-table references they are.
     let mut disk_paths: BTreeMap<String, PathBuf> = BTreeMap::new();
     disk_paths.insert(path.clone(), file.to_path_buf());
+    // The resolved surface imports the graph builder draws `imports` edges
+    // from; a set because the walk can reach one file through several paths.
+    let mut imports: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut read_error: Option<anyhow::Error> = None;
     let mut fetch = |importer: &str, import: &str| -> Option<(String, String)> {
         let known_surface = import.ends_with(".ifml")
@@ -343,6 +352,9 @@ pub(crate) fn read_ifml_inputs(
         };
         disk_paths.insert(import.to_string(), resolved.clone());
         disk_paths.insert(resolved_key.clone(), resolved);
+        if known_surface {
+            imports.insert(resolved_key.clone());
+        }
         Some((resolved_key, text))
     };
     let gathered = gather_ifml_project(&path, &source, &mut fetch);
@@ -404,6 +416,7 @@ pub(crate) fn read_ifml_inputs(
         domains,
         actors,
         decisions,
+        imports: imports.into_iter().collect(),
     })
 }
 

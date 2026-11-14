@@ -52,6 +52,7 @@ FIXTURE_FORMAT_GLOBS=(
   patterns/ifml
   tests/conformance/events
   tests/conformance/deploy
+  tests/conformance/graph
   tests/conformance/sigil
   tests/conformance/models/*.mox
   tests/conformance/models/*.actor

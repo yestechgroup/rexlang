@@ -188,8 +188,12 @@ fn iteration_3_performs_anchored_messages_and_successions() {
     assert_eq!(named.name, "confirmHandoff");
     assert_eq!(named.operation, "acknowledge");
     assert_eq!(
-        named.requires,
-        vec!["ProofOfDelivery".to_string(), "GpsPing".to_string()]
+        named
+            .requires
+            .iter()
+            .map(|name| name.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["ProofOfDelivery", "GpsPing"]
     );
     let bare = &courier.steps[1];
     assert_eq!(bare.name, "scanPackage");
@@ -856,7 +860,14 @@ fn a_guard_clause_parses_after_requires() {
     let guarded = &subject.steps[0];
     assert_eq!(guarded.name, "x");
     assert_eq!(guarded.operation, "auth");
-    assert_eq!(guarded.requires, ["Cap"]);
+    assert_eq!(
+        guarded
+            .requires
+            .iter()
+            .map(|name| name.text.as_str())
+            .collect::<Vec<_>>(),
+        ["Cap"]
+    );
     assert_eq!(
         span_text(source, guarded.when.expect("guard span")),
         "(armed && ready)",

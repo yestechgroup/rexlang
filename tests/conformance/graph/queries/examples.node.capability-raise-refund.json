@@ -1,0 +1,60 @@
+{
+  "formatVersion": 1,
+  "query": "node",
+  "reference": "capability:support.actor#Support.RaiseRefund",
+  "resolved": "capability:support.actor#Support.RaiseRefund",
+  "results": [
+    {
+      "id": "capability:support.actor#Support.RaiseRefund",
+      "kind": "capability",
+      "name": "Support.RaiseRefund",
+      "file": "support.actor",
+      "application": "cli.ifml"
+    }
+  ],
+  "edges": {
+    "out": [
+      {
+        "from": "capability:support.actor#Support.RaiseRefund",
+        "to": "capability:support.actor#Support.ApproveRefund",
+        "kind": "excludes"
+      },
+      {
+        "from": "capability:support.actor#Support.RaiseRefund",
+        "to": "class:support.mox#nz.example.support.Ticket",
+        "kind": "on"
+      }
+    ],
+    "in": [
+      {
+        "from": "actor:support.actor#Support.Agent",
+        "to": "capability:support.actor#Support.RaiseRefund",
+        "kind": "permits",
+        "effect": "permit",
+        "when": "refundCents > 0 && refundCents <= 5000",
+        "obligations": [
+          "audit",
+          "notifyCustomer"
+        ]
+      },
+      {
+        "from": "capability:support.actor#Support.ApproveRefund",
+        "to": "capability:support.actor#Support.RaiseRefund",
+        "kind": "excludes"
+      },
+      {
+        "from": "serviceOperation:support.ddd#SupportDesk.desk.TicketService.raiseRefund",
+        "to": "capability:support.actor#Support.RaiseRefund",
+        "kind": "carries"
+      },
+      {
+        "from": "useCase:support.uc#RaiseRefund",
+        "to": "capability:support.actor#Support.RaiseRefund",
+        "kind": "requires",
+        "attributes": {
+          "via": "ucStep"
+        }
+      }
+    ]
+  }
+}

@@ -87,12 +87,15 @@ pub(crate) fn role_decl<'src>() -> impl Parser<'src, Tokens<'src>, CmmnRole, Mox
             if semi.is_none() {
                 emitter.emit(Rich::custom(span, "expected `;` after the role"));
             }
+            let actor = match actor {
+                Some(Some(Some(Some(actor)))) => Some(actor),
+                _ => None,
+            };
             CmmnRole {
-                name: name.map(|n| n.text).unwrap_or_default(),
-                actor: match actor {
-                    Some(Some(Some(Some(actor)))) => Some(actor.text),
-                    _ => None,
-                },
+                name: name.as_ref().map(|n| n.text.clone()).unwrap_or_default(),
+                name_span: name.as_ref().map(|n| n.span).unwrap_or(span),
+                actor: actor.as_ref().map(|actor| actor.text.clone()),
+                actor_span: actor.as_ref().map(|actor| actor.span),
                 span,
             }
         })
@@ -136,7 +139,8 @@ pub(crate) fn case_file_item<'src>(
                 emitter.emit(Rich::custom(span, "expected `;` after the case-file item"));
             }
             CmmnFileItem {
-                name: name.map(|n| n.text).unwrap_or_default(),
+                name: name.as_ref().map(|n| n.text.clone()).unwrap_or_default(),
+                name_span: name.as_ref().map(|n| n.span).unwrap_or(span),
                 type_ref,
                 multiplicity,
                 description: None,
@@ -181,7 +185,8 @@ pub(crate) fn cmmn_on_part<'src>(
                 emitter.emit(Rich::custom(span, "expected a transition word after `.`"));
             }
             CmmnOnPart {
-                source: source.text,
+                source: source.text.clone(),
+                source_span: source.span,
                 event: match tail {
                     Some(Some(Some(Some(word)))) => Some(word.text),
                     _ => None,
@@ -257,8 +262,13 @@ pub(crate) fn criterion_decl<'src>(
 
 /// A `performer: <role>;` clause of a plan item body. Committed once
 /// `performer` matched.
+///
+/// The tuple is `(role, clause span, role-name span)`: the clause span
+/// carries the diagnostics, the name span is the mention site
+/// ([`CmmnItemDecl::performer_span`]). A recovered clause without a role
+/// name falls back to the clause span for both.
 pub(crate) fn performer_clause<'src>(
-) -> impl Parser<'src, Tokens<'src>, (String, Span), MoxExtra<'src>> + Clone {
+) -> impl Parser<'src, Tokens<'src>, (String, Span, Span), MoxExtra<'src>> + Clone {
     cmmn_keyword(cmmn::PERFORMER)
         .ignore_then(
             kw(Token::Other(':'))
@@ -285,7 +295,12 @@ pub(crate) fn performer_clause<'src>(
                     "expected `;` after the performer clause",
                 ));
             }
-            (role.map(|n| n.text).unwrap_or_default(), span)
+            let name_span = role.as_ref().map(|name| name.span).unwrap_or(span);
+            (
+                role.map(|name| name.text).unwrap_or_default(),
+                span,
+                name_span,
+            )
         })
 }
 
@@ -323,10 +338,17 @@ pub(crate) fn execute_clause<'src>(
                     (segment(0), segment(1), segment(2))
                 }
             };
+            // The mention the graph resolves is `Service.operation` — the
+            // alias names the imported file, not part of the target's name.
+            let reference_span = match name.segments.as_slice() {
+                [_, service, operation, ..] => (service.span.start..operation.span.end).into(),
+                _ => name.span,
+            };
             CmmnExecute {
                 alias,
                 service,
                 operation,
+                reference_span,
                 span,
             }
         })
@@ -373,6 +395,7 @@ pub(crate) fn invoke_clause<'src>(
                 .collect();
             CmmnInvoke {
                 service: segments.join("."),
+                name_span: name.span,
                 pin,
                 span,
             }
@@ -426,7 +449,7 @@ pub(crate) fn flag_decl<'src>(
 /// criterion, a control flag, or — inside a stage — a nested plan item.
 #[derive(Clone)]
 pub(crate) enum CmmnBodyMember {
-    Performer((String, Span)),
+    Performer((String, Span, Span)),
     Execute(CmmnExecute),
     Invoke(CmmnInvoke),
     Inputs(Vec<Name>),
@@ -442,7 +465,7 @@ pub(crate) enum CmmnBodyMember {
 /// The folded members of a plan item body.
 #[derive(Default)]
 pub(crate) struct CmmnBody {
-    performer: Option<(String, Span)>,
+    performer: Option<(String, Span, Span)>,
     execute: Option<CmmnExecute>,
     invokes: Option<CmmnInvoke>,
     inputs: Vec<Name>,
@@ -576,11 +599,16 @@ pub(crate) fn plan_item_decl<'src>(
                         CmmnItemKind::Milestone
                     };
                     CmmnItemDecl {
-                        name: name.map(|n| n.text).unwrap_or_default(),
+                        name: name.as_ref().map(|n| n.text.clone()).unwrap_or_default(),
+                        name_span: name.as_ref().map(|n| n.span).unwrap_or(span),
                         description: None,
                         discretionary: false,
                         kind,
-                        performer: body.performer,
+                        performer: body
+                            .performer
+                            .as_ref()
+                            .map(|(role, clause, _)| (role.clone(), *clause)),
+                        performer_span: body.performer.as_ref().map(|(_, _, name)| *name),
                         execute: body.execute,
                         invokes: body.invokes,
                         inputs: body.inputs,
@@ -619,11 +647,16 @@ pub(crate) fn plan_item_decl<'src>(
                     emitter.emit(Rich::custom(*problem_span, message.clone()));
                 }
                 CmmnItemDecl {
-                    name: name.map(|n| n.text).unwrap_or_default(),
+                    name: name.as_ref().map(|n| n.text.clone()).unwrap_or_default(),
+                    name_span: name.as_ref().map(|n| n.span).unwrap_or(span),
                     description: None,
                     discretionary: false,
                     kind: CmmnItemKind::Stage { items },
-                    performer: body.performer,
+                    performer: body
+                        .performer
+                        .as_ref()
+                        .map(|(role, clause, _)| (role.clone(), *clause)),
+                    performer_span: body.performer.as_ref().map(|(_, _, name)| *name),
                     execute: body.execute,
                     invokes: body.invokes,
                     inputs: body.inputs,
@@ -682,7 +715,8 @@ pub(crate) fn case_decl<'src>() -> impl Parser<'src, Tokens<'src>, CmmnCase, Mox
                 None
             });
             let mut case = CmmnCase {
-                name: name.map(|n| n.text).unwrap_or_default(),
+                name: name.as_ref().map(|n| n.text.clone()).unwrap_or_default(),
+                name_span: name.as_ref().map(|n| n.span).unwrap_or(span),
                 description: None,
                 roles: Vec::new(),
                 case_file: Vec::new(),

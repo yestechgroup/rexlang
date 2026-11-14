@@ -26,6 +26,7 @@
 //! [rexlang]: https://github.com/anton-makes/rexlang
 //! [salsa]: https://crates.io/crates/salsa
 
+pub mod applications;
 pub(crate) mod cmmn;
 pub(crate) mod conditions;
 mod ddd;
@@ -34,6 +35,7 @@ pub mod diagnostic;
 pub(crate) mod dmn;
 pub(crate) mod engine_common;
 pub(crate) mod events;
+pub mod graph;
 pub(crate) mod integrity;
 pub(crate) mod lower;
 pub mod machines;

@@ -8,6 +8,7 @@
 use super::*;
 
 use serde_json::json;
+use std::str::FromStr;
 use tower::Service;
 use tower_lsp_server::jsonrpc;
 use tower_lsp_server::LspService;
@@ -96,5 +97,33 @@ async fn hover_renders_definitions_as_markdown() {
     assert_eq!(
         hover_at(&mut service, line, character).await,
         Some("**Happy** = 0 (Mood)".to_string())
+    );
+}
+
+#[tokio::test]
+async fn hover_on_an_unlisted_extension_is_null() {
+    let (mut service, mut socket) = initialized_service().await;
+    let other =
+        tower_lsp_server::ls_types::Uri::from_str("file:///workspace/notes.txt").expect("a uri");
+    open_at(&mut service, &other, "shelf\n").await;
+    drain_socket(&mut socket).await;
+
+    let response = service
+        .call(
+            jsonrpc::Request::build("textDocument/hover")
+                .params(json!({
+                    "textDocument": {"uri": other.as_str()},
+                    "position": {"line": 0, "character": 1},
+                }))
+                .id(201)
+                .finish(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let (_, body) = response.into_parts();
+    assert!(
+        body.expect("hover must not error").is_null(),
+        "an unlisted extension has no hover"
     );
 }

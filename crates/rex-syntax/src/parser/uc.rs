@@ -136,16 +136,17 @@ pub(crate) fn uc_occurrence_decl<'src>(
 /// One capability name of a `requires [...]` list: any identifier except
 /// the two words that can begin the next member, so a missing `]` never
 /// swallows it (the `.evt` events-list rule). Escaped forms are names.
-pub(crate) fn uc_req_name<'src>() -> impl Parser<'src, Tokens<'src>, String, MoxExtra<'src>> + Clone
-{
+pub(crate) fn uc_req_name<'src>() -> impl Parser<'src, Tokens<'src>, Name, MoxExtra<'src>> + Clone {
     select! {
-        Token::Ident(text) = e if text != usecases::OCCURRENCE && text != usecases::PERFORM => {
-            let _ = e;
-            text.to_string()
+        Token::Ident(text) = e if text != usecases::OCCURRENCE && text != usecases::PERFORM => Name {
+            text: text.to_string(),
+            span: e.span(),
+            escaped: false,
         },
-        Token::IdentEscaped(text) = e => {
-            let _ = e;
-            text.to_string()
+        Token::IdentEscaped(text) = e => Name {
+            text: text.to_string(),
+            span: e.span(),
+            escaped: true,
         },
     }
 }
@@ -224,12 +225,18 @@ pub(crate) fn uc_perform_decl<'src>(
                 UcStep {
                     operation: if colon_seen {
                         // Recovered with an empty name when `:` had none.
-                        op.map(|op| op.text).unwrap_or_default()
+                        op.as_ref().map(|op| op.text.clone()).unwrap_or_default()
                     } else {
                         // The bare form: the step names its own operation.
                         name.text.clone()
                     },
+                    operation_span: if colon_seen {
+                        op.as_ref().map(|op| op.span).unwrap_or(name.span)
+                    } else {
+                        name.span
+                    },
                     name: name.text,
+                    name_span: name.span,
                     requires: requires_names,
                     when: match when {
                         Some(Some(Some(Some(parens)))) => Some(parens),
@@ -395,10 +402,17 @@ pub(crate) fn uc_realizes_decl<'src>(
                     (segment(0), segment(1), segment(2))
                 }
             };
+            // The mention the graph resolves is `Service.operation` — the
+            // alias names the imported file, not part of the target's name.
+            let reference_span = match name.segments.as_slice() {
+                [_, service, operation, ..] => (service.span.start..operation.span.end).into(),
+                _ => name.span,
+            };
             UcRealizes {
                 alias,
                 service,
                 operation,
+                reference_span,
                 span,
             }
         })
@@ -461,7 +475,9 @@ pub(crate) fn uc_participant_decl<'src>(
                 is_subject,
                 UcParticipant {
                     name: name.text,
-                    type_name: ty.map(|ty| ty.name.full_name()),
+                    name_span: name.span,
+                    type_name: ty.as_ref().map(|ty| ty.name.full_name()),
+                    type_span: ty.as_ref().map(|ty| ty.span),
                     occurrences,
                     steps,
                     span,
@@ -508,6 +524,7 @@ pub(crate) fn usecase_decl<'src>() -> impl Parser<'src, Tokens<'src>, UcDecl, Mo
         .map_with(|(name, members), e| {
             let mut decl = UcDecl {
                 name: name.text,
+                name_span: name.span,
                 description: None,
                 subject: None,
                 actors: Vec::new(),

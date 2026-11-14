@@ -39,10 +39,10 @@ pub(super) struct IfmlImportClosure {
 /// the compiled `.evt` contracts the `import "<path>.evt"` lines name
 /// (rule 14's bucket).
 pub(super) struct DmnSources {
-    domains: Vec<(String, String)>,
-    imports: rex_driver::DomainImports,
-    tables: Vec<(String, String)>,
-    events: Vec<(String, rex_ir::events::EventModel)>,
+    pub(super) domains: Vec<(String, String)>,
+    pub(super) imports: rex_driver::DomainImports,
+    pub(super) tables: Vec<(String, String)>,
+    pub(super) events: Vec<(String, rex_ir::events::EventModel)>,
 }
 
 /// The compiled state of one open `.ifml` document for the navigation
@@ -201,7 +201,12 @@ impl RexBackend {
                 .map(|(_, diagnostic)| to_lsp_diagnostic(diagnostic, &map))
                 .collect()
             }
-            Surface::Other => Vec::new(),
+            // The artifact surfaces publish diagnostics once their own
+            // compile pipeline lands; today they contribute to the graph
+            // snapshot on demand and publish nothing.
+            Surface::Evt | Surface::Deploy | Surface::Uc | Surface::Cmmn | Surface::Other => {
+                Vec::new()
+            }
         };
         self.client
             .publish_diagnostics(uri.clone(), lsp_diagnostics, version)
@@ -369,7 +374,7 @@ impl RexBackend {
 
     /// The text for a resolved path — the open document that lives there
     /// wins over disk (the editor's buffer is the truth).
-    fn fetch_open_or_disk(&self, resolved: &str) -> Option<String> {
+    pub(super) fn fetch_open_or_disk(&self, resolved: &str) -> Option<String> {
         let resolved = std::path::PathBuf::from(resolved);
         let open = {
             let documents = self.documents.lock().unwrap();
@@ -792,7 +797,7 @@ fn dmn_table_sources(dir: &std::path::Path, source: &str) -> Vec<(String, String
 /// `import schema`/`import sigil` content resolves from disk relative to
 /// each domain file (the domains' driver paths are disk paths, so no
 /// re-keying is needed).
-fn domain_import_bundle(domains: &[(String, String)]) -> rex_driver::DomainImports {
+pub(super) fn domain_import_bundle(domains: &[(String, String)]) -> rex_driver::DomainImports {
     let schemas =
         rex_driver::workspace_imports::collect_schema_imports(domains).unwrap_or_default();
     let sigil = rex_driver::workspace_imports::collect_sigil_imports(domains).ok();

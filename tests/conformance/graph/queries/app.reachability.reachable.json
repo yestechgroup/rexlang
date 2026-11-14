@@ -1,0 +1,31 @@
+{
+  "formatVersion": 1,
+  "query": "reachability",
+  "from": "actor:app.actor#App.Agent",
+  "to": "feature:app.mox#nz.example.graph.Note.internalNotes",
+  "results": [
+    {
+      "application": "app.actor",
+      "reachable": true,
+      "starts": [
+        "capability:app.actor#App.RaiseRefund",
+        "capability:app.actor#App.ReadTicket",
+        "capability:app.actor#App.UpdateTicket"
+      ],
+      "startClasses": [
+        "class:app.mox#nz.example.graph.Ticket"
+      ],
+      "target": "class:app.mox#nz.example.graph.Note",
+      "path": [
+        {
+          "node": "class:app.mox#nz.example.graph.Ticket"
+        },
+        {
+          "node": "class:app.mox#nz.example.graph.Note",
+          "edge": "contains",
+          "feature": "notes"
+        }
+      ]
+    }
+  ]
+}

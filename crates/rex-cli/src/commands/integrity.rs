@@ -19,6 +19,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use rex_driver::applications::{applications, ApplicationFile};
 use rex_driver::{
     check_integrity, compile_actors_str, compile_cmmn_str, compile_ddd_str, compile_deploy_str,
     compile_dmn_str, compile_evt_str, compile_usecase_str, Diagnostic,
@@ -327,58 +328,37 @@ fn report_union_integrity(
     checked_clean: &BTreeSet<String>,
     deny_warnings: bool,
 ) -> usize {
-    let mut nodes = Nodes::default();
-    // Contribution index → node index.
-    let mut owner: Vec<Option<usize>> = Vec::with_capacity(contributions.len());
-    for contribution in contributions {
-        owner.push(nodes.get(Path::new(&contribution.path)));
-    }
-    // Node → the contribution that owns it (first wins).
-    let mut contributor_of: BTreeMap<usize, usize> = BTreeMap::new();
-    for (index, node) in owner.iter().enumerate() {
-        if let Some(node) = node {
-            contributor_of.entry(*node).or_insert(index);
-        }
-    }
-    // Import edges: a contribution's resolved import targets join its node
-    // to whatever file lives there — a bucket file or a bridging `.mox`.
-    let mut edges: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
+    // The clustering's inputs are host-normalized: canonicalize every
+    // contribution path and every resolved import target here (the driver
+    // stays filesystem-free and matches strings only). A path that cannot be
+    // canonicalized (missing on disk) forms no node — the caller-side
+    // precondition `rex_driver::applications` documents.
+    let mut owners: Vec<usize> = Vec::with_capacity(contributions.len());
+    let mut files: Vec<ApplicationFile> = Vec::with_capacity(contributions.len());
+    // One node per canonical path, first contribution wins — the artifact set
+    // the pre-hoist union-find (`contributor_of`) gathered.
+    let mut seen: BTreeSet<String> = BTreeSet::new();
     for (index, contribution) in contributions.iter().enumerate() {
-        let Some(from) = owner[index] else { continue };
+        let Ok(path) = std::fs::canonicalize(&contribution.path) else {
+            continue;
+        };
+        let path = path.display().to_string();
+        if !seen.insert(path.clone()) {
+            continue;
+        }
         let dir = Path::new(&contribution.path)
             .parent()
             .unwrap_or(Path::new("."));
-        for import in &contribution.imports {
-            if let Some(to) = nodes.get(&import.target(dir)) {
-                edges[from].push(to);
-            }
-        }
-    }
-    // Union-find over the nodes; components then sort by their smallest
-    // canonical path so diagnostic order is stable across runs.
-    let mut parent: Vec<usize> = (0..nodes.len()).collect();
-    for (from, targets) in edges.iter().enumerate() {
-        for &to in targets {
-            let a = find_root(&mut parent, from);
-            let b = find_root(&mut parent, to);
-            if a != b {
-                parent[a] = b;
-            }
-        }
-    }
-    let mut components: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-    for node in 0..nodes.len() {
-        let root = find_root(&mut parent, node);
-        components.entry(root).or_default().push(node);
-    }
-    let mut ordered: Vec<Vec<usize>> = components.into_values().collect();
-    ordered.sort_by_key(|members| {
-        members
+        let imports = contribution
+            .imports
             .iter()
-            .map(|&node| nodes.path(node).to_path_buf())
-            .min()
-            .expect("a component is never empty")
-    });
+            .filter_map(|import| std::fs::canonicalize(import.target(dir)).ok())
+            .map(|target| target.display().to_string())
+            .collect();
+        files.push(ApplicationFile { path, imports });
+        owners.push(index);
+    }
+    let ordered = applications(&files);
 
     let sources: BTreeMap<&str, &str> = contributions
         .iter()
@@ -391,11 +371,8 @@ fn report_union_integrity(
         let mut events = Vec::new();
         let mut deploys = Vec::new();
         let mut flows = Vec::new();
-        for &node in members {
-            let Some(&contributor) = contributor_of.get(&node) else {
-                continue;
-            };
-            let contribution = &contributions[contributor];
+        for &member in members {
+            let contribution = &contributions[owners[member]];
             match &contribution.artifact {
                 Some(Artifact::Design(model)) => {
                     designs.push((contribution.path.clone(), model.clone()))
@@ -451,45 +428,6 @@ fn report_union_integrity(
         }
     }
     total_errors
-}
-
-/// The canonical node table of the import graph: checked files keyed by
-/// their canonical on-disk path, in first-seen index order.
-#[derive(Default)]
-struct Nodes {
-    index: BTreeMap<PathBuf, usize>,
-    list: Vec<PathBuf>,
-}
-
-impl Nodes {
-    /// The node for `path`, creating it when absent. Paths that cannot be
-    /// canonicalized (missing on disk) form no node.
-    fn get(&mut self, path: &Path) -> Option<usize> {
-        let canonical = std::fs::canonicalize(path).ok()?;
-        let next = self.list.len();
-        Some(*self.index.entry(canonical.clone()).or_insert_with(|| {
-            self.list.push(canonical);
-            next
-        }))
-    }
-
-    #[allow(dead_code)]
-    fn len(&self) -> usize {
-        self.list.len()
-    }
-
-    fn path(&self, index: usize) -> &Path {
-        &self.list[index]
-    }
-}
-
-/// Follows union-find parent links with path halving.
-fn find_root(parent: &mut [usize], mut node: usize) -> usize {
-    while parent[node] != node {
-        parent[node] = parent[parent[node]];
-        node = parent[node];
-    }
-    node
 }
 
 /// Groups path-tagged diagnostics into consecutive same-path runs.

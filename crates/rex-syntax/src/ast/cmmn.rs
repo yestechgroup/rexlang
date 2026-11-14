@@ -22,6 +22,9 @@ pub struct CmmnFile {
 pub struct CmmnCase {
     /// The case name.
     pub name: String,
+    /// Span of the declared case name itself (the navigation index's
+    /// definition site).
+    pub name_span: Span,
     /// Description from the doc comment directly above the declaration
     /// (contiguous `///` lines, joined).
     pub description: Option<String>,
@@ -42,8 +45,12 @@ pub struct CmmnCase {
 pub struct CmmnRole {
     /// The role name.
     pub name: String,
+    /// Span of the declared role name itself.
+    pub name_span: Span,
     /// The bound actor name from the `as` clause, when present.
     pub actor: Option<String>,
+    /// Span of the `as` actor mention as written, when present.
+    pub actor_span: Option<Span>,
     /// Span of the whole declaration.
     pub span: Span,
 }
@@ -54,6 +61,8 @@ pub struct CmmnRole {
 pub struct CmmnFileItem {
     /// The item name.
     pub name: String,
+    /// Span of the declared item name itself.
+    pub name_span: Span,
     /// The item's type reference.
     pub type_ref: TypeRef,
     /// The multiplicity annotation, when present.
@@ -71,6 +80,8 @@ pub struct CmmnFileItem {
 pub struct CmmnItemDecl {
     /// The plan item name.
     pub name: String,
+    /// Span of the declared plan item name itself.
+    pub name_span: Span,
     /// Description from the doc comment directly above the declaration.
     pub description: Option<String>,
     /// `true` when declared with the `discretionary` prefix.
@@ -80,6 +91,10 @@ pub struct CmmnItemDecl {
     /// The `performer: <role>;` clause, wherever it was declared — the
     /// driver validates that only a human task carries one.
     pub performer: Option<(String, Span)>,
+    /// Span of the `performer` role name itself (the clause span is
+    /// [`CmmnItemDecl::performer`]'s second half), when the clause was
+    /// declared.
+    pub performer_span: Option<Span>,
     /// The `execute <alias>.<Service>.<operation>;` clause, wherever it
     /// was declared — the driver validates that only a service task
     /// carries one.
@@ -134,6 +149,9 @@ pub struct CmmnExecute {
     pub service: String,
     /// The operation's name.
     pub operation: String,
+    /// Span of the `Service.operation` mention (the alias is a file-scope
+    /// qualifier, not part of the resolved name).
+    pub reference_span: Span,
     /// Span of the whole clause, `;` included.
     pub span: Span,
 }
@@ -148,6 +166,8 @@ pub struct CmmnInvoke {
     /// driver resolves it by its last segment (the rule-17 convention) and
     /// the artifact lowers the authored spelling.
     pub service: String,
+    /// Span of the invoked qualified name as written.
+    pub name_span: Span,
     /// The `version compatible` / `version "<X.Y.Z>"` pin, when written
     /// (rexlang#154) — the same shape the `.ddd` decision references take.
     pub pin: Option<DddVersionPin>,
@@ -175,6 +195,8 @@ pub struct CmmnCriterion {
 pub struct CmmnOnPart {
     /// The watched element's name.
     pub source: String,
+    /// Span of the watched element's name itself (the tail is excluded).
+    pub source_span: Span,
     /// The tail word, when the reference is dotted.
     pub event: Option<String>,
     /// Span of the whole on-part.

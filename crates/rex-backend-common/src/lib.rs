@@ -161,6 +161,7 @@ mod tests {
         "annotations",
         "applicabilityRules",
         "application",
+        "attributes",
         "authorizedRoles",
         "autoComplete",
         "base",
@@ -193,6 +194,7 @@ mod tests {
         "designs",
         "detailFields",
         "details",
+        "edges",
         "effect",
         "end",
         "entries",
@@ -202,6 +204,7 @@ mod tests {
         "extends",
         "facets",
         "features",
+        "files",
         "finite",
         "first",
         "flags",
@@ -243,6 +246,7 @@ mod tests {
         "multiplicity",
         "name",
         "neverBoth",
+        "nodes",
         "nonPersistent",
         "objects",
         "obligations",
@@ -277,6 +281,7 @@ mod tests {
         "schemaName",
         "sentryRef",
         "services",
+        "sessionKind",
         "source",
         "steps",
         "stereotype",
@@ -297,6 +302,7 @@ mod tests {
         "value",
         "valueFields",
         "version",
+        "via",
         "vocabularies",
         "when",
     ];
@@ -317,6 +323,20 @@ mod tests {
                 snake_case(&camel_case(&snake)),
                 snake,
                 "camel_case then snake_case broke {key:?}"
+            );
+        }
+    }
+
+    /// The corpus is copied from the CLI's `STRUCTURAL_KEYS`, where the
+    /// scanner binary-searches it — keep both lists sorted (and identical).
+    #[test]
+    fn structural_keys_are_sorted_and_unique() {
+        for pair in STRUCTURAL_KEYS.windows(2) {
+            assert!(
+                pair[0] < pair[1],
+                "STRUCTURAL_KEYS must be sorted and unique: {:?} before {:?}",
+                pair[0],
+                pair[1]
             );
         }
     }

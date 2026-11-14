@@ -1,0 +1,1783 @@
+{
+  "formatVersion": 1,
+  "applications": [
+    {
+      "id": "app.actor",
+      "files": [
+        "app.actor",
+        "app.cmmn",
+        "app.ddd",
+        "app.deploy",
+        "app.dmn",
+        "app.evt",
+        "app.ifml",
+        "app.mox",
+        "app.uc"
+      ],
+      "packages": [
+        "nz.example.graph"
+      ]
+    },
+    {
+      "id": "other.actor",
+      "files": [
+        "other.actor",
+        "other.mox"
+      ],
+      "packages": [
+        "nz.example.audit"
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "id": "actor:app.actor#App.Agent",
+      "kind": "actor",
+      "name": "App.Agent",
+      "file": "app.actor",
+      "application": "app.actor"
+    },
+    {
+      "id": "actor:app.actor#App.Customer",
+      "kind": "actor",
+      "name": "App.Customer",
+      "file": "app.actor",
+      "application": "app.actor"
+    },
+    {
+      "id": "actor:app.actor#App.Finance",
+      "kind": "actor",
+      "name": "App.Finance",
+      "file": "app.actor",
+      "application": "app.actor"
+    },
+    {
+      "id": "actor:app.actor#App.Manager",
+      "kind": "actor",
+      "name": "App.Manager",
+      "file": "app.actor",
+      "application": "app.actor"
+    },
+    {
+      "id": "capability:app.actor#App.ApproveRefund",
+      "kind": "capability",
+      "name": "App.ApproveRefund",
+      "file": "app.actor",
+      "application": "app.actor"
+    },
+    {
+      "id": "capability:app.actor#App.EscalateRefund",
+      "kind": "capability",
+      "name": "App.EscalateRefund",
+      "file": "app.actor",
+      "application": "app.actor"
+    },
+    {
+      "id": "capability:app.actor#App.RaiseRefund",
+      "kind": "capability",
+      "name": "App.RaiseRefund",
+      "file": "app.actor",
+      "application": "app.actor"
+    },
+    {
+      "id": "capability:app.actor#App.ReadTicket",
+      "kind": "capability",
+      "name": "App.ReadTicket",
+      "file": "app.actor",
+      "application": "app.actor"
+    },
+    {
+      "id": "capability:app.actor#App.ResolveTicket",
+      "kind": "capability",
+      "name": "App.ResolveTicket",
+      "file": "app.actor",
+      "application": "app.actor"
+    },
+    {
+      "id": "capability:app.actor#App.UpdateTicket",
+      "kind": "capability",
+      "name": "App.UpdateTicket",
+      "file": "app.actor",
+      "application": "app.actor"
+    },
+    {
+      "id": "file:app.actor#app.actor",
+      "kind": "file",
+      "name": "app.actor",
+      "file": "app.actor",
+      "application": "app.actor"
+    },
+    {
+      "id": "case:app.cmmn#RefundDesk",
+      "kind": "case",
+      "name": "RefundDesk",
+      "file": "app.cmmn",
+      "application": "app.actor"
+    },
+    {
+      "id": "caseFileItem:app.cmmn#RefundDesk.decision",
+      "kind": "caseFileItem",
+      "name": "RefundDesk.decision",
+      "file": "app.cmmn",
+      "application": "app.actor"
+    },
+    {
+      "id": "caseFileItem:app.cmmn#RefundDesk.ticket",
+      "kind": "caseFileItem",
+      "name": "RefundDesk.ticket",
+      "file": "app.cmmn",
+      "application": "app.actor"
+    },
+    {
+      "id": "caseRole:app.cmmn#RefundDesk.finance",
+      "kind": "caseRole",
+      "name": "RefundDesk.finance",
+      "file": "app.cmmn",
+      "application": "app.actor"
+    },
+    {
+      "id": "caseRole:app.cmmn#RefundDesk.triage",
+      "kind": "caseRole",
+      "name": "RefundDesk.triage",
+      "file": "app.cmmn",
+      "application": "app.actor"
+    },
+    {
+      "id": "file:app.cmmn#app.cmmn",
+      "kind": "file",
+      "name": "app.cmmn",
+      "file": "app.cmmn",
+      "application": "app.actor"
+    },
+    {
+      "id": "planItem:app.cmmn#RefundDesk.ApproveRefund",
+      "kind": "planItem",
+      "name": "RefundDesk.ApproveRefund",
+      "file": "app.cmmn",
+      "application": "app.actor"
+    },
+    {
+      "id": "planItem:app.cmmn#RefundDesk.AssessAuthority",
+      "kind": "planItem",
+      "name": "RefundDesk.AssessAuthority",
+      "file": "app.cmmn",
+      "application": "app.actor"
+    },
+    {
+      "id": "planItem:app.cmmn#RefundDesk.AssessRefund",
+      "kind": "planItem",
+      "name": "RefundDesk.AssessRefund",
+      "file": "app.cmmn",
+      "application": "app.actor"
+    },
+    {
+      "id": "planItem:app.cmmn#RefundDesk.Assessment",
+      "kind": "planItem",
+      "name": "RefundDesk.Assessment",
+      "file": "app.cmmn",
+      "application": "app.actor"
+    },
+    {
+      "id": "planItem:app.cmmn#RefundDesk.RefundSettled",
+      "kind": "planItem",
+      "name": "RefundDesk.RefundSettled",
+      "file": "app.cmmn",
+      "application": "app.actor"
+    },
+    {
+      "id": "planItem:app.cmmn#RefundDesk.ReviewTicket",
+      "kind": "planItem",
+      "name": "RefundDesk.ReviewTicket",
+      "file": "app.cmmn",
+      "application": "app.actor"
+    },
+    {
+      "id": "designApplication:app.ddd#GraphDesk",
+      "kind": "designApplication",
+      "name": "GraphDesk",
+      "file": "app.ddd",
+      "application": "app.actor"
+    },
+    {
+      "id": "file:app.ddd#app.ddd",
+      "kind": "file",
+      "name": "app.ddd",
+      "file": "app.ddd",
+      "application": "app.actor"
+    },
+    {
+      "id": "module:app.ddd#GraphDesk.desk",
+      "kind": "module",
+      "name": "GraphDesk.desk",
+      "file": "app.ddd",
+      "application": "app.actor"
+    },
+    {
+      "id": "repository:app.ddd#GraphDesk.desk.TicketRepository",
+      "kind": "repository",
+      "name": "GraphDesk.desk.TicketRepository",
+      "file": "app.ddd",
+      "application": "app.actor"
+    },
+    {
+      "id": "repositoryOperation:app.ddd#GraphDesk.desk.TicketRepository.delete",
+      "kind": "repositoryOperation",
+      "name": "GraphDesk.desk.TicketRepository.delete",
+      "file": "app.ddd",
+      "application": "app.actor"
+    },
+    {
+      "id": "repositoryOperation:app.ddd#GraphDesk.desk.TicketRepository.findAll",
+      "kind": "repositoryOperation",
+      "name": "GraphDesk.desk.TicketRepository.findAll",
+      "file": "app.ddd",
+      "application": "app.actor"
+    },
+    {
+      "id": "repositoryOperation:app.ddd#GraphDesk.desk.TicketRepository.findById",
+      "kind": "repositoryOperation",
+      "name": "GraphDesk.desk.TicketRepository.findById",
+      "file": "app.ddd",
+      "application": "app.actor"
+    },
+    {
+      "id": "repositoryOperation:app.ddd#GraphDesk.desk.TicketRepository.save",
+      "kind": "repositoryOperation",
+      "name": "GraphDesk.desk.TicketRepository.save",
+      "file": "app.ddd",
+      "application": "app.actor"
+    },
+    {
+      "id": "search:app.ddd#GraphDesk.desk.TicketSearch",
+      "kind": "search",
+      "name": "GraphDesk.desk.TicketSearch",
+      "file": "app.ddd",
+      "application": "app.actor"
+    },
+    {
+      "id": "service:app.ddd#GraphDesk.desk.TicketService",
+      "kind": "service",
+      "name": "GraphDesk.desk.TicketService",
+      "file": "app.ddd",
+      "application": "app.actor"
+    },
+    {
+      "id": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.approveRefund",
+      "kind": "serviceOperation",
+      "name": "GraphDesk.desk.TicketService.approveRefund",
+      "file": "app.ddd",
+      "application": "app.actor"
+    },
+    {
+      "id": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.listTickets",
+      "kind": "serviceOperation",
+      "name": "GraphDesk.desk.TicketService.listTickets",
+      "file": "app.ddd",
+      "application": "app.actor"
+    },
+    {
+      "id": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.raiseRefund",
+      "kind": "serviceOperation",
+      "name": "GraphDesk.desk.TicketService.raiseRefund",
+      "file": "app.ddd",
+      "application": "app.actor"
+    },
+    {
+      "id": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.raiseTicket",
+      "kind": "serviceOperation",
+      "name": "GraphDesk.desk.TicketService.raiseTicket",
+      "file": "app.ddd",
+      "application": "app.actor"
+    },
+    {
+      "id": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.readTicket",
+      "kind": "serviceOperation",
+      "name": "GraphDesk.desk.TicketService.readTicket",
+      "file": "app.ddd",
+      "application": "app.actor"
+    },
+    {
+      "id": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.resolveTicket",
+      "kind": "serviceOperation",
+      "name": "GraphDesk.desk.TicketService.resolveTicket",
+      "file": "app.ddd",
+      "application": "app.actor"
+    },
+    {
+      "id": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.updateTicket",
+      "kind": "serviceOperation",
+      "name": "GraphDesk.desk.TicketService.updateTicket",
+      "file": "app.ddd",
+      "application": "app.actor"
+    },
+    {
+      "id": "deployApplication:app.deploy#GraphDesk",
+      "kind": "deployApplication",
+      "name": "GraphDesk",
+      "file": "app.deploy",
+      "application": "app.actor"
+    },
+    {
+      "id": "deployComponent:app.deploy#GraphDesk.api",
+      "kind": "deployComponent",
+      "name": "GraphDesk.api",
+      "file": "app.deploy",
+      "application": "app.actor"
+    },
+    {
+      "id": "deployComponent:app.deploy#GraphDesk.db",
+      "kind": "deployComponent",
+      "name": "GraphDesk.db",
+      "file": "app.deploy",
+      "application": "app.actor"
+    },
+    {
+      "id": "deployComponent:app.deploy#GraphDesk.refund_approval_service",
+      "kind": "deployComponent",
+      "name": "GraphDesk.refund_approval_service",
+      "file": "app.deploy",
+      "application": "app.actor"
+    },
+    {
+      "id": "deployComponent:app.deploy#GraphDesk.web",
+      "kind": "deployComponent",
+      "name": "GraphDesk.web",
+      "file": "app.deploy",
+      "application": "app.actor"
+    },
+    {
+      "id": "deployProfile:app.deploy#production_k8s",
+      "kind": "deployProfile",
+      "name": "production_k8s",
+      "file": "app.deploy",
+      "application": "app.actor"
+    },
+    {
+      "id": "deployment:app.deploy#GraphDesk.production",
+      "kind": "deployment",
+      "name": "GraphDesk.production",
+      "file": "app.deploy",
+      "application": "app.actor"
+    },
+    {
+      "id": "file:app.deploy#app.deploy",
+      "kind": "file",
+      "name": "app.deploy",
+      "file": "app.deploy",
+      "application": "app.actor"
+    },
+    {
+      "id": "bkm:app.dmn#GraphDecisions.assess_refund",
+      "kind": "bkm",
+      "name": "GraphDecisions.assess_refund",
+      "file": "app.dmn",
+      "application": "app.actor"
+    },
+    {
+      "id": "decision:app.dmn#GraphDecisions.RefundAssessment",
+      "kind": "decision",
+      "name": "GraphDecisions.RefundAssessment",
+      "file": "app.dmn",
+      "application": "app.actor"
+    },
+    {
+      "id": "decision:app.dmn#GraphDecisions.RefundEligibility",
+      "kind": "decision",
+      "name": "GraphDecisions.RefundEligibility",
+      "file": "app.dmn",
+      "application": "app.actor"
+    },
+    {
+      "id": "decisionModel:app.dmn#GraphDecisions",
+      "kind": "decisionModel",
+      "name": "GraphDecisions",
+      "file": "app.dmn",
+      "application": "app.actor"
+    },
+    {
+      "id": "decisionService:app.dmn#GraphDecisions.AssessRefund",
+      "kind": "decisionService",
+      "name": "GraphDecisions.AssessRefund",
+      "file": "app.dmn",
+      "application": "app.actor"
+    },
+    {
+      "id": "file:app.dmn#app.dmn",
+      "kind": "file",
+      "name": "app.dmn",
+      "file": "app.dmn",
+      "application": "app.actor"
+    },
+    {
+      "id": "inputData:app.dmn#GraphDecisions.requested_cents",
+      "kind": "inputData",
+      "name": "GraphDecisions.requested_cents",
+      "file": "app.dmn",
+      "application": "app.actor"
+    },
+    {
+      "id": "inputData:app.dmn#GraphDecisions.ticket",
+      "kind": "inputData",
+      "name": "GraphDecisions.ticket",
+      "file": "app.dmn",
+      "application": "app.actor"
+    },
+    {
+      "id": "channel:app.evt#app.refunds",
+      "kind": "channel",
+      "name": "app.refunds",
+      "file": "app.evt",
+      "application": "app.actor"
+    },
+    {
+      "id": "channel:app.evt#app.tickets",
+      "kind": "channel",
+      "name": "app.tickets",
+      "file": "app.evt",
+      "application": "app.actor"
+    },
+    {
+      "id": "event:app.evt#app.RefundApproved",
+      "kind": "event",
+      "name": "app.RefundApproved",
+      "file": "app.evt",
+      "application": "app.actor"
+    },
+    {
+      "id": "event:app.evt#app.RefundRequested",
+      "kind": "event",
+      "name": "app.RefundRequested",
+      "file": "app.evt",
+      "application": "app.actor"
+    },
+    {
+      "id": "event:app.evt#app.TicketRaised",
+      "kind": "event",
+      "name": "app.TicketRaised",
+      "file": "app.evt",
+      "application": "app.actor"
+    },
+    {
+      "id": "file:app.evt#app.evt",
+      "kind": "file",
+      "name": "app.evt",
+      "file": "app.evt",
+      "application": "app.actor"
+    },
+    {
+      "id": "action:app.ifml#RaiseRefund",
+      "kind": "action",
+      "name": "RaiseRefund",
+      "file": "app.ifml",
+      "application": "app.actor"
+    },
+    {
+      "id": "component:app.ifml#Inbox.queue",
+      "kind": "component",
+      "name": "Inbox.queue",
+      "file": "app.ifml",
+      "application": "app.actor"
+    },
+    {
+      "id": "component:app.ifml#Intake.intake",
+      "kind": "component",
+      "name": "Intake.intake",
+      "file": "app.ifml",
+      "application": "app.actor"
+    },
+    {
+      "id": "file:app.ifml#app.ifml",
+      "kind": "file",
+      "name": "app.ifml",
+      "file": "app.ifml",
+      "application": "app.actor"
+    },
+    {
+      "id": "flow:app.ifml#app",
+      "kind": "flow",
+      "name": "app",
+      "file": "app.ifml",
+      "application": "app.actor"
+    },
+    {
+      "id": "view:app.ifml#Inbox",
+      "kind": "view",
+      "name": "Inbox",
+      "file": "app.ifml",
+      "application": "app.actor"
+    },
+    {
+      "id": "view:app.ifml#Intake",
+      "kind": "view",
+      "name": "Intake",
+      "file": "app.ifml",
+      "application": "app.actor"
+    },
+    {
+      "id": "class:app.mox#nz.example.graph.Invoice",
+      "kind": "class",
+      "name": "nz.example.graph.Invoice",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "class:app.mox#nz.example.graph.Note",
+      "kind": "class",
+      "name": "nz.example.graph.Note",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "class:app.mox#nz.example.graph.RefundDecision",
+      "kind": "class",
+      "name": "nz.example.graph.RefundDecision",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "class",
+      "name": "nz.example.graph.Ticket",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "class:app.mox#nz.example.graph.User",
+      "kind": "class",
+      "name": "nz.example.graph.User",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "enum:app.mox#nz.example.graph.TicketState",
+      "kind": "enum",
+      "name": "nz.example.graph.TicketState",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "feature:app.mox#nz.example.graph.Invoice.amount",
+      "kind": "feature",
+      "name": "nz.example.graph.Invoice.amount",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "feature:app.mox#nz.example.graph.Invoice.invoiceId",
+      "kind": "feature",
+      "name": "nz.example.graph.Invoice.invoiceId",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "feature:app.mox#nz.example.graph.Note.body",
+      "kind": "feature",
+      "name": "nz.example.graph.Note.body",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "feature:app.mox#nz.example.graph.Note.internalNotes",
+      "kind": "feature",
+      "name": "nz.example.graph.Note.internalNotes",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "feature:app.mox#nz.example.graph.Note.noteId",
+      "kind": "feature",
+      "name": "nz.example.graph.Note.noteId",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "feature:app.mox#nz.example.graph.Note.ticket",
+      "kind": "feature",
+      "name": "nz.example.graph.Note.ticket",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "feature:app.mox#nz.example.graph.RefundDecision.approved",
+      "kind": "feature",
+      "name": "nz.example.graph.RefundDecision.approved",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "feature:app.mox#nz.example.graph.RefundDecision.cents",
+      "kind": "feature",
+      "name": "nz.example.graph.RefundDecision.cents",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "feature:app.mox#nz.example.graph.RefundDecision.decisionId",
+      "kind": "feature",
+      "name": "nz.example.graph.RefundDecision.decisionId",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "feature:app.mox#nz.example.graph.Ticket.assignee",
+      "kind": "feature",
+      "name": "nz.example.graph.Ticket.assignee",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "feature:app.mox#nz.example.graph.Ticket.internal",
+      "kind": "feature",
+      "name": "nz.example.graph.Ticket.internal",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "feature:app.mox#nz.example.graph.Ticket.needsRefund",
+      "kind": "feature",
+      "name": "nz.example.graph.Ticket.needsRefund",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "feature:app.mox#nz.example.graph.Ticket.notes",
+      "kind": "feature",
+      "name": "nz.example.graph.Ticket.notes",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "feature:app.mox#nz.example.graph.Ticket.refundCents",
+      "kind": "feature",
+      "name": "nz.example.graph.Ticket.refundCents",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "feature:app.mox#nz.example.graph.Ticket.state",
+      "kind": "feature",
+      "name": "nz.example.graph.Ticket.state",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "feature:app.mox#nz.example.graph.Ticket.ticketNo",
+      "kind": "feature",
+      "name": "nz.example.graph.Ticket.ticketNo",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "feature:app.mox#nz.example.graph.Ticket.title",
+      "kind": "feature",
+      "name": "nz.example.graph.Ticket.title",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "feature:app.mox#nz.example.graph.User.active",
+      "kind": "feature",
+      "name": "nz.example.graph.User.active",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "feature:app.mox#nz.example.graph.User.assignedTickets",
+      "kind": "feature",
+      "name": "nz.example.graph.User.assignedTickets",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "feature:app.mox#nz.example.graph.User.name",
+      "kind": "feature",
+      "name": "nz.example.graph.User.name",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "feature:app.mox#nz.example.graph.User.userId",
+      "kind": "feature",
+      "name": "nz.example.graph.User.userId",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "file:app.mox#app.mox",
+      "kind": "file",
+      "name": "app.mox",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "operation:app.mox#nz.example.graph.Ticket.raiseRefund",
+      "kind": "operation",
+      "name": "nz.example.graph.Ticket.raiseRefund",
+      "file": "app.mox",
+      "application": "app.actor"
+    },
+    {
+      "id": "file:app.uc#app.uc",
+      "kind": "file",
+      "name": "app.uc",
+      "file": "app.uc",
+      "application": "app.actor"
+    },
+    {
+      "id": "useCase:app.uc#RaiseRefund",
+      "kind": "useCase",
+      "name": "RaiseRefund",
+      "file": "app.uc",
+      "application": "app.actor"
+    },
+    {
+      "id": "useCase:app.uc#TrackTickets",
+      "kind": "useCase",
+      "name": "TrackTickets",
+      "file": "app.uc",
+      "application": "app.actor"
+    },
+    {
+      "id": "actor:other.actor#Audit.Auditor",
+      "kind": "actor",
+      "name": "Audit.Auditor",
+      "file": "other.actor",
+      "application": "other.actor"
+    },
+    {
+      "id": "actor:other.actor#Audit.AuditorAgent",
+      "kind": "actor",
+      "name": "Audit.AuditorAgent",
+      "file": "other.actor",
+      "application": "other.actor"
+    },
+    {
+      "id": "capability:other.actor#Audit.PurgeAudit",
+      "kind": "capability",
+      "name": "Audit.PurgeAudit",
+      "file": "other.actor",
+      "application": "other.actor"
+    },
+    {
+      "id": "capability:other.actor#Audit.ReadAudit",
+      "kind": "capability",
+      "name": "Audit.ReadAudit",
+      "file": "other.actor",
+      "application": "other.actor"
+    },
+    {
+      "id": "file:other.actor#other.actor",
+      "kind": "file",
+      "name": "other.actor",
+      "file": "other.actor",
+      "application": "other.actor"
+    },
+    {
+      "id": "class:other.mox#nz.example.audit.AuditEntry",
+      "kind": "class",
+      "name": "nz.example.audit.AuditEntry",
+      "file": "other.mox",
+      "application": "other.actor"
+    },
+    {
+      "id": "feature:other.mox#nz.example.audit.AuditEntry.entryId",
+      "kind": "feature",
+      "name": "nz.example.audit.AuditEntry.entryId",
+      "file": "other.mox",
+      "application": "other.actor"
+    },
+    {
+      "id": "feature:other.mox#nz.example.audit.AuditEntry.note",
+      "kind": "feature",
+      "name": "nz.example.audit.AuditEntry.note",
+      "file": "other.mox",
+      "application": "other.actor"
+    },
+    {
+      "id": "file:other.mox#other.mox",
+      "kind": "file",
+      "name": "other.mox",
+      "file": "other.mox",
+      "application": "other.actor"
+    }
+  ],
+  "edges": [
+    {
+      "from": "action:app.ifml#RaiseRefund",
+      "to": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.raiseRefund",
+      "kind": "binds"
+    },
+    {
+      "from": "action:app.ifml#RaiseRefund",
+      "to": "flow:app.ifml#app",
+      "kind": "memberOf"
+    },
+    {
+      "from": "actor:app.actor#App.Agent",
+      "to": "actor:app.actor#App.Customer",
+      "kind": "extends"
+    },
+    {
+      "from": "actor:app.actor#App.Agent",
+      "to": "capability:app.actor#App.RaiseRefund",
+      "kind": "permits",
+      "effect": "permit",
+      "obligations": [
+        "audit"
+      ]
+    },
+    {
+      "from": "actor:app.actor#App.Agent",
+      "to": "capability:app.actor#App.ReadTicket",
+      "kind": "permits",
+      "effect": "permit"
+    },
+    {
+      "from": "actor:app.actor#App.Agent",
+      "to": "capability:app.actor#App.UpdateTicket",
+      "kind": "permits",
+      "effect": "permit"
+    },
+    {
+      "from": "actor:app.actor#App.Customer",
+      "to": "capability:app.actor#App.ReadTicket",
+      "kind": "permits",
+      "effect": "permit",
+      "when": "!internal",
+      "sessionKind": "human"
+    },
+    {
+      "from": "actor:app.actor#App.Finance",
+      "to": "capability:app.actor#App.ResolveTicket",
+      "kind": "forbids",
+      "effect": "forbid"
+    },
+    {
+      "from": "actor:app.actor#App.Finance",
+      "to": "capability:app.actor#App.ApproveRefund",
+      "kind": "permits",
+      "effect": "permit"
+    },
+    {
+      "from": "actor:app.actor#App.Finance",
+      "to": "capability:app.actor#App.ResolveTicket",
+      "kind": "permits",
+      "effect": "permit"
+    },
+    {
+      "from": "actor:app.actor#App.Manager",
+      "to": "actor:app.actor#App.Agent",
+      "kind": "extends"
+    },
+    {
+      "from": "actor:app.actor#App.Manager",
+      "to": "capability:app.actor#App.UpdateTicket",
+      "kind": "forbids",
+      "effect": "forbid"
+    },
+    {
+      "from": "actor:app.actor#App.Manager",
+      "to": "capability:app.actor#App.ApproveRefund",
+      "kind": "permits",
+      "effect": "permit"
+    },
+    {
+      "from": "actor:app.actor#App.Manager",
+      "to": "capability:app.actor#App.ReadTicket",
+      "kind": "permits",
+      "effect": "permit"
+    },
+    {
+      "from": "actor:other.actor#Audit.Auditor",
+      "to": "file:other.actor#other.actor",
+      "kind": "opaqueGrant",
+      "effect": "permit"
+    },
+    {
+      "from": "actor:other.actor#Audit.AuditorAgent",
+      "to": "actor:other.actor#Audit.Auditor",
+      "kind": "extends"
+    },
+    {
+      "from": "bkm:app.dmn#GraphDecisions.assess_refund",
+      "to": "decisionModel:app.dmn#GraphDecisions",
+      "kind": "memberOf"
+    },
+    {
+      "from": "capability:app.actor#App.ApproveRefund",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "on"
+    },
+    {
+      "from": "capability:app.actor#App.EscalateRefund",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "on"
+    },
+    {
+      "from": "capability:app.actor#App.RaiseRefund",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "on"
+    },
+    {
+      "from": "capability:app.actor#App.ReadTicket",
+      "to": "capability:app.actor#App.ResolveTicket",
+      "kind": "excludes"
+    },
+    {
+      "from": "capability:app.actor#App.ReadTicket",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "on"
+    },
+    {
+      "from": "capability:app.actor#App.ResolveTicket",
+      "to": "capability:app.actor#App.ReadTicket",
+      "kind": "excludes"
+    },
+    {
+      "from": "capability:app.actor#App.ResolveTicket",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "on"
+    },
+    {
+      "from": "capability:app.actor#App.UpdateTicket",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "on"
+    },
+    {
+      "from": "capability:other.actor#Audit.PurgeAudit",
+      "to": "class:other.mox#nz.example.audit.AuditEntry",
+      "kind": "on"
+    },
+    {
+      "from": "capability:other.actor#Audit.ReadAudit",
+      "to": "class:other.mox#nz.example.audit.AuditEntry",
+      "kind": "on"
+    },
+    {
+      "from": "caseFileItem:app.cmmn#RefundDesk.decision",
+      "to": "case:app.cmmn#RefundDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "caseFileItem:app.cmmn#RefundDesk.decision",
+      "to": "class:app.mox#nz.example.graph.RefundDecision",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "decision"
+      }
+    },
+    {
+      "from": "caseFileItem:app.cmmn#RefundDesk.ticket",
+      "to": "case:app.cmmn#RefundDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "caseFileItem:app.cmmn#RefundDesk.ticket",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "ticket"
+      }
+    },
+    {
+      "from": "caseRole:app.cmmn#RefundDesk.finance",
+      "to": "case:app.cmmn#RefundDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "caseRole:app.cmmn#RefundDesk.finance",
+      "to": "actor:app.actor#App.Finance",
+      "kind": "requires",
+      "attributes": {
+        "via": "roles"
+      }
+    },
+    {
+      "from": "caseRole:app.cmmn#RefundDesk.triage",
+      "to": "case:app.cmmn#RefundDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "caseRole:app.cmmn#RefundDesk.triage",
+      "to": "actor:app.actor#App.Agent",
+      "kind": "requires",
+      "attributes": {
+        "via": "roles"
+      }
+    },
+    {
+      "from": "channel:app.evt#app.refunds",
+      "to": "event:app.evt#app.RefundApproved",
+      "kind": "publishes"
+    },
+    {
+      "from": "channel:app.evt#app.refunds",
+      "to": "event:app.evt#app.RefundRequested",
+      "kind": "publishes"
+    },
+    {
+      "from": "channel:app.evt#app.tickets",
+      "to": "event:app.evt#app.TicketRaised",
+      "kind": "publishes"
+    },
+    {
+      "from": "class:app.mox#nz.example.graph.Ticket",
+      "to": "class:app.mox#nz.example.graph.Note",
+      "kind": "contains",
+      "attributes": {
+        "feature": "notes"
+      }
+    },
+    {
+      "from": "class:app.mox#nz.example.graph.Ticket",
+      "to": "class:app.mox#nz.example.graph.User",
+      "kind": "refers",
+      "attributes": {
+        "feature": "assignee"
+      }
+    },
+    {
+      "from": "class:app.mox#nz.example.graph.User",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "refers",
+      "attributes": {
+        "feature": "assignedTickets"
+      }
+    },
+    {
+      "from": "component:app.ifml#Inbox.queue",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "data",
+      "attributes": {
+        "asWritten": "Ticket"
+      }
+    },
+    {
+      "from": "component:app.ifml#Inbox.queue",
+      "to": "view:app.ifml#Intake",
+      "kind": "navigates",
+      "attributes": {
+        "source": "Inbox.queue",
+        "trigger": "select"
+      }
+    },
+    {
+      "from": "component:app.ifml#Inbox.queue",
+      "to": "feature:app.mox#nz.example.graph.Ticket.refundCents",
+      "kind": "readsFeature",
+      "attributes": {
+        "via": "column"
+      }
+    },
+    {
+      "from": "component:app.ifml#Inbox.queue",
+      "to": "feature:app.mox#nz.example.graph.Ticket.ticketNo",
+      "kind": "readsFeature",
+      "attributes": {
+        "via": "column"
+      }
+    },
+    {
+      "from": "component:app.ifml#Inbox.queue",
+      "to": "feature:app.mox#nz.example.graph.Ticket.title",
+      "kind": "readsFeature",
+      "attributes": {
+        "via": "column"
+      }
+    },
+    {
+      "from": "component:app.ifml#Intake.intake",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "data",
+      "attributes": {
+        "asWritten": "Ticket"
+      }
+    },
+    {
+      "from": "component:app.ifml#Intake.intake",
+      "to": "action:app.ifml#RaiseRefund",
+      "kind": "invokesAction",
+      "attributes": {
+        "source": "Intake.intake",
+        "trigger": "raise"
+      }
+    },
+    {
+      "from": "decision:app.dmn#GraphDecisions.RefundAssessment",
+      "to": "event:app.evt#app.RefundApproved",
+      "kind": "emits",
+      "when": "eligible"
+    },
+    {
+      "from": "decision:app.dmn#GraphDecisions.RefundAssessment",
+      "to": "decisionModel:app.dmn#GraphDecisions",
+      "kind": "memberOf"
+    },
+    {
+      "from": "decision:app.dmn#GraphDecisions.RefundEligibility",
+      "to": "decisionModel:app.dmn#GraphDecisions",
+      "kind": "memberOf"
+    },
+    {
+      "from": "decisionService:app.dmn#GraphDecisions.AssessRefund",
+      "to": "decisionModel:app.dmn#GraphDecisions",
+      "kind": "memberOf"
+    },
+    {
+      "from": "decisionService:app.dmn#GraphDecisions.AssessRefund",
+      "to": "decision:app.dmn#GraphDecisions.RefundAssessment",
+      "kind": "provides"
+    },
+    {
+      "from": "deployComponent:app.deploy#GraphDesk.api",
+      "to": "module:app.ddd#GraphDesk.desk",
+      "kind": "bindsDesign",
+      "attributes": {
+        "module": "desk"
+      }
+    },
+    {
+      "from": "deployComponent:app.deploy#GraphDesk.api",
+      "to": "deployComponent:app.deploy#GraphDesk.db",
+      "kind": "connects"
+    },
+    {
+      "from": "deployComponent:app.deploy#GraphDesk.api",
+      "to": "deployApplication:app.deploy#GraphDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "deployComponent:app.deploy#GraphDesk.db",
+      "to": "deployApplication:app.deploy#GraphDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "deployComponent:app.deploy#GraphDesk.refund_approval_service",
+      "to": "deployApplication:app.deploy#GraphDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "deployComponent:app.deploy#GraphDesk.web",
+      "to": "flow:app.ifml#app",
+      "kind": "bindsFlow"
+    },
+    {
+      "from": "deployComponent:app.deploy#GraphDesk.web",
+      "to": "deployComponent:app.deploy#GraphDesk.api",
+      "kind": "connects"
+    },
+    {
+      "from": "deployComponent:app.deploy#GraphDesk.web",
+      "to": "deployApplication:app.deploy#GraphDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "deployment:app.deploy#GraphDesk.production",
+      "to": "deployApplication:app.deploy#GraphDesk",
+      "kind": "deploys"
+    },
+    {
+      "from": "deployment:app.deploy#GraphDesk.production",
+      "to": "deployProfile:app.deploy#production_k8s",
+      "kind": "usesProfile"
+    },
+    {
+      "from": "event:app.evt#app.TicketRaised",
+      "to": "enum:app.mox#nz.example.graph.TicketState",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "state"
+      }
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.Invoice.amount",
+      "to": "class:app.mox#nz.example.graph.Invoice",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.Invoice.invoiceId",
+      "to": "class:app.mox#nz.example.graph.Invoice",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.Note.body",
+      "to": "class:app.mox#nz.example.graph.Note",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.Note.internalNotes",
+      "to": "class:app.mox#nz.example.graph.Note",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.Note.noteId",
+      "to": "class:app.mox#nz.example.graph.Note",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.Note.ticket",
+      "to": "class:app.mox#nz.example.graph.Note",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.Note.ticket",
+      "to": "feature:app.mox#nz.example.graph.Ticket.notes",
+      "kind": "opposite",
+      "attributes": {
+        "field": "ticket"
+      }
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.Note.ticket",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "ticket"
+      }
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.RefundDecision.approved",
+      "to": "class:app.mox#nz.example.graph.RefundDecision",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.RefundDecision.cents",
+      "to": "class:app.mox#nz.example.graph.RefundDecision",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.RefundDecision.decisionId",
+      "to": "class:app.mox#nz.example.graph.RefundDecision",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.Ticket.assignee",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.Ticket.assignee",
+      "to": "feature:app.mox#nz.example.graph.User.assignedTickets",
+      "kind": "opposite",
+      "attributes": {
+        "field": "assignee"
+      }
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.Ticket.assignee",
+      "to": "class:app.mox#nz.example.graph.User",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "assignee"
+      }
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.Ticket.internal",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.Ticket.needsRefund",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.Ticket.notes",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.Ticket.notes",
+      "to": "feature:app.mox#nz.example.graph.Note.ticket",
+      "kind": "opposite",
+      "attributes": {
+        "field": "notes"
+      }
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.Ticket.notes",
+      "to": "class:app.mox#nz.example.graph.Note",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "notes"
+      }
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.Ticket.refundCents",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.Ticket.state",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.Ticket.state",
+      "to": "enum:app.mox#nz.example.graph.TicketState",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "state"
+      }
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.Ticket.ticketNo",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.Ticket.title",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.User.active",
+      "to": "class:app.mox#nz.example.graph.User",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.User.assignedTickets",
+      "to": "class:app.mox#nz.example.graph.User",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.User.assignedTickets",
+      "to": "feature:app.mox#nz.example.graph.Ticket.assignee",
+      "kind": "opposite",
+      "attributes": {
+        "field": "assignedTickets"
+      }
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.User.assignedTickets",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "assignedTickets"
+      }
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.User.name",
+      "to": "class:app.mox#nz.example.graph.User",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:app.mox#nz.example.graph.User.userId",
+      "to": "class:app.mox#nz.example.graph.User",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:other.mox#nz.example.audit.AuditEntry.entryId",
+      "to": "class:other.mox#nz.example.audit.AuditEntry",
+      "kind": "memberOf"
+    },
+    {
+      "from": "feature:other.mox#nz.example.audit.AuditEntry.note",
+      "to": "class:other.mox#nz.example.audit.AuditEntry",
+      "kind": "memberOf"
+    },
+    {
+      "from": "file:app.actor#app.actor",
+      "to": "file:app.mox#app.mox",
+      "kind": "imports"
+    },
+    {
+      "from": "file:app.cmmn#app.cmmn",
+      "to": "file:app.actor#app.actor",
+      "kind": "imports"
+    },
+    {
+      "from": "file:app.cmmn#app.cmmn",
+      "to": "file:app.ddd#app.ddd",
+      "kind": "imports"
+    },
+    {
+      "from": "file:app.cmmn#app.cmmn",
+      "to": "file:app.dmn#app.dmn",
+      "kind": "imports"
+    },
+    {
+      "from": "file:app.cmmn#app.cmmn",
+      "to": "file:app.evt#app.evt",
+      "kind": "imports"
+    },
+    {
+      "from": "file:app.cmmn#app.cmmn",
+      "to": "file:app.mox#app.mox",
+      "kind": "imports"
+    },
+    {
+      "from": "file:app.ddd#app.ddd",
+      "to": "file:app.mox#app.mox",
+      "kind": "imports"
+    },
+    {
+      "from": "file:app.deploy#app.deploy",
+      "to": "file:app.ddd#app.ddd",
+      "kind": "imports"
+    },
+    {
+      "from": "file:app.deploy#app.deploy",
+      "to": "file:app.ifml#app.ifml",
+      "kind": "imports"
+    },
+    {
+      "from": "file:app.dmn#app.dmn",
+      "to": "file:app.evt#app.evt",
+      "kind": "imports"
+    },
+    {
+      "from": "file:app.dmn#app.dmn",
+      "to": "file:app.mox#app.mox",
+      "kind": "imports"
+    },
+    {
+      "from": "file:app.evt#app.evt",
+      "to": "file:app.mox#app.mox",
+      "kind": "imports"
+    },
+    {
+      "from": "file:app.ifml#app.ifml",
+      "to": "file:app.mox#app.mox",
+      "kind": "imports"
+    },
+    {
+      "from": "file:app.uc#app.uc",
+      "to": "file:app.actor#app.actor",
+      "kind": "imports"
+    },
+    {
+      "from": "file:app.uc#app.uc",
+      "to": "file:app.ddd#app.ddd",
+      "kind": "imports"
+    },
+    {
+      "from": "file:app.uc#app.uc",
+      "to": "file:app.evt#app.evt",
+      "kind": "imports"
+    },
+    {
+      "from": "file:app.uc#app.uc",
+      "to": "file:app.mox#app.mox",
+      "kind": "imports"
+    },
+    {
+      "from": "file:other.actor#other.actor",
+      "to": "file:other.mox#other.mox",
+      "kind": "imports"
+    },
+    {
+      "from": "inputData:app.dmn#GraphDecisions.requested_cents",
+      "to": "decisionModel:app.dmn#GraphDecisions",
+      "kind": "memberOf"
+    },
+    {
+      "from": "inputData:app.dmn#GraphDecisions.ticket",
+      "to": "decisionModel:app.dmn#GraphDecisions",
+      "kind": "memberOf"
+    },
+    {
+      "from": "inputData:app.dmn#GraphDecisions.ticket",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "ticket"
+      }
+    },
+    {
+      "from": "module:app.ddd#GraphDesk.desk",
+      "to": "designApplication:app.ddd#GraphDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "operation:app.mox#nz.example.graph.Ticket.raiseRefund",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "memberOf"
+    },
+    {
+      "from": "planItem:app.cmmn#RefundDesk.ApproveRefund",
+      "to": "caseRole:app.cmmn#RefundDesk.finance",
+      "kind": "assignedTo"
+    },
+    {
+      "from": "planItem:app.cmmn#RefundDesk.ApproveRefund",
+      "to": "case:app.cmmn#RefundDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "planItem:app.cmmn#RefundDesk.AssessAuthority",
+      "to": "decisionService:app.dmn#GraphDecisions.AssessRefund",
+      "kind": "invokesDecision",
+      "attributes": {
+        "via": "decision"
+      }
+    },
+    {
+      "from": "planItem:app.cmmn#RefundDesk.AssessAuthority",
+      "to": "case:app.cmmn#RefundDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "planItem:app.cmmn#RefundDesk.AssessRefund",
+      "to": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.raiseRefund",
+      "kind": "executes"
+    },
+    {
+      "from": "planItem:app.cmmn#RefundDesk.AssessRefund",
+      "to": "case:app.cmmn#RefundDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "planItem:app.cmmn#RefundDesk.Assessment",
+      "to": "case:app.cmmn#RefundDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "planItem:app.cmmn#RefundDesk.RefundSettled",
+      "to": "case:app.cmmn#RefundDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "planItem:app.cmmn#RefundDesk.ReviewTicket",
+      "to": "caseRole:app.cmmn#RefundDesk.triage",
+      "kind": "assignedTo"
+    },
+    {
+      "from": "planItem:app.cmmn#RefundDesk.ReviewTicket",
+      "to": "case:app.cmmn#RefundDesk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "repository:app.ddd#GraphDesk.desk.TicketRepository",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "designs",
+      "attributes": {
+        "via": "repository"
+      }
+    },
+    {
+      "from": "repository:app.ddd#GraphDesk.desk.TicketRepository",
+      "to": "module:app.ddd#GraphDesk.desk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "repositoryOperation:app.ddd#GraphDesk.desk.TicketRepository.delete",
+      "to": "repository:app.ddd#GraphDesk.desk.TicketRepository",
+      "kind": "memberOf"
+    },
+    {
+      "from": "repositoryOperation:app.ddd#GraphDesk.desk.TicketRepository.findAll",
+      "to": "repository:app.ddd#GraphDesk.desk.TicketRepository",
+      "kind": "memberOf"
+    },
+    {
+      "from": "repositoryOperation:app.ddd#GraphDesk.desk.TicketRepository.findById",
+      "to": "repository:app.ddd#GraphDesk.desk.TicketRepository",
+      "kind": "memberOf"
+    },
+    {
+      "from": "repositoryOperation:app.ddd#GraphDesk.desk.TicketRepository.save",
+      "to": "repository:app.ddd#GraphDesk.desk.TicketRepository",
+      "kind": "memberOf"
+    },
+    {
+      "from": "search:app.ddd#GraphDesk.desk.TicketSearch",
+      "to": "capability:app.actor#App.ReadTicket",
+      "kind": "carries"
+    },
+    {
+      "from": "search:app.ddd#GraphDesk.desk.TicketSearch",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "designs",
+      "attributes": {
+        "via": "search"
+      }
+    },
+    {
+      "from": "search:app.ddd#GraphDesk.desk.TicketSearch",
+      "to": "module:app.ddd#GraphDesk.desk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "search:app.ddd#GraphDesk.desk.TicketSearch",
+      "to": "feature:app.mox#nz.example.graph.Ticket.internal",
+      "kind": "readsFeature",
+      "attributes": {
+        "via": "filter"
+      }
+    },
+    {
+      "from": "search:app.ddd#GraphDesk.desk.TicketSearch",
+      "to": "feature:app.mox#nz.example.graph.Ticket.state",
+      "kind": "readsFeature",
+      "attributes": {
+        "via": "filter"
+      }
+    },
+    {
+      "from": "search:app.ddd#GraphDesk.desk.TicketSearch",
+      "to": "feature:app.mox#nz.example.graph.Ticket.title",
+      "kind": "readsFeature",
+      "attributes": {
+        "via": "sort"
+      }
+    },
+    {
+      "from": "search:app.ddd#GraphDesk.desk.TicketSearch",
+      "to": "feature:app.mox#nz.example.graph.Ticket.title",
+      "kind": "readsFeature",
+      "attributes": {
+        "via": "text"
+      }
+    },
+    {
+      "from": "service:app.ddd#GraphDesk.desk.TicketService",
+      "to": "repository:app.ddd#GraphDesk.desk.TicketRepository",
+      "kind": "injects"
+    },
+    {
+      "from": "service:app.ddd#GraphDesk.desk.TicketService",
+      "to": "module:app.ddd#GraphDesk.desk",
+      "kind": "memberOf"
+    },
+    {
+      "from": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.approveRefund",
+      "to": "capability:app.actor#App.ApproveRefund",
+      "kind": "carries"
+    },
+    {
+      "from": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.approveRefund",
+      "to": "event:app.evt#app.RefundApproved",
+      "kind": "emits"
+    },
+    {
+      "from": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.approveRefund",
+      "to": "service:app.ddd#GraphDesk.desk.TicketService",
+      "kind": "memberOf"
+    },
+    {
+      "from": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.approveRefund",
+      "to": "class:app.mox#nz.example.graph.User",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "approver",
+        "role": "param"
+      }
+    },
+    {
+      "from": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.listTickets",
+      "to": "service:app.ddd#GraphDesk.desk.TicketService",
+      "kind": "memberOf"
+    },
+    {
+      "from": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.listTickets",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "typeOf",
+      "attributes": {
+        "role": "return"
+      }
+    },
+    {
+      "from": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.raiseRefund",
+      "to": "capability:app.actor#App.RaiseRefund",
+      "kind": "carries"
+    },
+    {
+      "from": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.raiseRefund",
+      "to": "event:app.evt#app.RefundRequested",
+      "kind": "emits"
+    },
+    {
+      "from": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.raiseRefund",
+      "to": "service:app.ddd#GraphDesk.desk.TicketService",
+      "kind": "memberOf"
+    },
+    {
+      "from": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.raiseTicket",
+      "to": "event:app.evt#app.TicketRaised",
+      "kind": "emits"
+    },
+    {
+      "from": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.raiseTicket",
+      "to": "service:app.ddd#GraphDesk.desk.TicketService",
+      "kind": "memberOf"
+    },
+    {
+      "from": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.raiseTicket",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "typeOf",
+      "attributes": {
+        "role": "return"
+      }
+    },
+    {
+      "from": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.readTicket",
+      "to": "capability:app.actor#App.ReadTicket",
+      "kind": "carries"
+    },
+    {
+      "from": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.readTicket",
+      "to": "service:app.ddd#GraphDesk.desk.TicketService",
+      "kind": "memberOf"
+    },
+    {
+      "from": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.resolveTicket",
+      "to": "capability:app.actor#App.ResolveTicket",
+      "kind": "carries"
+    },
+    {
+      "from": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.resolveTicket",
+      "to": "service:app.ddd#GraphDesk.desk.TicketService",
+      "kind": "memberOf"
+    },
+    {
+      "from": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.updateTicket",
+      "to": "capability:app.actor#App.UpdateTicket",
+      "kind": "carries"
+    },
+    {
+      "from": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.updateTicket",
+      "to": "service:app.ddd#GraphDesk.desk.TicketService",
+      "kind": "memberOf"
+    },
+    {
+      "from": "useCase:app.uc#RaiseRefund",
+      "to": "serviceOperation:app.ddd#GraphDesk.desk.TicketService.raiseRefund",
+      "kind": "realizes"
+    },
+    {
+      "from": "useCase:app.uc#RaiseRefund",
+      "to": "capability:app.actor#App.RaiseRefund",
+      "kind": "requires",
+      "attributes": {
+        "via": "ucStep"
+      }
+    },
+    {
+      "from": "useCase:app.uc#RaiseRefund",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "Ticket"
+      }
+    },
+    {
+      "from": "useCase:app.uc#TrackTickets",
+      "to": "class:app.mox#nz.example.graph.Ticket",
+      "kind": "typeOf",
+      "attributes": {
+        "field": "Ticket"
+      }
+    },
+    {
+      "from": "view:app.ifml#Inbox",
+      "to": "flow:app.ifml#app",
+      "kind": "memberOf"
+    },
+    {
+      "from": "view:app.ifml#Intake",
+      "to": "flow:app.ifml#app",
+      "kind": "memberOf"
+    }
+  ]
+}

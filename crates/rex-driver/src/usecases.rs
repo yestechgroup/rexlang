@@ -338,7 +338,11 @@ pub(crate) fn compile_usecase_file(
                 steps_out.push(Step {
                     name: step.name.clone(),
                     operation: step.operation.clone(),
-                    requires: step.requires.clone(),
+                    requires: step
+                        .requires
+                        .iter()
+                        .map(|capability| capability.text.clone())
+                        .collect(),
                     when,
                 });
             }
@@ -485,8 +489,8 @@ pub(crate) fn compile_usecase_file(
         let mut required: Vec<String> = Vec::new();
         for step in decl.subject.iter().flat_map(|subject| &subject.steps) {
             for capability in &step.requires {
-                if !required.contains(capability) {
-                    required.push(capability.clone());
+                if !required.contains(&capability.text) {
+                    required.push(capability.text.clone());
                 }
             }
         }

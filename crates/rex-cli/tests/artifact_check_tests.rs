@@ -385,3 +385,114 @@ fn artifact_check_passes_on_every_golden_conformance_artifact() {
         .collect();
     assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
 }
+
+/// A minimal semantic graph artifact: one application, one node, one edge.
+const GOOD_GRAPH_ARTIFACT: &str = r#"{
+  "formatVersion": 1,
+  "applications": [
+    { "id": "support.mox", "files": ["support.mox"], "packages": ["nz.example.support"] }
+  ],
+  "nodes": [
+    {
+      "id": "class:support.mox#nz.example.support.Ticket",
+      "kind": "class",
+      "name": "nz.example.support.Ticket",
+      "file": "support.mox",
+      "application": "support.mox"
+    }
+  ],
+  "edges": [
+    {
+      "from": "class:support.mox#nz.example.support.Ticket",
+      "to": "class:support.mox#nz.example.support.User",
+      "kind": "refers",
+      "attributes": { "feature": "reporter" }
+    }
+  ]
+}
+"#;
+
+#[test]
+fn graph_artifact_classifies_as_graph_model() {
+    // The committed examples artifact: it carries `applications` (the
+    // deployment rule's lookalike key) *and* `nodes`, so the classifier
+    // ordering is what makes this pass rather than misreport a DeployModel.
+    let golden = workspace_root().join("examples/artifacts/examples.graph.json");
+    let inline = write_artifact("valid.graph.json", GOOD_GRAPH_ARTIFACT);
+    let output = rexlang()
+        .args([
+            "artifact",
+            "check",
+            golden.to_str().unwrap(),
+            inline.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run rexlang artifact check");
+    assert!(
+        output.status.success(),
+        "graph artifacts must pass: stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("OK {}\nOK {}\n", golden.display(), inline.display())
+    );
+}
+
+#[test]
+fn graph_empty_form_falls_back_to_actor() {
+    // Documented limitation, shared with every other empty-form artifact:
+    // an empty `GraphModel` serializes as exactly `{"formatVersion":1}`,
+    // which is byte-identical to the block-less ActorModel — shape-sniffing
+    // cannot tell them apart, and the shared rule (the actor fallback)
+    // claims the document. A non-empty graph is unambiguous (`nodes`).
+    let empty = write_artifact("empty.graph.json", r#"{"formatVersion": 1}"#);
+    let output = rexlang()
+        .args(["artifact", "check", empty.to_str().unwrap()])
+        .output()
+        .expect("run rexlang artifact check");
+    assert!(
+        output.status.success(),
+        "the empty form classifies as the ActorModel: stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("OK {}\n", empty.display())
+    );
+}
+
+#[test]
+fn graph_edges_carry_non_empty_endpoints() {
+    // An edge without `to` is not a semantic edge: the checker must name the
+    // precise violation, not classify the document as something else.
+    let broken = write_artifact(
+        "broken.graph.json",
+        r#"{
+          "formatVersion": 1,
+          "nodes": [
+            {
+              "id": "class:support.mox#nz.example.support.Ticket",
+              "kind": "class",
+              "name": "nz.example.support.Ticket",
+              "file": "support.mox",
+              "application": "support.mox"
+            }
+          ],
+          "edges": [
+            { "from": "class:support.mox#nz.example.support.Ticket", "kind": "refers" }
+          ]
+        }"#,
+    );
+    let output = rexlang()
+        .args(["artifact", "check", broken.to_str().unwrap()])
+        .output()
+        .expect("run rexlang artifact check");
+    assert_eq!(output.status.code(), Some(1));
+    let rendered = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        rendered.contains("edges[0]") && rendered.contains("\"to\""),
+        "the violation names the edge and the missing endpoint: {rendered}"
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).is_empty());
+}

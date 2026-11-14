@@ -35,6 +35,7 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "annotations",
     "applicabilityRules",
     "application",
+    "attributes",
     "authorizedRoles",
     "autoComplete",
     "base",
@@ -67,6 +68,7 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "designs",
     "detailFields",
     "details",
+    "edges",
     "effect",
     "end",
     "entries",
@@ -76,6 +78,7 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "extends",
     "facets",
     "features",
+    "files",
     "finite",
     "first",
     "flags",
@@ -117,6 +120,7 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "multiplicity",
     "name",
     "neverBoth",
+    "nodes",
     "nonPersistent",
     "objects",
     "obligations",
@@ -151,6 +155,7 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "schemaName",
     "sentryRef",
     "services",
+    "sessionKind",
     "source",
     "steps",
     "stereotype",
@@ -171,6 +176,7 @@ const STRUCTURAL_KEYS: &[&str] = &[
     "value",
     "valueFields",
     "version",
+    "via",
     "vocabularies",
     "when",
 ];
@@ -204,5 +210,26 @@ pub(super) fn scan_snake_case_keys(value: &Value, errors: &mut Vec<String>) {
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::STRUCTURAL_KEYS;
+
+    /// [`scan_snake_case_keys`] binary-searches this list, so an
+    /// out-of-order insertion silently disables the detector on one side of
+    /// the break. Pin the order (and uniqueness) — adding a structural key
+    /// means inserting it in place, never appending it.
+    #[test]
+    fn structural_keys_are_sorted_and_unique() {
+        for pair in STRUCTURAL_KEYS.windows(2) {
+            assert!(
+                pair[0] < pair[1],
+                "STRUCTURAL_KEYS must be sorted and unique: {:?} before {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
     }
 }

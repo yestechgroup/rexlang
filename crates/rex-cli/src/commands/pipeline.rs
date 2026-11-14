@@ -50,9 +50,10 @@ pub(crate) fn emit_json(json: String, out: Option<&Path>) -> anyhow::Result<()> 
     Ok(())
 }
 
-/// One compile outcome shared by `check`, `ir`, and `build`: the `OK`
-/// lines `check` prints and the artifact JSON `ir`/`build` emit — one
-/// compile feeds all three.
+/// One compile outcome shared by `check`, `ir`, `build`, and `graph`: the
+/// `OK` lines `check` prints, the artifact JSON `ir`/`build` emit, and the
+/// typed artifact plus resolved imports `graph` consumes — one compile feeds
+/// all four.
 pub(crate) struct SurfaceOutcome {
     /// The compiling sources' driver paths; `check` prints one
     /// `OK <path>` line each (a multi-`.mox` model prints one per file).
@@ -62,6 +63,15 @@ pub(crate) struct SurfaceOutcome {
     /// How many warning-severity diagnostics were rendered. Warnings never
     /// fail a compile; `check --deny-warnings` turns them into failures.
     pub(crate) warnings: usize,
+    /// The typed artifact of the compiling surface — the semantic graph's
+    /// input. A successful outcome always carries one; `check`/`ir`/`build`
+    /// ignore it.
+    pub(crate) artifact: Option<Artifact>,
+    /// The surface's resolved import paths, as its reader resolved them
+    /// (the host normalizes them for the graph). Empty for a domain model,
+    /// whose `import schema`/`import sigil` targets are vocabulary files,
+    /// never compiled graph surfaces.
+    pub(crate) imports: Vec<String>,
 }
 
 /// The compiled `.actor` artifacts of the project snapshot (excluding the
@@ -221,12 +231,11 @@ pub(crate) fn compile_surface(
         if warnings < binding.len() {
             return Ok(None);
         }
+        let artifact = Artifact::Flow(compilation.model.clone());
         if let Some(project) = project.as_deref_mut() {
-            project.store(
-                &files[0].display().to_string(),
-                &Artifact::Flow(compilation.model.clone()),
-            );
+            project.store(&files[0].display().to_string(), &artifact);
         }
+        let imports = inputs.imports.clone();
         let model = if expand {
             rex_ifml::expand_ifml(&compilation, &inputs.ifml_imports)
         } else {
@@ -236,6 +245,8 @@ pub(crate) fn compile_surface(
             ok: vec![inputs.path.clone()],
             json: model.to_json_pretty()?,
             warnings,
+            artifact: Some(artifact),
+            imports,
         }));
     }
     if files.len() == 1 && is_ddd_file(&files[0]) {
@@ -265,6 +276,7 @@ pub(crate) fn compile_surface(
             return Ok(None);
         };
         let artifact = Artifact::Design(design_model.clone());
+        let imports = import_paths(&design.domains);
         if let Some(project) = project.as_deref_mut() {
             project.store(&files[0].display().to_string(), &artifact);
         }
@@ -272,6 +284,8 @@ pub(crate) fn compile_surface(
             ok: vec![design.path.clone()],
             json: artifact.to_json_pretty()?,
             warnings: 0,
+            artifact: Some(artifact),
+            imports,
         }));
     }
     if files.len() == 1 && is_actor_file(&files[0]) {
@@ -295,6 +309,7 @@ pub(crate) fn compile_surface(
             return Ok(None);
         };
         let artifact = Artifact::Actor(actor_model.clone());
+        let imports = import_paths(&pair.domains);
         if let Some(project) = project.as_deref_mut() {
             project.store(&files[0].display().to_string(), &artifact);
         }
@@ -302,6 +317,8 @@ pub(crate) fn compile_surface(
             ok: vec![pair.path.clone()],
             json: artifact.to_json_pretty()?,
             warnings: 0,
+            artifact: Some(artifact),
+            imports,
         }));
     }
     if files.len() == 1 && is_evt_file(&files[0]) {
@@ -312,6 +329,7 @@ pub(crate) fn compile_surface(
             return Ok(None);
         };
         let artifact = Artifact::Event(event_model.clone());
+        let imports = import_paths(&pair.domains);
         if let Some(project) = project.as_deref_mut() {
             project.store(&files[0].display().to_string(), &artifact);
         }
@@ -319,6 +337,8 @@ pub(crate) fn compile_surface(
             ok: vec![pair.path.clone()],
             json: artifact.to_json_pretty()?,
             warnings: 0,
+            artifact: Some(artifact),
+            imports,
         }));
     }
     if files.len() == 1 && is_deploy_file(&files[0]) {
@@ -329,6 +349,7 @@ pub(crate) fn compile_surface(
             return Ok(None);
         };
         let artifact = Artifact::Deploy(deploy_model.clone());
+        let imports = merge_import_paths(&[import_paths(&pair.designs), import_paths(&pair.flows)]);
         if let Some(project) = project.as_deref_mut() {
             project.store(&files[0].display().to_string(), &artifact);
         }
@@ -336,6 +357,8 @@ pub(crate) fn compile_surface(
             ok: vec![pair.path.clone()],
             json: artifact.to_json_pretty()?,
             warnings: 0,
+            artifact: Some(artifact),
+            imports,
         }));
     }
     if files.len() == 1 && is_uc_file(&files[0]) {
@@ -354,6 +377,12 @@ pub(crate) fn compile_surface(
             return Ok(None);
         };
         let artifact = Artifact::UseCase(use_case_model.clone());
+        let imports = merge_import_paths(&[
+            import_paths(&pair.pair.domains),
+            import_paths(&pair.designs),
+            import_paths(&pair.actors),
+            import_paths(&pair.events),
+        ]);
         if let Some(project) = project.as_deref_mut() {
             project.store(&files[0].display().to_string(), &artifact);
         }
@@ -361,6 +390,8 @@ pub(crate) fn compile_surface(
             ok: vec![pair.pair.path.clone()],
             json: artifact.to_json_pretty()?,
             warnings: 0,
+            artifact: Some(artifact),
+            imports,
         }));
     }
     if files.len() == 1 && is_cmmn_file(&files[0]) {
@@ -380,6 +411,13 @@ pub(crate) fn compile_surface(
             return Ok(None);
         };
         let artifact = Artifact::Case(case_model.clone());
+        let imports = merge_import_paths(&[
+            import_paths(&pair.pair.domains),
+            import_paths(&pair.designs),
+            import_paths(&pair.actors),
+            import_paths(&pair.events),
+            import_paths(&pair.decisions),
+        ]);
         if let Some(project) = project.as_deref_mut() {
             project.store(&files[0].display().to_string(), &artifact);
         }
@@ -387,6 +425,8 @@ pub(crate) fn compile_surface(
             ok: vec![pair.pair.path.clone()],
             json: artifact.to_json_pretty()?,
             warnings: 0,
+            artifact: Some(artifact),
+            imports,
         }));
     }
     if files.len() == 1 && is_dmn_file(&files[0]) {
@@ -404,6 +444,10 @@ pub(crate) fn compile_surface(
             return Ok(None);
         };
         let artifact = Artifact::Decision(decision_model.clone());
+        let imports = merge_import_paths(&[
+            import_paths(&pair.pair.domains),
+            written_import_paths(&files[0], &pair.events),
+        ]);
         if let Some(project) = project.as_deref_mut() {
             project.store(&files[0].display().to_string(), &artifact);
         }
@@ -411,6 +455,8 @@ pub(crate) fn compile_surface(
             ok: vec![pair.pair.path.clone()],
             json: artifact.to_json_pretty()?,
             warnings: 0,
+            artifact: Some(artifact),
+            imports,
         }));
     }
     let (sources, compilation) = compile_reported_sources(files)?;
@@ -418,8 +464,8 @@ pub(crate) fn compile_surface(
         return Ok(None);
     };
     let ok = sources.iter().map(|(path, _)| path.clone()).collect();
+    let artifact = Artifact::Domain(model.clone());
     let json = if let [file] = files {
-        let artifact = Artifact::Domain(model.clone());
         if let Some(project) = project {
             project.store(&file.display().to_string(), &artifact);
         }
@@ -431,5 +477,40 @@ pub(crate) fn compile_surface(
         ok,
         json,
         warnings: 0,
+        artifact: Some(artifact),
+        imports: Vec::new(),
     }))
+}
+
+/// The resolved import paths of one `(path, payload)` reader bucket,
+/// deduplicated and sorted — the host-normalized keys `rexlang graph`
+/// clusters applications and draws `imports` edges from.
+fn import_paths<T>(buckets: &[(String, T)]) -> Vec<String> {
+    let mut paths: Vec<String> = buckets.iter().map(|(path, _)| path.clone()).collect();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// [`import_paths`] for a `.dmn` events bucket, whose keys are the import
+/// strings **as written** (the driver matches events entries exactly as
+/// written): resolve each against the decision file's own directory, the
+/// rule every import resolution here follows.
+fn written_import_paths<T>(file: &Path, buckets: &[(String, T)]) -> Vec<String> {
+    let directory = file
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    buckets
+        .iter()
+        .map(|(written, _)| directory.join(written).display().to_string())
+        .collect()
+}
+
+/// The union of several import-path buckets, deduplicated and sorted.
+fn merge_import_paths(groups: &[Vec<String>]) -> Vec<String> {
+    let mut paths: Vec<String> = groups.iter().flatten().cloned().collect();
+    paths.sort();
+    paths.dedup();
+    paths
 }

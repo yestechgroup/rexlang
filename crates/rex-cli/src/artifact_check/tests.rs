@@ -367,6 +367,74 @@ fn classification_table_over_all_artifact_kinds() {
             json: r#"{"formatVersion": 1, "views": [{"oops": true}]}"#.to_string(),
             expected: Err("views[0]"),
         },
+        ClassificationCase {
+            name: "semantic graph artifact (serialized GraphModel)",
+            json: serde_json::to_string(&{
+                let mut model = rex_ir::graph::GraphModel::new();
+                model.nodes.push(rex_ir::graph::GraphNode::new(
+                    "class:support.mox#nz.example.support.Ticket",
+                    rex_ir::graph::kinds::CLASS,
+                    "nz.example.support.Ticket",
+                    "support.mox",
+                    "support.mox",
+                ));
+                model
+            })
+            .expect("serialize GraphModel"),
+            expected: Ok(ArtifactKind::GraphModel),
+        },
+        // Precedence case: a graph artifact also carries an
+        // `applications` array — the deployment rule's key — but the
+        // graph's unique `nodes` array claims the document first. This row
+        // is the ordering guard: swap the two rules and it fails.
+        ClassificationCase {
+            name: "a nodes-and-applications GraphModel classifies as a GraphModel, \
+                       never the deployment shape",
+            json: serde_json::to_string(&{
+                let mut model = rex_ir::graph::GraphModel::new();
+                model.applications.push(rex_ir::graph::GraphApplication {
+                    id: "support.mox".to_string(),
+                    files: vec!["support.mox".to_string()],
+                    packages: Vec::new(),
+                });
+                model.nodes.push(rex_ir::graph::GraphNode::new(
+                    "class:support.mox#nz.example.support.Ticket",
+                    rex_ir::graph::kinds::CLASS,
+                    "nz.example.support.Ticket",
+                    "support.mox",
+                    "support.mox",
+                ));
+                model
+            })
+            .expect("serialize GraphModel"),
+            expected: Ok(ArtifactKind::GraphModel),
+        },
+        // Misclassification guard: a malformed graph-shaped document is
+        // reported by the GraphModel check, never the deployment or actor
+        // fallback.
+        ClassificationCase {
+            name: "malformed graph shape is reported as a GraphModel, not a DeployModel",
+            json: r#"{"formatVersion": 1, "applications": [], "nodes": [{"oops": true}]}"#
+                .to_string(),
+            expected: Err("nodes[0]"),
+        },
+        // Empty-form limitation, shared with every other empty artifact: an
+        // empty GraphModel serializes as exactly `{"formatVersion":1}` and
+        // classifies as the block-less ActorModel (rule 11).
+        ClassificationCase {
+            name: "empty graph artifact serializes as the same minimal-empty bytes",
+            json: {
+                let empty_graph_json = serde_json::to_string(&rex_ir::graph::GraphModel::new())
+                    .expect("serialize GraphModel");
+                assert_eq!(
+                    empty_graph_json, block_less_actor_json,
+                    "an empty GraphModel and an empty ActorModel are \
+                         byte-identical on the wire"
+                );
+                empty_graph_json
+            },
+            expected: Ok(ArtifactKind::ActorModel),
+        },
     ];
 
     for case in &cases {
@@ -822,6 +890,16 @@ fn snake_case_dmn_keys_are_reported_with_the_camel_case_spelling() {
             .any(|error| error.contains("format_version") && error.contains("formatVersion")),
         "errors: {errors:?}"
     );
+}
+
+#[test]
+fn the_graph_golden_artifact_classifies_as_graph_model() {
+    // The real emitter output (`rexlang graph examples/`): it carries
+    // `applications`, `nodes`, and `edges` — the deploy rule's
+    // `applications` lookalike included — so only the graph rule (which
+    // runs first) may claim it.
+    let golden = include_str!("../../../../examples/artifacts/examples.graph.json");
+    assert_eq!(check(golden), Ok(ArtifactKind::GraphModel));
 }
 
 #[test]

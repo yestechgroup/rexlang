@@ -1,0 +1,56 @@
+// The analytics conformance policy. Every outcome the four analytics
+// distinguish lives here:
+//
+// - `ReadTicket` is alive and human-only on `Customer` (the session filter
+//   narrows it away for an agent session);
+// - `ResolveTicket` is permitted then forbidden by `Finance` — nobody else
+//   permits it, so it is dead (the self-narrowing warning the compiler emits
+//   on that pair is expected: this fixture does not deny warnings);
+// - `EscalateRefund` is declared and never granted — latent, not dead;
+// - `never_both { ReadTicket, ResolveTicket }` is a declared pair with no
+//   violation;
+// - `Manager` inherits `RaiseRefund` from `Agent` and is granted
+//   `ApproveRefund` itself, so the *undeclared* pair is the violation;
+// - `Manager` also forbids `UpdateTicket`, which `Agent` permits — the
+//   monotonicity gap (and the second expected self-narrowing warning).
+import "app.mox"
+
+actors App {
+    actor Customer
+    actor Agent extends Customer
+    actor Manager extends Agent
+    actor Finance
+
+    capability ReadTicket on Ticket
+    capability UpdateTicket on Ticket
+    capability ResolveTicket on Ticket
+    capability RaiseRefund on Ticket
+    capability ApproveRefund on Ticket
+    capability EscalateRefund on Ticket
+
+    obligation audit
+
+    grant Customer {
+        permit human ReadTicket when (!internal)
+    }
+
+    grant Agent {
+        permit ReadTicket
+        permit UpdateTicket
+        permit RaiseRefund obligation audit
+    }
+
+    grant Manager {
+        permit ReadTicket
+        permit ApproveRefund
+        forbid UpdateTicket
+    }
+
+    grant Finance {
+        permit ApproveRefund
+        permit ResolveTicket
+        forbid ResolveTicket
+    }
+
+    never_both { ReadTicket, ResolveTicket }
+}

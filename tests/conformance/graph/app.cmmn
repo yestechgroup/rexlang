@@ -1,0 +1,50 @@
+// The case half of the fixture: the work a refund needs coordinated around
+// the ticket, executing the design's operation and consulting the sibling
+// decision service.
+import "app.mox"
+import "app.evt"
+import "app.actor"
+import "app.dmn"
+import "app.ddd" as app
+
+case RefundDesk {
+    roles {
+        role triage as Agent;
+        role finance as Finance;
+    }
+    case_file {
+        /// The ticket under triage.
+        Ticket[1..1] ticket;
+        /// The refund decision, once assessed.
+        RefundDecision[0..1] decision;
+    }
+    stage Assessment {
+        entry on ticket.create;
+        /// A human triages the ticket before anything automatic runs.
+        task ReviewTicket {
+            performer: triage;
+        }
+        /// The desk's own assessment runs once the review lands.
+        service AssessRefund {
+            execute app.TicketService.raiseRefund;
+            entry on ReviewTicket.complete when (decision == null);
+            required;
+        }
+        /// The decision layer the case consults.
+        decision AssessAuthority {
+            invokes GraphDecisions.AssessRefund;
+            inputs { ticket }
+            outputs { decision }
+            entry on AssessRefund.complete when (decision == null);
+            required;
+        }
+        /// Finance approves only what assessment could not settle.
+        discretionary task ApproveRefund {
+            performer: finance;
+            entry on AssessRefund.complete;
+        }
+        milestone RefundSettled {
+            entry on AssessRefund.complete;
+        }
+    }
+}

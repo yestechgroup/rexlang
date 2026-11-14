@@ -2,7 +2,8 @@
 //! plumbing on top of the rex-driver session.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use rex_driver::navigation::Lookup;
 use rex_driver::{Database, SourceFile};
@@ -12,12 +13,14 @@ use tower_lsp_server::{Client, LanguageServer};
 
 use crate::position::PositionMap;
 
+mod graph;
 mod ifml;
 mod mox;
 mod pipeline;
 #[cfg(test)]
 mod tests;
 
+use graph::*;
 use ifml::*;
 use mox::*;
 
@@ -25,20 +28,28 @@ use mox::*;
 const SOURCE_NAME: &str = "rexlang";
 
 /// Which surface an open document belongs to, decided by URI extension at
-/// open time. `.mox` drives the salsa session; `.ifml` gets the rex-ifml
-/// one-shot compile; `.ddd` gets the one-shot design compile (diagnostics
-/// only — no navigation yet); `.actor` gets the policy compile with grant
-/// coverage against the directory's designs (rexlang#128); `.dmn` gets the
-/// decision-model compile (diagnostics only — its markdown tables read
-/// from disk next to the document, rexlang#151); anything else publishes
-/// no diagnostics (an unknown file kind must never produce bogus `.mox`
-/// errors).
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// open time.
+///
+/// `.mox` drives the salsa session and its rich [`rex_driver::NavigationIndex`];
+/// every other supported surface is compiled one-shot by the driver and
+/// navigated through the cross-surface [`graph::GraphSnapshot`] (the
+/// directory's compiled artifacts plus one spanned surface index per file).
+/// The publish pipeline stays per surface: `.ifml` through rex-ifml,
+/// `.ddd`/`.actor`/`.dmn` with their sibling-artifact joins (rexlang#128,
+/// rexlang#78). `.evt`/`.deploy`/`.uc`/`.cmmn` compile inside
+/// [`graph::GraphSnapshot`]'s builder and publish no diagnostics yet; an
+/// unknown file kind publishes nothing either (it must never produce bogus
+/// `.mox` errors).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Surface {
     Mox,
     Ifml,
     Ddd,
     Actor,
+    Evt,
+    Deploy,
+    Uc,
+    Cmmn,
     Dmn,
     Other,
 }
@@ -49,6 +60,10 @@ fn surface_for(uri: &Uri) -> Surface {
         Some("ifml") => Surface::Ifml,
         Some("ddd") => Surface::Ddd,
         Some("actor") => Surface::Actor,
+        Some("evt") => Surface::Evt,
+        Some("deploy") => Surface::Deploy,
+        Some("uc") => Surface::Uc,
+        Some("cmmn") => Surface::Cmmn,
         Some("dmn") => Surface::Dmn,
         _ => Surface::Other,
     }
@@ -63,11 +78,26 @@ struct Document {
     file: Option<SourceFile>,
 }
 
+/// The cross-surface graph snapshot cache: the directory it covers, the
+/// `(uri, version)` signature of every open document in it, and the built
+/// snapshot.
+///
+/// [`RexBackend`] clears the cache on open, change, and close, so an edit
+/// can never be served from a stale snapshot; the signature makes a hit
+/// explicit (and would keep the cache honest if a future edit path forgot
+/// to clear it).
+struct GraphCache {
+    directory: PathBuf,
+    open: Vec<(String, i32)>,
+    snapshot: Arc<graph::GraphSnapshot>,
+}
+
 /// The rexlang language server backend.
 pub struct RexBackend {
     client: Client,
     documents: Mutex<HashMap<Uri, Document>>,
     db: Mutex<Database>,
+    graph_cache: Mutex<Option<GraphCache>>,
 }
 
 impl RexBackend {
@@ -77,7 +107,14 @@ impl RexBackend {
             client,
             documents: Mutex::new(HashMap::new()),
             db: Mutex::new(Database::new()),
+            graph_cache: Mutex::new(None),
         }
+    }
+
+    /// Drops the cached graph snapshot: the open-document set or one
+    /// document's text moved.
+    fn invalidate_graph(&self) {
+        *self.graph_cache.lock().unwrap() = None;
     }
 }
 
@@ -131,8 +168,9 @@ impl LanguageServer for RexBackend {
                     text_document.text.clone(),
                 ))
             }
-            Surface::Ifml | Surface::Ddd | Surface::Actor | Surface::Dmn | Surface::Other => None,
+            _ => None,
         };
+        self.invalidate_graph();
         self.documents.lock().unwrap().insert(
             uri.clone(),
             Document {
@@ -163,6 +201,7 @@ impl LanguageServer for RexBackend {
                 file.set_text(&mut *db).to(document.text.clone());
             }
         }
+        self.invalidate_graph();
         self.publish(&uri, Some(params.text_document.version)).await;
     }
 
@@ -171,6 +210,7 @@ impl LanguageServer for RexBackend {
             .lock()
             .unwrap()
             .remove(&params.text_document.uri);
+        self.invalidate_graph();
         self.client
             .publish_diagnostics(params.text_document.uri, vec![], None)
             .await;
@@ -228,45 +268,71 @@ impl LanguageServer for RexBackend {
     ) -> tower_lsp_server::jsonrpc::Result<Option<GotoDefinitionResponse>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-        if let Some(location) = self.with_ifml(&uri, |snapshot| {
-            ifml_goto_definition(snapshot, uri.clone(), position)
-        }) {
-            return Ok(Some(location));
+        if surface_for(&uri) == Surface::Mox {
+            // `.mox` keeps its own index: it resolves typed references,
+            // `opposite` ends, enum literals, and vocabulary facets the graph
+            // deliberately does not model.
+            let location = self.with_navigation(&uri, |map, index| {
+                let offset = map.offset_for(position);
+                let target = match index.at(offset) {
+                    Lookup::Definition(_, definition) => definition,
+                    Lookup::Reference(reference) => index.resolve(reference)?,
+                    Lookup::None => return None,
+                };
+                Some(Location {
+                    uri: uri.clone(),
+                    range: map.range_for(target.name_span),
+                })
+            });
+            return Ok(location.map(GotoDefinitionResponse::Scalar));
         }
-        let location = self.with_navigation(&uri, |map, index| {
-            let offset = map.offset_for(position);
-            let target = match index.at(offset) {
-                Lookup::Definition(_, definition) => definition,
-                Lookup::Reference(reference) => index.resolve(reference)?,
-                Lookup::None => return None,
-            };
-            Some(Location {
-                uri: uri.clone(),
-                range: map.range_for(target.name_span),
-            })
-        });
-        Ok(location.map(GotoDefinitionResponse::Scalar))
+        // Every other surface resolves through the cross-surface graph; an
+        // unresolved reference answers "no location", never an error.
+        if let Some(snapshot) = self.graph_snapshot(&uri) {
+            if let Some(location) = graph_goto_definition(&snapshot, &uri, position) {
+                return Ok(Some(GotoDefinitionResponse::Scalar(location)));
+            }
+        }
+        // `.ifml` keeps its own declaration-to-declaration walk for the
+        // free-string names (module uses, views) when the graph has no node
+        // to bind.
+        if surface_for(&uri) == Surface::Ifml {
+            return Ok(self.with_ifml(&uri, |snapshot| {
+                ifml_goto_definition(snapshot, uri.clone(), position)
+            }));
+        }
+        Ok(None)
     }
 
     async fn hover(&self, params: HoverParams) -> tower_lsp_server::jsonrpc::Result<Option<Hover>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-        if let Some(hover) = self.with_ifml(&uri, |snapshot| ifml_hover(snapshot, position)) {
-            return Ok(Some(hover));
-        }
-        let hover = self.with_navigation(&uri, |map, index| {
-            let offset = map.offset_for(position);
-            match index.at(offset) {
-                Lookup::Definition(def_id, _) => Some(Hover {
-                    contents: HoverContents::Markup(MarkupContent {
-                        kind: MarkupKind::Markdown,
-                        value: crate::hover::hover_markdown(index, def_id),
+        if surface_for(&uri) == Surface::Mox {
+            let hover = self.with_navigation(&uri, |map, index| {
+                let offset = map.offset_for(position);
+                match index.at(offset) {
+                    Lookup::Definition(def_id, _) => Some(Hover {
+                        contents: HoverContents::Markup(MarkupContent {
+                            kind: MarkupKind::Markdown,
+                            value: crate::hover::hover_markdown(index, def_id),
+                        }),
+                        range: None,
                     }),
-                    range: None,
-                }),
-                _ => None,
+                    _ => None,
+                }
+            });
+            return Ok(hover);
+        }
+        // `.ifml`'s own hover (the module signature, the declaration kind)
+        // wins where it has an answer; the graph enriches the rest.
+        if surface_for(&uri) == Surface::Ifml {
+            if let Some(hover) = self.with_ifml(&uri, |snapshot| ifml_hover(snapshot, position)) {
+                return Ok(Some(hover));
             }
-        });
+        }
+        let hover = self
+            .graph_snapshot(&uri)
+            .and_then(|snapshot| graph_hover(&snapshot, &uri, position));
         Ok(hover)
     }
 
@@ -276,32 +342,43 @@ impl LanguageServer for RexBackend {
         params: DocumentSymbolParams,
     ) -> tower_lsp_server::jsonrpc::Result<Option<DocumentSymbolResponse>> {
         let uri = params.text_document.uri;
-        if let Some(symbols) = self.with_ifml(&uri, ifml_document_symbols) {
-            return Ok(Some(symbols));
+        if surface_for(&uri) == Surface::Mox {
+            let symbols = self.with_navigation(&uri, |map, index| {
+                let roots: Vec<DocumentSymbol> = index
+                    .definitions()
+                    .filter(|(_, definition)| definition.owner.is_none())
+                    .map(|(id, definition)| DocumentSymbol {
+                        name: definition.name.clone(),
+                        detail: None,
+                        kind: lsp_symbol_kind(definition.kind),
+                        tags: None,
+                        deprecated: None,
+                        range: map.range_for(definition.full_span),
+                        selection_range: map.range_for(definition.name_span),
+                        children: Some(
+                            index
+                                .definitions()
+                                .filter(|(_, child)| child.owner == Some(id))
+                                .map(|(child_id, _)| leaf_symbol(index, child_id, map))
+                                .collect(),
+                        ),
+                    })
+                    .collect();
+                Some(DocumentSymbolResponse::Nested(roots))
+            });
+            return Ok(symbols);
         }
-        let symbols = self.with_navigation(&uri, |map, index| {
-            let roots: Vec<DocumentSymbol> = index
-                .definitions()
-                .filter(|(_, definition)| definition.owner.is_none())
-                .map(|(id, definition)| DocumentSymbol {
-                    name: definition.name.clone(),
-                    detail: None,
-                    kind: lsp_symbol_kind(definition.kind),
-                    tags: None,
-                    deprecated: None,
-                    range: map.range_for(definition.full_span),
-                    selection_range: map.range_for(definition.name_span),
-                    children: Some(
-                        index
-                            .definitions()
-                            .filter(|(_, child)| child.owner == Some(id))
-                            .map(|(child_id, _)| leaf_symbol(index, child_id, map))
-                            .collect(),
-                    ),
-                })
-                .collect();
-            Some(DocumentSymbolResponse::Nested(roots))
-        });
+        // `.ifml`'s outline carries its module `use` sites nested under their
+        // declarations — richer than the flat surface index.
+        if surface_for(&uri) == Surface::Ifml {
+            if let Some(symbols) = self.with_ifml(&uri, ifml_document_symbols) {
+                return Ok(Some(symbols));
+            }
+        }
+        // Every other surface: one symbol per `SurfaceIndex` declaration.
+        let symbols = self
+            .graph_snapshot(&uri)
+            .and_then(|snapshot| graph_document_symbols(&snapshot, &uri));
         Ok(symbols)
     }
 
@@ -404,6 +481,9 @@ impl LanguageServer for RexBackend {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
         let include_declaration = params.context.include_declaration;
+        // `.ifml`'s free-string names are matched by name across every open
+        // snapshot; the graph answers for every other surface (and for
+        // `.ifml` sites outside its own walk).
         if self.open_ifml_document(&uri) {
             let snapshots = self.open_ifml_snapshots();
             if let Some(focused) = focused_snapshot(&snapshots, &uri) {
@@ -414,9 +494,16 @@ impl LanguageServer for RexBackend {
                 }
             }
         }
-        // `.mox` references are served through rename's resolver; a
-        // standalone references handler for `.mox` is future work.
-        Ok(None)
+        // `.mox` references ride rename's resolver (the navigation index's
+        // typed targets); the standalone handler declines rather than
+        // answering from a second, partial table.
+        if surface_for(&uri) == Surface::Mox {
+            return Ok(None);
+        }
+        let locations = self
+            .graph_snapshot(&uri)
+            .and_then(|snapshot| graph_references(&snapshot, &uri, position, include_declaration));
+        Ok(locations)
     }
 
     async fn prepare_rename(
@@ -433,7 +520,17 @@ impl LanguageServer for RexBackend {
                 }
             }
         }
-        Ok(None)
+        if surface_for(&uri) == Surface::Mox {
+            return Ok(None);
+        }
+        match self
+            .graph_snapshot(&uri)
+            .map(|snapshot| graph_prepare_rename(&snapshot, &uri, position))
+        {
+            Some(Ok(range)) => Ok(range.map(PrepareRenameResponse::Range)),
+            Some(Err(message)) => Err(tower_lsp_server::jsonrpc::Error::invalid_params(message)),
+            None => Ok(None),
+        }
     }
 
     async fn rename(
@@ -462,31 +559,41 @@ impl LanguageServer for RexBackend {
                 "invalid identifier",
             ));
         }
-        let edit = self.with_navigation(&uri, |map, index| {
-            let offset = map.offset_for(position);
-            let target = match index.at(offset) {
-                Lookup::Definition(id, _) => id,
-                Lookup::Reference(reference) => index.resolve_id(reference)?,
-                Lookup::None => return None,
-            };
-            // The definition's name plus every mention that resolves to it,
-            // latest source position first (safe for overlapping edits).
-            let mut spans = index.references_to(target);
-            spans.push(index.definition(target).name_span);
-            spans.sort_unstable_by_key(|span| std::cmp::Reverse(span.start));
-            let edits = spans
-                .into_iter()
-                .map(|span| TextEdit {
-                    range: map.range_for(span),
-                    new_text: params.new_name.clone(),
+        if surface_for(&uri) == Surface::Mox {
+            let edit = self.with_navigation(&uri, |map, index| {
+                let offset = map.offset_for(position);
+                let target = match index.at(offset) {
+                    Lookup::Definition(id, _) => id,
+                    Lookup::Reference(reference) => index.resolve_id(reference)?,
+                    Lookup::None => return None,
+                };
+                // The definition's name plus every mention that resolves to it,
+                // latest source position first (safe for overlapping edits).
+                let mut spans = index.references_to(target);
+                spans.push(index.definition(target).name_span);
+                spans.sort_unstable_by_key(|span| std::cmp::Reverse(span.start));
+                let edits = spans
+                    .into_iter()
+                    .map(|span| TextEdit {
+                        range: map.range_for(span),
+                        new_text: params.new_name.clone(),
+                    })
+                    .collect();
+                Some(WorkspaceEdit {
+                    changes: Some([(uri.clone(), edits)].into_iter().collect()),
+                    document_changes: None,
+                    change_annotations: None,
                 })
-                .collect();
-            Some(WorkspaceEdit {
-                changes: Some([(uri.clone(), edits)].into_iter().collect()),
-                document_changes: None,
-                change_annotations: None,
-            })
-        });
-        Ok(edit)
+            });
+            return Ok(edit);
+        }
+        match self
+            .graph_snapshot(&uri)
+            .map(|snapshot| graph_rename(&snapshot, &uri, position, &params.new_name))
+        {
+            Some(Ok(edit)) => Ok(edit),
+            Some(Err(message)) => Err(tower_lsp_server::jsonrpc::Error::invalid_params(message)),
+            None => Ok(None),
+        }
     }
 }

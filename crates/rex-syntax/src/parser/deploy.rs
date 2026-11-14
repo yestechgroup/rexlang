@@ -155,7 +155,21 @@ pub(crate) fn deploy_binding<'src>(
         deploy_keyword(deploy::FLOW)
     };
     keyword
-        .ignore_then(string_lit().or_not())
+        .ignore_then(
+            string_lit()
+                .map_with(|reference: String, e| {
+                    // The token's span covers the quotes; the mention is the
+                    // path between them (the reference-string text itself).
+                    let span = e.span();
+                    let inner = if span.end > span.start + 1 {
+                        (span.start + 1..span.end - 1).into()
+                    } else {
+                        span
+                    };
+                    (reference, inner)
+                })
+                .or_not(),
+        )
         .map_with(|reference, e| (reference, e.span()))
         .validate(move |(reference, span), _e, emitter| {
             if reference.is_none() {
@@ -168,9 +182,16 @@ pub(crate) fn deploy_binding<'src>(
                     },
                 ));
             }
+            let (reference, reference_span) = match reference {
+                Some(pair) => pair,
+                // The recovered form has no string to point at; the entry's
+                // own span is the best available site.
+                None => (String::new(), span),
+            };
             DeployBindingDecl {
-                reference: reference.unwrap_or_default(),
+                reference,
                 is_design,
+                reference_span,
                 span,
             }
         })

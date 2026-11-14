@@ -44,8 +44,11 @@
 
 use std::collections::HashMap;
 
+use rex_ir::graph::kinds;
 use rex_syntax::ast as mox;
 use rex_syntax::Span;
+
+use super::surface::SurfaceIndex;
 
 /// Stable identifier of a [`Definition`] within one [`NavigationIndex`].
 ///
@@ -783,5 +786,111 @@ fn render_multiplicity(multiplicity: &mox::Multiplicity) -> String {
             mox::MultBound::Star => format!("[{lower}..*]"),
             mox::MultBound::Int(upper) => format!("[{lower}..{upper}]"),
         },
+    }
+}
+
+// --- The `.mox` span table's graph-node projection -------------------------
+
+/// The `.mox` surface's spanned index: every declaration the semantic graph
+/// emits a node for, keyed by the graph builder's `(kind, name)`.
+///
+/// This is the shared-contract projection of the same parsed model
+/// [`NavigationIndex`] indexes — classes (interfaces and registers included),
+/// enums, datatypes, class features and operations, and the inline `actors`
+/// block's actors and capabilities. Names come from the graph's own
+/// `ids` helpers, so the keys are the graph builder's by construction.
+///
+/// Two declarations the graph does **not** model as nodes stay
+/// [`NavigationIndex`] symbols only and are deliberately absent here: enum
+/// literals and vocabulary declarations (with their facets). The editor's
+/// `.mox` document symbols keep using the richer [`NavigationIndex`], which
+/// is the same source table with those members included.
+///
+/// References are empty on purpose: `.mox`'s mentions carry typed
+/// [`Reference::target`] resolution (including `opposite` ends) inside the
+/// index, which remains the surface's reference source.
+pub fn mox_index(source: &str) -> SurfaceIndex {
+    let mut index = SurfaceIndex::default();
+    let Some(model) = rex_syntax::parse(source).ast else {
+        return index;
+    };
+    let package = model
+        .package
+        .as_ref()
+        .map(|package| package.name.full_name())
+        .unwrap_or_default();
+    for declaration in &model.declarations {
+        match declaration {
+            mox::Decl::Class(class) => {
+                let class_name =
+                    crate::graph::ids::qualify(&[package.as_str(), class.name.text.as_str()]);
+                index.push_definition(kinds::CLASS, &class_name, class.name.span, class.span);
+                push_features(&mut index, &class_name, &class.features);
+            }
+            mox::Decl::Register(register) => {
+                let class_name =
+                    crate::graph::ids::qualify(&[package.as_str(), register.name.text.as_str()]);
+                index.push_definition(kinds::CLASS, &class_name, register.name.span, register.span);
+                push_features(&mut index, &class_name, &register.attributes);
+            }
+            mox::Decl::Interface(interface) => {
+                let class_name =
+                    crate::graph::ids::qualify(&[package.as_str(), interface.name.text.as_str()]);
+                index.push_definition(
+                    kinds::CLASS,
+                    &class_name,
+                    interface.name.span,
+                    interface.span,
+                );
+            }
+            mox::Decl::Enum(enumeration) => {
+                let name =
+                    crate::graph::ids::qualify(&[package.as_str(), enumeration.name.text.as_str()]);
+                index.push_definition(kinds::ENUM, &name, enumeration.name.span, enumeration.span);
+            }
+            mox::Decl::Datatype(datatype) => {
+                let name =
+                    crate::graph::ids::qualify(&[package.as_str(), datatype.name.text.as_str()]);
+                index.push_definition(kinds::DATATYPE, &name, datatype.name.span, datatype.span);
+            }
+            mox::Decl::Actors(block) => {
+                // The inline authorization block is part of the `.mox`
+                // surface: its actors and capabilities are graph nodes
+                // (`<Block>.<Name>`). Purposes, obligations, grants,
+                // delegations, and `never_both` groups are not.
+                for actor in &block.actors {
+                    index.push_definition(
+                        kinds::ACTOR,
+                        crate::graph::ids::actor_name(&block.name.text, &actor.name.text),
+                        actor.name.span,
+                        actor.span,
+                    );
+                }
+                for capability in &block.capabilities {
+                    index.push_definition(
+                        kinds::CAPABILITY,
+                        crate::graph::ids::capability_name(&block.name.text, &capability.name.text),
+                        capability.name.span,
+                        capability.span,
+                    );
+                }
+            }
+            mox::Decl::Vocabulary(_) | mox::Decl::Annotation(_) | mox::Decl::ImportSchema(_) => {}
+        }
+    }
+    index.sort();
+    index
+}
+
+/// Records one class's features and operations, keyed `<package>.<Class>.<name>`.
+fn push_features(index: &mut SurfaceIndex, class_name: &str, features: &[mox::FeatureDecl]) {
+    for feature in features {
+        let name = feature.name();
+        let qualified = crate::graph::ids::qualify(&[class_name, name.text.as_str()]);
+        let kind = match feature {
+            mox::FeatureDecl::Op { .. } => kinds::OPERATION,
+            _ => kinds::FEATURE,
+        };
+        index.push_definition(kind, &qualified, name.span, feature.span());
     }
 }
