@@ -69,26 +69,24 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --workspace --all-targets
+        run: scripts/ci-local.sh build
+      # Every gate below invokes scripts/ci-local.sh — the single source
+      # of truth for the gate sequence and the fixture-glob list (issue
+      # #121): local and remote can never drift. Step boundaries match the
+      # script's subcommands 1:1 so the Actions view stays legible.
       # rustdoc links doctest artifacts under TMPDIR, which defaults to
       # the small tmpfs /tmp — the linker SIGBUSes there (the AGENTS.md
-      # testing-quirks gotcha; `ld terminated with signal 7`). Point it at
-      # the workspace's disk-backed target/, and cap the job count so the
-      # eleven rex-driver doctests don't link concurrently.
+      # testing-quirks gotcha; `ld terminated with signal 7`). The script
+      # points TMPDIR at the disk-backed target/ and caps the job count so
+      # the eleven rex-driver doctests don't link concurrently.
       - name: Tests
-        run: |
-          mkdir -p target/tmp
-          TMPDIR=$PWD/target/tmp cargo test --workspace --jobs 2
+        run: scripts/ci-local.sh test
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: scripts/ci-local.sh clippy
       - name: Format check
-        run: |
-          cargo fmt --all -- --check
-          cargo run -q -p rex-cli -- fmt --check examples/*.mox examples/*.actor examples/*.ifml examples/*.evt examples/*.dmn examples/*.ddd examples/*.uc examples/*.deploy examples/*.cmmn tests/conformance/models/*.mox tests/conformance/models/*.actor tests/conformance/ddd/*.ddd tests/conformance/sigil/*.mox tests/conformance/sigil/*.actor tests/conformance/sigil/*.ddd tests/conformance/events/*.mox tests/conformance/events/*.evt tests/conformance/deploy/*.deploy tests/conformance/usecases/*.uc tests/conformance/cmmn/*.cmmn tests/conformance/dmn/*.dmn patterns/ifml/*.ifml tests/conformance/ifml/app.ifml tests/conformance/ifml/cli.ifml tests/conformance/ifml/rexlang/auth.mox tests/conformance/ifml/rexlang/auth.actor
+        run: scripts/ci-local.sh fmt
       # Broken intra-doc links are warnings by default; -D warnings makes
       # them errors so the gate stays visible (issue #175). cargo doc runs
       # no doctests, so it needs no TMPDIR dance.
       - name: Docs
-        run: cargo doc --workspace --no-deps
-        env:
-          RUSTDOCFLAGS: "-D warnings"
+        run: scripts/ci-local.sh docs
