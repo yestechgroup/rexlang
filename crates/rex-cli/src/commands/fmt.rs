@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use crate::inputs::{
-    is_actor_file, is_cmmn_file, is_ddd_file, is_deploy_file, is_dmn_file, is_evt_file,
-    is_ifml_file, is_uc_file,
+    expand_check_inputs, is_actor_file, is_cmmn_file, is_ddd_file, is_deploy_file, is_dmn_file,
+    is_evt_file, is_ifml_file, is_uc_file,
 };
 
 pub(crate) fn run(check: bool, files: Vec<PathBuf>) -> anyhow::Result<ExitCode> {
@@ -22,6 +22,12 @@ pub(crate) fn run(check: bool, files: Vec<PathBuf>) -> anyhow::Result<ExitCode> 
             .map_err(|error| anyhow::anyhow!("cannot write stdout: {error}"))?;
         return Ok(ExitCode::SUCCESS);
     }
+    // Directory arguments scan recursively for every supported surface —
+    // the same expansion `check` uses, including the formatter-golden
+    // `X.fmt.<ext>` skip (they are outputs, not standalone models).
+    // Explicit file arguments pass through untouched, and dispatch below
+    // stays per-file by extension.
+    let files = expand_check_inputs(&files)?;
     let mut unformatted = false;
     for file in &files {
         let source = std::fs::read_to_string(file)
