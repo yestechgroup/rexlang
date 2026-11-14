@@ -27,6 +27,8 @@ artifact. This index routes to the right document.
 | [../examples/README.md](../examples/README.md) | you learn from working code — the canonical examples compile one domain through every surface, CI-enforced |
 | [BACKENDS.md](BACKENDS.md) | you write a backend (in or out of tree) that consumes rexlang artifacts |
 | [RUNE-BODIES.md](RUNE-BODIES.md) | you care about executing imported Rune (`.rosetta`) logic — the design RFC for lowering Rune bodies |
+| [SEMANTICS.md](SEMANTICS.md) | you want the claim ladder: what the program claims, the per-surface judgments, theorem S and its assumptions, and the explicit non-goals with their reversal triggers |
+| [VERIFICATION.md](VERIFICATION.md) | you need the proof-obligation register: every claim, its status (`proved`/`tested`/`argued`/`assumed`), its evidence pointer and review date — generated from `docs/verification/register.json`, gated by CI |
 | [../AGENTS.md](../AGENTS.md) | you change the compiler itself: crate ownership, commands, testing quirks, gotchas |
 
 ## Reading paths
@@ -40,5 +42,9 @@ artifact. This index routes to the right document.
   each layer by hand.
 - **"I want to consume rexlang from my tool"** → [BACKENDS.md](BACKENDS.md)
   (artifact contract), or the root README's integration styles.
+- **"I want evidence, not assurances"** → [SEMANTICS.md](SEMANTICS.md) for
+  what is claimed and refused, [VERIFICATION.md](VERIFICATION.md) for each
+  row's status, evidence pointer and review date, and [RECEIPTS.md](RECEIPTS.md)
+  for checking a release's evidence without the prover toolchain.
 - **"I want to add a surface"** → [../AGENTS.md](../AGENTS.md) (the table
   row), then any per-surface doc as the template.
