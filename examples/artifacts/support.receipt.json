@@ -158,7 +158,7 @@
         "mutantKilled": null,
         "review": "2027-02-13",
         "status": "argued",
-        "trigger": "a time-boxed formal attempt lands under epic #202 (T1)"
+        "trigger": "a time-boxed formal attempt under epic #202's T1 — one focused session; if the box is exceeded, downgrade the row with a written rationale, never leave it silently open"
       },
       {
         "claim": "Type references always resolve",
@@ -264,7 +264,7 @@
         "mutantKilled": null,
         "review": "2027-05-14",
         "status": "assumed",
-        "trigger": "shrinking the trusted set is always a welcome PR (#90's spirit): prove the dispatcher's cycle walk against the kernel's loop discipline"
+        "trigger": "shrinking the trusted set is always a welcome PR (#90's spirit): prove the dispatcher's cycle walk against the kernel's loop discipline, or retire it with a creusot-std bump that closes the borrow-boundary gap"
       },
       {
         "claim": "Mutation primitives do exactly what their contracts state",
@@ -290,7 +290,7 @@
         "mutantKilled": null,
         "review": "2027-05-14",
         "status": "assumed",
-        "trigger": "shrinking the trusted set is always a welcome PR (#90's spirit); a creusot-std bump that re-establishes the consolidated invariant across a raw `Vec` borrow retires the primitives"
+        "trigger": "shrinking the trusted set is always a welcome PR (#90's spirit); a creusot-std bump that re-establishes the consolidated invariant across a raw `Vec` borrow (release notes) retires the primitives"
       },
       {
         "claim": "Wire rule 3: a feature's stable id equals its 0-based declaration index; `assign_feature_ids` establishes it and changes nothing else",
@@ -312,7 +312,7 @@
         "mutantKilled": null,
         "review": "2027-05-14",
         "status": "proved",
-        "trigger": "the next creusot-std/Creusot toolchain bump — its release notes are the trigger; move the mirror in-crate when the derive-gap family closes"
+        "trigger": "the next creusot-std/Creusot toolchain bump — its release notes are the trigger: watch them for the derive-gap family closing, then move the mirror in-crate"
       },
       {
         "claim": "Interaction references always resolve to declarations ([issue #112](https://github.com/yestechgroup/rexlang/issues/112)): every interaction reference edge — `action(\"X\")`, `navigate(\"X\")`, `refresh(\"X\")` — terminates at a **declaration-backed** node, never a synthesized one",
@@ -438,7 +438,7 @@
         "mutantKilled": null,
         "review": "2027-05-14",
         "status": "proved",
-        "trigger": "the next creusot-std/Creusot toolchain bump — its release notes are the trigger; move the mirror in-crate when the std-spec translation gap closes"
+        "trigger": "the next creusot-std/Creusot toolchain bump — its release notes are the trigger: watch them for the std-spec translation gap closing, then move the mirror in-crate"
       },
       {
         "claim": "Class→artifact correspondence at the IR → JSON Schema boundary (issue #95, the first proved transformation statement): the collector admits exactly the declarations with distinct class names (duplicates rejected — `Context::collect`'s `bail!`), and the emitted `$defs` are in correspondence with the declared classes — **one def per class, in declaration order, none dropped, none synthesized**",
@@ -464,7 +464,7 @@
         "mutantKilled": null,
         "review": "2027-05-14",
         "status": "proved",
-        "trigger": "the next creusot-std/Creusot toolchain bump — its release notes are the trigger; move the mirror in-crate when the wire types translate"
+        "trigger": "the next creusot-std/Creusot toolchain bump — its release notes are the trigger: watch them for the `rex-ir` wire types translating, then move the mirror in-crate"
       },
       {
         "claim": "Stripped-name uniqueness within a package (issue #177): two declarations — classes or enums, in any combination — whose names strip to the same module identifier (one trailing `Type` suffix, then snake_case; `PayRun` and `PayRunType` both strip to `pay_run`), or two classes mapping to the same effective table name (declared `table \"…\"` override, else the derived default), are rejected; a pair where either class is a containment target is exempt (a contained value object shares its owner's module downstream by design), and a pair already diagnosed as E0300 is not re-diagnosed as E0301 (one rename resolves both)",
@@ -493,7 +493,7 @@
         "trigger": null
       }
     ],
-    "sha256": "b34cf89879f72b701da38c21141d38f82330730e2219622775f03bf04b24efd6",
+    "sha256": "99cb8432eec807489b419692bfb1cefe5059852e352ace4880b9330ec7c71e77",
     "source": "docs/verification/register.json"
   },
   "sources": [
