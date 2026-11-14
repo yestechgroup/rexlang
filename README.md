@@ -76,6 +76,8 @@ rexlang ir usecase.uc -o usecase.uc.json      # every artifact surface: .ddd/.ev
 rexlang artifact check usecase.uc.json        # lint any serialized artifact, no toolchain needed
 rexlang vocab fetch model.mox --provider file:vocab-sources/
 rexlang explain E0104              # explain any diagnostic code (--list: the allocation ledger)
+rexlang completions bash           # shell completion script (zsh, fish, powershell, elvish too)
+rexlang man                        # the man page (roff, to stdout or --out FILE)
 rexlang lsp                       # start the language server (stdio)
 ```
 
