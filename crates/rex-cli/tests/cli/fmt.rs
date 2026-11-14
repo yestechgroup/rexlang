@@ -152,3 +152,155 @@ fn fmt_help_works() {
     assert!(stdout.contains("Usage:"), "stdout was: {stdout}");
     assert!(stdout.contains("--check"), "stdout was: {stdout}");
 }
+
+// --- directory parity with `check` (#136) -------------------------------------
+
+const GOOD_ACTOR: &str = r#"import "actor-domain.mox"
+
+actors Escalation {
+    actor Finance
+    capability EscalateTicket on Ticket
+
+    grant Finance {
+        permit EscalateTicket when (amount > 0)
+    }
+}
+"#;
+
+/// A scratch directory tree with model files at the top level and in a
+/// nested subdirectory.
+fn fmt_tree(name: &str, top: &[(&str, &str)], nested: &[(&str, &str)]) -> std::path::PathBuf {
+    let dir = scratch_dir().join(name);
+    std::fs::create_dir_all(dir.join("nested")).expect("create tree");
+    for (file, contents) in top {
+        std::fs::write(dir.join(file), contents).expect("write top-level file");
+    }
+    for (file, contents) in nested {
+        std::fs::write(dir.join("nested").join(file), contents).expect("write nested file");
+    }
+    dir
+}
+
+#[test]
+fn fmt_check_directory_passes_when_canonical() {
+    let dir = fmt_tree(
+        "fmt_dir_ok",
+        &[("model.mox", FORMATTED), ("policy.actor", GOOD_ACTOR)],
+        &[("actor-domain.mox", FORMATTED)],
+    );
+    let output = rexlang()
+        .args(["fmt", "--check", dir.to_str().unwrap()])
+        .output()
+        .expect("run rexlang fmt --check <dir>");
+    assert!(
+        output.status.success(),
+        "stdout: {:?} stderr: {:?}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).is_empty());
+}
+
+#[test]
+fn fmt_check_directory_reports_unformatted_files_and_exits_1() {
+    let dir = fmt_tree(
+        "fmt_dir_messy",
+        &[("messy.mox", MESSY), ("clean.mox", FORMATTED)],
+        &[("nested_messy.mox", MESSY)],
+    );
+    let output = rexlang()
+        .args(["fmt", "--check", dir.to_str().unwrap()])
+        .output()
+        .expect("run rexlang fmt --check <dir>");
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut listed: Vec<&str> = stdout.lines().collect();
+    listed.sort_unstable();
+    assert_eq!(listed.len(), 2, "stdout was: {stdout}");
+    assert!(stdout.contains("messy.mox"), "stdout was: {stdout}");
+    assert!(stdout.contains("nested_messy.mox"), "stdout was: {stdout}");
+    assert!(!stdout.contains("clean.mox"), "stdout was: {stdout}");
+    // --check must not rewrite.
+    assert_eq!(
+        std::fs::read_to_string(dir.join("messy.mox")).unwrap(),
+        MESSY
+    );
+}
+
+/// Formatter-golden artifacts (`X.fmt.<ext>`) are outputs, not standalone
+/// models — directory scans must skip them exactly like `check <dir>` does,
+/// even when their bytes would fail `--check` (the conformance `fmt/` goldens
+/// are deliberately non-canonical).
+#[test]
+fn fmt_check_directory_skips_formatter_golden_artifacts() {
+    let dir = fmt_tree(
+        "fmt_dir_golden_skip",
+        &[("model.mox", FORMATTED), ("noncanonical.fmt.mox", MESSY)],
+        &[],
+    );
+    let output = rexlang()
+        .args(["fmt", "--check", dir.to_str().unwrap()])
+        .output()
+        .expect("run rexlang fmt --check <dir>");
+    assert!(
+        output.status.success(),
+        "stdout: {:?} — the .fmt. golden must not be scanned",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    // The golden file itself stays untouched.
+    assert_eq!(
+        std::fs::read_to_string(dir.join("noncanonical.fmt.mox")).unwrap(),
+        MESSY
+    );
+}
+
+/// Files without a supported surface extension are ignored by directory
+/// scans (the `check <dir>` rule); explicit file arguments still format
+/// any supported surface by extension.
+#[test]
+fn fmt_directory_ignores_unsupported_extensions() {
+    let dir = fmt_tree(
+        "fmt_dir_unsupported",
+        &[("model.mox", FORMATTED), ("notes.txt", MESSY)],
+        &[],
+    );
+    let output = rexlang()
+        .args(["fmt", "--check", dir.to_str().unwrap()])
+        .output()
+        .expect("run rexlang fmt --check <dir>");
+    assert!(
+        output.status.success(),
+        "stdout: {:?} — .txt must not be scanned",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("notes.txt")).unwrap(),
+        MESSY
+    );
+}
+
+#[test]
+fn fmt_directory_rewrites_in_place() {
+    let dir = fmt_tree(
+        "fmt_dir_write",
+        &[("messy.mox", MESSY)],
+        &[("nested.mox", MESSY)],
+    );
+    let output = rexlang()
+        .args(["fmt", dir.to_str().unwrap()])
+        .output()
+        .expect("run rexlang fmt <dir>");
+    assert!(
+        output.status.success(),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("messy.mox")).unwrap(),
+        FORMATTED
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("nested").join("nested.mox")).unwrap(),
+        FORMATTED
+    );
+}
