@@ -29,6 +29,15 @@ kill_orphans() {
   sleep 1
 }
 
+# Optional subcommand: the advisory/license/supply-chain gate that CI runs
+# as separate fast jobs (`audit` + `deny`), locally in one shot.
+if [ "${1:-}" = "audit" ]; then
+  step "audit: cargo deny check + cargo audit"
+  nice -n 19 cargo deny check && echo "DENY-OK" || echo "DENY-FAIL"
+  nice -n 19 cargo audit && echo "AUDIT-OK" || echo "AUDIT-FAIL"
+  exit 0
+fi
+
 step "CI 1/5: cargo build --workspace --all-targets"
 nice -n 19 cargo build --workspace --all-targets && echo "BUILD-OK" || echo "BUILD-FAIL"
 kill_orphans

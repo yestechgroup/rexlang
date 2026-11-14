@@ -19,6 +19,31 @@ env:
   RUSTFLAGS: "-C debuginfo=0"
 
 jobs:
+  # Advisory + license/supply-chain gates (WI-5 of v0.2, issue #173).
+  # Kept as separate fast jobs: a red audit must not block unrelated test
+  # signal, and neither job builds the workspace.
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - run: cargo audit
+
+  deny:
+    runs-on: ubuntu-latest
+    env:
+      # The rev-pinned git deps (sigil, xstate-ir, dsntk) fetch through the
+      # git CLI with checkout's persisted credentials — cargo-deny reads
+      # their sources for the license check, and restingstate is private.
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
   test:
     runs-on: ubuntu-latest
     steps:
