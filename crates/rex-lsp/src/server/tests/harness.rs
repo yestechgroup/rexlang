@@ -11,20 +11,22 @@ use futures::StreamExt;
 use super::*;
 
 use serde_json::json;
+use std::str::FromStr;
 use std::time::Duration;
 use tower::{Service, ServiceExt};
-use tower_lsp::jsonrpc;
-use tower_lsp::LspService;
+use tower_lsp_server::jsonrpc;
+use tower_lsp_server::LspService;
 
 pub(crate) const FIXED: &str =
     "package demo\n\nclass Book { String title }\n\nclass Shelf { String oops }\n";
 
-pub(crate) fn uri() -> Url {
-    Url::parse("file:///workspace/shelf.mox").unwrap()
+pub(crate) fn uri() -> Uri {
+    Uri::from_str("file:///workspace/shelf.mox").unwrap()
 }
 
 /// Builds an initialized `(service, socket)` pair.
-pub(crate) async fn initialized_service() -> (LspService<RexBackend>, tower_lsp::ClientSocket) {
+pub(crate) async fn initialized_service() -> (LspService<RexBackend>, tower_lsp_server::ClientSocket)
+{
     let (mut service, mut socket) = LspService::new(RexBackend::new);
     let response = service
         .ready()
@@ -54,14 +56,14 @@ pub(crate) async fn initialized_service() -> (LspService<RexBackend>, tower_lsp:
 }
 
 /// Reads and discards everything currently queued on the socket.
-pub(crate) async fn drain_socket(socket: &mut tower_lsp::ClientSocket) {
+pub(crate) async fn drain_socket(socket: &mut tower_lsp_server::ClientSocket) {
     while let Ok(Some(_)) = tokio::time::timeout(Duration::from_millis(50), socket.next()).await {}
 }
 
 /// The next `publishDiagnostics` for `uri`, or `None` on timeout.
 pub(crate) async fn next_publish(
-    socket: &mut tower_lsp::ClientSocket,
-    target: &Url,
+    socket: &mut tower_lsp_server::ClientSocket,
+    target: &Uri,
 ) -> Option<PublishDiagnosticsParams> {
     loop {
         let message = tokio::time::timeout(Duration::from_secs(2), socket.next())
@@ -96,7 +98,7 @@ pub(crate) async fn open(service: &mut LspService<RexBackend>, text: &str) {
 }
 
 /// Opens a document at an arbitrary URI (extension decides the surface).
-pub(crate) async fn open_at(service: &mut LspService<RexBackend>, uri: &Url, text: &str) {
+pub(crate) async fn open_at(service: &mut LspService<RexBackend>, uri: &Uri, text: &str) {
     service
         .call(
             jsonrpc::Request::build("textDocument/didOpen")

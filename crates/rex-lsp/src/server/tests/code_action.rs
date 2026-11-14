@@ -9,8 +9,8 @@ use super::*;
 
 use serde_json::json;
 use tower::Service;
-use tower_lsp::jsonrpc;
-use tower_lsp::LspService;
+use tower_lsp_server::jsonrpc;
+use tower_lsp_server::LspService;
 
 // --- code action (quick fix) ----------------------------------------------
 
@@ -50,7 +50,7 @@ async fn code_actions_at(
 /// published range.
 async fn flagship_diagnostic(
     service: &mut LspService<RexBackend>,
-    socket: &mut tower_lsp::ClientSocket,
+    socket: &mut tower_lsp_server::ClientSocket,
 ) -> (Diagnostic, Range) {
     open(service, BROKEN).await;
     let publish = next_publish(socket, &uri()).await.expect("publish");

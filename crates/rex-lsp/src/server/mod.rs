@@ -7,8 +7,8 @@ use std::sync::Mutex;
 use rex_driver::navigation::Lookup;
 use rex_driver::{Database, SourceFile};
 use salsa::Setter as _;
-use tower_lsp::lsp_types::*;
-use tower_lsp::{Client, LanguageServer};
+use tower_lsp_server::ls_types::*;
+use tower_lsp_server::{Client, LanguageServer};
 
 use crate::position::PositionMap;
 
@@ -43,8 +43,8 @@ enum Surface {
     Other,
 }
 
-fn surface_for(uri: &Url) -> Surface {
-    match uri.path().rsplit('.').next() {
+fn surface_for(uri: &Uri) -> Surface {
+    match uri.path().decode().to_string_lossy().rsplit('.').next() {
         Some("mox") => Surface::Mox,
         Some("ifml") => Surface::Ifml,
         Some("ddd") => Surface::Ddd,
@@ -66,7 +66,7 @@ struct Document {
 /// The rexlang language server backend.
 pub struct RexBackend {
     client: Client,
-    documents: Mutex<HashMap<Url, Document>>,
+    documents: Mutex<HashMap<Uri, Document>>,
     db: Mutex<Database>,
 }
 
@@ -103,14 +103,17 @@ fn capabilities() -> ServerCapabilities {
     }
 }
 
-#[tower_lsp::async_trait]
 impl LanguageServer for RexBackend {
     async fn initialize(
         &self,
         _params: InitializeParams,
-    ) -> tower_lsp::jsonrpc::Result<InitializeResult> {
+    ) -> tower_lsp_server::jsonrpc::Result<InitializeResult> {
         Ok(InitializeResult {
             capabilities: capabilities(),
+            // Absent = the LSP default UTF-16 offsets — exactly what
+            // `position.rs`'s `PositionMap` computes. The clangd UTF-8
+            // extension stays off.
+            offset_encoding: None,
             server_info: None,
         })
     }
@@ -173,14 +176,14 @@ impl LanguageServer for RexBackend {
             .await;
     }
 
-    async fn shutdown(&self) -> tower_lsp::jsonrpc::Result<()> {
+    async fn shutdown(&self) -> tower_lsp_server::jsonrpc::Result<()> {
         Ok(())
     }
 
     async fn formatting(
         &self,
         params: DocumentFormattingParams,
-    ) -> tower_lsp::jsonrpc::Result<Option<Vec<TextEdit>>> {
+    ) -> tower_lsp_server::jsonrpc::Result<Option<Vec<TextEdit>>> {
         let uri = params.text_document.uri;
         // Per-surface formatter dispatch; a surface without a formatter
         // (or a `.dmn` that no longer parses) yields no edit.
@@ -222,7 +225,7 @@ impl LanguageServer for RexBackend {
     async fn goto_definition(
         &self,
         params: GotoDefinitionParams,
-    ) -> tower_lsp::jsonrpc::Result<Option<GotoDefinitionResponse>> {
+    ) -> tower_lsp_server::jsonrpc::Result<Option<GotoDefinitionResponse>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
         if let Some(location) = self.with_ifml(&uri, |snapshot| {
@@ -245,7 +248,7 @@ impl LanguageServer for RexBackend {
         Ok(location.map(GotoDefinitionResponse::Scalar))
     }
 
-    async fn hover(&self, params: HoverParams) -> tower_lsp::jsonrpc::Result<Option<Hover>> {
+    async fn hover(&self, params: HoverParams) -> tower_lsp_server::jsonrpc::Result<Option<Hover>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
         if let Some(hover) = self.with_ifml(&uri, |snapshot| ifml_hover(snapshot, position)) {
@@ -271,7 +274,7 @@ impl LanguageServer for RexBackend {
     async fn document_symbol(
         &self,
         params: DocumentSymbolParams,
-    ) -> tower_lsp::jsonrpc::Result<Option<DocumentSymbolResponse>> {
+    ) -> tower_lsp_server::jsonrpc::Result<Option<DocumentSymbolResponse>> {
         let uri = params.text_document.uri;
         if let Some(symbols) = self.with_ifml(&uri, ifml_document_symbols) {
             return Ok(Some(symbols));
@@ -305,7 +308,7 @@ impl LanguageServer for RexBackend {
     async fn completion(
         &self,
         params: CompletionParams,
-    ) -> tower_lsp::jsonrpc::Result<Option<CompletionResponse>> {
+    ) -> tower_lsp_server::jsonrpc::Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
         if let Some(response) =
@@ -346,7 +349,7 @@ impl LanguageServer for RexBackend {
     async fn code_action(
         &self,
         params: CodeActionParams,
-    ) -> tower_lsp::jsonrpc::Result<Option<CodeActionResponse>> {
+    ) -> tower_lsp_server::jsonrpc::Result<Option<CodeActionResponse>> {
         let uri = params.text_document.uri;
         let requested = params.range;
         // `.ifml` quick fixes run over the compiled snapshot (its index
@@ -397,7 +400,7 @@ impl LanguageServer for RexBackend {
     async fn references(
         &self,
         params: ReferenceParams,
-    ) -> tower_lsp::jsonrpc::Result<Option<Vec<Location>>> {
+    ) -> tower_lsp_server::jsonrpc::Result<Option<Vec<Location>>> {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
         let include_declaration = params.context.include_declaration;
@@ -419,7 +422,7 @@ impl LanguageServer for RexBackend {
     async fn prepare_rename(
         &self,
         params: TextDocumentPositionParams,
-    ) -> tower_lsp::jsonrpc::Result<Option<PrepareRenameResponse>> {
+    ) -> tower_lsp_server::jsonrpc::Result<Option<PrepareRenameResponse>> {
         let uri = params.text_document.uri;
         let position = params.position;
         if self.open_ifml_document(&uri) {
@@ -436,9 +439,9 @@ impl LanguageServer for RexBackend {
     async fn rename(
         &self,
         params: RenameParams,
-    ) -> tower_lsp::jsonrpc::Result<Option<WorkspaceEdit>> {
+    ) -> tower_lsp_server::jsonrpc::Result<Option<WorkspaceEdit>> {
         if !is_identifier(&params.new_name) && !is_ifml_name(&params.new_name) {
-            return Err(tower_lsp::jsonrpc::Error::invalid_params(
+            return Err(tower_lsp_server::jsonrpc::Error::invalid_params(
                 "invalid identifier",
             ));
         }
@@ -455,7 +458,7 @@ impl LanguageServer for RexBackend {
             }
         }
         if !is_identifier(&params.new_name) {
-            return Err(tower_lsp::jsonrpc::Error::invalid_params(
+            return Err(tower_lsp_server::jsonrpc::Error::invalid_params(
                 "invalid identifier",
             ));
         }

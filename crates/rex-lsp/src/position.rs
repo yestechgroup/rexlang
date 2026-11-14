@@ -6,7 +6,7 @@
 //! panicking (editor traffic is routinely out of sync with the file).
 
 use rex_driver::Span;
-use tower_lsp::lsp_types::{Position, Range};
+use tower_lsp_server::ls_types::{Position, Range};
 
 /// One indexed line: byte range of the content (excluding the line
 /// terminator) and its UTF-16 length.
