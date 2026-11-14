@@ -84,10 +84,10 @@ dsntk-feel-parser = { git = "https://github.com/yestechgroup/dsntk-rs.git", rev 
 dsntk-feel-evaluator = { git = "https://github.com/yestechgroup/dsntk-rs.git", rev = "b926458c089085fb59e9178d549f27a8119e45ff" }
 
 anyhow = "1.0"
-ariadne = "0.5"
+ariadne = "0.6"
 chumsky = "0.10"
 clap = { version = "4.5", features = ["derive"] }
-jsonschema = "0.55"
+jsonschema = "0.61"
 creusot-std = "0.14.0"
 logos = "0.15"
 pest = "2"
