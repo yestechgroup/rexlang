@@ -838,11 +838,18 @@ fn push_reference(nodes: &mut Vec<Node>, f: NodeId, to: NodeId) {
 // ---------------------------------------------------------------------------
 // Reachability lemmas (register V3).
 //
-// The shift lemma is the workhorse: with old-slot parent edges unchanged
-// and every fresh slot parentless, bounded reachability (reflexive and
-// strict) agrees in both directions for old slots. It is proved by
-// induction on the bound `k`; `lemma_acyclic_preserved` instantiates it
-// at the node-count budget and folds in the fresh-slot case.
+// What is proved here (`lemma_anc_shift`): bounded reachability — the
+// reflexive closure `anc_k` and the strict closure `anc_strict_k` — agrees
+// in both directions between a graph and any mutation that keeps every old
+// slot's parent list and appends parentless slots, for every bound up to
+// `k`, by induction on the bound. That is the shape of every mutator except
+// `link`.
+//
+// What remains open (register V3 stays `argued`): linking the executable
+// `is_ancestor` walk to this predicate (its functional spec is
+// `#[ensures(true)]`), and preserving `acyclic` across `link` — the latter
+// needs a path-shortening (loop-cutting) lemma plus a DFS-completeness
+// invariant, and no such lemma is proved in this module yet.
 // ---------------------------------------------------------------------------
 
 /// Shift lemma: bounded reachability transfers across a mutation that

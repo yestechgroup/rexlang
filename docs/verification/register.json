@@ -81,7 +81,7 @@
         }
       ],
       "statusNote": "spec machinery proved (shift lemma); `is_ancestor` functional spec and acyclicity preservation under `link` open — they need a path-shortening (loop-cutting) lemma plus a DFS-completeness invariant, deliberately budgeted as #93's hard residue; driver detection kernel-backed",
-      "trigger": "a time-boxed formal attempt lands under epic #202 (T1)",
+      "trigger": "a time-boxed formal attempt under epic #202's T1 — one focused session; if the box is exceeded, downgrade the row with a written rationale, never leave it silently open",
       "review": "2027-02-13"
     },
     {
@@ -186,8 +186,8 @@
           "pointer": "crates/rex-verify/tests/invariants.rs:p5_invariants_hold_after_random_mutation_sequences"
         }
       ],
-      "statusNote": "oracle dispatcher is test-side (validated by the property suites, never relied on by proofs); both walk helpers proved",
-      "trigger": "shrinking the trusted set is always a welcome PR (#90's spirit): prove the dispatcher's cycle walk against the kernel's loop discipline",
+      "statusNote": "deliberate assumption, not an oversight — the dispatcher is test-side (validated by the property suites, never relied on by proofs) and must inspect arbitrary, possibly malformed graphs, the very states the invariant excludes; the prover cannot re-establish the consolidated invariant across that raw `Vec`-borrow boundary (quantifier instantiation across the borrow). Both walk helpers are proved. Shrinking path (#90's spirit): shrinking the trusted set is always a welcome PR",
+      "trigger": "shrinking the trusted set is always a welcome PR (#90's spirit): prove the dispatcher's cycle walk against the kernel's loop discipline, or retire it with a creusot-std bump that closes the borrow-boundary gap",
       "review": "2027-05-14"
     },
     {
@@ -214,8 +214,8 @@
           "pointer": "crates/rex-verify/src/lib.rs:push_reference"
         }
       ],
-      "statusNote": "bodies assumed, contracts proved (see the `#[trusted]` policy)",
-      "trigger": "shrinking the trusted set is always a welcome PR (#90's spirit); a creusot-std bump that re-establishes the consolidated invariant across a raw `Vec` borrow retires the primitives",
+      "statusNote": "deliberate assumption, not an oversight — the one-statement bodies exist because the prover cannot re-establish the consolidated invariant directly after a raw `Vec`-indexing borrow (quantifier instantiation across the borrow boundary); bodies assumed, full model-effect contracts proved (see the `#[trusted]` policy). Shrinking path (#90's spirit): shrinking the trusted set is always a welcome PR",
+      "trigger": "shrinking the trusted set is always a welcome PR (#90's spirit); a creusot-std bump that re-establishes the consolidated invariant across a raw `Vec` borrow (release notes) retires the primitives",
       "review": "2027-05-14"
     },
     {
@@ -239,7 +239,7 @@
         }
       ],
       "statusNote": "in-crate `rex-ir` translation blocked upstream (see avoidances)",
-      "trigger": "the next creusot-std/Creusot toolchain bump — its release notes are the trigger; move the mirror in-crate when the derive-gap family closes",
+      "trigger": "the next creusot-std/Creusot toolchain bump — its release notes are the trigger: watch them for the derive-gap family closing, then move the mirror in-crate",
       "review": "2027-05-14",
       "mirror": {
         "of": "rex-ir `ClassDef::assign_feature_ids`",
@@ -368,7 +368,7 @@
           "pointer": "crates/rex-expr/tests/typecheck.rs:domain_types_is_assembled_incrementally_and_merges"
         }
       ],
-      "trigger": "the next creusot-std/Creusot toolchain bump — its release notes are the trigger; move the mirror in-crate when the std-spec translation gap closes",
+      "trigger": "the next creusot-std/Creusot toolchain bump — its release notes are the trigger: watch them for the std-spec translation gap closing, then move the mirror in-crate",
       "review": "2027-05-14",
       "mirror": {
         "of": "rex-expr `DomainTypes` (`BTreeMap`-backed)",
@@ -399,7 +399,7 @@
           "pointer": "crates/rex-backend-jsonschema/src/lib.rs:collect_rejects_duplicate_class_names"
         }
       ],
-      "trigger": "the next creusot-std/Creusot toolchain bump — its release notes are the trigger; move the mirror in-crate when the wire types translate",
+      "trigger": "the next creusot-std/Creusot toolchain bump — its release notes are the trigger: watch them for the `rex-ir` wire types translating, then move the mirror in-crate",
       "review": "2027-05-14",
       "mirror": {
         "of": "rex-backend-jsonschema `wire_defs`",
@@ -465,6 +465,12 @@
     }
   ],
   "hold": [
+    {
+      "item": "nightly-CI proof job (#88)",
+      "reason": "closed as a **documented non-goal**, not delivered: no proof workflow exists in `.github/workflows/` (only `ci.yml`), and prover availability and cost keep proofs local and per-release. The sanctioned form of proof automation is epic P6/T3's per-release proof-log artifact (`verif/` manifest + why3find summary) referenced by the release receipt — a nightly prover job would need its own go/no-go",
+      "trigger": "the next release tag — where the P6/T3 per-release proof-log artifact would be produced",
+      "review": "2027-02-13"
+    },
     {
       "item": "`creusot-std` 0.14.0 → 0.15.0",
       "reason": "proofs are toolchain-coupled: a stdlib bump needs the matching Creusot upgrade, a full `cargo creusot -p rex-verify` re-run, and a register review; held through v0.2 per the #173 plan",
