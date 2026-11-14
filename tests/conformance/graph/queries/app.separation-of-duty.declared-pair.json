@@ -1,0 +1,27 @@
+{
+  "formatVersion": 1,
+  "query": "separationOfDuty",
+  "results": [
+    {
+      "application": "app.actor",
+      "pair": [
+        "capability:app.actor#App.ReadTicket",
+        "capability:app.actor#App.ResolveTicket"
+      ],
+      "declared": true,
+      "holders": [
+        {
+          "capability": "capability:app.actor#App.ReadTicket",
+          "actors": [
+            "actor:app.actor#App.Agent",
+            "actor:app.actor#App.Customer",
+            "actor:app.actor#App.Manager"
+          ]
+        },
+        {
+          "capability": "capability:app.actor#App.ResolveTicket"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+// The interaction half of the fixture: a queue that navigates to an intake
+// form, whose action binds to the design's `raiseRefund` operation by
+// case-insensitive name. No pattern library is instantiated — the fixture is
+// self-contained.
+import "app.mox";
+
+view "Inbox" {
+    params { tickets: Ticket };
+    label "Ticket Inbox";
+
+    component "queue" {
+        type: list;
+        data: Ticket;
+        fields: [ticketNo, title, refundCents];
+
+        on select(row) -> navigate("Intake", {
+            ticket: row.ticketNo
+        });
+    }
+}
+
+view "Intake" {
+    params { ticket: Ticket, agent: User };
+    label "Refund Intake";
+
+    component "intake" {
+        type: form;
+        data: Ticket;
+        if refundCents > 0;
+
+        on raise(values) -> action("RaiseRefund");
+    }
+}
+
+action "RaiseRefund" {
+    target: Ticket;
+}

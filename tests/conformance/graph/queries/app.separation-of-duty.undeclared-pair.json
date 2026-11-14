@@ -1,0 +1,43 @@
+{
+  "formatVersion": 1,
+  "query": "separationOfDuty",
+  "pair": [
+    "capability:app.actor#App.ApproveRefund",
+    "capability:app.actor#App.RaiseRefund"
+  ],
+  "results": [
+    {
+      "application": "app.actor",
+      "pair": [
+        "capability:app.actor#App.ApproveRefund",
+        "capability:app.actor#App.RaiseRefund"
+      ],
+      "declared": false,
+      "holders": [
+        {
+          "capability": "capability:app.actor#App.ApproveRefund",
+          "actors": [
+            "actor:app.actor#App.Finance",
+            "actor:app.actor#App.Manager"
+          ]
+        },
+        {
+          "capability": "capability:app.actor#App.RaiseRefund",
+          "actors": [
+            "actor:app.actor#App.Agent",
+            "actor:app.actor#App.Manager"
+          ]
+        }
+      ],
+      "violations": [
+        {
+          "actor": "actor:app.actor#App.Manager",
+          "evidence": [
+            "permits capability:app.actor#App.ApproveRefund",
+            "permits capability:app.actor#App.RaiseRefund"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,81 @@
+{
+  "formatVersion": 1,
+  "query": "deadCapabilities",
+  "results": [
+    {
+      "application": "app.actor",
+      "capability": "capability:app.actor#App.ApproveRefund",
+      "name": "App.ApproveRefund",
+      "status": "alive",
+      "holders": [
+        "actor:app.actor#App.Finance",
+        "actor:app.actor#App.Manager"
+      ]
+    },
+    {
+      "application": "app.actor",
+      "capability": "capability:app.actor#App.EscalateRefund",
+      "name": "App.EscalateRefund",
+      "status": "latent"
+    },
+    {
+      "application": "app.actor",
+      "capability": "capability:app.actor#App.RaiseRefund",
+      "name": "App.RaiseRefund",
+      "status": "alive",
+      "holders": [
+        "actor:app.actor#App.Agent",
+        "actor:app.actor#App.Manager"
+      ]
+    },
+    {
+      "application": "app.actor",
+      "capability": "capability:app.actor#App.ReadTicket",
+      "name": "App.ReadTicket",
+      "status": "alive",
+      "holders": [
+        "actor:app.actor#App.Agent",
+        "actor:app.actor#App.Customer",
+        "actor:app.actor#App.Manager"
+      ]
+    },
+    {
+      "application": "app.actor",
+      "capability": "capability:app.actor#App.ResolveTicket",
+      "name": "App.ResolveTicket",
+      "status": "dead",
+      "blockedBy": [
+        "actor:app.actor#App.Finance"
+      ]
+    },
+    {
+      "application": "app.actor",
+      "capability": "capability:app.actor#App.UpdateTicket",
+      "name": "App.UpdateTicket",
+      "status": "alive",
+      "holders": [
+        "actor:app.actor#App.Agent"
+      ]
+    },
+    {
+      "application": "other.actor",
+      "capability": "capability:other.actor#Audit.PurgeAudit",
+      "name": "Audit.PurgeAudit",
+      "status": "unknown",
+      "unknownActors": [
+        "actor:other.actor#Audit.Auditor",
+        "actor:other.actor#Audit.AuditorAgent"
+      ]
+    },
+    {
+      "application": "other.actor",
+      "capability": "capability:other.actor#Audit.ReadAudit",
+      "name": "Audit.ReadAudit",
+      "status": "unknown",
+      "unknownActors": [
+        "actor:other.actor#Audit.Auditor",
+        "actor:other.actor#Audit.AuditorAgent"
+      ]
+    }
+  ]
+}

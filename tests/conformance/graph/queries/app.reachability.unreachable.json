@@ -1,0 +1,21 @@
+{
+  "formatVersion": 1,
+  "query": "reachability",
+  "from": "actor:app.actor#App.Agent",
+  "to": "feature:app.mox#nz.example.graph.Invoice.amount",
+  "results": [
+    {
+      "application": "app.actor",
+      "reachable": false,
+      "starts": [
+        "capability:app.actor#App.RaiseRefund",
+        "capability:app.actor#App.ReadTicket",
+        "capability:app.actor#App.UpdateTicket"
+      ],
+      "startClasses": [
+        "class:app.mox#nz.example.graph.Ticket"
+      ],
+      "target": "class:app.mox#nz.example.graph.Invoice"
+    }
+  ]
+}

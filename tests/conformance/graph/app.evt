@@ -1,0 +1,29 @@
+// The event contracts the fixture's decision model emits and its use case
+// carries: the integration vocabulary the impact closures reach.
+import "app.mox"
+
+event TicketRaised version "1.0.0" {
+    ticketNo: String;
+    title: String;
+    state: TicketState;
+    internal: boolean;
+}
+
+event RefundRequested version "1.0.0" {
+    ticketNo: String;
+    refundCents: int;
+}
+
+event RefundApproved version "1.0.0" {
+    ticketNo: String;
+    refundCents: int;
+}
+
+channel tickets {
+    publishes TicketRaised;
+}
+
+channel refunds {
+    publishes RefundRequested;
+    publishes RefundApproved;
+}

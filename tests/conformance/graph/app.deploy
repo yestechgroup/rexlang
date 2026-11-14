@@ -1,0 +1,47 @@
+// The deployment half of the fixture: binds the design module and the
+// interaction flow into one logical application and deploys it, so an
+// impact closure from a capability reaches the deploy components and their
+// deployments.
+import "app.ddd"
+import "app.ifml"
+
+application GraphDesk {
+    component api: api {
+        design "app.ddd#desk"
+        scaling: autoscaled
+        port: 18083
+        env {
+            LOG_LEVEL = "info"
+        }
+    }
+    component web: frontend {
+        flow "app.ifml"
+        entrypoint: "src/inbox.ts"
+    }
+    component db: database {
+        storage: managed
+    }
+    component refund_approval_service: api {}
+    connects web -> api
+    connects api -> db
+}
+
+profile production_k8s {
+    target: kubernetes
+    defaults {
+        api.runtime: container
+        api.replicas: 3
+        db.engine: postgres
+    }
+    mappings {
+        api -> kubernetes.deployment
+        database -> external.postgres
+    }
+}
+
+deployment production for GraphDesk {
+    use production_k8s
+    configure {
+        api.replicas: 4
+    }
+}

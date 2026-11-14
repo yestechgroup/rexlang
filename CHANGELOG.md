@@ -11,8 +11,93 @@ evidence chain becomes mechanical. No grammar, IR, artifact, or wire-format
 change — the receipts are a new document kind, and every existing golden is
 untouched.
 
+"The unified semantic graph" (epic #194): every surface now compiles into
+**one** queryable artifact — applications, nodes, and edges — that impact
+analysis, `graph query`, the cross-policy analytics, the editor's
+cross-surface navigation, and (in later milestones) the MCP server and
+Studio all consume. The graph is a new *additive, independently versioned*
+wire artifact (`rex_ir::graph::GraphModel`, marker
+`GRAPH_MODEL_FORMAT_VERSION`): no existing artifact, golden, or emitted
+byte moves.
+
 ### Added
 
+- **`rex_ir::graph::GraphModel`** (issue #239, the semantic-graph slice
+  1/8): the unified, versioned semantic-graph wire artifact — applications,
+  nodes (`class`, `serviceOperation`, `decision`, `event`, `view`,
+  `planItem`, …), and edges (`imports`, `permits`, `binds`, `emits`,
+  `executes`, `deploys`, …). Node and edge kinds are an **open,
+  string-typed vocabulary** so the artifact can grow additively before the
+  v0.7 freeze; an empty graph serializes as exactly `{"formatVersion":1}`,
+  unknown kinds round-trip, and there is no `rexVersion` stamp (goldens
+  never churn on release bumps). Normative tables in `docs/GRAPH.md`.
+- **`rex_driver::graph` + `rex_driver::applications`** (issue #241, slice
+  2/8): the pure post-compile builder over all nine surfaces — `.mox`,
+  `.actor`, `.ddd` (state machines included), `.evt`, `.dmn`, `.ifml`,
+  `.deploy`, `.uc`, `.cmmn` — with cross-surface resolution mirroring the
+  compiler (union-wide capability/actor pools, the ASCII-case-insensitive
+  `action → operation` rule, ambiguity flagged, unresolved references emit
+  **no** edge). The import-connected-application union-find moved out of
+  the CLI into the driver and `check`'s integrity pass now consumes it
+  (its diagnostics are byte-identical).
+- **`GraphIndex` + `rexlang graph query`** (issue #242, slice 4/8): the
+  artifact-only query surface — `node`, `list`, `affected-by`,
+  `dependencies` — each in one versioned envelope, running from a committed
+  `graph.json` with no sources and no recompile. `rexlang artifact check`
+  classifies `GraphModel` artifacts (before the deploy rule) and names
+  violations precisely.
+- **Spanned `SurfaceIndex` navigation indexes for all seven artifact
+  surfaces** (issues #245/#244, slices 6/8 and 7/8): `.actor`, `.ddd`,
+  `.evt`, `.deploy`, `.uc`, `.cmmn`, `.dmn` each publish definitions and
+  references with byte spans, and every definition's `(kind, name)` **is**
+  the graph builder's node key — pinned by the anti-drift equality test
+  over all nine surfaces. The `.mox` index moved verbatim into
+  `navigation/mox.rs` (behavior frozen).
+- **`rexlang graph`** (issue #240, the semantic-graph slice 3/8): compile a
+  tree of model files into **one** deterministic, versioned
+  `rex_ir::graph::GraphModel` — the import-connected applications, the full
+  node/edge vocabulary, and the semantic edges between every surface —
+  printed to stdout or `-o`. Directories enter project mode like
+  `check`/`build`; display paths are root-relative POSIX (base = the input
+  roots' common ancestor), so the artifact never carries a machine path.
+  Emission is best-effort over the compiling subset (the `build` precedent).
+  The pipeline's `SurfaceOutcome` now carries each file's typed artifact and
+  resolved imports (and `IfmlInputs` its imports), so the graph re-reads and
+  re-compiles nothing; `check`/`ir`/`build` output is unchanged. Pinned by
+  `examples/artifacts/examples.graph.json` (the whole `examples/` tree, base
+  `examples/`) and its `crates/rex-cli/tests/cli/graph.rs` suite.
+- **`rexlang graph query … separation-of-duty|monotonicity|dead-capabilities|reachability`**
+  (issue #246, the semantic-graph slice 5/8): the four cross-policy analytics
+  run on the artifact **alone** and answer in the same versioned envelope as
+  the structural queries — per application (unrelated applications never
+  cross-check), conservative may-analysis (`when` guards are satisfiable), and
+  an explicit `unknown` for opaque `cedar` grants, which never become a
+  definite yes or no. `--fail-on-findings` exits `1` only on a definite
+  finding (a violated pair, a monotonicity gap, a `dead` capability, an
+  unreachable target), so CI can gate without making a policy finding a
+  language error. The compiler's `lineage`/`effective_permits` semantics are
+  rederived from the artifact (`crates/rex-driver/src/graph/analytics.rs`).
+  Pinned by the self-contained `tests/conformance/graph/` fixture — `app.*`
+  across all nine surfaces plus the unrelated `other.*` application (its
+  `cedar` policy is the `unknown` case) — with `app.graph.json` and one
+  `queries/app.*` golden per analytic.
+- **Cross-surface LSP navigation over the graph index** (issue #243, the
+  semantic-graph slice 8/8): every surface now answers
+  definition/references/hover/document-symbols from one semantic index. The
+  server builds a **graph snapshot** from the open document, its
+  open-document siblings, and the disk siblings of its directory (open
+  buffers win over disk; a non-compiling sibling contributes nothing),
+  resolving names with the graph's `GraphIndex` and landing on spans from
+  each file's `SurfaceIndex` — `.actor`→`.mox` class, `.ddd` capability →
+  `.actor`, `invokes` → `.dmn`, `emits` → `.evt`, `.evt` consumer →
+  `.deploy` component, `.ifml` `requires:`/`action(...)` → capability /
+  bound design operation, deploy bindings → module, `.uc`/.cmmn` →
+  designed operation, `.dmn` emits → event, and inline `.mox` actors. Rename
+  is declaration-owned and document-scoped: a reference to another file's
+  declaration is refused with a message naming the owner. `NavigationIndex`
+  (`.mox`) and `IfmlIndex` (`.ifml`) gained `SurfaceIndex` projections, and
+  the anti-drift equality test now covers all nine surfaces. No artifact,
+  wire-format, or golden change.
 - **`rex-evidence`**, the evidence-spine crate (issue #203): the
   machine-readable proof-obligation register's data model, canonical parse,
   semantic validation, and markdown rendering. Pure — serde/serde_json only,

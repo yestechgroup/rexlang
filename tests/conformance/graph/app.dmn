@@ -1,0 +1,63 @@
+// The decision half of the fixture: the refund assessment the case consults
+// and the approval event it emits. DMN never depends on the design — its
+// imports are the domain and the event contracts only.
+import "app.mox";
+import "app.evt";
+
+decision_model GraphDecisions {
+    namespace nz.example.graph.decisions;
+    inputs {
+        ticket: Ticket;
+        requested_cents: int;
+    }
+    knowledge {
+        /// The narrative the desk records for a refund decision.
+        model assess_refund {
+            parameters {
+                eligible: boolean;
+                amount: int;
+            }
+            output string;
+            logic expression "if eligible then \"approved at the desk\" else \"refund unavailable\""
+        }
+    }
+    decisions {
+        /// Whether the desk can raise the requested refund on this ticket.
+        decision RefundEligibility {
+            output boolean;
+            logic expression "ticket.needsRefund and requested_cents > 0"
+        }
+        /// The composed assessment recorded against the ticket.
+        decision RefundAssessment {
+            outputs {
+                eligible: boolean;
+                reason: string;
+            }
+            logic invoke assess_refund {
+                eligible: "RefundEligibility";
+                amount: "requested_cents";
+            }
+            emits {
+                RefundApproved when "eligible";
+            }
+        }
+    }
+    requirements {
+        information {
+            RefundEligibility requires ticket;
+            RefundEligibility requires requested_cents;
+            RefundAssessment requires RefundEligibility;
+        }
+        knowledge {
+            RefundAssessment invokes assess_refund;
+        }
+    }
+    services {
+        /// The case-facing contract: assess one refund request.
+        service AssessRefund {
+            inputs { ticket requested_cents }
+            outputs { RefundAssessment }
+            encapsulates { RefundEligibility RefundAssessment assess_refund }
+        }
+    }
+}

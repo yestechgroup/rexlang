@@ -1,0 +1,44 @@
+// The design half of the fixture: every granted capability is carried by a
+// service operation or search (the coverage rule), and the CLI action
+// `RaiseRefund` binds to `raiseRefund` by case-insensitive name, so the
+// impact closure crosses the `.ifml` boundary.
+import "app.mox";
+
+application GraphDesk {
+    base nz.example.graph
+    module desk {
+        /// Triages and resolves support tickets.
+        service TicketService {
+            inject TicketRepository;
+            inject TicketSearch;
+            boolean readTicket(String ticketNo) capability ReadTicket;
+            boolean updateTicket(String ticketNo) capability UpdateTicket;
+            boolean resolveTicket(String ticketNo) capability ResolveTicket;
+            Ticket raiseTicket(String title) emits TicketRaised;
+            boolean raiseRefund(String ticketNo, int cents) capability RaiseRefund emits RefundRequested;
+            boolean approveRefund(String ticketNo, int cents, User approver) capability ApproveRefund emits RefundApproved;
+            Ticket[] listTickets();
+        }
+        entity Ticket scaffold cache repository TicketRepository {
+            findById;
+            findAll;
+            save;
+            delete;
+        }
+        /// Full-text search over the ticket queue.
+        search TicketSearch {
+            entity Ticket
+            text {
+                title boost 3
+            }
+            filters {
+                state
+                internal
+            }
+            sort {
+                title
+            }
+            capability ReadTicket
+        }
+    }
+}

@@ -8,6 +8,7 @@
 use super::*;
 
 use serde_json::json;
+use std::str::FromStr;
 use tower::Service;
 use tower_lsp_server::jsonrpc;
 use tower_lsp_server::LspService;
@@ -132,4 +133,34 @@ async fn goto_definition_on_unknown_type_or_keyword_is_null() {
 async fn goto_definition_for_a_closed_document_is_null() {
     let (mut service, _socket) = initialized_service().await;
     assert!(goto_definition_at(&mut service, 0, 0).await.is_none());
+}
+
+#[tokio::test]
+async fn goto_definition_on_an_unlisted_extension_is_null() {
+    // A document outside every surface is not part of any graph snapshot:
+    // no `.mox` index is built for it and no bogus location is guessed.
+    let (mut service, mut socket) = initialized_service().await;
+    let other =
+        tower_lsp_server::ls_types::Uri::from_str("file:///workspace/data.json").expect("a uri");
+    open_at(&mut service, &other, "{\"name\": \"shelf\"}\n").await;
+    drain_socket(&mut socket).await;
+
+    let response = service
+        .call(
+            jsonrpc::Request::build("textDocument/definition")
+                .params(json!({
+                    "textDocument": {"uri": other.as_str()},
+                    "position": {"line": 0, "character": 3},
+                }))
+                .id(101)
+                .finish(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let (_, body) = response.into_parts();
+    assert!(
+        body.expect("gotoDefinition must not error").is_null(),
+        "an unlisted extension has no definitions"
+    );
 }

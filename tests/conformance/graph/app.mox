@@ -1,0 +1,54 @@
+// The analytics conformance fixture's domain: a support ticket that
+// contains notes (the containment reachability walks), a user that refers
+// tickets (the reference edge), and an unrelated rooted type (the
+// unreachable negative case). The second, unrelated application in this
+// directory (other.mox/other.actor) exercises the per-application rule and
+// the opaque `cedar` outcome; it shares no import with this file.
+package nz.example.graph
+
+enum TicketState {
+    Open as "open" = 0
+    InProgress as "in_progress" = 1
+    Resolved as "resolved" = 2
+}
+
+class User {
+    id readonly String userId
+    String name
+    boolean active
+    refers Ticket[] assignedTickets opposite assignee
+}
+
+class Ticket {
+    id readonly String ticketNo
+    String title
+    boolean internal
+    int refundCents
+    TicketState state
+    contains Note[] notes opposite ticket
+    refers User[0..1] assignee opposite assignedTickets
+    derived boolean needsRefund {
+        expr { refundCents > 0 }
+    }
+    op boolean raiseRefund(int cents) {
+        expr { refundCents + cents <= 5000 }
+    }
+}
+
+class Note {
+    id readonly String noteId
+    String body
+    boolean internalNotes
+    container Ticket ticket opposite notes
+}
+
+class RefundDecision {
+    id readonly String decisionId
+    readonly int cents
+    readonly boolean approved
+}
+
+class Invoice {
+    id readonly String invoiceId
+    int amount
+}

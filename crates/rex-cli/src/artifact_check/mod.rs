@@ -4,6 +4,7 @@
 //! Third-party backends consume [`rex_ir::Model`] / [`rex_ir::ActorModel`]
 //! / [`rex_ir::ddd::DddModel`] / [`rex_ir::events::EventModel`]
 //! / [`rex_ir::deploy::DeployModel`] / [`rex_ir::usecases::UseCaseModel`]
+//! / [`rex_ir::graph::GraphModel`]
 //! (or read the serialized artifact directly) and emit canonical instance
 //! JSON. This module checks the *format* invariants of those documents
 //! without needing the originating model:
@@ -11,8 +12,8 @@
 //! * the root shape matches a known artifact kind (IR artifact, standalone
 //!   actor-policy artifact, DDD design artifact, event-contract artifact,
 //!   deployment artifact, use-case artifact, decision-model artifact,
-//!   case-management artifact, interaction-flow artifact, or canonical
-//!   instance),
+//!   case-management artifact, interaction-flow artifact, semantic graph
+//!   artifact, or canonical instance),
 //! * `formatVersion` is present and supported — a higher version is rejected
 //!   with an error naming it, mirroring the readers' version gate
 //!   ([`rex_ir::IrError::UnsupportedFormatVersion`]),
@@ -41,7 +42,7 @@ mod kinds;
 use instances::check_instance;
 use kinds::{
     check_actor_model, check_cmmn_model, check_ddd_model, check_deploy_model, check_dmn_model,
-    check_event_model, check_ifml_model, check_ir_model, check_usecase_model,
+    check_event_model, check_graph_model, check_ifml_model, check_ir_model, check_usecase_model,
 };
 
 /// The instance `formatVersion` this tool reads
@@ -79,6 +80,11 @@ pub enum ArtifactKind {
     /// A standalone case-management artifact (`rex_ir::cmmn::CmmnModel`):
     /// root carries a `cases` array (omitted when empty).
     CmmnModel,
+    /// A semantic graph artifact (`rex_ir::graph::GraphModel`): root carries
+    /// a `nodes` array (omitted when empty). The graph also carries an
+    /// `applications` array — the deployment artifact's lookalike key — so
+    /// its rule runs **before** the deployment rule.
+    GraphModel,
     /// A standalone interaction-flow artifact
     /// (`rex_ir::ifml::IfmlModel`): root carries a `views`, `domains`,
     /// `actions`, `commands`, or `imports` entry (all omitted when
@@ -140,25 +146,33 @@ pub fn check_str(path: &str, text: &str) -> Result<ArtifactKind, Vec<String>> {
 ///    runs *before* the actor fallback (the keys exist on no other
 ///    artifact), and after the DDD rule only for documentation symmetry —
 ///    the key sets are disjoint, so rules 5 and 6 can never both match.
-/// 7. **`applications`/`profiles`/`deployments` → deployment artifact.** A
+/// 7. **`nodes` → semantic graph artifact.** A `formatVersion`-bearing root
+///    that carries a `nodes` array validates as an
+///    [`ArtifactKind::GraphModel`]. This check runs **before** the
+///    deployment rule because the graph also carries an `applications`
+///    array: `nodes` exists on no other artifact root, so it claims the
+///    document first (the classifier ordering is load-bearing, not
+///    documentation symmetry).
+/// 8. **`applications`/`profiles`/`deployments` → deployment artifact.** A
 ///    `formatVersion`-bearing root that carries any of those arrays
-///    validates as an [`ArtifactKind::DeployModel`]. The keys are disjoint
-///    from every earlier rule (`application` on a DDD design is a singular
-///    object, not these plural arrays), so the ordering is documentation
-///    symmetry again.
-/// 8. **`useCases` → use-case artifact.** A `formatVersion`-bearing root
+///    validates as an [`ArtifactKind::DeployModel`] — **unless** rule 7
+///    already claimed it (a graph artifact's `applications` look-alike). The
+///    keys are disjoint from every earlier rule (`application` on a DDD
+///    design is a singular object, not these plural arrays), so the ordering
+///    is documentation symmetry again.
+/// 9. **`useCases` → use-case artifact.** A `formatVersion`-bearing root
 ///    that carries that array validates as an
 ///    [`ArtifactKind::UseCaseModel`]. The key exists on no other artifact,
 ///    so the ordering is documentation symmetry once more.
-/// 9. **`cases` → case artifact.** A `formatVersion`-bearing root that
-///    carries that array validates as an [`ArtifactKind::CmmnModel`] —
-///    same disjointness, same symmetry.
-/// 10. **`blocks` or exactly `{"formatVersion": N}` → actor artifact.** The
+/// 10. **`cases` → case artifact.** A `formatVersion`-bearing root that
+///     carries that array validates as an [`ArtifactKind::CmmnModel`] —
+///     same disjointness, same symmetry.
+/// 11. **`blocks` or exactly `{"formatVersion": N}` → actor artifact.** The
 ///     canonical block-less [`rex_ir::ActorModel`] is exactly the version
 ///     marker, and the marker alone can only be an ActorModel (a Model always
 ///     emits `packages`; a DddModel always carries the design keys), so the
 ///     minimal-empty document falls here.
-/// 11. **Anything else** is rejected as `unrecognized artifact`.
+/// 12. **Anything else** is rejected as `unrecognized artifact`.
 ///
 /// Known limitations, same root cause: the minimal-empty artifact is exactly
 /// `{"formatVersion":1}` for several kinds, and shape-sniffing cannot tell
@@ -174,8 +188,12 @@ pub fn check_str(path: &str, text: &str) -> Result<ArtifactKind, Vec<String>> {
 /// - [`rex_ir::dmn::DmnModel`] is empty-form-collided the same way (rule
 ///   10; only a non-empty one reaches rule 3).
 /// - [`rex_ir::cmmn::CmmnModel`] is empty-form-collided the same way (rule
-///   10; only a non-empty one reaches rule 9's `cases` check first).
-/// - [`rex_ir::ifml::IfmlModel`] is empty-form-collided (rule 10; only a
+///   11; only a non-empty one reaches rule 10's `cases` check first).
+/// - [`rex_ir::graph::GraphModel`] is empty-form-collided the same way (rule
+///   11; only a non-empty one — a graph with at least one node — reaches
+///   rule 7's `nodes` check first), the shared limitation with every other
+///   empty-form artifact.
+/// - [`rex_ir::ifml::IfmlModel`] is empty-form-collided (rule 11; only a
 ///   non-empty one reaches rule 4) and module-only-collided: an IFML model
 ///   carrying *only* `modules` shape-matches the DDD design keys and
 ///   classifies as a DddModel (rule 5). Any other IFML key claims it.
@@ -257,6 +275,18 @@ pub fn check(text: &str) -> Result<ArtifactKind, Vec<String>> {
     {
         return check_event_model(root);
     }
+    // A semantic-graph artifact carries a `nodes` array — a key no other
+    // artifact root has — so its check runs **before** the deployment rule:
+    // the graph also carries an `applications` array, which is the
+    // deployment artifact's lookalike key, and the graph rule must claim the
+    // document first. The empty graph serializes as exactly
+    // `{"formatVersion":1}` and falls through to the actor fallback like the
+    // other empty forms.
+    if root.get("formatVersion").is_some_and(Value::is_u64)
+        && root.get("nodes").is_some_and(Value::is_array)
+    {
+        return check_graph_model(root);
+    }
     // A deployment artifact carries an `applications`, `profiles`, or
     // `deployments` array — keys no other artifact has (`application` on a
     // DDD design is a singular *object*, not these plural arrays) — so its
@@ -309,6 +339,7 @@ pub fn check(text: &str) -> Result<ArtifactKind, Vec<String>> {
          DDD design artifacts \"application\"/\"modules\", \
          event artifacts \"events\"/\"channels\"/\"subscriptions\", \
          deployment artifacts \"applications\"/\"profiles\"/\"deployments\", \
+         semantic graph artifacts \"nodes\", \
          use-case artifacts \"useCases\", \
          decision artifacts \"decisions\", \
          instances declare $type {:?})",

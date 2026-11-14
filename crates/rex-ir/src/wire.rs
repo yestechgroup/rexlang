@@ -3,7 +3,8 @@
 //! Every artifact root ([`Model`], [`ActorModel`], [`ddd::DddModel`],
 //! [`events::EventModel`], [`deploy::DeployModel`],
 //! [`usecases::UseCaseModel`], [`ifml::IfmlModel`],
-//! [`ifml_manifest::IfmlManifest`], [`cmmn::CmmnModel`], [`dmn::DmnModel`])
+//! [`ifml_manifest::IfmlManifest`], [`cmmn::CmmnModel`], [`dmn::DmnModel`],
+//! [`graph::GraphModel`])
 //! carries a `format_version` field and implements
 //! [`VersionedArtifact`]. The serialize/version-gate plumbing is written
 //! once here, as the trait's default methods: each root's public inherent
@@ -205,6 +206,7 @@ pub(crate) mod tests {
     use crate::deploy::{DeployModel, DEPLOY_MODEL_FORMAT_VERSION};
     use crate::dmn::{DmnModel, DMN_MODEL_FORMAT_VERSION};
     use crate::events::{EventModel, EVENT_MODEL_FORMAT_VERSION};
+    use crate::graph::{GraphModel, GRAPH_MODEL_FORMAT_VERSION};
     use crate::ifml::{IfmlModel, IFML_MODEL_FORMAT_VERSION};
     use crate::ifml_manifest::{IfmlManifest, IFML_MANIFEST_FORMAT_VERSION};
     use crate::usecases::{UseCaseModel, USE_CASE_MODEL_FORMAT_VERSION};
@@ -237,6 +239,8 @@ pub(crate) mod tests {
         assert_eq!(cmmn.format_version, CMMN_MODEL_FORMAT_VERSION);
         let dmn: DmnModel = from_json("{\"formatVersion\":1}").unwrap();
         assert_eq!(dmn.format_version, DMN_MODEL_FORMAT_VERSION);
+        let graph: GraphModel = from_json("{\"formatVersion\":1}").unwrap();
+        assert_eq!(graph.format_version, GRAPH_MODEL_FORMAT_VERSION);
 
         for json in ["{}", "{\"formatVersion\":2}"] {
             rejects_version::<Model>(json);
@@ -249,6 +253,7 @@ pub(crate) mod tests {
             rejects_version::<IfmlManifest>(json);
             rejects_version::<CmmnModel>(json);
             rejects_version::<DmnModel>(json);
+            rejects_version::<GraphModel>(json);
         }
     }
 

@@ -201,6 +201,141 @@ pub(super) fn check_dmn_model(
     )
 }
 
+/// Validates a semantic graph artifact: the version gate mirrors
+/// [`rex_ir::graph::GraphModel::from_json`], and the three collections carry
+/// their identity fields — applications an `id`, nodes a non-empty `id`
+/// (plus `kind`, `name`, `file`, and `application`), edges non-empty `from`
+/// and `to` (plus `kind`). Optional string arrays (`files`, `packages`) and
+/// the `attributes` maps are shape-checked too.
+pub(super) fn check_graph_model(
+    root: &serde_json::Map<String, Value>,
+) -> Result<ArtifactKind, Vec<String>> {
+    let mut errors = Vec::new();
+    if let Some(error) = format_version_error(
+        root,
+        rex_ir::graph::GRAPH_MODEL_FORMAT_VERSION,
+        "semantic graph artifact",
+    ) {
+        errors.push(error);
+    }
+    check_graph_objects(
+        root.get("applications"),
+        "applications",
+        &["id"],
+        &mut errors,
+    );
+    check_string_arrays(
+        root.get("applications"),
+        "applications",
+        &["files", "packages"],
+        &mut errors,
+    );
+    check_graph_objects(
+        root.get("nodes"),
+        "nodes",
+        &["id", "kind", "name", "file", "application"],
+        &mut errors,
+    );
+    check_graph_attributes(root.get("nodes"), "nodes", &mut errors);
+    check_graph_objects(
+        root.get("edges"),
+        "edges",
+        &["from", "to", "kind"],
+        &mut errors,
+    );
+    check_graph_attributes(root.get("edges"), "edges", &mut errors);
+    scan_snake_case_keys(&Value::Object(root.clone()), &mut errors);
+    finish(ArtifactKind::GraphModel, errors)
+}
+
+/// Every entry of an optional graph collection must be an object carrying
+/// each required field as a non-empty string.
+fn check_graph_objects(
+    array: Option<&Value>,
+    key: &str,
+    required: &[&str],
+    errors: &mut Vec<String>,
+) {
+    let Some(value) = array else {
+        return;
+    };
+    let Some(items) = value.as_array() else {
+        errors.push(format!("{key:?} must be an array, found {value}"));
+        return;
+    };
+    for (index, item) in items.iter().enumerate() {
+        let Some(object) = item.as_object() else {
+            errors.push(format!("{key}[{index}] must be an object, found {item}"));
+            continue;
+        };
+        for field in required {
+            match object.get(*field) {
+                None => errors.push(format!("{key}[{index}] is missing \"{field}\"")),
+                Some(value) if value.as_str().is_none_or(str::is_empty) => errors.push(format!(
+                    "{key}[{index}] \"{field}\" must be a non-empty string, found {value}"
+                )),
+                _ => {}
+            }
+        }
+    }
+}
+
+/// The optional `files`/`packages` arrays of an application must be arrays
+/// of strings.
+fn check_string_arrays(
+    array: Option<&Value>,
+    key: &str,
+    fields: &[&str],
+    errors: &mut Vec<String>,
+) {
+    let Some(Value::Array(items)) = array else {
+        // A non-array has already been reported by [`check_graph_objects`].
+        return;
+    };
+    for (index, item) in items.iter().enumerate() {
+        let Some(object) = item.as_object() else {
+            continue;
+        };
+        for field in fields {
+            let Some(value) = object.get(*field) else {
+                continue;
+            };
+            match value.as_array() {
+                None => errors.push(format!("{key}[{index}] \"{field}\" must be an array")),
+                Some(entries) if entries.iter().any(|entry| entry.as_str().is_none()) => errors
+                    .push(format!(
+                        "{key}[{index}] \"{field}\" must be an array of strings"
+                    )),
+                Some(_) => {}
+            }
+        }
+    }
+}
+
+/// An optional `attributes` map must map strings to strings.
+fn check_graph_attributes(array: Option<&Value>, key: &str, errors: &mut Vec<String>) {
+    let Some(Value::Array(items)) = array else {
+        return;
+    };
+    for (index, item) in items.iter().enumerate() {
+        let Some(object) = item.as_object() else {
+            continue;
+        };
+        let Some(value) = object.get("attributes") else {
+            continue;
+        };
+        match value.as_object() {
+            None => errors.push(format!("{key}[{index}] \"attributes\" must be an object")),
+            Some(entries) if entries.values().any(|entry| entry.as_str().is_none()) => errors.push(
+                format!("{key}[{index}] \"attributes\" must map strings to strings"),
+            ),
+            Some(_) => {}
+        }
+    }
+}
+
+/// The shared result constructor: the kind when no violation was found,
+/// every violation otherwise.
 pub(super) fn finish(kind: ArtifactKind, errors: Vec<String>) -> Result<ArtifactKind, Vec<String>> {
     if errors.is_empty() {
         Ok(kind)

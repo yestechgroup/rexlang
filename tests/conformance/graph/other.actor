@@ -1,0 +1,19 @@
+// The second application's policy: no import path to app.actor, so its
+// capability names never pool with the support policy's (the per-application
+// rule). `Auditor` carries a bare `cedar { … }` entry — an opaque grant — so
+// `PurgeAudit` (declared, never granted) is `unknown`: the artifact cannot
+// decide, and the tool must not call it latent or dead.
+import "other.mox"
+
+actors Audit {
+    actor Auditor
+    agent AuditorAgent extends Auditor
+    capability ReadAudit on AuditEntry
+    capability PurgeAudit on AuditEntry
+
+    grant Auditor {
+        cedar {
+            permit(principal is Audit::Auditor, action, resource is Audit::AuditEntry);
+        }
+    }
+}

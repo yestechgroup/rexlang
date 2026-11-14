@@ -28,6 +28,16 @@
 //!   output directory defaults to `target/rex`). Directories enter project
 //!   mode like `check`; exits `1` when any file fails, while compiling
 //!   files still emit their artifacts.
+//! * `rexlang graph <paths>... [-o <file>]` — compile every input and emit
+//!   **one** semantic graph artifact spanning the whole tree (the
+//!   import-connected applications, their nodes, and the semantic edges
+//!   between them) as JSON to stdout or a file. Directories enter project
+//!   mode like `check`/`build`; display paths are relative to the input
+//!   roots' common ancestor, so the artifact never carries a machine path.
+//!   Exits `1` when any file fails, while the compiling subset still emits
+//!   (the `build` precedent). `rexlang graph query <graph.json> <subcommand>`
+//!   runs the structural queries (`node`, `list`, `affected-by`,
+//!   `dependencies`) on a committed artifact alone (see docs/GRAPH.md).
 //! * `rexlang manifest <file.ifml> [-o <out>]` — compile one `.ifml`
 //!   interaction flow, check it, and export its control/route manifest
 //!   (routes, controls, edges, actions, commands) as JSON to stdout or a
@@ -135,6 +145,30 @@ enum Command {
         /// file).
         #[arg(short, long, value_name = "DIR", default_value = "target/rex")]
         out: PathBuf,
+    },
+    /// Compile every input and emit one semantic graph artifact spanning the
+    /// whole tree: the import-connected applications, every surface's nodes,
+    /// and the semantic edges between them (see docs/GRAPH.md). Directories
+    /// enter project mode like `check`/`build`, and display paths are
+    /// relative to the input roots' common ancestor. Exits `1` when any file
+    /// fails; the compiling subset still emits.
+    ///
+    /// `rexlang graph query <graph.json> <subcommand>` runs the structural
+    /// queries (`node`, `list`, `affected-by`, `dependencies`) and the
+    /// cross-policy analytics (`separation-of-duty`, `monotonicity`,
+    /// `dead-capabilities`, `reachability`) on a committed artifact instead —
+    /// no sources, no recompile. Clap matches the subcommand first, so a
+    /// directory literally named `query` must be given as `./query`.
+    Graph {
+        /// Files or directories to compile.
+        #[arg(value_name = "PATHS")]
+        paths: Vec<PathBuf>,
+        /// Write the graph JSON to this path instead of stdout.
+        #[arg(short, long, value_name = "FILE")]
+        out: Option<PathBuf>,
+        /// Query a committed graph artifact instead of compiling sources.
+        #[command(subcommand)]
+        action: Option<commands::graph::GraphCommand>,
     },
     /// Export the declaration-backed control/route manifest of one `.ifml`
     /// interaction flow as JSON: its routes/views, controls (expanded, with
@@ -337,6 +371,10 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         } => commands::check::run(files, deny_warnings),
         Command::Ir { files, out, expand } => commands::ir::run(files, out, expand),
         Command::Build { files, out } => commands::build::run(files, out),
+        Command::Graph { paths, out, action } => match action {
+            Some(action) => commands::graph::query(action),
+            None => commands::graph::run(paths, out),
+        },
         Command::Manifest { file, out } => commands::manifest::run(vec![file], out),
         Command::Verify {
             files,
