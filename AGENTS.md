@@ -27,19 +27,17 @@ Surfaces are parsed in `rex-syntax` (logos lexer + chumsky parser, one parse/fmt
 ## Commands
 
 ```sh
-cargo test --workspace                          # full suite (~600 tests)
+scripts/ci-local.sh              # THE gate: build, test, clippy, fmt, docs — every step must report *-OK before pushing
+scripts/ci-local.sh audit        # the supply-chain gates (cargo deny check + cargo audit) — CI runs them as separate fast jobs
+scripts/ci-local.sh build|test|clippy|fmt|docs    # one CI step at a time
 cargo test -p rex-driver --test navigation      # one test suite
-cargo clippy --workspace --all-targets          # must be ZERO warnings
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps    # strict rustdoc gate: every intra-doc link must resolve
-cargo fmt --all                                 # rustfmt
-cargo run -p rex-cli -- fmt --check tests/conformance/models/*.mox tests/conformance/models/*.actor   # fixture format gate (.ddd gate: tests/conformance/ddd/*.ddd; sigil gate: tests/conformance/sigil/*.mox, tests/conformance/sigil/*.actor, tests/conformance/sigil/*.ddd; .evt gate: tests/conformance/events/*.evt; .deploy gate: tests/conformance/deploy/*.deploy; .uc gate: tests/conformance/usecases/*.uc; .cmmn gate: tests/conformance/cmmn/*.cmmn; .dmn gate: tests/conformance/dmn/*.dmn; .ifml gates: tests/conformance/ifml/app.ifml, tests/conformance/ifml/cli.ifml, tests/conformance/ifml/rexlang/auth.{mox,actor}, patterns/ifml/*.ifml, examples/*.ifml)
 cargo run -p rex-cli -- check tests/conformance/                            # project mode + the union integrity pass: one snapshot of every supported surface under a dir; each file checks independently with its imports resolving map-first from the snapshot, then the standalone artifacts cluster into import-connected applications and the cross-layer wiring is diagnosed per application (formatter-golden `X.fmt.<ext>` artifacts are skipped — they are outputs whose imports/vocab resolve next to their sources, not standalone models)
 cargo run -p rex-cli -- build tests/conformance/ -o target/rex               # project-mode artifact emission: one `<input path>.json` per file under the out dir (default `target/rex`), each the `rexlang ir` artifact for its surface
 cargo run -p rex-cli -- explain E0104                                        # explain one diagnostic code from the rex-diagnostics registry (--list: the allocation ledger + every code)
 REX_UPDATE_FIXTURES=1 cargo test --workspace    # regenerate golden files
 ```
 
-CI (`.github/workflows/ci.yml`) runs build, tests (`TMPDIR=$PWD/target/tmp cargo test --workspace --jobs 2` — the doctest SIGBUS remedy, see Testing quirks), `clippy -- -D warnings`, the **strict rustdoc gate** (`RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` — broken intra-doc links are errors, issue rexlang#175), then **both** format gates: `cargo fmt --all -- --check` **and** `rexlang fmt --check` on the canonical fixtures (`.mox`, `.actor`, `.ddd`, `.evt`, `.deploy`, `.uc`, `.cmmn`, `.dmn`, the `.ifml` fixtures, plus the sigil fixtures' `.mox`/`.actor`/`.ddd`). A warning anywhere is a failure. CI also runs two fast supply-chain jobs: `cargo audit` (advisories — must stay at zero) and `cargo deny check` (advisories/licenses/bans/sources per `deny.toml`). `scripts/ci-local.sh` replicates the five build gates locally — run it until every step reports `*-OK` before pushing; `scripts/ci-local.sh audit` replicates the two supply-chain jobs.
+CI (`.github/workflows/ci.yml`) **invokes `scripts/ci-local.sh` for every gate** (build, tests, clippy, fmt, docs) — the script is the single source of truth for the gate sequence and the `rexlang fmt --check` fixture-glob list (`FIXTURE_FORMAT_GLOBS`), so a new fixture directory is a one-file edit and local/remote can never drift (issue #121). CI also runs two fast supply-chain jobs: `cargo audit` (advisories — must stay at zero) and `cargo deny check` (advisories/licenses/bans/sources per `deny.toml`); the script's `audit` subcommand replicates both locally. A warning anywhere is a failure.
 
 ## Testing quirks
 
