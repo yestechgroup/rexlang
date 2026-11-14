@@ -13,7 +13,7 @@ use crate::Diagnostic;
 /// parse → resolve/validate → lower. The tracked surface compiles with an
 /// empty import bundle — every import declaration is a not-provided error;
 /// the one-shot [`compile_str`] carries caller-provided content.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn compile(db: &dyn Db, file: SourceFile) -> Compiled {
     compile_file(db, file, &DomainImports::default())
 }
@@ -67,7 +67,7 @@ fn compile_file(db: &dyn Db, file: SourceFile, imports: &DomainImports) -> Compi
 /// union namespace of all packages, so declarations may reference types
 /// across packages. `first` is the compilation's anchor file; `rest` holds
 /// the remaining files in input order.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub(crate) fn compile_multi(
     db: &dyn Db,
     first: SourceFile,

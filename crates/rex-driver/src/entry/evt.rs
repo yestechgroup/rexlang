@@ -16,7 +16,7 @@ use crate::union::{domain_files, lower_domains};
 /// domain pipeline (the same union-namespace rule
 /// [`compile_actors_str`](crate::compile_actors_str) uses), then lower and
 /// validate the contract against the resolved domain namespaces.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn compile_evt(
     db: &dyn Db,
     contract: SourceFile,

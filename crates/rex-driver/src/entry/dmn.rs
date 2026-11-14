@@ -24,7 +24,7 @@ use crate::union::{domain_files, lower_domains};
 /// resolve to nothing, and an `import "<path>.evt"` contract errors as
 /// unprovided. Use it for parse/domain editing feedback, not for full
 /// validation.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn compile_dmn(db: &dyn Db, model: SourceFile, domains: Vec<SourceFile>) -> DmnCompilation {
     compile_dmn_with(db, model, domains, &[], &DomainImports::default(), &[])
 }

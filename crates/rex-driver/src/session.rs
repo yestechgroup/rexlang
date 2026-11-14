@@ -10,8 +10,10 @@ use crate::Diagnostic;
 #[salsa::input]
 pub struct SourceFile {
     /// Path used to label diagnostics (not read from disk).
+    #[returns(clone)]
     pub path: String,
     /// The complete source text.
+    #[returns(clone)]
     pub text: String,
 }
 
@@ -122,7 +124,7 @@ fn parse_error_diagnostics(errors: Vec<rex_syntax::ParseError>) -> Vec<Diagnosti
 }
 
 /// Lexes and parses a [`SourceFile`] (memoized by salsa).
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn parse_query(db: &dyn Db, file: SourceFile) -> ParseOutput {
     let source = file.text(db);
     let parsed = rex_syntax::parse(&source);
@@ -134,7 +136,7 @@ pub fn parse_query(db: &dyn Db, file: SourceFile) -> ParseOutput {
 
 /// Lexes and parses a [`SourceFile`] as an `.actor` file (memoized by
 /// salsa).
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn parse_actors_query(db: &dyn Db, file: SourceFile) -> ActorsParseOutput {
     let source = file.text(db);
     let parsed = rex_syntax::parse_actors(&source);
@@ -145,7 +147,7 @@ pub fn parse_actors_query(db: &dyn Db, file: SourceFile) -> ActorsParseOutput {
 }
 
 /// Lexes and parses a [`SourceFile`] as a `.ddd` file (memoized by salsa).
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn parse_ddd_query(db: &dyn Db, file: SourceFile) -> DddParseOutput {
     let source = file.text(db);
     let parsed = rex_syntax::parse_ddd(&source);
@@ -156,7 +158,7 @@ pub fn parse_ddd_query(db: &dyn Db, file: SourceFile) -> DddParseOutput {
 }
 
 /// Lexes and parses a [`SourceFile`] as an `.evt` file (memoized by salsa).
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn parse_evt_query(db: &dyn Db, file: SourceFile) -> EvtParseOutput {
     let source = file.text(db);
     let parsed = rex_syntax::parse_evt(&source);
@@ -167,7 +169,7 @@ pub fn parse_evt_query(db: &dyn Db, file: SourceFile) -> EvtParseOutput {
 }
 
 /// Lexes and parses a [`SourceFile`] as a `.uc` file (memoized by salsa).
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn parse_usecase_query(db: &dyn Db, file: SourceFile) -> UcParseOutput {
     let source = file.text(db);
     let parsed = rex_syntax::parse_usecases(&source);
@@ -178,7 +180,7 @@ pub fn parse_usecase_query(db: &dyn Db, file: SourceFile) -> UcParseOutput {
 }
 
 /// Lexes and parses a [`SourceFile`] as a `.cmmn` file (memoized by salsa).
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn parse_cmmn_query(db: &dyn Db, file: SourceFile) -> CmmnParseOutput {
     let source = file.text(db);
     let parsed = rex_syntax::parse_cmmn(&source);
@@ -189,7 +191,7 @@ pub fn parse_cmmn_query(db: &dyn Db, file: SourceFile) -> CmmnParseOutput {
 }
 
 /// Lexes and parses a [`SourceFile`] as a `.dmn` file (memoized by salsa).
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn parse_dmn_query(db: &dyn Db, file: SourceFile) -> DmnParseOutput {
     let source = file.text(db);
     let parsed = rex_syntax::parse_dmn(&source);
@@ -201,7 +203,7 @@ pub fn parse_dmn_query(db: &dyn Db, file: SourceFile) -> DmnParseOutput {
 
 /// Lexes and parses a [`SourceFile`] as a `.deploy` file (memoized by
 /// salsa).
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn parse_deploy_query(db: &dyn Db, file: SourceFile) -> DeployParseOutput {
     let source = file.text(db);
     let parsed = rex_syntax::parse_deploy(&source);
