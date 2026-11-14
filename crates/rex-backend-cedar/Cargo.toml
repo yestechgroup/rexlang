@@ -17,5 +17,5 @@ anyhow = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-cedar-policy = "4.12"
+cedar-policy = "4.14"
 rex-driver = { workspace = true }
