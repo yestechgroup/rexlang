@@ -11,6 +11,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use walkdir::WalkDir;
+
 use rex_driver::{
     compile_actor_imports, compile_decision_imports, compile_domain_union, compile_files,
     compile_str, gather_case_imports, gather_deploy_imports, gather_domain_sources,
@@ -93,31 +95,31 @@ fn collect_mox_files(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
 }
 
 /// Recursively collects files under `dir` whose extension is one of
-/// `extensions` (subdirectories first come out in name order; the caller
-/// sorts the final list anyway). Formatter-golden artifacts (see
+/// `extensions`. Symlinks are never followed ([`WalkDir::follow_links`] is
+/// `false` — a link loop cannot hang the scan), and the traversal order is
+/// the platform's readdir order: the *callers* (`expand_inputs`,
+/// `expand_check_inputs`) sort the final list lexicographically, so the
+/// output is deterministic regardless. Formatter-golden artifacts (see
 /// [`is_formatter_golden`]) are never collected.
 fn collect_with_extensions(
     dir: &Path,
     extensions: &[&str],
     out: &mut Vec<PathBuf>,
 ) -> anyhow::Result<()> {
-    let read = |error: std::io::Error| anyhow::anyhow!("cannot read {}: {error}", dir.display());
-    let mut entries: Vec<std::fs::DirEntry> = std::fs::read_dir(dir)
-        .map_err(read)?
-        .collect::<Result<_, _>>()
-        .map_err(read)?;
-    entries.sort_by_key(|entry| entry.file_name());
-    for entry in entries {
+    for entry in WalkDir::new(dir).follow_links(false) {
+        let entry =
+            entry.map_err(|error| anyhow::anyhow!("cannot read {}: {error}", dir.display()))?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
         let path = entry.path();
-        if path.is_dir() {
-            collect_with_extensions(&path, extensions, out)?;
-        } else if path
+        if path
             .extension()
             .and_then(|extension| extension.to_str())
             .is_some_and(|extension| extensions.contains(&extension))
-            && !is_formatter_golden(&path)
+            && !is_formatter_golden(path)
         {
-            out.push(path);
+            out.push(path.to_path_buf());
         }
     }
     Ok(())

@@ -6,6 +6,7 @@ mod support;
 mod actor;
 mod batch;
 mod cmmn;
+mod completions;
 mod core;
 mod ddd;
 mod ddd_decisions;

@@ -27,6 +27,9 @@ rex-backend-common = { workspace = true }
 rex-runtime = { workspace = true }
 rex-vocab = { workspace = true }
 clap = { workspace = true }
+clap_complete = { workspace = true }
+clap_mangen = { workspace = true }
+walkdir = { workspace = true }
 anyhow = { workspace = true }
 serde_json = { workspace = true }
 

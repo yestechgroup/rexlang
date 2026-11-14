@@ -176,6 +176,20 @@ enum Command {
         #[arg(long)]
         list: bool,
     },
+    /// Emit shell completion script for the `rexlang` binary (bash, zsh,
+    /// fish, powershell, or elvish) to stdout.
+    Completions {
+        /// The shell to generate completions for.
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
+    /// Emit the `rexlang` man page (roff) to stdout, or write it to
+    /// `--out`.
+    Man {
+        /// Write the man page to this path instead of stdout.
+        #[arg(short, long, value_name = "FILE")]
+        out: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -295,5 +309,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         } => commands::vocab::run(&file, provider.as_deref(), url_template.as_deref()),
         Command::Lsp => commands::lsp::run(),
         Command::Explain { code, list } => commands::explain::run(code.as_deref(), list),
+        Command::Completions { shell } => commands::completions::run_completions(shell),
+        Command::Man { out } => commands::completions::run_man(out),
     }
 }
