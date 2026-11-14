@@ -2699,7 +2699,7 @@ dependencies = [
 
 [[package]]
 name = "rex-backend-cedar"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "cedar-policy",
@@ -2712,7 +2712,7 @@ dependencies = [
 
 [[package]]
 name = "rex-backend-cmmn"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rex-driver",
  "rex-expr",
@@ -2724,7 +2724,7 @@ dependencies = [
 
 [[package]]
 name = "rex-backend-common"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -2732,7 +2732,7 @@ dependencies = [
 
 [[package]]
 name = "rex-backend-dmn"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dsntk-common",
  "dsntk-feel",
@@ -2751,7 +2751,7 @@ dependencies = [
 
 [[package]]
 name = "rex-backend-jsonschema"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "jsonschema",
@@ -2764,7 +2764,7 @@ dependencies = [
 
 [[package]]
 name = "rex-backend-rust"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "proptest",
@@ -2777,7 +2777,7 @@ dependencies = [
 
 [[package]]
 name = "rex-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2801,15 +2801,15 @@ dependencies = [
 
 [[package]]
 name = "rex-dates"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "rex-diagnostics"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "rex-driver"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -2836,7 +2836,7 @@ dependencies = [
 
 [[package]]
 name = "rex-expr"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chumsky 0.10.1",
  "logos 0.15.1",
@@ -2852,7 +2852,7 @@ dependencies = [
 
 [[package]]
 name = "rex-ifml"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pest",
  "pest_derive",
@@ -2868,7 +2868,7 @@ dependencies = [
 
 [[package]]
 name = "rex-ir"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2877,7 +2877,7 @@ dependencies = [
 
 [[package]]
 name = "rex-lsp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "futures",
  "rex-driver",
@@ -2895,7 +2895,7 @@ dependencies = [
 
 [[package]]
 name = "rex-runtime"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rex-dates",
  "serde",
@@ -2906,11 +2906,11 @@ dependencies = [
 
 [[package]]
 name = "rex-strings"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "rex-syntax"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chumsky 0.10.1",
  "logos 0.15.1",
@@ -2920,7 +2920,7 @@ dependencies = [
 
 [[package]]
 name = "rex-verify"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "creusot-std",
  "proptest",
@@ -2928,7 +2928,7 @@ dependencies = [
 
 [[package]]
 name = "rex-vocab"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "rex-ir",
