@@ -14,3 +14,4 @@ creusot-std = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+rex-evidence = { workspace = true }
